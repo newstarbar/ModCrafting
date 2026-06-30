@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "releaseDate": "2026-06-30",
-  "notes": "Test release",
+  "notes": "Release v1.0.0",
   "feeds": {
     "gitee": {
       "manifest": "https://gitee.com/newstarbar/ModCrafting/releases/download/v1.0.0/latest.yml",

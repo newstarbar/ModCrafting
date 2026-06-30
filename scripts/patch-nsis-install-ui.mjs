@@ -2,9 +2,8 @@
 /**
  * Patch electron-builder NSIS templates for install progress + file details.
  * - Show file list during install (SetDetailsPrint both)
- * - Use Nsis7z::ExtractWithCallback for determinate progress bar
- *
- * Callback Function lives in build/installer.nsh (top-level include), NOT here.
+ * - Use Nsis7z::ExtractWithCallback only for Setup (MODCRAFTING_SETUP_PROGRESS in installer.nsh)
+ * - Portable uses vanilla Extract (no custom include / callback)
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -40,8 +39,12 @@ const extractMacro = `!macro extractUsing7za FILE
   CreateDirectory "$PLUGINSDIR\\7z-out"
   ClearErrors
   SetOutPath "$PLUGINSDIR\\7z-out"
+  !ifdef MODCRAFTING_SETUP_PROGRESS
   GetFunctionAddress $R0 ModCrafting_7zExtractCallback
   Nsis7z::ExtractWithCallback "\${FILE}" $R0
+  !else
+  Nsis7z::Extract "\${FILE}"
+  !endif
   Pop $R0
   SetOutPath $R0
 
@@ -60,8 +63,12 @@ const extractMacro = `!macro extractUsing7za FILE
     \${endIf}
 
     RMDir /r "$PLUGINSDIR\\7z-out"
+    !ifdef MODCRAFTING_SETUP_PROGRESS
     GetFunctionAddress $R0 ModCrafting_7zExtractCallback
     Nsis7z::ExtractWithCallback "\${FILE}" $R0
+    !else
+    Nsis7z::Extract "\${FILE}"
+    !endif
     Goto DoneExtract7za
 
   AbortExtract7za:
@@ -87,10 +94,10 @@ const macroStart = extractContent.indexOf('!macro extractUsing7za FILE')
 const macroEnd = extractContent.indexOf('!macroend', macroStart) + '!macroend'.length
 if (macroStart === -1 || macroEnd === -1) {
   console.warn('[nsis] extractUsing7za macro not found — skip extract patch')
-} else if (!extractContent.includes('ExtractWithCallback')) {
+} else if (!extractContent.includes('MODCRAFTING_SETUP_PROGRESS')) {
   extractContent = extractContent.slice(0, macroStart) + extractMacro + '\n' + extractContent.slice(macroEnd)
   writeFileSync(extractPath, extractContent)
-  console.log('[nsis] extractAppPackage.nsh: ExtractWithCallback enabled')
+  console.log('[nsis] extractAppPackage.nsh: conditional ExtractWithCallback enabled')
 } else {
   writeFileSync(extractPath, extractContent)
 }

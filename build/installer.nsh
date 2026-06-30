@@ -22,6 +22,7 @@ Function ModCrafting_7zExtractCallback
 FunctionEnd
 
 !macro customHeader
+  !define MODCRAFTING_SETUP_PROGRESS
   ; 安装详情：显示文件列表与进度（覆盖 common.nsh 的 nevershow）
   ShowInstDetails show
   ShowUninstDetails show

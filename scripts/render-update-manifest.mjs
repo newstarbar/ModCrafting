@@ -11,16 +11,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
 const manifestPath = path.join(root, 'build', 'update-manifest.json')
 
-const version = process.argv[2]
-const notes = process.argv[3] || `ModCrafting ${version}`
+const rawVersion = process.argv[2]
+const notes = process.argv[3] || `ModCrafting ${rawVersion}`
 
-if (!version || !/^\d+\.\d+\.\d+/.test(version)) {
+if (!rawVersion) {
   console.error('Usage: node scripts/render-update-manifest.mjs <version> [notes]')
   process.exit(1)
 }
 
-const tag = version.startsWith('v') ? version : `v${version}`
-const ver = version.replace(/^v/, '')
+const ver = rawVersion.replace(/^v/, '')
+if (!/^\d+\.\d+\.\d+/.test(ver)) {
+  console.error('Usage: node scripts/render-update-manifest.mjs <version> [notes]')
+  console.error(`Invalid version: ${rawVersion}`)
+  process.exit(1)
+}
+
+const tag = rawVersion.startsWith('v') ? rawVersion : `v${ver}`
 
 const manifest = {
   version: ver,
