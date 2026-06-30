@@ -1,0 +1,157 @@
+{
+	"name": "modcrafting",
+	"type": "module",
+	"version": "1.0.0",
+	"description": "A one-stop Minecraft mod development environment based on Vibecoding 基于Vibecoding的一站式Minecraft模组开发环境",
+	"author": "newstarbar",
+	"main": "./out/main/index.js",
+	"scripts": {
+		"dev": "electron-vite dev",
+		"build": "electron-vite build",
+		"preview": "electron-vite preview",
+		"start": "electron .",
+		"build:win": "electron-vite build && node scripts/run-electron-builder.mjs --win",
+		"build:win:setup": "electron-vite build && node scripts/run-electron-builder.mjs --win nsis",
+		"build:win:portable": "electron-vite build && node scripts/run-electron-builder.mjs --win portable",
+		"setup:toolchain": "node scripts/setup-toolchain.mjs",
+		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
+		"verify:toolchain": "node scripts/verify-toolchain.mjs",
+		"verify:offline": "node scripts/verify-offline-build.mjs",
+		"prebuild:win": "node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
+		"prebuild:win:setup": "node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
+		"prebuild:win:portable": "node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs"
+	},
+	"dependencies": {
+		"@electron-toolkit/utils": "^4.0.0",
+		"@xterm/addon-fit": "^0.11.0",
+		"@xterm/xterm": "^6.0.0",
+		"iconv-lite": "^0.7.2",
+		"node-pty": "^1.1.0",
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0"
+	},
+	"devDependencies": {
+		"@types/react": "^19.1.2",
+		"@types/react-dom": "^19.1.2",
+		"@vitejs/plugin-react": "^6.0.2",
+		"electron": "^42.4.1",
+		"electron-builder": "^26.0.0",
+		"electron-vite": "^5.0.0",
+		"typescript": "^5.8.3",
+		"vite": "^8.0.16"
+	},
+	"build": {
+		"appId": "com.modcrafting.app",
+		"productName": "ModCrafting",
+		"directories": {
+			"output": "release"
+		},
+		"files": [
+			"out/**/*"
+		],
+		"extraResources": [
+			{
+				"from": "resources/jdk-21",
+				"to": "jdk-21",
+				"filter": [
+					"**/*"
+				]
+			},
+			{
+				"from": "resources/gradle-9.5",
+				"to": "gradle-9.5",
+				"filter": [
+					"**/*"
+				]
+			},
+			{
+				"from": "resources/gradle-wrapper.jar",
+				"to": "gradle-wrapper.jar"
+			},
+			{
+				"from": "resources/gradle-home-seed",
+				"to": "gradle-home-seed",
+				"filter": [
+					"**/*"
+				]
+			},
+			{
+				"from": "resources/fabric-versions.json",
+				"to": "fabric-versions.json"
+			},
+			{
+				"from": "build/icon.png",
+				"to": "icon.png"
+			},
+			{
+				"from": "resources/_base_mods",
+				"to": "_base_mods",
+				"filter": [
+					"**/*.jar"
+				]
+			}
+		],
+		"win": {
+			"target": [
+				{
+					"target": "nsis",
+					"arch": [
+						"x64"
+					]
+				},
+				{
+					"target": "portable",
+					"arch": [
+						"x64"
+					]
+				}
+			],
+			"icon": "build/icon.png",
+			"signAndEditExecutable": false
+		},
+		"nsis": {
+			"oneClick": false,
+			"allowToChangeInstallationDirectory": true,
+			"allowElevation": true,
+			"perMachine": false,
+			"createDesktopShortcut": true,
+			"createStartMenuShortcut": true,
+			"menuCategory": true,
+			"shortcutName": "ModCrafting",
+			"runAfterFinish": true,
+			"deleteAppDataOnUninstall": false,
+			"displayLanguageSelector": true,
+			"installerLanguages": [
+				"zh_CN",
+				"en_US"
+			],
+			"language": "2052",
+			"license": "build/license.txt",
+			"include": "build/installer.nsh",
+			"installerIcon": "build/installerIcon.png",
+			"installerHeaderIcon": "build/installerHeaderIcon.png",
+			"guid": "c8f4a2b1-9e3d-4f5a-b6c7-8d9e0f1a2b3c",
+			"artifactName": "${productName} Setup ${version}.${ext}",
+			"uninstallDisplayName": "ModCrafting",
+			"warningsAsErrors": false
+		},
+		"portable": {
+			"artifactName": "${productName} ${version} Portable.${ext}"
+		},
+		"asarUnpack": [
+			"node_modules/node-pty/**"
+		],
+		"electronDownload": {
+			"version": "42.4.1",
+			"mirror": "https://npmmirror.com/mirrors/electron/"
+		},
+		"electronDist": "node_modules/electron/dist",
+		"afterPack": null,
+		"npmRebuild": "false"
+	},
+	"license": "GPL-3.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/newstarbar/ModCrafting.git"
+	}
+}

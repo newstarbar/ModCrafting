@@ -1,0 +1,42 @@
+runtime/
+resources/gradle-9.5.0-bin.zip
+resources/gradle-8.11.1-bin.zip
+resources/_gradle_extract/
+resources/_jdk_extract/
+resources/_test_extract/
+resources/gradle-home-seed/
+resources/_prefetch_runtime/
+resources/_prefetch_project/
+resources/_offline_verify_project/
+
+# 依赖与构建
+node_modules/
+out/
+dist/
+
+# 打包产物
+release/
+release2/
+
+# 运行时缓存（用户本机生成）
+runtime/
+
+# 工具链（由脚本下载/生成，不进仓库）
+resources/jdk-21/
+resources/gradle-9.5/
+resources/gradle-8.11/
+resources/*.zip
+resources/*jdk*.tar.gz
+resources/_jdk-21-download.*
+resources/gradle-home-seed/
+
+# IDE / 本地工具
+.reasonix/
+.cursor/
+*.log
+.env
+.env.*
+
+# 系统
+Thumbs.db
+.DS_Store

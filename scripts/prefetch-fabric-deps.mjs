@@ -1,0 +1,174 @@
+#!/usr/bin/env node
+/**
+ * Online prefetch of Fabric/Minecraft dependencies into resources/gradle-home-seed.
+ * Run once before packaging: npm run prefetch:deps
+ */
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { spawn } from 'child_process'
+import path from 'path'
+import { fileURLToPath } from 'url'
+import { FABRIC_VERSIONS } from './fabric-versions.mjs'
+import { setupPrefetchProject } from './fabric-template.mjs'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const root = path.join(__dirname, '..')
+const resourcesDir = path.join(root, 'resources')
+const seedDir = path.join(resourcesDir, 'gradle-home-seed')
+const seedMarker = path.join(seedDir, '.modcrafting-seed.json')
+const prefetchRuntime = path.join(resourcesDir, '_prefetch_runtime')
+const prefetchProject = path.join(resourcesDir, '_prefetch_project')
+const jdkSrc = path.join(resourcesDir, 'jdk-21')
+const gradleSrc = path.join(resourcesDir, 'gradle-9.5')
+const GRADLE_RUNTIME_DIR = 'gradle-9.5'
+const GRADLE_DIST_NAME = `gradle-${FABRIC_VERSIONS.gradle_version}-bin`
+const GRADLE_HOME_DIR = `gradle-${FABRIC_VERSIONS.gradle_version}`
+const force = process.argv.includes('--force')
+
+function countDirStats(dir) {
+  let fileCount = 0
+  let totalBytes = 0
+  function walk(d) {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else {
+        fileCount++
+        try { totalBytes += statSync(full).size } catch { /* ignore */ }
+      }
+    }
+  }
+  if (existsSync(dir)) walk(dir)
+  return { fileCount, totalBytes }
+}
+
+function seedFingerprintValid() {
+  if (!existsSync(seedMarker)) return false
+  try {
+    const marker = JSON.parse(readFileSync(seedMarker, 'utf-8'))
+    for (const [k, v] of Object.entries(FABRIC_VERSIONS)) {
+      if (marker[k] !== v) return false
+    }
+    return marker.fileCount > 100 && marker.totalBytes > 50_000_000
+  } catch {
+    return false
+  }
+}
+
+function setupRuntime() {
+  mkdirSync(prefetchRuntime, { recursive: true })
+  const jdkDest = path.join(prefetchRuntime, 'jdk-21')
+  const gradleDest = path.join(prefetchRuntime, GRADLE_RUNTIME_DIR)
+  const gradleHome = path.join(prefetchRuntime, 'gradle-home')
+
+  if (!existsSync(jdkSrc)) {
+    throw new Error('缺少 resources/jdk-21，请先运行: npm run setup:toolchain')
+  }
+  if (!existsSync(gradleSrc)) {
+    throw new Error('缺少 resources/gradle-9.5，请运行 npm run setup:toolchain')
+  }
+
+  if (existsSync(jdkDest)) rmSync(jdkDest, { recursive: true, force: true })
+  if (existsSync(gradleDest)) rmSync(gradleDest, { recursive: true, force: true })
+  if (force && existsSync(gradleHome)) rmSync(gradleHome, { recursive: true, force: true })
+  if (force && existsSync(seedDir)) rmSync(seedDir, { recursive: true, force: true })
+
+  cpSync(jdkSrc, jdkDest, { recursive: true })
+  cpSync(gradleSrc, gradleDest, { recursive: true })
+  mkdirSync(gradleHome, { recursive: true })
+
+  // Pre-seed Gradle wrapper dist (offline)
+  const wrapperDists = path.join(gradleHome, 'wrapper', 'dists', GRADLE_DIST_NAME, 'modcrafting-offline')
+  const targetGradle = path.join(wrapperDists, GRADLE_HOME_DIR)
+  mkdirSync(targetGradle, { recursive: true })
+  cpSync(gradleDest, targetGradle, { recursive: true })
+  writeFileSync(path.join(wrapperDists, `${GRADLE_DIST_NAME}.zip.ok`), '', 'utf-8')
+
+  return gradleHome
+}
+
+function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('cmd', ['/c', 'gradlew.bat', ...args], {
+      cwd,
+      env: {
+        ...process.env,
+        MODCRAFTING_RUNTIME: prefetchRuntime,
+        JAVA_HOME: path.join(prefetchRuntime, 'jdk-21'),
+        GRADLE_USER_HOME: gradleHome,
+        PATH: `${path.join(prefetchRuntime, 'jdk-21', 'bin')};${process.env.PATH || ''}`
+      },
+      shell: true
+    })
+    let timer
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try { child.kill('SIGTERM') } catch { /* ignore */ }
+        reject(new Error(`Gradle timed out after ${timeoutMs}ms: ${args.join(' ')}`))
+      }, timeoutMs)
+    }
+    child.stdout.on('data', (d) => process.stdout.write(d))
+    child.stderr.on('data', (d) => process.stderr.write(d))
+    child.on('error', (err) => {
+      if (timer) clearTimeout(timer)
+      reject(err)
+    })
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer)
+      if (code === 0) resolve(code)
+      else reject(new Error(`Gradle exited ${code}: ${args.join(' ')}`))
+    })
+  })
+}
+
+async function main() {
+  if (!force && seedFingerprintValid()) {
+    console.log('gradle-home-seed already valid, skipping (use --force to rebuild)')
+    return
+  }
+
+  console.log('Setting up prefetch runtime...')
+  const gradleHome = setupRuntime()
+
+  console.log('Creating prefetch Fabric project...')
+  await setupPrefetchProject(prefetchProject, prefetchRuntime, gradleSrc)
+
+  const tasks = [
+    ['build', '--refresh-dependencies', '--no-daemon'],
+    ['downloadAssets', '--no-daemon']
+  ]
+
+  for (const args of tasks) {
+    console.log(`\n>>> gradlew ${args.join(' ')}`)
+    await runGradle(prefetchProject, gradleHome, args, 30 * 60 * 1000)
+  }
+
+  // Brief runClient to pull launch natives/classpath into loom cache
+  console.log('\n>>> gradlew runClient (brief, for launch cache)...')
+  try {
+    await runGradle(prefetchProject, gradleHome, ['runClient', '--no-daemon'], 3 * 60 * 1000)
+  } catch {
+    console.warn('runClient prefetch timed out or failed (may still be sufficient for build)')
+  }
+
+  console.log('\nCopying gradle-home to seed directory...')
+  if (existsSync(seedDir)) rmSync(seedDir, { recursive: true, force: true })
+  cpSync(gradleHome, seedDir, { recursive: true })
+
+  const { fileCount, totalBytes } = countDirStats(seedDir)
+  const marker = {
+    ...FABRIC_VERSIONS,
+    fileCount,
+    totalBytes,
+    createdAt: new Date().toISOString()
+  }
+  writeFileSync(seedMarker, JSON.stringify(marker, null, 2), 'utf-8')
+
+  console.log(`\nDone. Seed: ${seedDir}`)
+  console.log(`Files: ${fileCount}, Size: ${(totalBytes / 1024 / 1024).toFixed(1)} MB`)
+  console.log('Marker:', seedMarker)
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
