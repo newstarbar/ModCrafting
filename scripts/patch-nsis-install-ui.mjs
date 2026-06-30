@@ -3,6 +3,8 @@
  * Patch electron-builder NSIS templates for install progress + file details.
  * - Show file list during install (SetDetailsPrint both)
  * - Use Nsis7z::ExtractWithCallback for determinate progress bar
+ *
+ * Callback Function lives in build/installer.nsh (top-level include), NOT here.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -58,47 +60,26 @@ const extractMacro = `!macro extractUsing7za FILE
 !macroend`
 
 let extractContent = readFileSync(extractPath, 'utf8')
+
+// Remove wrongly placed callback (Function cannot live in Section-included files)
+const callbackStart = extractContent.indexOf('!ifndef MODCRAFTING_7Z_CALLBACK')
+if (callbackStart !== -1) {
+  extractContent = extractContent.slice(0, callbackStart).trimEnd() + '\n'
+  console.log('[nsis] extractAppPackage.nsh: removed misplaced callback Function')
+}
+
 const macroStart = extractContent.indexOf('!macro extractUsing7za FILE')
 const macroEnd = extractContent.indexOf('!macroend', macroStart) + '!macroend'.length
 if (macroStart === -1 || macroEnd === -1) {
   console.warn('[nsis] extractUsing7za macro not found — skip extract patch')
-} else if (!extractContent.includes('ModCrafting_7zExtractCallback')) {
-  const callbackFn = `
-!ifndef MODCRAFTING_7Z_CALLBACK
-!define MODCRAFTING_7Z_CALLBACK
-
-Function ModCrafting_7zExtractCallback
-  Pop $R8
-  Pop $R9
-  \${If} $R9 == 0
-    Goto mc7z_done
-  \${EndIf}
-  IntOp $R7 $R8 * 100
-  IntOp $R7 $R7 / $R9
-  FindWindow $0 "#32770" "" $HWNDPARENT
-  \${If} $0 <> 0
-    GetDlgItem $0 $0 1004
-    \${If} $0 <> 0
-      SendMessage $0 0x0402 $R7 0
-    \${EndIf}
-  \${EndIf}
-  SetDetailsPrint textonly
-  DetailPrint "正在解压组件… $R7%"
-  SetDetailsPrint listonly
-  DetailPrint "已解压 $R8 / $R9 字节"
-  mc7z_done:
-FunctionEnd
-!endif
-`
-  extractContent =
-    extractContent.slice(0, macroStart) +
-    extractMacro +
-    extractContent.slice(macroEnd) +
-    callbackFn
+} else if (!extractContent.includes('ExtractWithCallback')) {
+  extractContent = extractContent.slice(0, macroStart) + extractMacro + '\n' + extractContent.slice(macroEnd)
   writeFileSync(extractPath, extractContent)
-  console.log('[nsis] extractAppPackage.nsh: ExtractWithCallback + progress callback')
+  console.log('[nsis] extractAppPackage.nsh: ExtractWithCallback enabled')
+} else {
+  writeFileSync(extractPath, extractContent)
 }
 
 export default async function beforePack() {
-  // electron-builder beforePack hook entry
+  // electron-builder beforePack hook — top-level code runs on import too
 }

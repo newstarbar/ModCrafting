@@ -20,8 +20,8 @@
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
 		"generate:icon": "node scripts/generate-icon-ico.mjs",
-		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
-		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
+		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/patch-nsis-install-ui.mjs",
 		"prebuild:win:portable": "node scripts/generate-icon-ico.mjs && node scripts/verify-portable-resources.mjs"
 	},
 	"dependencies": {

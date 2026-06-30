@@ -1,6 +1,26 @@
 ; ModCrafting NSIS 自定义脚本（electron-builder 自动 include）
 ; 文档: https://www.electron.build/nsis
 
+; 7z 解压进度回调（须在顶层定义；不可用 ${If}，因此时 LogicLib 尚未加载）
+Function ModCrafting_7zExtractCallback
+  Pop $R8
+  Pop $R9
+  IntCmp $R9 0 mc7z_done
+  IntOp $R7 $R8 * 100
+  IntOp $R7 $R7 / $R9
+  FindWindow $0 "#32770" "" $HWNDPARENT
+  StrCmp $0 "" mc7z_details
+  GetDlgItem $0 $0 1004
+  StrCmp $0 "" mc7z_details
+  SendMessage $0 0x0402 $R7 0
+  mc7z_details:
+  SetDetailsPrint textonly
+  DetailPrint "正在解压组件… $R7%"
+  SetDetailsPrint listonly
+  DetailPrint "已解压 $R8 / $R9 字节"
+  mc7z_done:
+FunctionEnd
+
 !macro customHeader
   ; 安装详情：显示文件列表与进度（覆盖 common.nsh 的 nevershow）
   ShowInstDetails show

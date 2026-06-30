@@ -52,9 +52,10 @@ jobs:
         run: npx electron-builder --config electron-builder.portable.json --win portable
 
       - name: Sync Gitee Release
-        if: ${{ secrets.GITEE_TOKEN }}
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+          GITEE_REPO: ${{ vars.GITEE_REPO }}
         run: node scripts/sync-gitee-release.mjs "${{ github.ref_name }}"
 
       - name: Commit update manifest

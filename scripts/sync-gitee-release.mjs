@@ -20,12 +20,13 @@ if (!version) {
 
 const token = process.env.GITEE_TOKEN
 if (!token) {
-  console.error('GITEE_TOKEN is required')
-  process.exit(1)
+  console.warn('[gitee] GITEE_TOKEN not set — skip Gitee Release sync')
+  console.warn('[gitee] Add repository Secret GITEE_TOKEN to enable automatic sync')
+  process.exit(0)
 }
 
-const owner = 'newstarbar'
-const repo = 'ModCrafting'
+const owner = process.env.GITEE_OWNER || 'newstarbar'
+const repo = process.env.GITEE_REPO || 'ModCrafting'
 const tag = version.startsWith('v') ? version : `v${version}`
 const apiBase = 'https://gitee.com/api/v5'
 
