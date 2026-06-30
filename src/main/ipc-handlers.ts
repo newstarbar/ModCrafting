@@ -25,8 +25,10 @@ import {
   initToolchain,
   isGlobalToolchainReady,
   resetToolchainInitState,
-  createWindowProgressSender
+  createWindowProgressSender,
+  getAppEdition
 } from './build-env'
+import { checkForUpdates, openReleasePages } from './updater'
 import {
   listRecentProjects,
   addRecentProject,
@@ -345,6 +347,17 @@ export function setupIpcHandlers(): void {
   )
 
   ipcMain.handle('env:checkRuntimeWritable', async () => checkRuntimeWritable())
+
+  ipcMain.handle('env:getEdition', async () => getAppEdition())
+
+  ipcMain.handle('updater:check', async () => checkForUpdates(true))
+
+  ipcMain.handle('updater:getVersion', async () => app.getVersion())
+
+  ipcMain.handle('updater:openReleases', async () => {
+    await openReleasePages()
+    return { success: true }
+  })
 
   // API config (non-sensitive settings + encrypted API key)
   ipcMain.handle('config:load', async () => loadApiConfig())

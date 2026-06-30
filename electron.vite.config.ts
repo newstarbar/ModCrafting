@@ -7,7 +7,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        external: ['electron', 'iconv-lite', 'node-pty'],
+        external: ['electron', 'electron-updater', 'iconv-lite', 'node-pty'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts')
         }
@@ -18,7 +18,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        external: ['electron', 'iconv-lite', 'node-pty'],
+        external: ['electron', 'electron-updater', 'iconv-lite', 'node-pty'],
         input: {
           index: resolve(__dirname, 'src/preload/index.ts')
         }

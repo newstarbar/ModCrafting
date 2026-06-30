@@ -13,6 +13,7 @@ export interface ToolchainInitState {
 interface ToolchainInitOverlayProps {
   state: ToolchainInitState
   projectPreparing: boolean
+  edition?: 'dev' | 'full' | 'portable'
   onRetry: () => void
 }
 
@@ -47,16 +48,22 @@ function stepStatus(
   return 'pending'
 }
 
-const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, projectPreparing, onRetry }) => {
+const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, projectPreparing, edition = 'full', onRetry }) => {
   const showOverlay = !state.ready || projectPreparing || state.phase === 'error'
   if (!showOverlay) return null
 
   const isError = state.phase === 'error'
   const displayPercent = Math.min(100, Math.max(0, state.percent))
+  const isPortable = edition === 'portable'
+  const depsLabel = isPortable ? 'Fabric 依赖' : '离线依赖'
+
+  const steps = STEPS.map((s) => (s.id === 'deps' ? { ...s, label: depsLabel } : s))
 
   const subtitle = projectPreparing && state.ready
     ? '正在准备当前项目环境'
-    : '正在准备离线构建环境'
+    : isPortable
+      ? '正在联网下载构建环境（首次约 1GB，需稳定网络）'
+      : '正在准备离线构建环境'
 
   return (
     <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="toolchain-init-title">
@@ -70,7 +77,7 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
         </div>
 
         <div className="toolchain-init-steps toolchain-init-steps--5">
-          {STEPS.map((step) => {
+          {steps.map((step) => {
             const status = stepStatus(step.id, state.phase, state.ready, projectPreparing, isError)
             return (
               <div key={step.id} className={`toolchain-init-step toolchain-init-step--${status}`}>
@@ -98,7 +105,9 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
 
         {!isError && state.phase === 'deps' && displayPercent < 90 && (
           <p className="toolchain-init-hint">
-            首次启动需复制约 1GB 离线依赖到本地缓存，请耐心等待，完成后即可完全离线构建。
+            {isPortable
+              ? '便携版首次启动需联网下载 JDK、Gradle 与 Fabric 依赖，完成后可离线构建。'
+              : '首次启动需复制约 1GB 离线依赖到本地缓存，请耐心等待，完成后即可完全离线构建。'}
           </p>
         )}
 
@@ -108,7 +117,11 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
             <ul>
               <li>请勿将应用安装到 Program Files 等受保护目录</li>
               <li>便携版请放在可写文件夹（如桌面、D 盘）</li>
-              <li>若安装包不完整，请重新下载完整版并先运行 prefetch</li>
+              {isPortable ? (
+                <li>便携版需要稳定网络连接，请检查网络后重试</li>
+              ) : (
+                <li>若安装包不完整，请重新下载完整版（Setup）安装包</li>
+              )}
             </ul>
             <button type="button" className="toolchain-init-retry-btn" onClick={onRetry}>
               重新初始化

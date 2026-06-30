@@ -1,0 +1,32 @@
+{
+  "extends": "./package.json",
+  "extraResources": [
+    {
+      "from": "resources/gradle-wrapper.jar",
+      "to": "gradle-wrapper.jar"
+    },
+    {
+      "from": "resources/fabric-versions.json",
+      "to": "fabric-versions.json"
+    },
+    {
+      "from": "build/appIcon.png",
+      "to": "icon.png"
+    },
+    {
+      "from": "resources/_base_mods",
+      "to": "_base_mods",
+      "filter": ["**/*.jar"]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/appIcon.ico",
+    "signExecutable": false
+  }
+}

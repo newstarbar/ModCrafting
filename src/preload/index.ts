@@ -256,6 +256,39 @@ const api = {
   checkRuntimeWritable: (): Promise<{ writable: boolean; runtimeRoot: string; error?: string }> =>
     ipcRenderer.invoke('env:checkRuntimeWritable'),
 
+  getEdition: (): Promise<'dev' | 'full' | 'portable'> =>
+    ipcRenderer.invoke('env:getEdition'),
+
+  checkForUpdates: (): Promise<{
+    ok: boolean
+    currentVersion: string
+    latestVersion?: string
+    hasUpdate?: boolean
+    source?: 'gitee' | 'github'
+    error?: string
+  }> => ipcRenderer.invoke('updater:check'),
+
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('updater:getVersion'),
+
+  openReleasePages: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('updater:openReleases'),
+
+  onUpdateStatus: (callback: (payload: {
+    phase: string
+    source?: string
+    percent?: number
+    error?: string
+  }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: {
+      phase: string
+      source?: string
+      percent?: number
+      error?: string
+    }) => callback(payload)
+    ipcRenderer.on('updater:status', handler)
+    return () => ipcRenderer.removeListener('updater:status', handler)
+  },
+
   // API config & secrets
   loadApiConfig: (): Promise<{ endpoint: string; model: string; hasApiKey: boolean; encryptionAvailable: boolean }> =>
     ipcRenderer.invoke('config:load'),

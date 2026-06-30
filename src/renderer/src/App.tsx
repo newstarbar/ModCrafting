@@ -9,6 +9,7 @@ import ProjectHub from "./components/ProjectHub";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
+import UpdateBanner from "./components/UpdateBanner";
 import { EMPTY_USAGE, type UsageStats } from "./utils/usage";
 
 const DEFAULT_API_CONFIG = {
@@ -68,6 +69,8 @@ const App: React.FC = () => {
 		ready: false
 	});
 	const [projectPreparing, setProjectPreparing] = useState(false);
+	const [appEdition, setAppEdition] = useState<'dev' | 'full' | 'portable'>('dev');
+	const [updateBanner, setUpdateBanner] = useState({ visible: false, message: '', percent: 0 });
 	const toolchainReady = toolchainInit.ready && !projectPreparing;
 	const overlayLocked = !toolchainInit.ready || projectPreparing || toolchainInit.phase === "error";
 	const [projectDialog, setProjectDialog] = useState<ProjectDialog>("none");
@@ -300,10 +303,22 @@ const App: React.FC = () => {
 			}));
 			setToolchainProgress(payload.message);
 		});
+		const unsubUpdate = window.api.onUpdateStatus((payload) => {
+			if (payload.phase === 'downloading') {
+				setUpdateBanner({
+					visible: true,
+					message: `正在下载更新（${payload.source || 'mirror'}）…`,
+					percent: payload.percent || 0
+				});
+			} else if (payload.phase === 'downloaded' || payload.phase === 'error') {
+				setUpdateBanner((prev) => ({ ...prev, visible: false }));
+			}
+		});
 
 		return () => {
 			unsubDownload();
 			unsubToolchain();
+			unsubUpdate();
 		};
 	}, []);
 
@@ -311,6 +326,8 @@ const App: React.FC = () => {
 		const startedAt = Date.now();
 
 		async function initToolchain(): Promise<void> {
+			const edition = await window.api.getEdition();
+			setAppEdition(edition);
 			const result = await window.api.initToolchain();
 			const status = await window.api.getToolchainStatus();
 			setToolchainStatus(status);
@@ -498,7 +515,8 @@ const App: React.FC = () => {
 				onOpen={(dir) => void handleOpenProjectPath(dir)}
 				onRecentChange={() => void refreshRecentProjects()}
 			/>
-			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} onRetry={retryToolchainInit} />
+			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} />
+			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
 			<StatusBar
 				usage={usage}
 				running={isRunning}

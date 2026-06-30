@@ -106,8 +106,13 @@ interface ModCraftingApi {
   ensureGradleHomeFromSeed: () => Promise<{ ok: boolean; error?: string }>
   prepareBuild: (projectPath: string) => Promise<{ ok: boolean; jdkPath?: string; cmdPrefix: string; powershellEnv: string; error?: string }>
   runGradleTask: (projectPath: string, task: string) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean }>
-  getToolchainStatus: () => Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean }>
+  getToolchainStatus: () => Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean; edition: 'dev' | 'full' | 'portable' }>
   checkRuntimeWritable: () => Promise<{ writable: boolean; runtimeRoot: string; error?: string }>
+  getEdition: () => Promise<'dev' | 'full' | 'portable'>
+  checkForUpdates: () => Promise<{ ok: boolean; currentVersion: string; latestVersion?: string; hasUpdate?: boolean; source?: 'gitee' | 'github'; error?: string }>
+  getAppVersion: () => Promise<string>
+  openReleasePages: () => Promise<{ success: boolean }>
+  onUpdateStatus: (callback: (payload: { phase: string; source?: string; percent?: number; error?: string }) => void) => () => void
   loadApiConfig: () => Promise<{ endpoint: string; model: string; hasApiKey: boolean; encryptionAvailable: boolean }>
   saveApiConfig: (config: { endpoint: string; model: string }) => Promise<{ success: boolean; error?: string }>
   saveApiKey: (key: string) => Promise<{ success: boolean; error?: string }>

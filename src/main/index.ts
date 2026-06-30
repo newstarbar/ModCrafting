@@ -6,6 +6,7 @@ import { setupMenu } from './menu'
 import { setupIpcHandlers } from './ipc-handlers'
 import { setupTerminalHandlers } from './terminal-handler'
 import { setupMcRuntimeHandlers } from './mc-runtime'
+import { initUpdater } from './updater'
 
 if (is.dev) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
@@ -16,8 +17,8 @@ let mainWindow: BrowserWindow | null = null
 function resolveAppIcon(): string | undefined {
   const candidates = [
     join(process.resourcesPath, 'icon.png'),
-    join(__dirname, '../../build/icon.png'),
-    join(app.getAppPath(), 'build', 'icon.png')
+    join(__dirname, '../../build/appIcon.png'),
+    join(app.getAppPath(), 'build', 'appIcon.png')
   ]
   return candidates.find((p) => existsSync(p))
 }
@@ -69,6 +70,7 @@ app.whenReady().then(() => {
   setupTerminalHandlers()
   setupMcRuntimeHandlers()
   createWindow()
+  initUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

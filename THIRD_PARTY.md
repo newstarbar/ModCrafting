@@ -121,7 +121,14 @@ ModCrafting 以 **GPL-3.0** 发布时：
 
 ---
 
-## 七、如何更新本文件
+## 七、应用更新与下载镜像
+
+- **应用更新**：Setup 完整版通过 `electron-updater` 从 **Gitee Releases（优先）** 与 **GitHub Releases（备用）** 获取 `latest.yml` 与安装包；版本清单见 [`build/update-manifest.json`](build/update-manifest.json)。
+- **便携版工具链**：首次运行从 **Adoptium**、**Microsoft JDK**、**Gradle 官方** 或 **腾讯云 Gradle 镜像** 下载，不由 ModCrafting 重新分发。
+
+---
+
+## 八、如何更新本文件
 
 1. 升级 `package.json` 中直接依赖后，核对 `package-lock.json` 内各包 `license` 字段。  
 2. 升级 [`resources/fabric-versions.json`](resources/fabric-versions.json) 后，重新运行 `npm run prefetch:deps` 并更新第二节版本表。  
@@ -134,7 +141,7 @@ ModCrafting 以 **GPL-3.0** 发布时：
 
 ---
 
-## 八、联系
+## 九、联系
 
 如发现本文档遗漏、许可标注错误或疑似侵权，请通过 [GitHub Issues](https://github.com/newstarbar/ModCrafting/issues) 或 Security Advisory 联系维护者。
 

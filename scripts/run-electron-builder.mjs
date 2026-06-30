@@ -21,7 +21,7 @@ if (!existsSync(electronDist)) {
   process.exit(1)
 }
 
-if (!args.includes('--dir') && existsSync(unpackedDir)) {
+if (!args.includes('--dir') && !args.includes('--prepackaged') && existsSync(unpackedDir)) {
   try {
     console.log('[build] cleaning release/win-unpacked')
     rmSync(unpackedDir, { recursive: true, force: true })

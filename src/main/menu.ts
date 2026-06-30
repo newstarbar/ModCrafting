@@ -1,7 +1,11 @@
-import { Menu, app, BrowserWindow, MenuItemConstructorOptions } from 'electron'
+import { Menu, app, BrowserWindow, MenuItemConstructorOptions, dialog } from 'electron'
+import { runUpdateCheckFlow } from './updater'
+import { getAppEdition } from './edition'
 
 export function setupMenu(): void {
   const isMac = process.platform === 'darwin'
+  const edition = getAppEdition()
+  const editionLabel = edition === 'portable' ? '便携版' : edition === 'full' ? '完整版' : '开发版'
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -92,14 +96,19 @@ export function setupMenu(): void {
       label: '帮助',
       submenu: [
         {
+          label: '检查更新…',
+          click: () => {
+            void runUpdateCheckFlow(true)
+          }
+        },
+        {
           label: '关于 ModCrafting',
           click: () => {
-            const { dialog } = require('electron')
-            dialog.showMessageBox({
+            void dialog.showMessageBox({
               type: 'info',
               title: '关于 ModCrafting',
-              message: 'ModCrafting v1.0.0',
-              detail: 'AI 驱动的 Minecraft 模组开发环境\n使用 Fabric + VibeCoding 方式开发模组'
+              message: `ModCrafting v${app.getVersion()}（${editionLabel}）`,
+              detail: 'AI 驱动的 Minecraft 模组开发环境\n使用 Fabric + VibeCoding 方式开发模组\n\n完整版支持应用内更新（Gitee 优先 / GitHub 备用）'
             })
           }
         }

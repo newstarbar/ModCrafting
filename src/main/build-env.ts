@@ -3,6 +3,15 @@ import { spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { promisify } from 'util'
+import { getAppEdition, isPortableEdition, isFullEdition } from './edition'
+import {
+  downloadAndExtractGradle,
+  downloadAndExtractJdk,
+  isCompleteGradleDist
+} from './toolchain-download'
+import { ensureGradleHomeOnline } from './portable-prefetch'
+
+export { getAppEdition, isPortableEdition, isFullEdition } from './edition'
 
 const copyFileAsync = promisify(fs.copyFile)
 const mkdirAsync = promisify(fs.mkdir)
@@ -155,6 +164,131 @@ export async function initToolchain(
 }
 
 async function initToolchainImpl(
+  onProgress: ProgressSender
+): Promise<{ ok: boolean; error?: string }> {
+  if (isPortableEdition()) {
+    return initPortableToolchainImpl(onProgress)
+  }
+  return initFullToolchainImpl(onProgress)
+}
+
+async function initPortableToolchainImpl(
+  onProgress: ProgressSender
+): Promise<{ ok: boolean; error?: string }> {
+  onProgress({ phase: 'checking', message: '检查运行时目录（便携版需联网）…', percent: 0 })
+
+  const writable = checkRuntimeWritable()
+  if (!writable.writable) {
+    const err = writable.error || '运行时目录不可写'
+    onProgress({ phase: 'error', message: err, percent: 0, error: err })
+    return { ok: false, error: err }
+  }
+
+  onProgress({ phase: 'jdk', message: '准备 JDK 21（联网下载）…', percent: 5 })
+  const jdk = await ensurePortableJdk(onProgress)
+  if (!jdk.ok) {
+    const err = jdk.error || 'JDK 21 准备失败'
+    onProgress({ phase: 'error', message: err, percent: 10, error: err })
+    return { ok: false, error: err }
+  }
+
+  onProgress({ phase: 'gradle', message: '准备 Gradle（联网下载）…', percent: 25 })
+  const gradleOk = await ensurePortableGradle(onProgress)
+  if (!gradleOk) {
+    const err = 'Gradle 下载失败，请检查网络后重试'
+    onProgress({ phase: 'error', message: err, percent: 28, error: err })
+    return { ok: false, error: err }
+  }
+
+  onProgress({ phase: 'deps', message: '准备 Fabric 依赖（联网下载）…', percent: 35 })
+  const deps = await ensurePortableGradleHome(onProgress)
+  if (!deps.ok) {
+    const err = deps.error || 'Fabric 依赖准备失败'
+    onProgress({ phase: 'error', message: err, percent: 40, error: err })
+    return { ok: false, error: err }
+  }
+
+  onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })
+  return { ok: true }
+}
+
+async function ensurePortableJdk(onProgress: ProgressSender): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const runtimeJdk = getRuntimeJdkPath()
+  if (isValidJdk(runtimeJdk)) {
+    return { ok: true, path: runtimeJdk }
+  }
+  try {
+    await downloadAndExtractJdk(runtimeJdk, getRuntimeRoot(), (msg) => {
+      onProgress({ phase: 'jdk', message: msg, percent: 15 })
+    })
+    return isValidJdk(runtimeJdk) ? { ok: true, path: runtimeJdk } : { ok: false, error: 'JDK 验证失败' }
+  } catch (err) {
+    return { ok: false, error: String(err) }
+  }
+}
+
+async function ensurePortableGradle(onProgress: ProgressSender): Promise<boolean> {
+  const dest = getRuntimeGradlePath()
+  if (isCompleteGradleDist(dest)) return true
+  try {
+    await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg) => {
+      onProgress({ phase: 'gradle', message: msg, percent: 30 })
+    })
+    return isCompleteGradleDist(dest)
+  } catch {
+    return false
+  }
+}
+
+function writeRuntimeSeedMarker(gradleHome: string): void {
+  const expected = loadFabricVersions()
+  let fileCount = 0
+  let totalBytes = 0
+  function walk(d: string): void {
+    for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, ent.name)
+      if (ent.isDirectory()) walk(full)
+      else {
+        fileCount++
+        try { totalBytes += fs.statSync(full).size } catch { /* ignore */ }
+      }
+    }
+  }
+  if (fs.existsSync(gradleHome)) walk(gradleHome)
+  const marker: SeedMarker = {
+    ...expected,
+    fileCount,
+    totalBytes,
+    createdAt: new Date().toISOString()
+  }
+  fs.writeFileSync(path.join(gradleHome, SEED_MARKER), JSON.stringify(marker, null, 2), 'utf-8')
+}
+
+async function ensurePortableGradleHome(onProgress: ProgressSender): Promise<{ ok: boolean; error?: string }> {
+  const runtimeRoot = getRuntimeRoot()
+  const gradleHome = runtimeGradleHomePath()
+  const expected = loadFabricVersions()
+
+  const isReady = (): boolean => {
+    const marker = readSeedMarker(path.join(gradleHome, SEED_MARKER))
+    return Boolean(marker && versionsMatchSeed(marker, expected) && gradleHomeHasFabricCache(gradleHome))
+  }
+
+  const wrapperJar = wrapperJarSearchPaths().find((p) => fs.existsSync(p)) || path.join(runtimeRoot, 'gradle-wrapper.jar')
+
+  return ensureGradleHomeOnline(
+    runtimeRoot,
+    getRuntimeGradlePath(),
+    wrapperJar,
+    gradleHome,
+    expected,
+    isReady,
+    () => writeRuntimeSeedMarker(gradleHome),
+    onProgress
+  )
+}
+
+async function initFullToolchainImpl(
   onProgress: ProgressSender
 ): Promise<{ ok: boolean; error?: string }> {
   onProgress({ phase: 'checking', message: '检查运行时目录…', percent: 0 })
@@ -688,6 +822,11 @@ export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultPr
       return isCompleteGradleDist(dest)
     }
   }
+
+  if (isPortableEdition()) {
+    return ensurePortableGradle(onProgress)
+  }
+
   return false
 }
 
@@ -733,7 +872,18 @@ export async function ensureJdkReady(onProgress: ProgressSender = defaultProgres
     }
   }
 
-  return { ok: false, error: app.isPackaged ? '安装包不完整，缺少捆绑 JDK 21' : '未找到 JDK 21，请运行 npm run prefetch:deps 或检查 resources/jdk-21' }
+  if (isPortableEdition() && app.isPackaged) {
+    return ensurePortableJdk(onProgress)
+  }
+
+  return { ok: false, error: app.isPackaged ? (isPortableEdition() ? 'JDK 未就绪' : '安装包不完整，缺少捆绑 JDK 21') : '未找到 JDK 21，请运行 npm run prefetch:deps 或检查 resources/jdk-21' }
+}
+
+function shouldUseOfflineGradle(): boolean {
+  if (!app.isPackaged) {
+    return resolveBundledGradleHomeSeedPath() !== null
+  }
+  return isGradleHomeSeedReady()
 }
 
 export function getBuildEnv(jdkPath: string): NodeJS.ProcessEnv {
@@ -742,29 +892,37 @@ export function getBuildEnv(jdkPath: string): NodeJS.ProcessEnv {
   const javaBin = path.join(jdkPath, 'bin')
   const pathSep = process.platform === 'win32' ? ';' : ':'
   const existingPath = process.env.PATH || process.env.Path || ''
+  const offline = shouldUseOfflineGradle()
 
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     MODCRAFTING_RUNTIME: runtimeRoot,
     JAVA_HOME: jdkPath,
     GRADLE_USER_HOME: gradleUserHome,
     GRADLE_OPTS: `-Dorg.gradle.java.home=${jdkPath}`,
-    ORG_GRADLE_PROJECT_org_gradle_offline: 'true',
     PATH: `${javaBin}${pathSep}${existingPath}`
   }
+  if (offline) {
+    env.ORG_GRADLE_PROJECT_org_gradle_offline = 'true'
+  }
+  return env
 }
 
 export function getCmdEnvPrefix(jdkPath: string): string {
   const runtimeRoot = getRuntimeRoot()
   const gradleUserHome = getGradleUserHome()
-  return `set "MODCRAFTING_RUNTIME=${runtimeRoot}" && set "JAVA_HOME=${jdkPath}" && set "PATH=${jdkPath}\\bin;%PATH%" && set "GRADLE_OPTS=-Dorg.gradle.java.home=${jdkPath}" && set "GRADLE_USER_HOME=${gradleUserHome}" && set "ORG_GRADLE_PROJECT_org_gradle_offline=true" && `
+  const offline = shouldUseOfflineGradle() ? ' && set "ORG_GRADLE_PROJECT_org_gradle_offline=true"' : ''
+  return `set "MODCRAFTING_RUNTIME=${runtimeRoot}" && set "JAVA_HOME=${jdkPath}" && set "PATH=${jdkPath}\\bin;%PATH%" && set "GRADLE_OPTS=-Dorg.gradle.java.home=${jdkPath}" && set "GRADLE_USER_HOME=${gradleUserHome}"${offline} && `
 }
 
 export function getPowerShellEnvScript(jdkPath: string): string {
   const runtimeRoot = getRuntimeRoot().replace(/\\/g, '\\\\')
   const gradleUserHome = getGradleUserHome().replace(/\\/g, '\\\\')
   const jdkEscaped = jdkPath.replace(/\\/g, '\\\\')
-  return `$env:MODCRAFTING_RUNTIME = "${runtimeRoot}"\r$env:JAVA_HOME = "${jdkEscaped}"\r$env:GRADLE_USER_HOME = "${gradleUserHome}"\r$env:GRADLE_OPTS = "-Dorg.gradle.java.home=${jdkEscaped}"\r$env:ORG_GRADLE_PROJECT_org_gradle_offline = "true"\r$env:PATH = "${jdkEscaped}\\bin;" + $env:PATH\r`
+  const offlineLine = shouldUseOfflineGradle()
+    ? `$env:ORG_GRADLE_PROJECT_org_gradle_offline = "true"\r`
+    : ''
+  return `$env:MODCRAFTING_RUNTIME = "${runtimeRoot}"\r$env:JAVA_HOME = "${jdkEscaped}"\r$env:GRADLE_USER_HOME = "${gradleUserHome}"\r$env:GRADLE_OPTS = "-Dorg.gradle.java.home=${jdkEscaped}"\r${offlineLine}$env:PATH = "${jdkEscaped}\\bin;" + $env:PATH\r`
 }
 
 export async function ensureGradleWrapper(
@@ -1287,7 +1445,11 @@ export async function prepareBuild(projectPath: string): Promise<{
   await ensureGradleWrapper(projectPath)
   await prefetchGradleDistribution()
   if (!isGradleHomeSeedReady()) {
-    await ensureGradleHomeFromSeed()
+    if (isPortableEdition()) {
+      await ensurePortableGradleHome(defaultProgress)
+    } else {
+      await ensureGradleHomeFromSeed()
+    }
   }
   await copyBaseModsToProject(projectPath, () => {}, { quiet: true })
 
@@ -1308,6 +1470,7 @@ export function getToolchainStatus(): {
   jdkPath: string | null
   runtimeRoot: string
   isPackaged: boolean
+  edition: 'dev' | 'full' | 'portable'
 } {
   const runtimeJdk = getRuntimeJdkPath()
   let jdk: 'ready' | 'bundled' | 'missing' = 'missing'
@@ -1326,7 +1489,7 @@ export function getToolchainStatus(): {
 
   const gradleBundled = resolveBundledGradlePath()
   let gradle: 'ready' | 'incomplete' | 'missing' = 'missing'
-  if (gradleBundled) {
+  if (isCompleteGradleDist(getRuntimeGradlePath()) || gradleBundled) {
     gradle = 'ready'
   } else {
     for (const p of gradleSearchPaths()) {
@@ -1343,6 +1506,7 @@ export function getToolchainStatus(): {
     deps: isGradleHomeSeedReady() ? 'ready' : 'missing',
     jdkPath,
     runtimeRoot: getRuntimeRoot(),
-    isPackaged: app.isPackaged
+    isPackaged: app.isPackaged,
+    edition: getAppEdition()
   }
 }

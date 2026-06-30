@@ -10,21 +10,25 @@
 		"build": "electron-vite build",
 		"preview": "electron-vite preview",
 		"start": "electron .",
-		"build:win": "electron-vite build && node scripts/run-electron-builder.mjs --win",
+		"build:win": "electron-vite build && node scripts/run-electron-builder.mjs --win nsis && node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable",
 		"build:win:setup": "electron-vite build && node scripts/run-electron-builder.mjs --win nsis",
-		"build:win:portable": "electron-vite build && node scripts/run-electron-builder.mjs --win portable",
+		"build:win:portable": "electron-vite build && node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable",
+		"render:manifest": "node scripts/render-update-manifest.mjs",
+		"sync:gitee": "node scripts/sync-gitee-release.mjs",
 		"setup:toolchain": "node scripts/setup-toolchain.mjs",
 		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
-		"prebuild:win": "node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
-		"prebuild:win:setup": "node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
-		"prebuild:win:portable": "node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs"
+		"generate:icon": "node scripts/generate-icon-ico.mjs",
+		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
+		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs",
+		"prebuild:win:portable": "node scripts/generate-icon-ico.mjs && node scripts/verify-portable-resources.mjs"
 	},
 	"dependencies": {
 		"@electron-toolkit/utils": "^4.0.0",
 		"@xterm/addon-fit": "^0.11.0",
 		"@xterm/xterm": "^6.0.0",
+		"electron-updater": "^6.6.2",
 		"iconv-lite": "^0.7.2",
 		"node-pty": "^1.1.0",
 		"react": "^19.1.0",
@@ -37,6 +41,8 @@
 		"electron": "^42.4.1",
 		"electron-builder": "^26.0.0",
 		"electron-vite": "^5.0.0",
+		"png-to-ico": "^3.0.1",
+		"sharp": "^0.35.2",
 		"typescript": "^5.8.3",
 		"vite": "^8.0.16"
 	},
@@ -80,7 +86,7 @@
 				"to": "fabric-versions.json"
 			},
 			{
-				"from": "build/icon.png",
+				"from": "build/appIcon.png",
 				"to": "icon.png"
 			},
 			{
@@ -98,16 +104,10 @@
 					"arch": [
 						"x64"
 					]
-				},
-				{
-					"target": "portable",
-					"arch": [
-						"x64"
-					]
 				}
 			],
-			"icon": "build/icon.png",
-			"signAndEditExecutable": false
+			"icon": "build/appIcon.ico",
+			"signExecutable": false
 		},
 		"nsis": {
 			"oneClick": false,
@@ -128,8 +128,8 @@
 			"language": "2052",
 			"license": "build/license.txt",
 			"include": "build/installer.nsh",
-			"installerIcon": "build/installerIcon.png",
-			"installerHeaderIcon": "build/installerHeaderIcon.png",
+			"installerIcon": "build/installerIcon.ico",
+			"installerHeaderIcon": "build/installerIcon.ico",
 			"guid": "c8f4a2b1-9e3d-4f5a-b6c7-8d9e0f1a2b3c",
 			"artifactName": "${productName} Setup ${version}.${ext}",
 			"uninstallDisplayName": "ModCrafting",
@@ -149,6 +149,13 @@
 		"afterPack": null,
 		"npmRebuild": "false"
 	},
+	"publish": [
+		{
+			"provider": "github",
+			"owner": "newstarbar",
+			"repo": "ModCrafting"
+		}
+	],
 	"license": "GPL-3.0",
 	"repository": {
 		"type": "git",
