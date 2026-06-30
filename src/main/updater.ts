@@ -1,5 +1,7 @@
 import { app, dialog, shell, BrowserWindow } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import electronUpdater from 'electron-updater'
+
+const { autoUpdater } = electronUpdater
 import { is } from '@electron-toolkit/utils'
 import { isFullEdition, isPortableEdition } from './edition'
 

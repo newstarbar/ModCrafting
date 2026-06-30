@@ -47,14 +47,7 @@
 		"vite": "^8.0.16"
 	},
 	"build": {
-		"appId": "com.modcrafting.app",
-		"productName": "ModCrafting",
-		"directories": {
-			"output": "release"
-		},
-		"files": [
-			"out/**/*"
-		],
+		"extends": "./electron-builder.base.json",
 		"extraResources": [
 			{
 				"from": "resources/jdk-21",
@@ -126,7 +119,6 @@
 				"en_US"
 			],
 			"language": "2052",
-			"license": "build/license.txt",
 			"include": "build/installer.nsh",
 			"installerIcon": "build/installerIcon.ico",
 			"installerHeaderIcon": "build/installerIcon.ico",
@@ -134,20 +126,7 @@
 			"artifactName": "${productName} Setup ${version}.${ext}",
 			"uninstallDisplayName": "ModCrafting",
 			"warningsAsErrors": false
-		},
-		"portable": {
-			"artifactName": "${productName} ${version} Portable.${ext}"
-		},
-		"asarUnpack": [
-			"node_modules/node-pty/**"
-		],
-		"electronDownload": {
-			"version": "42.4.1",
-			"mirror": "https://npmmirror.com/mirrors/electron/"
-		},
-		"electronDist": "node_modules/electron/dist",
-		"afterPack": null,
-		"npmRebuild": "false"
+		}
 	},
 	"publish": [
 		{

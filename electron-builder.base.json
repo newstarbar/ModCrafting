@@ -1,0 +1,24 @@
+{
+  "appId": "com.modcrafting.app",
+  "productName": "ModCrafting",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "out/**/*"
+  ],
+  "asarUnpack": [
+    "node_modules/node-pty/**"
+  ],
+  "electronDownload": {
+    "version": "42.4.1",
+    "mirror": "https://npmmirror.com/mirrors/electron/"
+  },
+  "electronDist": "node_modules/electron/dist",
+  "afterPack": null,
+  "beforePack": "./scripts/patch-nsis-install-ui.mjs",
+  "npmRebuild": "false",
+  "portable": {
+    "artifactName": "${productName} ${version} Portable.${ext}"
+  }
+}

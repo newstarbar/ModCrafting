@@ -1,0 +1,12 @@
+﻿ModCrafting Software License
+
+Copyright (c) ModCrafting
+
+This software is provided "as is" for Minecraft Fabric mod development and AI-assisted programming.
+
+By using this software, you agree that:
+1. Bundled JDK, Gradle, and third-party open-source components are governed by their respective upstream licenses.
+2. You are responsible for complying with Minecraft / Mojang terms of use.
+3. The developers are not liable for any direct or indirect damages arising from use of this software.
+
+For a full list of open-source components, see the documentation in the installation directory.

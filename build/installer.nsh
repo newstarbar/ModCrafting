@@ -2,6 +2,11 @@
 ; 文档: https://www.electron.build/nsis
 
 !macro customHeader
+  ; 安装详情：显示文件列表与进度（覆盖 common.nsh 的 nevershow）
+  ShowInstDetails show
+  ShowUninstDetails show
+  !define MUI_INSTFILESPAGE_SHOWDETAILS
+
   ; 欢迎页 / 完成页文案（中文）
   !define MUI_WELCOMEPAGE_TITLE "安装 ModCrafting ${VERSION}"
   !define MUI_WELCOMEPAGE_TEXT \
@@ -31,9 +36,9 @@
     安装目录下的 runtime 缓存可能需要手动删除。$\r$\n$\r$\n\
     单击「下一步」继续。"
 
-  ; 安装详情页：显示正在释放的文件（辅助安装器默认行为）
+  ; 安装详情页标题
   !define MUI_INSTFILESPAGE_FINISHHEADER_TEXT "正在安装 ModCrafting"
-  !define MUI_INSTFILESPAGE_FINISHHEADER_SUBTEXT "请稍候，正在复制程序文件与离线构建资源…"
+  !define MUI_INSTFILESPAGE_FINISHHEADER_SUBTEXT "请稍候，正在解压并复制程序文件与离线构建资源…"
 !macroend
 
 ; 升级安装：在复制文件前提示

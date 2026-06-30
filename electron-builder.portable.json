@@ -1,5 +1,5 @@
 {
-  "extends": "./package.json",
+  "extends": "./electron-builder.base.json",
   "extraResources": [
     {
       "from": "resources/gradle-wrapper.jar",
