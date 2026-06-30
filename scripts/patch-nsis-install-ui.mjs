@@ -6,12 +6,22 @@
  *
  * Callback Function lives in build/installer.nsh (top-level include), NOT here.
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const tpl = join(process.cwd(), 'node_modules', 'app-builder-lib', 'templates', 'nsis')
 
+if (!existsSync(tpl)) {
+  console.warn('[nsis] app-builder-lib templates not found — run npm install first, skip patch')
+  process.exit(0)
+}
+
 const installSectionPath = join(tpl, 'installSection.nsh')
+if (!existsSync(installSectionPath)) {
+  console.warn('[nsis] installSection.nsh not found — skip patch')
+  process.exit(0)
+}
+
 let installSection = readFileSync(installSectionPath, 'utf8')
 if (installSection.includes('SetDetailsPrint none')) {
   installSection = installSection.replace('SetDetailsPrint none', 'SetDetailsPrint both')
@@ -20,6 +30,11 @@ if (installSection.includes('SetDetailsPrint none')) {
 }
 
 const extractPath = join(tpl, 'include', 'extractAppPackage.nsh')
+if (!existsSync(extractPath)) {
+  console.warn('[nsis] extractAppPackage.nsh not found — skip extract patch')
+  process.exit(0)
+}
+
 const extractMacro = `!macro extractUsing7za FILE
   Push $OUTDIR
   CreateDirectory "$PLUGINSDIR\\7z-out"

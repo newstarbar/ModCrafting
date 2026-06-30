@@ -72,7 +72,7 @@ tasks.named("runClient").configure {
     runDir.mkdirs()
     def opts = new File(runDir, "options.txt")
     if (!opts.exists()) {
-      opts.text = "lang:zh_cn\\n"
+      opts.text = "lang:zh_cn\\nonboardAccessibility:false\\nnarrator:0\\n"
     }
   }
 }`

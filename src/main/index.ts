@@ -23,6 +23,15 @@ function resolveAppIcon(): string | undefined {
   return candidates.find((p) => existsSync(p))
 }
 
+function resolvePreloadScript(): string {
+  const base = join(__dirname, '../preload/index')
+  const mjs = `${base}.mjs`
+  const js = `${base}.js`
+  if (existsSync(mjs)) return mjs
+  if (existsSync(js)) return js
+  return mjs
+}
+
 function createWindow(): void {
   const iconPath = resolveAppIcon()
   mainWindow = new BrowserWindow({
@@ -34,7 +43,7 @@ function createWindow(): void {
     title: 'ModCrafting',
     ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: resolvePreloadScript(),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false

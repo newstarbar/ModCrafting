@@ -20,6 +20,7 @@
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
 		"generate:icon": "node scripts/generate-icon-ico.mjs",
+		"postinstall": "node scripts/ensure-native-deps.mjs",
 		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/patch-nsis-install-ui.mjs",
 		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/patch-nsis-install-ui.mjs",
 		"prebuild:win:portable": "node scripts/generate-icon-ico.mjs && node scripts/verify-portable-resources.mjs"
@@ -139,5 +140,12 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/newstarbar/ModCrafting.git"
+	},
+	"allowScripts": {
+		"electron@42.4.1": true,
+		"node-pty@1.1.0": true,
+		"sharp@0.35.2": true,
+		"esbuild@0.25.12": true,
+		"electron-winstaller@5.4.0": true
 	}
 }

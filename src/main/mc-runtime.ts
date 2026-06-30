@@ -70,9 +70,40 @@ function buildInstanceGradleEnv(baseEnv: NodeJS.ProcessEnv, instanceId: string):
   return { ...baseEnv, GRADLE_USER_HOME: instanceHome }
 }
 
-function instanceGameDirRel(instanceId: string): string {
+function instanceGameDirAbs(projectPath: string, instanceId: string): string {
   const safe = instanceId.replace(/[^a-zA-Z0-9_-]/g, '_')
-  return `run/mc-${safe}`
+  return path.join(projectPath, 'run', safe)
+}
+
+function quoteGameDirArg(gameDirAbs: string): string {
+  const normalized = gameDirAbs.replace(/\\/g, '/')
+  return normalized.includes(' ') ? `"${normalized}"` : normalized
+}
+
+/** Ensure Chinese UI and skip the first-run accessibility welcome screen. */
+function ensureGameOptions(gameDirAbs: string): void {
+  const optionsPath = path.join(gameDirAbs, 'options.txt')
+  const required: Record<string, string> = {
+    lang: 'zh_cn',
+    onboardAccessibility: 'false',
+    narrator: '0'
+  }
+
+  if (!fs.existsSync(optionsPath)) {
+    const content = Object.entries(required)
+      .map(([k, v]) => `${k}:${v}`)
+      .join('\n')
+    fs.writeFileSync(optionsPath, `${content}\n`, 'utf-8')
+    return
+  }
+
+  let content = fs.readFileSync(optionsPath, 'utf-8')
+  for (const [key, value] of Object.entries(required)) {
+    const re = new RegExp(`^${key}:.*$`, 'm')
+    const line = `${key}:${value}`
+    content = re.test(content) ? content.replace(re, line) : `${content.replace(/\s*$/, '')}\n${line}`
+  }
+  fs.writeFileSync(optionsPath, `${content.replace(/\s*$/, '')}\n`, 'utf-8')
 }
 
 type ExitReason = 'none' | 'normal' | 'crash' | 'manual' | 'start_failed'
@@ -138,11 +169,12 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
   const gradlew = path.join(instance.projectPath, 'gradlew.bat')
   const cmd = fs.existsSync(gradlew) ? gradlew : 'gradle'
   const offlineFlags = isGradleHomeSeedReady() ? '--offline' : '-Dorg.gradle.offline=false'
-  const gameDirRel = instanceGameDirRel(id)
-  const gameDirAbs = path.join(instance.projectPath, gameDirRel)
-  fs.mkdirSync(gameDirAbs, { recursive: true })
+  const gameDirAbs = instanceGameDirAbs(instance.projectPath, id)
+  fs.mkdirSync(path.join(gameDirAbs, 'mods'), { recursive: true })
+  ensureGameOptions(gameDirAbs)
   const instanceEnv = buildInstanceGradleEnv(buildPrep.env || process.env, id)
-  const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirRel.replace(/\\/g, '/')}"`
+  const gameDirArg = quoteGameDirArg(gameDirAbs)
+  const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirArg}"`
 
   try {
     const proc = spawn(fullCmd, [], {
@@ -188,7 +220,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
         instance.exitReason = 'crash'
         instance.crashedAt = new Date()
 
-        const crashReportsDir = path.join(instance.projectPath, 'run', 'crash-reports')
+        const crashReportsDir = path.join(instanceGameDirAbs(instance.projectPath, id), 'crash-reports')
         if (fs.existsSync(crashReportsDir)) {
           const files = fs.readdirSync(crashReportsDir)
             .filter((f) => f.endsWith('.txt'))

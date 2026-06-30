@@ -24,6 +24,23 @@ const GRADLE_DIST_NAME = `gradle-${FABRIC_VERSIONS.gradle_version}-bin`
 const GRADLE_HOME_DIR = `gradle-${FABRIC_VERSIONS.gradle_version}`
 const force = process.argv.includes('--force')
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function killProcessTree(child) {
+  if (!child?.pid) return
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/PID', String(child.pid), '/F', '/T'], { shell: true, stdio: 'ignore' })
+    } else {
+      child.kill('SIGTERM')
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function countDirStats(dir) {
   let fileCount = 0
   let totalBytes = 0
@@ -100,9 +117,11 @@ function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
       shell: true
     })
     let timer
+    let timedOut = false
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
-        try { child.kill('SIGTERM') } catch { /* ignore */ }
+        timedOut = true
+        killProcessTree(child)
         reject(new Error(`Gradle timed out after ${timeoutMs}ms: ${args.join(' ')}`))
       }, timeoutMs)
     }
@@ -114,10 +133,37 @@ function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
     })
     child.on('close', (code) => {
       if (timer) clearTimeout(timer)
+      if (timedOut) return
       if (code === 0) resolve(code)
       else reject(new Error(`Gradle exited ${code}: ${args.join(' ')}`))
     })
   })
+}
+
+async function stopGradleDaemons(gradleHome) {
+  console.log('Stopping Gradle daemons before copying cache...')
+  try {
+    await runGradle(prefetchProject, gradleHome, ['--stop'], 60_000)
+  } catch {
+    // --stop may return non-zero when no daemons were running
+  }
+  await sleep(3000)
+}
+
+async function copyGradleHomeToSeed(src, dest) {
+  const maxAttempts = 6
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (existsSync(dest)) rmSync(dest, { recursive: true, force: true })
+      cpSync(src, dest, { recursive: true })
+      return
+    } catch (err) {
+      const retryable = ['EBUSY', 'EPERM', 'EDOM', 'EACCES'].includes(err?.code)
+      if (!retryable || attempt === maxAttempts) throw err
+      console.warn(`[prefetch] copy locked (${err.code}), retry ${attempt}/${maxAttempts} in 5s...`)
+      await sleep(5000)
+    }
+  }
 }
 
 async function main() {
@@ -150,9 +196,10 @@ async function main() {
     console.warn('runClient prefetch timed out or failed (may still be sufficient for build)')
   }
 
+  await stopGradleDaemons(gradleHome)
+
   console.log('\nCopying gradle-home to seed directory...')
-  if (existsSync(seedDir)) rmSync(seedDir, { recursive: true, force: true })
-  cpSync(gradleHome, seedDir, { recursive: true })
+  await copyGradleHomeToSeed(gradleHome, seedDir)
 
   const { fileCount, totalBytes } = countDirStats(seedDir)
   const marker = {
