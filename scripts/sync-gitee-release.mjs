@@ -95,19 +95,19 @@ async function uploadAsset(releaseId, filePath) {
 async function main() {
   const assets = collectAssets(releaseDir)
   if (assets.length === 0) {
-    console.error(`No release assets in ${releaseDir}`)
+    console.error(`[gitee] No release assets in ${releaseDir}`)
     process.exit(1)
   }
 
-  console.log(`Syncing ${assets.length} assets to Gitee ${tag}...`)
+  console.log(`[gitee] Syncing ${assets.length} assets to ${owner}/${repo} ${tag}...`)
   const release = await ensureRelease()
   for (const asset of assets) {
     await uploadAsset(release.id, asset)
   }
-  console.log('Gitee release sync complete.')
+  console.log('[gitee] Release sync complete.')
 }
 
 main().catch((err) => {
-  console.error(err)
+  console.error('[gitee] Sync failed:', err.message || err)
   process.exit(1)
 })

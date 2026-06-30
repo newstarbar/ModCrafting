@@ -11,12 +11,18 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Cache toolchain resources
@@ -37,6 +43,11 @@ jobs:
       - name: Prefetch Fabric deps
         run: npm run prefetch:deps
 
+      - name: Prepare installer assets
+        run: |
+          npm run generate:icon
+          node scripts/patch-nsis-install-ui.mjs
+
       - name: Render update manifest
         run: node scripts/render-update-manifest.mjs "${{ github.ref_name }}" "Release ${{ github.ref_name }}"
 
@@ -44,14 +55,13 @@ jobs:
         run: npm run build
 
       - name: Build Setup (NSIS) and publish GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win nsis --publish always
+        run: node scripts/run-electron-builder.mjs --win nsis --publish always
 
       - name: Build Portable
-        run: npx electron-builder --config electron-builder.portable.json --win portable
+        run: node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable
 
       - name: Sync Gitee Release
+        continue-on-error: true
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_OWNER: ${{ vars.GITEE_OWNER }}
@@ -59,9 +69,24 @@ jobs:
         run: node scripts/sync-gitee-release.mjs "${{ github.ref_name }}"
 
       - name: Commit update manifest
+        continue-on-error: true
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add build/update-manifest.json
-          git diff --staged --quiet || git commit -m "chore: update manifest for ${{ github.ref_name }}"
-          git push || echo "Manifest push skipped (may need manual merge)"
+          MANIFEST="build/update-manifest.json"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "Manifest not found, skip"
+            exit 0
+          fi
+          git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+          git checkout "${{ github.sha }}" -- "$MANIFEST"
+          git add "$MANIFEST"
+          if git diff --staged --quiet; then
+            echo "Manifest unchanged on main, skip"
+            exit 0
+          fi
+          git commit -m "chore: update manifest for ${{ github.ref_name }}"
+          git push origin main
