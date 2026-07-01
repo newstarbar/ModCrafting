@@ -19,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -48,8 +50,11 @@ jobs:
           npm run generate:icon
           node scripts/patch-nsis-install-ui.mjs
 
+      - name: Render release notes
+        run: node scripts/render-release-notes.mjs "${{ github.ref_name }}"
+
       - name: Render update manifest
-        run: node scripts/render-update-manifest.mjs "${{ github.ref_name }}" "Release ${{ github.ref_name }}"
+        run: node scripts/render-update-manifest.mjs "${{ github.ref_name }}"
 
       - name: Build app
         run: npm run build
@@ -64,6 +69,7 @@ jobs:
         continue-on-error: true
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          # 可选：覆盖 build/gitee-config.json 中的 owner/repo
           GITEE_OWNER: ${{ vars.GITEE_OWNER }}
           GITEE_REPO: ${{ vars.GITEE_REPO }}
         run: node scripts/sync-gitee-release.mjs "${{ github.ref_name }}"

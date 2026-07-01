@@ -1,13 +1,13 @@
 {
   "version": "1.0.0",
-  "releaseDate": "2026-06-30",
-  "notes": "Release v1.0.0",
+  "releaseDate": "2026-07-01",
+  "notes": "ModCrafting v1.0.0",
   "feeds": {
     "gitee": {
-      "manifest": "https://gitee.com/newstarbar/ModCrafting/releases/download/v1.0.0/latest.yml",
-      "setup": "https://gitee.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting%20Setup%201.0.0.exe",
-      "portable": "https://gitee.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting%201.0.0%20Portable.exe",
-      "releasesPage": "https://gitee.com/newstarbar/ModCrafting/releases"
+      "manifest": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/latest.yml",
+      "setup": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting%20Setup%201.0.0.exe",
+      "portable": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting%201.0.0%20Portable.exe",
+      "releasesPage": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases"
     },
     "github": {
       "manifest": "https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/latest.yml",

@@ -1,5 +1,7 @@
 import { app, dialog, shell, BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
+import * as fs from 'fs'
+import * as path from 'path'
 
 const { autoUpdater } = electronUpdater
 import { is } from '@electron-toolkit/utils'
@@ -7,13 +9,32 @@ import { isFullEdition, isPortableEdition } from './edition'
 
 const MANIFEST_TIMEOUT_MS = 8000
 
+function loadGiteeRepo(): { owner: string; repo: string } {
+  const candidates = [
+    path.join(process.resourcesPath || '', 'gitee-config.json'),
+    path.join(__dirname, '..', '..', 'build', 'gitee-config.json')
+  ]
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { owner?: string; repo?: string }
+      if (data.owner && data.repo) return { owner: data.owner, repo: data.repo }
+    } catch {
+      /* ignore */
+    }
+  }
+  return { owner: 'chenmo-starry-sky', repo: 'mod-crafting' }
+}
+
+const giteeRepo = loadGiteeRepo()
+
 const MANIFEST_URLS = {
-  gitee: 'https://gitee.com/newstarbar/ModCrafting/raw/main/build/update-manifest.json',
+  gitee: `https://gitee.com/${giteeRepo.owner}/${giteeRepo.repo}/raw/main/build/update-manifest.json`,
   github: 'https://raw.githubusercontent.com/newstarbar/ModCrafting/main/build/update-manifest.json'
 }
 
 const DEFAULT_RELEASE_PAGES = {
-  gitee: 'https://gitee.com/newstarbar/ModCrafting/releases',
+  gitee: `https://gitee.com/${giteeRepo.owner}/${giteeRepo.repo}/releases`,
   github: 'https://github.com/newstarbar/ModCrafting/releases'
 }
 

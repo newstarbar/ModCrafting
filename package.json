@@ -14,6 +14,7 @@
 		"build:win:setup": "electron-vite build && node scripts/run-electron-builder.mjs --win nsis",
 		"build:win:portable": "electron-vite build && node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable",
 		"render:manifest": "node scripts/render-update-manifest.mjs",
+		"render:release-notes": "node scripts/render-release-notes.mjs",
 		"sync:gitee": "node scripts/sync-gitee-release.mjs",
 		"setup:toolchain": "node scripts/setup-toolchain.mjs",
 		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
@@ -133,7 +134,11 @@
 		{
 			"provider": "github",
 			"owner": "newstarbar",
-			"repo": "ModCrafting"
+			"repo": "ModCrafting",
+			"draft": false,
+			"releaseInfo": {
+				"releaseNotesFile": "build/release-body.md"
+			}
 		}
 	],
 	"license": "GPL-3.0",

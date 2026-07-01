@@ -18,6 +18,12 @@
   "afterPack": null,
   "beforePack": "./scripts/patch-nsis-install-ui.mjs",
   "npmRebuild": "false",
+  "extraResources": [
+    {
+      "from": "build/gitee-config.json",
+      "to": "gitee-config.json"
+    }
+  ],
   "portable": {
     "artifactName": "${productName} ${version} Portable.${ext}"
   }

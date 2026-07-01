@@ -3,16 +3,17 @@
  * Render build/update-manifest.json for a release version.
  * Usage: node scripts/render-update-manifest.mjs 1.0.1 "Release notes"
  */
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { giteeUrls, resolveGiteeRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
 const manifestPath = path.join(root, 'build', 'update-manifest.json')
 
 const rawVersion = process.argv[2]
-const notes = process.argv[3] || `ModCrafting ${rawVersion}`
+const notesArg = process.argv[3]
 
 if (!rawVersion) {
   console.error('Usage: node scripts/render-update-manifest.mjs <version> [notes]')
@@ -27,6 +28,17 @@ if (!/^\d+\.\d+\.\d+/.test(ver)) {
 }
 
 const tag = rawVersion.startsWith('v') ? rawVersion : `v${ver}`
+const { owner, repo } = resolveGiteeRepo()
+const gitee = giteeUrls(owner, repo, tag, ver)
+
+const releaseBodyPath = path.join(root, 'build', 'release-body.md')
+let notes = notesArg
+if (!notes && existsSync(releaseBodyPath)) {
+  const firstLine = readFileSync(releaseBodyPath, 'utf-8').split(/\r?\n/).find((l) => l.trim())
+  notes = firstLine?.replace(/^#\s*/, '') || `ModCrafting ${tag}`
+} else if (!notes) {
+  notes = `ModCrafting ${tag}`
+}
 
 const manifest = {
   version: ver,
@@ -34,10 +46,10 @@ const manifest = {
   notes,
   feeds: {
     gitee: {
-      manifest: `https://gitee.com/newstarbar/ModCrafting/releases/download/${tag}/latest.yml`,
-      setup: `https://gitee.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`,
-      portable: `https://gitee.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20${ver}%20Portable.exe`,
-      releasesPage: 'https://gitee.com/newstarbar/ModCrafting/releases'
+      manifest: gitee.manifest,
+      setup: gitee.setup,
+      portable: gitee.portable,
+      releasesPage: gitee.releasesPage
     },
     github: {
       manifest: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/latest.yml`,

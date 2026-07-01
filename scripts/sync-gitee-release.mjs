@@ -6,6 +6,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { resolveGiteeRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -25,10 +26,21 @@ if (!token) {
   process.exit(0)
 }
 
-const owner = process.env.GITEE_OWNER || 'newstarbar'
-const repo = process.env.GITEE_REPO || 'ModCrafting'
+const { owner, repo, source } = resolveGiteeRepo()
 const tag = version.startsWith('v') ? version : `v${version}`
 const apiBase = 'https://gitee.com/api/v5'
+
+async function verifyRepoAccess() {
+  try {
+    await giteeApi('GET', `/repos/${owner}/${repo}`)
+  } catch (err) {
+    const hint =
+      source === 'fallback'
+        ? '请在 GitHub 仓库 Settings → Secrets and variables → Actions 中设置 Variables：GITEE_OWNER、GITEE_REPO；或编辑 build/gitee-config.json'
+        : `当前配置来自 ${source}（${owner}/${repo}）。请确认仓库存在，且 GITEE_TOKEN 对该仓库有 releases 权限`
+    throw new Error(`${err.message}\n[gitee] ${hint}`)
+  }
+}
 
 async function giteeApi(method, endpoint, body) {
   const sep = endpoint.includes('?') ? '&' : '?'
@@ -60,10 +72,25 @@ function collectAssets(dir) {
     .filter((p) => statSync(p).isFile())
 }
 
+function readReleaseBody() {
+  const bodyPath = path.join(root, 'build', 'release-body.md')
+  if (existsSync(bodyPath)) {
+    return readFileSync(bodyPath, 'utf-8')
+  }
+  return `ModCrafting ${tag} — synced from GitHub Actions.`
+}
+
 async function ensureRelease() {
+  const body = readReleaseBody()
   try {
     const existing = await giteeApi('GET', `/repos/${owner}/${repo}/releases/tags/${tag}`)
-    if (existing?.id) return existing
+    if (existing?.id) {
+      await giteeApi('PATCH', `/repos/${owner}/${repo}/releases/${existing.id}`, {
+        body,
+        name: `ModCrafting ${tag}`
+      })
+      return existing
+    }
   } catch {
     /* create */
   }
@@ -71,7 +98,7 @@ async function ensureRelease() {
   return giteeApi('POST', `/repos/${owner}/${repo}/releases`, {
     tag_name: tag,
     name: `ModCrafting ${tag}`,
-    body: `ModCrafting ${tag} — synced from GitHub Actions.`,
+    body,
     target_commitish: 'main',
     prerelease: false
   })
@@ -99,7 +126,8 @@ async function main() {
     process.exit(1)
   }
 
-  console.log(`[gitee] Syncing ${assets.length} assets to ${owner}/${repo} ${tag}...`)
+  console.log(`[gitee] Syncing ${assets.length} assets to ${owner}/${repo} ${tag} (from ${source})...`)
+  await verifyRepoAccess()
   const release = await ensureRelease()
   for (const asset of assets) {
     await uploadAsset(release.id, asset)
