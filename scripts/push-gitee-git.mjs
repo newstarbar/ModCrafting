@@ -50,4 +50,7 @@ run('git config user.email "github-actions[bot]@users.noreply.github.com"')
 run(`git push gitee ${sha}:refs/heads/main`)
 run(`git push gitee refs/tags/${normalizedTag}:refs/tags/${normalizedTag} --force`)
 
+// 避免后续 git checkout main 歧义（origin/main vs gitee/main）
+runQuiet('git remote remove gitee')
+
 console.log('[gitee] Git mirror push complete.')

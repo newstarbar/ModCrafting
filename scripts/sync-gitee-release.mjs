@@ -3,7 +3,8 @@
  * Sync release assets to Gitee Releases.
  * Requires env GITEE_TOKEN. Usage: node scripts/sync-gitee-release.mjs <version> [release_dir]
  */
-import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
+import { readFileSync, existsSync, statSync, readdirSync } from 'fs'
+import { spawn } from 'node:child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { resolveGiteeRepo } from './gitee-config.mjs'
@@ -22,13 +23,14 @@ if (!version) {
 const token = process.env.GITEE_TOKEN
 if (!token) {
   console.warn('[gitee] GITEE_TOKEN not set — skip Gitee Release sync')
-  console.warn('[gitee] Add repository Secret GITEE_TOKEN to enable automatic sync')
   process.exit(0)
 }
 
 const { owner, repo, source } = resolveGiteeRepo()
 const tag = version.startsWith('v') ? version : `v${version}`
+const ver = tag.replace(/^v/, '')
 const apiBase = 'https://gitee.com/api/v5'
+const UPLOAD_TIMEOUT_MS = 45 * 60 * 1000
 
 async function giteeApi(method, endpoint, body) {
   const sep = endpoint.includes('?') ? '&' : '?'
@@ -52,15 +54,7 @@ async function giteeApi(method, endpoint, body) {
 }
 
 async function verifyRepoAccess() {
-  try {
-    await giteeApi('GET', `/repos/${owner}/${repo}`)
-  } catch (err) {
-    const hint =
-      source === 'fallback'
-        ? '请在 GitHub 仓库 Settings → Secrets and variables → Actions 中设置 Variables：GITEE_OWNER、GITEE_REPO；或编辑 build/gitee-config.json'
-        : `当前配置来自 ${source}（${owner}/${repo}）。请确认仓库存在，且 GITEE_TOKEN 对该仓库有 releases 权限`
-    throw new Error(`${err.message}\n[gitee] ${hint}`)
-  }
+  await giteeApi('GET', `/repos/${owner}/${repo}`)
 }
 
 async function getDefaultBranch() {
@@ -84,36 +78,50 @@ async function findReleaseByTag(tagName) {
   } catch {
     /* list fallback */
   }
-
   const releases = await giteeApi('GET', `/repos/${owner}/${repo}/releases?per_page=100&page=1`)
   if (!Array.isArray(releases)) return null
   return releases.find((r) => r.tag_name === tagName) || null
 }
 
-function collectAssets(dir) {
+/** 仅同步用户需要的发布附件，排除 builder-debug.yml / 内部 7z 等 */
+function collectReleaseAssets(dir) {
   if (!existsSync(dir)) return []
-  const exts = ['.exe', '.yml', '.blockmap', '.7z']
-  return readdirSync(dir)
-    .filter((name) => exts.some((ext) => name.endsWith(ext)))
+
+  const candidates = [
+    'latest.yml',
+    `ModCrafting Setup ${ver}.exe.blockmap`,
+    `ModCrafting Setup ${ver}.exe`,
+    `ModCrafting ${ver} Portable.exe`
+  ]
+
+  const files = candidates
     .map((name) => path.join(dir, name))
-    .filter((p) => statSync(p).isFile())
+    .filter((p) => existsSync(p) && statSync(p).isFile())
+
+  if (files.length === 0) {
+    console.warn('[gitee] expected filenames missing, listing release/:')
+    for (const name of readdirSync(dir)) {
+      console.warn(`  - ${name}`)
+    }
+  }
+
+  return files
 }
 
 function readReleaseBody() {
   const bodyPath = path.join(root, 'build', 'release-body.md')
-  if (existsSync(bodyPath)) {
-    return readFileSync(bodyPath, 'utf-8')
+  if (!existsSync(bodyPath)) {
+    throw new Error(`[gitee] ${bodyPath} not found — run render-release-notes.mjs first`)
   }
-  return `ModCrafting ${tag} — synced from GitHub Actions.`
+  const body = readFileSync(bodyPath, 'utf-8')
+  console.log(`[gitee] release body: ${body.split(/\r?\n/)[0]} (${body.length} chars)`)
+  return body
 }
 
 async function createRelease(body) {
   const hasTag = await tagExistsOnGitee(tag)
   const defaultBranch = await getDefaultBranch()
-  const target =
-    process.env.GITHUB_SHA ||
-    process.env.GITHUB_REF_NAME?.replace(/^refs\/tags\//, '') ||
-    defaultBranch
+  const target = process.env.GITHUB_SHA || defaultBranch
 
   const basePayload = {
     tag_name: tag,
@@ -129,9 +137,8 @@ async function createRelease(body) {
   try {
     return await giteeApi('POST', `/repos/${owner}/${repo}/releases`, basePayload)
   } catch (err) {
-    // 标签已存在但 Release 未创建时，Gitee 可能报「创建标签失败」
     if (String(err.message).includes('创建标签失败') || String(err.message).includes('400')) {
-      console.warn('[gitee] create release retry without target_commitish (tag may already exist)')
+      console.warn('[gitee] create release retry without target_commitish')
       return giteeApi('POST', `/repos/${owner}/${repo}/releases`, {
         tag_name: tag,
         name: `ModCrafting ${tag}`,
@@ -152,7 +159,7 @@ async function ensureRelease() {
       body,
       name: `ModCrafting ${tag}`
     })
-    console.log(`[gitee] Updated existing release #${existing.id}`)
+    console.log(`[gitee] Updated release body #${existing.id}`)
     return existing
   }
 
@@ -161,34 +168,98 @@ async function ensureRelease() {
   return created
 }
 
+function formatSize(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function uploadWithCurl(releaseId, filePath) {
+  const fileName = path.basename(filePath)
+  const size = statSync(filePath).size
+  const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-fS',
+      '--retry', '3',
+      '--retry-delay', '10',
+      '--connect-timeout', '60',
+      '-m', String(Math.ceil(UPLOAD_TIMEOUT_MS / 1000)),
+      '-X', 'POST',
+      '-F', `file=@${filePath}`,
+      url
+    ]
+    console.log(`[gitee] Uploading ${fileName} (${formatSize(size)})...`)
+    const child = spawn('curl.exe', args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    child.stderr.on('data', (d) => { stderr += d.toString() })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) {
+        console.log(`[gitee] Uploaded: ${fileName}`)
+        resolve()
+      } else {
+        reject(new Error(`curl upload ${fileName} failed (${code}): ${stderr.trim()}`))
+      }
+    })
+  })
+}
+
 async function uploadAsset(releaseId, filePath) {
+  const size = statSync(filePath).size
+  // 大文件用 curl 流式上传，避免 Node fetch 读入 1GB 内存超时
+  if (size > 8 * 1024 * 1024) {
+    return uploadWithCurl(releaseId, filePath)
+  }
+
   const fileName = path.basename(filePath)
   const buffer = readFileSync(filePath)
   const form = new FormData()
   form.append('file', new Blob([buffer]), fileName)
-
   const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
-  const res = await fetch(url, { method: 'POST', body: form })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Upload ${fileName} failed: ${res.status} ${text}`)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000)
+  try {
+    const res = await fetch(url, { method: 'POST', body: form, signal: controller.signal })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Upload ${fileName} failed: ${res.status} ${text}`)
+    }
+    console.log(`[gitee] Uploaded: ${fileName}`)
+  } finally {
+    clearTimeout(timer)
   }
-  console.log(`Uploaded: ${fileName}`)
 }
 
 async function main() {
-  const assets = collectAssets(releaseDir)
+  const assets = collectReleaseAssets(releaseDir)
   if (assets.length === 0) {
     console.error(`[gitee] No release assets in ${releaseDir}`)
     process.exit(1)
   }
 
   console.log(`[gitee] Syncing ${assets.length} assets to ${owner}/${repo} ${tag} (from ${source})...`)
+  assets.forEach((a) => console.log(`  - ${path.basename(a)} (${formatSize(statSync(a).size)})`))
+
   await verifyRepoAccess()
   const release = await ensureRelease()
+
+  const failed = []
   for (const asset of assets) {
-    await uploadAsset(release.id, asset)
+    try {
+      await uploadAsset(release.id, asset)
+    } catch (err) {
+      failed.push({ asset, err })
+      console.error(`[gitee] FAILED: ${path.basename(asset)} — ${err.message || err}`)
+    }
   }
+
+  if (failed.length > 0) {
+    const names = failed.map((f) => path.basename(f.asset)).join(', ')
+    throw new Error(`${failed.length} asset(s) failed: ${names}`)
+  }
+
   console.log('[gitee] Release sync complete.')
 }
 

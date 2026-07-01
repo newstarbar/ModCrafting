@@ -63,7 +63,19 @@ jobs:
         run: node scripts/run-electron-builder.mjs --win nsis --publish always
 
       - name: Build Portable
-        run: node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable
+        run: node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable --publish never
+
+      - name: Upload Portable to GitHub Release
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          PORTABLE="release/ModCrafting ${VER} Portable.exe"
+          if [ -f "$PORTABLE" ]; then
+            gh release upload "${GITHUB_REF_NAME}" "$PORTABLE" --clobber
+          else
+            echo "Portable not found: $PORTABLE"
+            exit 1
+          fi
 
       - name: Push git ref and tag to Gitee
         continue-on-error: false
@@ -93,8 +105,9 @@ jobs:
             echo "Manifest not found, skip"
             exit 0
           fi
+          git remote remove gitee 2>/dev/null || true
           git fetch origin main
-          git checkout main
+          git checkout -B main origin/main
           git pull --ff-only origin main
           git checkout "${{ github.sha }}" -- "$MANIFEST"
           git add "$MANIFEST"
