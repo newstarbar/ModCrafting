@@ -13,6 +13,8 @@ resources/_offline_verify_project/
 node_modules/
 out/
 dist/
+temp/
+design/
 
 # 打包产物
 release/

@@ -30,18 +30,6 @@ const { owner, repo, source } = resolveGiteeRepo()
 const tag = version.startsWith('v') ? version : `v${version}`
 const apiBase = 'https://gitee.com/api/v5'
 
-async function verifyRepoAccess() {
-  try {
-    await giteeApi('GET', `/repos/${owner}/${repo}`)
-  } catch (err) {
-    const hint =
-      source === 'fallback'
-        ? '请在 GitHub 仓库 Settings → Secrets and variables → Actions 中设置 Variables：GITEE_OWNER、GITEE_REPO；或编辑 build/gitee-config.json'
-        : `当前配置来自 ${source}（${owner}/${repo}）。请确认仓库存在，且 GITEE_TOKEN 对该仓库有 releases 权限`
-    throw new Error(`${err.message}\n[gitee] ${hint}`)
-  }
-}
-
 async function giteeApi(method, endpoint, body) {
   const sep = endpoint.includes('?') ? '&' : '?'
   const url = `${apiBase}${endpoint}${sep}access_token=${token}`
@@ -63,6 +51,45 @@ async function giteeApi(method, endpoint, body) {
   return data
 }
 
+async function verifyRepoAccess() {
+  try {
+    await giteeApi('GET', `/repos/${owner}/${repo}`)
+  } catch (err) {
+    const hint =
+      source === 'fallback'
+        ? '请在 GitHub 仓库 Settings → Secrets and variables → Actions 中设置 Variables：GITEE_OWNER、GITEE_REPO；或编辑 build/gitee-config.json'
+        : `当前配置来自 ${source}（${owner}/${repo}）。请确认仓库存在，且 GITEE_TOKEN 对该仓库有 releases 权限`
+    throw new Error(`${err.message}\n[gitee] ${hint}`)
+  }
+}
+
+async function getDefaultBranch() {
+  const info = await giteeApi('GET', `/repos/${owner}/${repo}`)
+  return info?.default_branch || 'main'
+}
+
+async function tagExistsOnGitee(tagName) {
+  try {
+    await giteeApi('GET', `/repos/${owner}/${repo}/tags/${tagName}`)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function findReleaseByTag(tagName) {
+  try {
+    const byTag = await giteeApi('GET', `/repos/${owner}/${repo}/releases/tags/${tagName}`)
+    if (byTag?.id) return byTag
+  } catch {
+    /* list fallback */
+  }
+
+  const releases = await giteeApi('GET', `/repos/${owner}/${repo}/releases?per_page=100&page=1`)
+  if (!Array.isArray(releases)) return null
+  return releases.find((r) => r.tag_name === tagName) || null
+}
+
 function collectAssets(dir) {
   if (!existsSync(dir)) return []
   const exts = ['.exe', '.yml', '.blockmap', '.7z']
@@ -80,28 +107,58 @@ function readReleaseBody() {
   return `ModCrafting ${tag} — synced from GitHub Actions.`
 }
 
-async function ensureRelease() {
-  const body = readReleaseBody()
-  try {
-    const existing = await giteeApi('GET', `/repos/${owner}/${repo}/releases/tags/${tag}`)
-    if (existing?.id) {
-      await giteeApi('PATCH', `/repos/${owner}/${repo}/releases/${existing.id}`, {
-        body,
-        name: `ModCrafting ${tag}`
-      })
-      return existing
-    }
-  } catch {
-    /* create */
-  }
+async function createRelease(body) {
+  const hasTag = await tagExistsOnGitee(tag)
+  const defaultBranch = await getDefaultBranch()
+  const target =
+    process.env.GITHUB_SHA ||
+    process.env.GITHUB_REF_NAME?.replace(/^refs\/tags\//, '') ||
+    defaultBranch
 
-  return giteeApi('POST', `/repos/${owner}/${repo}/releases`, {
+  const basePayload = {
     tag_name: tag,
     name: `ModCrafting ${tag}`,
     body,
-    target_commitish: 'main',
     prerelease: false
-  })
+  }
+
+  if (!hasTag) {
+    basePayload.target_commitish = target.length === 40 ? target : defaultBranch
+  }
+
+  try {
+    return await giteeApi('POST', `/repos/${owner}/${repo}/releases`, basePayload)
+  } catch (err) {
+    // 标签已存在但 Release 未创建时，Gitee 可能报「创建标签失败」
+    if (String(err.message).includes('创建标签失败') || String(err.message).includes('400')) {
+      console.warn('[gitee] create release retry without target_commitish (tag may already exist)')
+      return giteeApi('POST', `/repos/${owner}/${repo}/releases`, {
+        tag_name: tag,
+        name: `ModCrafting ${tag}`,
+        body,
+        prerelease: false
+      })
+    }
+    throw err
+  }
+}
+
+async function ensureRelease() {
+  const body = readReleaseBody()
+  const existing = await findReleaseByTag(tag)
+
+  if (existing?.id) {
+    await giteeApi('PATCH', `/repos/${owner}/${repo}/releases/${existing.id}`, {
+      body,
+      name: `ModCrafting ${tag}`
+    })
+    console.log(`[gitee] Updated existing release #${existing.id}`)
+    return existing
+  }
+
+  const created = await createRelease(body)
+  console.log(`[gitee] Created release #${created.id}`)
+  return created
 }
 
 async function uploadAsset(releaseId, filePath) {

@@ -16,6 +16,7 @@
 		"render:manifest": "node scripts/render-update-manifest.mjs",
 		"render:release-notes": "node scripts/render-release-notes.mjs",
 		"sync:gitee": "node scripts/sync-gitee-release.mjs",
+		"push:gitee": "node scripts/push-gitee-git.mjs",
 		"setup:toolchain": "node scripts/setup-toolchain.mjs",
 		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",

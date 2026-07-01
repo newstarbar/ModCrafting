@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import appIcon from '../../../../build/appIcon.png'
+import installerIcon from '../../../../build/installerIcon.png'
 import { Controller } from '../harness/controller'
 import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'
@@ -474,7 +476,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const renderMessage = (msg: DisplayMessage) => (
     <div key={msg.id} className={`chat-message ${msg.role}`}>
       <div className="role">
-        {msg.role === 'user' ? '👤 你' : '🤖 AI'}
+        {msg.role === 'user' ? (
+          '你'
+        ) : (
+          <span className="chat-role-brand">
+            <img src={installerIcon} alt="" className="chat-role-brand-icon" />
+            AI 助手
+          </span>
+        )}
         {msg.isStreaming && <span className="streaming-dot">●</span>}
       </div>
       <div className="message-content">
@@ -577,7 +586,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     <div className="chat-panel">
       <div className="chat-header">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>🤖 AI 智能体</span>
+          <span className="chat-header-brand">
+            <img src={appIcon} alt="" className="chat-brand-icon" />
+            AI 智能体
+          </span>
           <div style={{ display: 'flex', gap: '4px' }}>
           </div>
         </div>

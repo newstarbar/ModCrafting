@@ -340,6 +340,31 @@ html, body, #root {
   color: var(--accent);
 }
 
+.chat-header-brand,
+.chat-role-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-brand-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+}
+
+.chat-role-brand-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+}
+
 .chat-input-area {
   padding: 12px 20px 16px;
   border-top: 1px solid var(--border-color);
