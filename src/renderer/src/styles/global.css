@@ -560,6 +560,11 @@ html, body, #root {
   white-space: nowrap;
 }
 
+.chat-header-status--done {
+  color: var(--success);
+  animation: none;
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -1174,6 +1179,52 @@ html, body, #root {
   50% { opacity: 0.3; }
 }
 
+/* ── Turn completion badges ── */
+.turn-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.turn-badge--done {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+}
+
+.turn-badge--error {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+}
+
+.turn-badge--cancelled {
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+}
+
+.bubble--done .bubble-hd .role {
+  color: var(--text-secondary);
+}
+
+/* ── Sticky plan in chat scroll area ── */
+.chat-plan-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-bottom: 8px;
+  background: var(--bg-primary);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.chat-plan-sticky .task-plan {
+  margin: 0;
+  max-height: 200px;
+}
+
 /* ── Tool calls inline ── */
 .tool-call {
   margin: 8px 0;
@@ -1322,13 +1373,65 @@ html, body, #root {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  margin: 0 20px 8px;
+  margin: 0 0 8px;
   padding: 10px 12px;
   flex-shrink: 0;
   max-height: 220px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.task-plan--anchored {
+  margin: 0 0 10px;
+  max-height: none;
+}
+
+.task-plan--collapsed {
+  padding: 0;
+  border-style: dashed;
+  background: var(--bg-tertiary);
+}
+
+.task-plan-collapsed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.task-plan-collapsed-toggle:hover {
+  color: var(--text-primary);
+}
+
+.task-plan-collapsed-icon {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.task-plan-collapsed-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.task-plan-header-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .task-plan-header {

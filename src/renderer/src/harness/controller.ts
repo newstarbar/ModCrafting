@@ -6,7 +6,7 @@ import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from './events
 import { Agent } from './agent'
 import { Registry } from './tools'
 import { PlanTracker } from './plan-tracker'
-import { isOpsOnlyPlan, parsePlanSteps, planHasActionableSteps } from '../utils/plan-steps'
+import { parsePlanSteps, planHasActionableSteps, selectPlanText, isActionablePlanText } from '../utils/plan-steps'
 import { logger } from '../utils/logger'
 
 export interface ControllerOptions {
@@ -108,16 +108,7 @@ export class Controller {
 
   /** Skip execute when plan has no concrete steps */
   private isActionablePlan(planText: string): boolean {
-    const text = planText.trim()
-    if (!text) return false
-    if (/无法制定|暂无.*计划|等待用户|未提供.*需求|仅打招呼|无法输出.*计划/i.test(text)) {
-      return false
-    }
-    if (!planHasActionableSteps(text)) return false
-    const steps = parsePlanSteps(text)
-    const hasFileRef = /\.(java|json|gradle|properties|toml)|src\/|gradle\//i.test(text)
-    const hasOpsRef = isOpsOnlyPlan(steps) || /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行/i.test(text)
-    return hasFileRef || hasOpsRef
+    return isActionablePlanText(planText)
   }
 
   private buildExecuteConfirmMessage(tracker: PlanTracker): string {
@@ -231,6 +222,11 @@ ${projectInfo}`
   2. 修改 settings.gradle - 配置仓库
   3. 构建项目
 
+计划必须精简：
+- **禁止重复步骤，禁止把同一个操作拆成多条**（例如不要既写"构建项目"又写"运行 gradlew build"）。
+- **每个操作只出现一次。** 一次构建就是一步，一次运行就是一步。
+- 构建/运行类任务通常只需 1-3 步。不要为"确保编译无错误""测试"等再追加重复的构建/运行步骤。
+
 计划输出后系统会自动进入执行阶段。`
       : `## 🔧 第二阶段：执行计划
 
@@ -296,7 +292,11 @@ ${projectInfo}`
     this.messages.push({ role: 'user', content: input })
     this.onAgentStatus?.('思考中...')
 
+    let planStreamReasoning = ''
+    let planStreamText = ''
     const streamCb = (text: string, reasoning?: string) => {
+      if (text) planStreamText = text
+      if (reasoning) planStreamReasoning = reasoning
       this.onStreamUpdate?.(text, reasoning)
     }
 
@@ -333,18 +333,33 @@ ${projectInfo}`
           { phase: 'plan', emitLifecycle: false }
         )
 
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: planResult })
+        const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
+        logger.agent('Plan merged', {
+          steps: parsePlanSteps(fullPlanText).length,
+          actionable: this.isActionablePlan(fullPlanText)
+        })
+
+        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: fullPlanText })
         this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
 
-        if (!this.isActionablePlan(planResult)) {
+        if (!this.isActionablePlan(fullPlanText)) {
           this.onAgentStatus?.('')
+          this.emitEvent({
+            kind: EventKind.Notice,
+            notice: {
+              level: 'warn',
+              text: planHasActionableSteps(fullPlanText)
+                ? '计划已生成但缺少可执行步骤描述，未进入执行阶段'
+                : '未能解析出编号实施步骤，未进入执行阶段'
+            }
+          })
           this.emitEvent({ kind: EventKind.TurnDone })
           return planResult
         }
 
         this._phase = 'execute'
         await this.updateSystemPrompt('execute')
-        this.planTracker = PlanTracker.fromPlanText(planResult)
+        this.planTracker = PlanTracker.fromPlanText(fullPlanText)
         if (this.planTracker.steps.length > 0) {
           this.planTracker.markRunning()
           this.emitPlanState(this.planTracker)

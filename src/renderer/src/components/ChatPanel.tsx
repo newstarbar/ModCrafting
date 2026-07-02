@@ -59,7 +59,15 @@ interface DisplayMessage {
   content: string  // kept for user messages
   entries?: ChronoEntry[]  // used for assistant messages — chronologically ordered
   isStreaming?: boolean
+  turnStatus?: 'completed' | 'error' | 'cancelled'
+  embeddedPlan?: PlanStep[]
   timestamp: number
+}
+
+interface ActivePlan {
+  steps: PlanStep[]
+  anchorMsgId: string
+  pinned: boolean
 }
 
 interface Session {
@@ -96,6 +104,35 @@ function toPlanSteps(steps: Array<{ id: string; description: string; status: str
   }))
 }
 
+const NUMBERED_LINE_RE = /^\s*\d+[.\、\s]+/
+
+function isNumberedPlanText(content: string): boolean {
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return false
+  const numbered = lines.filter((l) => NUMBERED_LINE_RE.test(l))
+  return numbered.length >= 2 || (numbered.length === 1 && lines.length === 1)
+}
+
+function replacePlanEntriesWithSummary(entries: ChronoEntry[], stepCount: number): ChronoEntry[] {
+  const kept = entries.filter((e) => e.kind !== 'text' || !isNumberedPlanText(e.content))
+  return [...kept, { kind: 'text', content: `已制定实施计划（${stepCount} 步），进度见上方。` }]
+}
+
+function finalizeRunningTools(entries: ChronoEntry[], hasError: boolean): ChronoEntry[] {
+  return entries.map((e) => {
+    if (e.kind === 'tool' && e.status === 'running') {
+      return { ...e, status: hasError ? 'error' as const : 'done' as const }
+    }
+    return e
+  })
+}
+
+function resolveTurnStatus(error?: string): DisplayMessage['turnStatus'] {
+  if (!error) return 'completed'
+  if (/cancel/i.test(error)) return 'cancelled'
+  return 'error'
+}
+
 const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onAppendToSession, onNewSession, onRenameSession, toolchainReady = true }) => {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
@@ -116,7 +153,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const toolOutputRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [usageAccum, setUsageAccum] = useState<UsageStats>(EMPTY_USAGE)
   const turnUsageRef = useRef({ promptTokens: 0, completionTokens: 0 })
-  const [planSteps, setPlanSteps] = useState<PlanStep[]>([])
+  const [activePlan, setActivePlan] = useState<ActivePlan | null>(null)
+  const activePlanRef = useRef<ActivePlan | null>(null)
+  activePlanRef.current = activePlan
+  const [completionFlash, setCompletionFlash] = useState('')
+  const completionFlashTimerRef = useRef<number | null>(null)
 
   const appendToSessionRef = useRef<(role: string, content: string) => void>(() => {})
   const onRunningChangeRef = useRef(onRunningChange)
@@ -189,13 +230,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   useEffect(() => {
     if (isUserScrolledUpRef.current) return
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [displayMessages, agentStatus, runTick])
+  }, [displayMessages, agentStatus, runTick, activePlan, completionFlash])
 
   useEffect(() => {
     if (!isLoading) return
     const id = window.setInterval(() => setRunTick((t) => t + 1), 1000)
     return () => window.clearInterval(id)
   }, [isLoading])
+
+  useEffect(() => {
+    return () => {
+      if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+    }
+  }, [])
 
   // Init controller once
   useEffect(() => {
@@ -221,7 +268,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
     if (!currentSessionId) {
       setDisplayMessages([])
-      setPlanSteps([])
+      setActivePlan(null)
       controllerRef.current?.clearSession()
       return
     }
@@ -241,7 +288,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         timestamp: Date.now()
       }))
     setDisplayMessages(display)
-    setPlanSteps([])
+    setActivePlan(null)
     controllerRef.current?.restoreSnapshot(session.messages)
   }, [currentSessionId])
 
@@ -281,8 +328,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             .map((e) => e.content)
             .join('\n')
           const steps = parsePlanSteps(planText)
-          if (steps.length > 0) {
-            setPlanSteps(toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' }))))
+          if (steps.length > 0 && t.msgId) {
+            const planStepList = toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' })))
+            setActivePlan({ steps: planStepList, anchorMsgId: t.msgId, pinned: true })
+            t.entries = replacePlanEntriesWithSummary(t.entries, steps.length)
+            refreshDisplay()
           }
         } else if (event.phase === 'plan_stream_end') {
           if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
@@ -294,7 +344,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
       case EventKind.PlanState:
         if (event.planSteps && event.planSteps.length > 0) {
-          setPlanSteps(toPlanSteps(event.planSteps))
+          const nextSteps = toPlanSteps(event.planSteps)
+          setActivePlan((prev) => prev
+            ? { ...prev, steps: nextSteps }
+            : t.msgId
+              ? { steps: nextSteps, anchorMsgId: t.msgId, pinned: true }
+              : null)
         }
         break
 
@@ -408,9 +463,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           const stepDoneMatch = output.match(/\[STEP_DONE:(\d+)\]/)
           if (stepDoneMatch) {
             const stepIdx = parseInt(stepDoneMatch[1]) - 1
-            setPlanSteps((prev) => prev.map((s, i) =>
-              i === stepIdx ? { ...s, status: 'completed' as const } : s
-            ))
+            setActivePlan((prev) => prev
+              ? {
+                  ...prev,
+                  steps: prev.steps.map((s, i) =>
+                    i === stepIdx ? { ...s, status: 'completed' as const } : s
+                  )
+                }
+              : prev)
           }
           refreshDisplay()
         }
@@ -446,38 +506,80 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         }
         break
 
-      case EventKind.TurnDone:
+      case EventKind.TurnDone: {
         t.streamDone = true
         if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
+        const hasError = Boolean(event.error)
+        t.entries = finalizeRunningTools(t.entries, hasError)
+        const turnStatus = resolveTurnStatus(event.error)
+        const planSnapshot = activePlanRef.current
+
         setIsLoading(false)
         setAgentStatus('')
         onRunningChangeRef.current?.(false)
+
+        if (!hasError) {
+          setCompletionFlash('任务已完成')
+          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+        }
 
         setUsageAccum((prev) => {
           onUsageChangeRef.current?.(prev)
           return prev
         })
+
+        const finalSteps = planSnapshot
+          ? planSnapshot.steps.map((s) => ({
+              ...s,
+              status: hasError && s.status === 'running'
+                ? 'error' as const
+                : !hasError && s.status !== 'error'
+                  ? 'completed' as const
+                  : s.status
+            }))
+          : undefined
+
         const combinedText = t.entries
           .filter((e): e is { kind: 'text' | 'reasoning'; content: string } & ChronoEntry =>
             e.kind === 'text' || e.kind === 'reasoning'
           )
           .map((e) => e.content)
           .join('\n') || '(完成)'
+
+        const anchorId = planSnapshot?.anchorMsgId || t.msgId
+
         setDisplayMessages((prev) => prev.map((m) => {
-          if (m.id !== t.msgId) return m
-          appendToSessionRef.current('assistant', combinedText)
-          return {
-            ...m,
-            entries: [...t.entries],
-            isStreaming: false
+          if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
+            const isAnchor = m.id === anchorId || m.id === t.msgId
+            if (isAnchor) {
+              appendToSessionRef.current('assistant', combinedText)
+            }
+            return {
+              ...m,
+              ...(isAnchor ? { entries: [...t.entries] } : {}),
+              isStreaming: false,
+              ...(isAnchor ? {
+                turnStatus,
+                embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
+              } : {})
+            }
           }
+          return m
         }))
+
+        setActivePlan(null)
         t.msgId = ''
         break
+      }
 
       case EventKind.Notice:
-        if (event.notice && event.notice.level === 'error') {
-          appendToSessionRef.current('system', event.notice.text)
+        if (event.notice) {
+          if (event.notice.level === 'error') {
+            appendToSessionRef.current('system', event.notice.text)
+          } else if (event.notice.level === 'warn') {
+            setAgentStatus(event.notice.text)
+          }
         }
         break
     }
@@ -510,7 +612,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     setInput('')
     setIsLoading(true)
     setAgentStatus('思考中...')
-    setPlanSteps([])
+    setActivePlan(null)
+    setCompletionFlash('')
 
     if (!currentSessionId) {
       const newId = onNewSession(userMsg)
@@ -525,14 +628,45 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     const ctrl = controllerRef.current
     if (!ctrl) return
     try { await ctrl.send(userMsg) }
-    catch { setIsLoading(false); setAgentStatus('') }
+    catch {
+      setIsLoading(false)
+      setAgentStatus('')
+      onRunningChangeRef.current?.(false)
+    }
   }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, appendToSession, onNewSession])
 
   const handleCancel = useCallback(() => {
     controllerRef.current?.cancel()
+    const t = turnRef.current
+    t.streamDone = true
+    t.entries = finalizeRunningTools(t.entries, true)
+    const planSnapshot = activePlanRef.current
+
     setIsLoading(false)
     setAgentStatus('')
     onRunningChangeRef.current?.(false)
+
+    const anchorId = planSnapshot?.anchorMsgId || t.msgId
+    const finalSteps = planSnapshot?.steps
+
+    setDisplayMessages((prev) => prev.map((m) => {
+      if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
+        const isAnchor = m.id === anchorId || m.id === t.msgId
+        return {
+          ...m,
+          ...(isAnchor && t.msgId ? { entries: [...t.entries] } : {}),
+          isStreaming: false,
+          ...(isAnchor ? {
+            turnStatus: 'cancelled' as const,
+            embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
+          } : {})
+        }
+      }
+      return m
+    }))
+
+    setActivePlan(null)
+    t.msgId = ''
   }, [])
 
   // ======== RENDER ========
@@ -555,8 +689,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
   const renderMessage = (msg: DisplayMessage) => {
     const isUser = msg.role === 'user'
+    const suppressPlanText = Boolean(
+      msg.embeddedPlan?.length
+      || (activePlan?.pinned && activePlan.anchorMsgId === msg.id)
+    )
     return (
-      <div key={msg.id} className={`bubble ${isUser ? 'user' : 'ai'}`}>
+      <div key={msg.id} className={`bubble ${isUser ? 'user' : 'ai'}${msg.turnStatus === 'completed' ? ' bubble--done' : ''}`}>
         <div className="bubble-hd">
           {isUser ? (
             <>
@@ -567,7 +705,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             <>
               <img src={installerIcon} alt="" />
               <span className="role">AI 助手</span>
-              {msg.isStreaming && <span className="streaming-dot">●</span>}
+              {msg.turnStatus === 'completed' && <span className="turn-badge turn-badge--done">已完成</span>}
+              {msg.turnStatus === 'error' && <span className="turn-badge turn-badge--error">已中断</span>}
+              {msg.turnStatus === 'cancelled' && <span className="turn-badge turn-badge--cancelled">已取消</span>}
+              {msg.isStreaming && !msg.turnStatus && <span className="streaming-dot">●</span>}
             </>
           )}
         </div>
@@ -577,6 +718,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           )}
           {!isUser && (
             <>
+              {msg.embeddedPlan && msg.embeddedPlan.length > 0 && (
+                <TaskPlan steps={msg.embeddedPlan} variant="anchored" defaultCollapsed />
+              )}
               {msg.entries && msg.entries.length === 0 && msg.isStreaming && (
                 <span className="mc-dim" style={{ fontSize: '12px', fontStyle: 'italic' }}>思考中...</span>
               )}
@@ -611,6 +755,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                     )
                   }
                   case 'text':
+                    if (suppressPlanText && isNumberedPlanText(entry.content)) return null
                     return <div key={`t-${i}`}>{renderContent(entry.content)}</div>
                   case 'tool': {
                     const isCollapsed = collapsedToolIds.has(entry.id)
@@ -698,13 +843,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           <img src={appIcon} alt="" className="chat-brand-icon" />
           <span className="chat-header-brand">AI 智能体</span>
         </div>
-        {agentStatus && <span className="chat-header-status">{agentStatus}</span>}
+        {completionFlash ? (
+          <span className="chat-header-status chat-header-status--done">{completionFlash}</span>
+        ) : agentStatus ? (
+          <span className="chat-header-status">{agentStatus}</span>
+        ) : null}
       </div>
-      {planSteps.length > 0 && (
-        <TaskPlan steps={planSteps} />
-      )}
       <div className="chat-messages" ref={chatMessagesRef} onScroll={handleScroll}>
-        {displayMessages.length === 0 && (
+        {activePlan?.pinned && (
+          <div className="chat-plan-sticky">
+            <TaskPlan steps={activePlan.steps} variant="pinned" />
+          </div>
+        )}
+        {displayMessages.length === 0 && !activePlan?.pinned && (
           <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0', fontSize: '13px' }}>
             {projectPath ? '描述你想开发的功能，AI 会自动规划并执行' : '请先打开或新建一个项目'}
           </div>

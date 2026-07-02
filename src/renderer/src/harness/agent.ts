@@ -6,6 +6,7 @@ import type { Sink, Event } from './events'
 import { EventKind } from './events'
 import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from './tools'
 import type { PlanTracker } from './plan-tracker'
+import { OPS_STEP_PATTERN } from '../utils/plan-steps'
 import { logger } from '../utils/logger'
 
 let _toolCallIdCounter = 0
@@ -60,6 +61,8 @@ export class Agent {
   private repeatSuccessCounts = new Map<string, number>()
   private finalReadinessBlocks = 0
   private graceRound = false
+  // Rounds where every tool call was rejected by the loop guard (no progress)
+  private consecutiveBlockedRounds = 0
 
   constructor(opts: AgentOptions) {
     this.registry = opts.registry
@@ -76,6 +79,7 @@ export class Agent {
     this.repeatSuccessCounts.clear()
     this.finalReadinessBlocks = 0
     this.graceRound = false
+    this.consecutiveBlockedRounds = 0
   }
 
   private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
@@ -120,6 +124,7 @@ export class Agent {
     const phase = options.phase ?? 'execute'
     const emitLifecycle = options.emitLifecycle ?? true
     const planTracker = options.planTracker ?? null
+    const opsOnlyPlan = options.opsOnlyPlan ?? false
 
     if (options.opsOnlyPlan) {
       this.readonlyLocked = true
@@ -396,8 +401,66 @@ export class Agent {
             this.consecutiveWriteOnlyRounds = 0
           }
 
+          // ---- Loop-breaking: don't rely on weak models to call complete_step ----
+          // Every call this round was rejected by the loop guard → no progress made.
+          const roundFullyBlocked = executableCalls.length === 0 && blockedResults.size > 0
+          const buildSucceeded = combinedOutput.includes('BUILD SUCCESSFUL')
+          const curStep = planTracker?.currentStep ?? null
+          const curIsOps = !!curStep && (opsOnlyPlan || OPS_STEP_PATTERN.test(curStep.description))
+
+          // Auto-advance the current ops/build step when its build actually
+          // succeeded, or when the model is stuck re-calling an already-successful
+          // tool (loop guard keeps blocking). Previously this waited forever for the
+          // model to call complete_step, causing the infinite trigger_build loop.
+          let autoAdvanceMsg = ''
+          if (planTracker && curStep && !hasStepDone && curIsOps && (buildSucceeded || roundFullyBlocked)) {
+            const res = planTracker.advance(curStep.id)
+            if (res.ok) {
+              autoAdvanceMsg = res.message
+              this.consecutiveBlockedRounds = 0
+              this.emit({ kind: EventKind.PlanState, planSteps: planTracker.snapshot() })
+              logger.agent('Auto-advance step (build ok / loop-guard block)', {
+                stepId: curStep.id,
+                reason: buildSucceeded ? 'build_successful' : 'loop_guard_block'
+              })
+            }
+          }
+
+          // All steps finished via auto-advance → end the run instead of looping.
+          if (autoAdvanceMsg && planTracker?.allDone()) {
+            messages.push({
+              role: 'system',
+              content: combinedOutput + `\n\n[SYSTEM: ${autoAdvanceMsg}]`
+            })
+            finalContent = finalContent.trim() || '构建已成功完成，全部计划步骤已完成。'
+            this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
+            logger.agent('Auto-advance: all steps done, ending run', { step, phase })
+            this.finishRun(emitLifecycle)
+            return finalContent
+          }
+
+          // Safety net: model keeps spamming a blocked tool with no way forward.
+          if (roundFullyBlocked && !autoAdvanceMsg) {
+            this.consecutiveBlockedRounds++
+          } else if (!roundFullyBlocked) {
+            this.consecutiveBlockedRounds = 0
+          }
+          if (this.consecutiveBlockedRounds >= 2) {
+            const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
+            finalContent = finalContent.trim() || `检测到重复调用已完成的操作，已自动结束本轮。${remaining}`
+            this.emit({
+              kind: EventKind.Notice,
+              notice: { level: 'warn', text: '检测到工具重复调用循环，已自动结束本轮' }
+            })
+            logger.agent('Loop escape: blocked-round cap reached, ending run', { step, phase })
+            this.finishRun(emitLifecycle)
+            return finalContent
+          }
+
           let instruction
-          if (this.consecutiveWriteOnlyRounds >= 3) {
+          if (autoAdvanceMsg) {
+            instruction = `\n\n[SYSTEM: ${autoAdvanceMsg} 请直接执行下一步，不要重复已完成的构建。]`
+          } else if (this.consecutiveWriteOnlyRounds >= 3) {
             instruction = '\n\n【系统警告】你已经连续多次只写入文件而没有构建！立即调用 trigger_build 来构建项目，不要继续写文件！'
             this.consecutiveWriteOnlyRounds = 0
           } else if (dupWarning) {

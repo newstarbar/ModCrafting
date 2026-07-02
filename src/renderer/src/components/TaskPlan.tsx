@@ -9,6 +9,8 @@ export interface PlanStep {
 interface TaskPlanProps {
   steps: PlanStep[]
   maxVisible?: number
+  variant?: 'pinned' | 'anchored'
+  defaultCollapsed?: boolean
   onToggleStep?: (id: string) => void
 }
 
@@ -38,10 +40,17 @@ function sliceWithExpand<T>(items: T[], expanded: boolean, max: number): { visib
   return { visible: items.slice(0, max), hidden: items.length - max }
 }
 
-const TaskPlan: React.FC<TaskPlanProps> = ({ steps, maxVisible = MAX_VISIBLE_DEFAULT, onToggleStep }) => {
+const TaskPlan: React.FC<TaskPlanProps> = ({
+  steps,
+  maxVisible = MAX_VISIBLE_DEFAULT,
+  variant = 'pinned',
+  defaultCollapsed = false,
+  onToggleStep
+}) => {
   const [activeExpanded, setActiveExpanded] = useState(false)
   const [showDone, setShowDone] = useState(false)
   const [doneExpanded, setDoneExpanded] = useState(false)
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
   const { active, done } = useMemo(() => partitionSteps(steps), [steps])
 
@@ -50,6 +59,7 @@ const TaskPlan: React.FC<TaskPlanProps> = ({ steps, maxVisible = MAX_VISIBLE_DEF
   const completedCount = done.length
   const total = steps.length
   const allDone = completedCount === total
+  const hasError = steps.some((s) => s.status === 'error')
 
   const { visible: visibleActive, hidden: activeHidden } = sliceWithExpand(active, activeExpanded, maxVisible)
   const { visible: visibleDone, hidden: doneHidden } = sliceWithExpand(done, doneExpanded, maxVisible)
@@ -73,10 +83,43 @@ const TaskPlan: React.FC<TaskPlanProps> = ({ steps, maxVisible = MAX_VISIBLE_DEF
     </div>
   )
 
+  const summarySuffix = hasError
+    ? '部分失败'
+    : allDone
+      ? '全部完成'
+      : `${completedCount}/${total}`
+
+  if (variant === 'anchored' && collapsed) {
+    return (
+      <div className="task-plan task-plan--anchored task-plan--collapsed">
+        <button
+          type="button"
+          className="task-plan-collapsed-toggle"
+          onClick={() => setCollapsed(false)}
+        >
+          <span className="task-plan-collapsed-icon">▸</span>
+          <span>实施计划</span>
+          <span className="task-plan-collapsed-meta">· {summarySuffix}</span>
+        </button>
+      </div>
+    )
+  }
+
   return (
-    <div className="task-plan">
+    <div className={`task-plan${variant === 'anchored' ? ' task-plan--anchored' : ''}`}>
       <div className="task-plan-header">
-        <span>实施计划</span>
+        {variant === 'anchored' ? (
+          <button
+            type="button"
+            className="task-plan-header-toggle"
+            onClick={() => setCollapsed(true)}
+          >
+            <span className="task-plan-collapsed-icon">▾</span>
+            <span>实施计划</span>
+          </button>
+        ) : (
+          <span>实施计划</span>
+        )}
         <span className="task-plan-progress">
           {completedCount}/{total}
           {allDone && <span className="task-plan-done"> · 全部完成</span>}
