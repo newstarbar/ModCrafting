@@ -3,7 +3,7 @@ import { spawn, ChildProcess } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as iconv from 'iconv-lite'
-import { ensureJdkReady, isGradleHomeSeedReady, prepareBuild } from './build-env'
+import { ensureJdkReady, isGradleHomeSeedReady, prepareBuild, purgeGradleEphemeralCaches } from './build-env'
 
 const LOG_BUFFER_MAX_LINES = 500
 
@@ -172,6 +172,20 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
   const gameDirAbs = instanceGameDirAbs(instance.projectPath, id)
   fs.mkdirSync(path.join(gameDirAbs, 'mods'), { recursive: true })
   ensureGameOptions(gameDirAbs)
+
+  const sharedGradleHome = buildPrep.env?.GRADLE_USER_HOME
+  if (typeof sharedGradleHome === 'string') {
+    purgeGradleEphemeralCaches(sharedGradleHome)
+    const staleInstanceHome = path.join(sharedGradleHome, 'mc-instances', id)
+    if (fs.existsSync(staleInstanceHome)) {
+      try {
+        fs.rmSync(staleInstanceHome, { recursive: true, force: true })
+      } catch {
+        // continue with junction setup even if stale instance dir could not be removed
+      }
+    }
+  }
+
   const instanceEnv = buildInstanceGradleEnv(buildPrep.env || process.env, id)
   const gameDirArg = quoteGameDirArg(gameDirAbs)
   const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirArg}"`

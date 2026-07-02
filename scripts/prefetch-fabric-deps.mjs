@@ -3,12 +3,19 @@
  * Online prefetch of Fabric/Minecraft dependencies into resources/gradle-home-seed.
  * Run once before packaging: npm run prefetch:deps
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { spawn } from 'child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { FABRIC_VERSIONS } from './fabric-versions.mjs'
 import { setupPrefetchProject } from './fabric-template.mjs'
+import {
+  sanitizeGradleHomeForSeed,
+  validateSeedContent,
+  validateSeedIntegrity,
+  writeSeedMarker,
+  runOfflineBuildVerification
+} from './gradle-seed-utils.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -23,6 +30,7 @@ const GRADLE_RUNTIME_DIR = 'gradle-9.5'
 const GRADLE_DIST_NAME = `gradle-${FABRIC_VERSIONS.gradle_version}-bin`
 const GRADLE_HOME_DIR = `gradle-${FABRIC_VERSIONS.gradle_version}`
 const force = process.argv.includes('--force')
+const skipVerify = process.argv.includes('--skip-verify')
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -41,23 +49,6 @@ function killProcessTree(child) {
   }
 }
 
-function countDirStats(dir) {
-  let fileCount = 0
-  let totalBytes = 0
-  function walk(d) {
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
-      const full = path.join(d, entry.name)
-      if (entry.isDirectory()) walk(full)
-      else {
-        fileCount++
-        try { totalBytes += statSync(full).size } catch { /* ignore */ }
-      }
-    }
-  }
-  if (existsSync(dir)) walk(dir)
-  return { fileCount, totalBytes }
-}
-
 function seedFingerprintValid() {
   if (!existsSync(seedMarker)) return false
   try {
@@ -65,7 +56,9 @@ function seedFingerprintValid() {
     for (const [k, v] of Object.entries(FABRIC_VERSIONS)) {
       if (marker[k] !== v) return false
     }
-    return marker.fileCount > 100 && marker.totalBytes > 50_000_000
+    if (!marker.verifiedOffline) return false
+    const integrity = validateSeedIntegrity(seedDir)
+    return integrity.ok && marker.fileCount > 100 && marker.totalBytes > 50_000_000
   } catch {
     return false
   }
@@ -193,22 +186,42 @@ async function main() {
   try {
     await runGradle(prefetchProject, gradleHome, ['runClient', '--no-daemon'], 3 * 60 * 1000)
   } catch {
-    console.warn('runClient prefetch timed out or failed (may still be sufficient for build)')
+    console.warn('runClient prefetch timed out or failed (transform caches will be stripped before seed copy)')
   }
 
   await stopGradleDaemons(gradleHome)
 
+  console.log('\nSanitizing gradle-home before seed copy...')
+  sanitizeGradleHomeForSeed(gradleHome)
+
   console.log('\nCopying gradle-home to seed directory...')
   await copyGradleHomeToSeed(gradleHome, seedDir)
 
-  const { fileCount, totalBytes } = countDirStats(seedDir)
-  const marker = {
-    ...FABRIC_VERSIONS,
-    fileCount,
-    totalBytes,
-    createdAt: new Date().toISOString()
+  sanitizeGradleHomeForSeed(seedDir)
+
+  const integrity = validateSeedContent(seedDir)
+  if (!integrity.ok) {
+    rmSync(seedDir, { recursive: true, force: true })
+    throw new Error(`Seed content check failed after copy:\n- ${integrity.errors.join('\n- ')}`)
   }
-  writeFileSync(seedMarker, JSON.stringify(marker, null, 2), 'utf-8')
+
+  if (!skipVerify) {
+    console.log('\nVerifying offline build against seed...')
+    const verify = await runOfflineBuildVerification({ root, seedDir })
+    if (!verify.ok) {
+      rmSync(seedDir, { recursive: true, force: true })
+      throw new Error(
+        `Offline build verification failed (exit ${verify.exitCode}). Seed was not finalized.\n` +
+        'Re-run with: npm run prefetch:deps -- --force'
+      )
+    }
+    console.log('Offline build verification passed.')
+  } else {
+    console.warn('Skipping offline verification (--skip-verify)')
+  }
+
+  const marker = writeSeedMarker(seedDir)
+  const { fileCount, totalBytes } = marker
 
   console.log(`\nDone. Seed: ${seedDir}`)
   console.log(`Files: ${fileCount}, Size: ${(totalBytes / 1024 / 1024).toFixed(1)} MB`)

@@ -37,7 +37,36 @@ type SeedMarker = FabricVersions & {
   fileCount?: number
   totalBytes?: number
   createdAt?: string
+  verifiedOffline?: boolean
 }
+
+/** Fabric API modules required for the default template offline build. */
+const REQUIRED_FABRIC_API_MODULES = [
+  'fabric-api',
+  'fabric-api-lookup-api-v1',
+  'fabric-blockrenderlayer-v1',
+  'fabric-client-tags-api-v1',
+  'fabric-content-registries-v0',
+  'fabric-data-generation-api-v1',
+  'fabric-convention-tags-v1',
+  'fabric-convention-tags-v2',
+  'fabric-data-attachment-api-v1',
+  'fabric-events-interaction-v0',
+  'fabric-lifecycle-events-v1',
+  'fabric-model-loading-api-v1',
+  'fabric-screen-handler-api-v1',
+  'fabric-networking-api-v1',
+  'fabric-object-builder-api-v1',
+  'fabric-rendering-fluids-v1',
+  'fabric-rendering-data-attachment-v1',
+  'fabric-block-view-api-v2',
+  'fabric-client-gametest-api-v1',
+  'fabric-crash-report-info-v1',
+  'fabric-key-binding-api-v1',
+  'fabric-resource-conditions-api-v1',
+  'fabric-resource-loader-v0',
+  'fabric-transitive-access-wideners-v1'
+]
 
 export type ToolchainPhase = 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
 
@@ -615,24 +644,82 @@ function readSeedMarker(markerPath: string): SeedMarker | null {
   }
 }
 
+function fabricApiModuleDir(home: string, moduleName: string): string {
+  return path.join(home, 'caches', 'modules-2', 'files-2.1', 'net.fabricmc.fabric-api', moduleName)
+}
+
+function moduleDirHasJar(moduleDir: string): boolean {
+  if (!fs.existsSync(moduleDir)) return false
+  try {
+    const walk = (dir: string): boolean => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name)
+        if (ent.isDirectory()) {
+          if (walk(full)) return true
+        } else if (ent.name.endsWith('.jar')) {
+          return true
+        }
+      }
+      return false
+    }
+    return walk(moduleDir)
+  } catch {
+    return false
+  }
+}
+
 function gradleHomeHasFabricCache(home: string): boolean {
   const fabricApiDir = path.join(home, 'caches', 'modules-2', 'files-2.1', 'net.fabricmc.fabric-api')
-  return fs.existsSync(fabricApiDir)
+  if (!fs.existsSync(fabricApiDir)) return false
+  return REQUIRED_FABRIC_API_MODULES.every((name) => moduleDirHasJar(fabricApiModuleDir(home, name)))
+}
+
+function gradleHomeHasLoomCache(home: string): boolean {
+  const loomCache = path.join(home, 'caches', 'fabric-loom')
+  if (!fs.existsSync(loomCache)) return false
+  const mcVersion = loadFabricVersions().minecraft_version
+  try {
+    const walk = (dir: string): boolean => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name)
+        if (ent.isDirectory()) {
+          if (walk(full)) return true
+        } else {
+          const lower = ent.name.toLowerCase()
+          if (lower.includes('minecraft') || lower.includes(mcVersion)) return true
+        }
+      }
+      return false
+    }
+    return walk(loomCache)
+  } catch {
+    return false
+  }
+}
+
+function seedMarkerIsValid(marker: SeedMarker | null, expected: FabricVersions): boolean {
+  if (!marker || !versionsMatchSeed(marker, expected)) return false
+  if (app.isPackaged && marker.verifiedOffline !== true) return false
+  return true
 }
 
 export function resolveBundledGradleHomeSeedPath(): string | null {
+  const expected = loadFabricVersions()
   for (const p of bundledGradleHomeSeedPaths()) {
     const marker = readSeedMarker(path.join(p, SEED_MARKER))
-    if (marker && versionsMatchSeed(marker, loadFabricVersions()) && gradleHomeHasFabricCache(p)) return p
+    if (!seedMarkerIsValid(marker, expected)) continue
+    if (!gradleHomeHasFabricCache(p) || !gradleHomeHasLoomCache(p)) continue
+    return p
   }
   return null
 }
 
 export function isGradleHomeSeedReady(): boolean {
+  const expected = loadFabricVersions()
   const home = getGradleUserHome()
   const marker = readSeedMarker(path.join(home, SEED_MARKER))
-  if (!marker || !versionsMatchSeed(marker, loadFabricVersions())) return false
-  if (!gradleHomeHasFabricCache(home)) return false
+  if (!seedMarkerIsValid(marker, expected)) return false
+  if (!gradleHomeHasFabricCache(home) || !gradleHomeHasLoomCache(home)) return false
   if (!app.isPackaged) return resolveBundledGradleHomeSeedPath() !== null
   return true
 }
@@ -640,7 +727,13 @@ export function isGradleHomeSeedReady(): boolean {
 export function getGradleUserHome(): string {
   const runtimeHome = runtimeGradleHomePath()
   const runtimeMarker = readSeedMarker(path.join(runtimeHome, SEED_MARKER))
-  if (runtimeMarker && versionsMatchSeed(runtimeMarker, loadFabricVersions()) && gradleHomeHasFabricCache(runtimeHome)) {
+  const expected = loadFabricVersions()
+  if (
+    runtimeMarker &&
+    seedMarkerIsValid(runtimeMarker, expected) &&
+    gradleHomeHasFabricCache(runtimeHome) &&
+    gradleHomeHasLoomCache(runtimeHome)
+  ) {
     return runtimeHome
   }
   // Dev: use seed in place — avoids copying ~1GB on every fresh runtime
@@ -669,7 +762,12 @@ async function ensureGradleHomeFromSeedImpl(
   const dest = runtimeGradleHomePath()
   const destMarkerPath = path.join(dest, SEED_MARKER)
   const existing = readSeedMarker(destMarkerPath)
-  if (existing && versionsMatchSeed(existing, expected) && gradleHomeHasFabricCache(dest)) {
+  if (
+    existing &&
+    seedMarkerIsValid(existing, expected) &&
+    gradleHomeHasFabricCache(dest) &&
+    gradleHomeHasLoomCache(dest)
+  ) {
     return { ok: true }
   }
 
@@ -715,7 +813,12 @@ async function ensureGradleHomeFromSeedImpl(
     })
 
     const staged = readSeedMarker(path.join(staging, SEED_MARKER))
-    if (!staged || !versionsMatchSeed(staged, expected) || !gradleHomeHasFabricCache(staging)) {
+    if (
+      !staged ||
+      !seedMarkerIsValid(staged, expected) ||
+      !gradleHomeHasFabricCache(staging) ||
+      !gradleHomeHasLoomCache(staging)
+    ) {
       await safeRmAsync(staging)
       return { ok: false, error: '离线依赖缓存复制后校验失败（缺少 Fabric 依赖）。请重新安装完整版或运行 npm run prefetch:deps' }
     }
@@ -1320,8 +1423,94 @@ export async function ensureProjectEnvironment(
   return { ok: errors.length === 0, errors }
 }
 
+export function isGradleCacheCorrupted(output: string): boolean {
+  return /immutable workspace|transformed \(Missing|have been modified\. These workspace directories are not supposed to be modified/i.test(output)
+}
+
 export function isOfflineCacheMiss(output: string): boolean {
   return /No cached version available for offline mode|Could not resolve all files for configuration/i.test(output)
+}
+
+export function isRecoverableGradleCacheError(output: string): boolean {
+  return isGradleCacheCorrupted(output) || isOfflineCacheMiss(output)
+}
+
+const EPHEMERAL_GRADLE_HOME_DIRS = ['daemon', 'notifications', 'mc-instances'] as const
+const EPHEMERAL_CACHE_DIRS = ['transforms', 'executionHistory', 'generated-gradle-jars', 'jars-9', 'journal-1'] as const
+
+/** Remove rebuildable Gradle caches that commonly cause immutable-workspace failures. */
+export function purgeGradleEphemeralCaches(gradleHome: string): number {
+  let removed = 0
+  for (const name of EPHEMERAL_GRADLE_HOME_DIRS) {
+    const target = path.join(gradleHome, name)
+    if (fs.existsSync(target)) {
+      safeRmSync(target)
+      removed++
+    }
+  }
+
+  const cachesRoot = path.join(gradleHome, 'caches')
+  if (!fs.existsSync(cachesRoot)) return removed
+
+  for (const versionEnt of fs.readdirSync(cachesRoot, { withFileTypes: true })) {
+    if (!versionEnt.isDirectory()) continue
+    const versionPath = path.join(cachesRoot, versionEnt.name)
+    for (const childName of EPHEMERAL_CACHE_DIRS) {
+      const target = path.join(versionPath, childName)
+      if (fs.existsSync(target)) {
+        safeRmSync(target)
+        removed++
+      }
+    }
+  }
+
+  return removed
+}
+
+/**
+ * Re-copy runtime gradle-home from bundled seed after cache corruption.
+ * Only applies to packaged full edition with a valid bundled seed.
+ */
+export async function recoverRuntimeGradleHomeFromSeed(
+  onProgress: ProgressSender = defaultProgress
+): Promise<{ ok: boolean; error?: string }> {
+  if (isPortableEdition()) {
+    return { ok: false, error: '便携版需联网重新下载依赖缓存' }
+  }
+
+  const seedSrc = resolveBundledGradleHomeSeedPath()
+  if (!seedSrc) {
+    return {
+      ok: false,
+      error: '离线依赖种子不可用，请重新安装完整版 ModCrafting 或运行 npm run prefetch:deps'
+    }
+  }
+
+  const dest = runtimeGradleHomePath()
+  onProgress({
+    phase: 'deps',
+    message: '检测到 Gradle 缓存损坏，正在从离线种子恢复…',
+    percent: 40
+  })
+
+  try {
+    await stopGradleDaemons(resolveJdkPath())
+    if (fs.existsSync(dest)) {
+      await safeRmAsync(dest)
+    }
+
+    const staging = `${dest}.recovery`
+    await safeRmAsync(staging)
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+
+    await copyTreeAsync(seedSrc, staging)
+    fs.renameSync(staging, dest)
+
+    onProgress({ phase: 'deps', message: '离线 Gradle 缓存已恢复', percent: 85 })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: `恢复离线缓存失败: ${String(err)}` }
+  }
 }
 
 function formatGradleCommand(
@@ -1396,10 +1585,40 @@ export async function runGradleTask(
   let cmd = formatGradleCommand(projectPath, prep.cmdPrefix, task, true)
   let result = await execShellCommand(cmd, projectPath, prep.env, onOutput)
 
+  if (result.exitCode !== 0 && isRecoverableGradleCacheError(result.output)) {
+    const gradleHome = getGradleUserHome()
+    const purged = purgeGradleEphemeralCaches(gradleHome)
+    if (purged > 0) {
+      onOutput?.(`\n[ModCrafting] 已清理 ${purged} 处损坏的 Gradle 缓存，正在重试离线构建…\n`)
+      result = await execShellCommand(cmd, projectPath, prep.env, onOutput)
+    }
+
+    if (result.exitCode !== 0 && isRecoverableGradleCacheError(result.output) && app.isPackaged && isFullEdition()) {
+      onOutput?.('\n[ModCrafting] 离线缓存仍不可用，正在从安装包内的离线种子恢复…\n')
+      const recovered = await recoverRuntimeGradleHomeFromSeed((payload) => {
+        const normalized = normalizeProgress(payload)
+        onOutput?.(`[ModCrafting] ${normalized.message}\n`)
+      })
+      if (recovered.ok) {
+        const refreshedPrep = await prepareBuild(projectPath)
+        if (refreshedPrep.ok) {
+          cmd = formatGradleCommand(projectPath, refreshedPrep.cmdPrefix, task, true)
+          result = await execShellCommand(cmd, projectPath, refreshedPrep.env, onOutput)
+        }
+      } else if (recovered.error) {
+        onOutput?.(`[ModCrafting] ${recovered.error}\n`)
+      }
+    }
+  }
+
   if (result.exitCode !== 0 && isOfflineCacheMiss(result.output)) {
     onOutput?.('\n[ModCrafting] 离线缓存缺少 Fabric 依赖，正在联网下载并写入本地缓存…\n')
-    cmd = formatGradleCommand(projectPath, prep.cmdPrefix, task, false)
-    result = await execShellCommand(cmd, projectPath, prep.env, onOutput)
+    const onlinePrep = await prepareBuild(projectPath)
+    if (!onlinePrep.ok) {
+      return { output: result.output, exitCode: result.exitCode, usedOnlineFallback: false }
+    }
+    cmd = formatGradleCommand(projectPath, onlinePrep.cmdPrefix, task, false)
+    result = await execShellCommand(cmd, projectPath, onlinePrep.env, onOutput)
     if (result.exitCode === 0) {
       onOutput?.('\n[ModCrafting] 依赖已下载到本地缓存，后续构建可离线进行。\n')
     }

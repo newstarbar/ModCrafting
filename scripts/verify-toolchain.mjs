@@ -2,9 +2,10 @@
  * Quick verification of toolchain module and bundled JDK.
  * Run: node scripts/verify-toolchain.mjs
  */
-import { existsSync, readFileSync, readdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { validateSeedIntegrity } from './gradle-seed-utils.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(scriptDir, '..')
@@ -22,18 +23,6 @@ function check(label, pass, hint) {
   if (!pass) ok = false
 }
 
-function findLoomCacheHint() {
-  const loomCache = path.join(seedDir, 'caches', 'fabric-loom')
-  if (!existsSync(loomCache)) return 'missing caches/fabric-loom'
-  try {
-    const entries = readdirSync(loomCache, { recursive: true })
-    const hasMc = entries.some((e) => String(e).includes('minecraft') || String(e).includes('1.21.4'))
-    return hasMc ? '' : 'no minecraft artifacts in fabric-loom cache'
-  } catch {
-    return 'cannot read fabric-loom cache'
-  }
-}
-
 check('JDK 21 bundled', existsSync(jdkJava), 'run: npm run setup:toolchain')
 check('gradle-wrapper.jar', existsSync(wrapperJar), wrapperJar)
 check('Gradle lib/ complete', existsSync(gradleLauncher), 'run: npm run setup:toolchain')
@@ -46,14 +35,16 @@ if (existsSync(seedMarker)) {
     const marker = JSON.parse(readFileSync(seedMarker, 'utf-8'))
     const versions = JSON.parse(readFileSync(fabricVersions, 'utf-8'))
     const versionMatch = Object.keys(versions).every((k) => marker[k] === versions[k])
-    seedOk = versionMatch && marker.fileCount > 100 && marker.totalBytes > 50_000_000
-    seedHint = seedOk ? `${marker.fileCount} files, ${(marker.totalBytes / 1024 / 1024).toFixed(0)} MB` : 'invalid seed marker'
+    const integrity = validateSeedIntegrity(seedDir, versions)
+    seedOk = versionMatch && marker.verifiedOffline === true && integrity.ok
     if (seedOk) {
-      const loomHint = findLoomCacheHint()
-      if (loomHint) {
-        seedOk = false
-        seedHint = loomHint
-      }
+      seedHint = `${marker.fileCount} files, ${(marker.totalBytes / 1024 / 1024).toFixed(0)} MB, offline verified`
+    } else if (!versionMatch) {
+      seedHint = 'invalid seed marker versions'
+    } else if (!marker.verifiedOffline) {
+      seedHint = 'seed not offline-verified; run: npm run prefetch:deps -- --force'
+    } else {
+      seedHint = integrity.errors[0] || 'invalid seed'
     }
   } catch (err) {
     seedHint = String(err)
