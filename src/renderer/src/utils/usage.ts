@@ -39,7 +39,15 @@ export function estimateCostDelta(
 }
 
 export function contextWindowLimit(model?: string): number {
-  return /128|256/i.test(model || '') ? 128000 : 64000
+  const m = (model || '').toLowerCase()
+  if (/1m|1000k|1048k/.test(m)) return 1_000_000
+  // DeepSeek V4 系列（flash / pro）为 1M 上下文
+  if (/deepseek-?v4|v4-flash|v4-pro/.test(m)) return 1_000_000
+  if (/256/.test(m)) return 256_000
+  if (/(^|[^0-9])32k?([^0-9]|$)/.test(m)) return 32_000
+  if (/(^|[^0-9])64k?([^0-9]|$)/.test(m)) return 64_000
+  // DeepSeek V3/R1 及多数现代模型默认 128K 上下文
+  return 128_000
 }
 
 export function formatContextLimit(limit: number): string {

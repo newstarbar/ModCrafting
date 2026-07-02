@@ -63,6 +63,8 @@ export class Agent {
   private graceRound = false
   // Rounds where every tool call was rejected by the loop guard (no progress)
   private consecutiveBlockedRounds = 0
+  // Rounds where the model only called complete_step without any real work
+  private consecutiveStepDoneOnlyRounds = 0
 
   constructor(opts: AgentOptions) {
     this.registry = opts.registry
@@ -80,6 +82,7 @@ export class Agent {
     this.finalReadinessBlocks = 0
     this.graceRound = false
     this.consecutiveBlockedRounds = 0
+    this.consecutiveStepDoneOnlyRounds = 0
   }
 
   private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
@@ -435,6 +438,36 @@ export class Agent {
             finalContent = finalContent.trim() || '构建已成功完成，全部计划步骤已完成。'
             this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
             logger.agent('Auto-advance: all steps done, ending run', { step, phase })
+            this.finishRun(emitLifecycle)
+            return finalContent
+          }
+
+          // complete_step marked the last step done → end immediately so the
+          // model can't keep spamming complete_step against a finished plan.
+          if (hasStepDone && planTracker?.allDone()) {
+            messages.push({
+              role: 'system',
+              content: combinedOutput + '\n\n[SYSTEM: 全部计划步骤已完成。]'
+            })
+            finalContent = finalContent.trim() || '全部计划步骤已完成。'
+            this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
+            logger.agent('complete_step: all steps done, ending run', { step, phase })
+            this.finishRun(emitLifecycle)
+            return finalContent
+          }
+
+          // Safety net: model keeps calling complete_step without doing real work.
+          const stepDoneOnly = hasStepDone && !hasWrite && !hasBuild && executableCalls.length > 0
+          if (stepDoneOnly) this.consecutiveStepDoneOnlyRounds++
+          else this.consecutiveStepDoneOnlyRounds = 0
+          if (this.consecutiveStepDoneOnlyRounds >= 4) {
+            const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
+            finalContent = finalContent.trim() || `检测到反复标记步骤但无实质进展，已自动结束本轮。${remaining}`
+            this.emit({
+              kind: EventKind.Notice,
+              notice: { level: 'warn', text: '检测到 complete_step 循环，已自动结束本轮' }
+            })
+            logger.agent('Loop escape: complete_step spam cap reached', { step, phase })
             this.finishRun(emitLifecycle)
             return finalContent
           }
