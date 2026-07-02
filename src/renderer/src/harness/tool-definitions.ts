@@ -4,6 +4,20 @@
 import { type Tool, type ToolContext, type Previewer } from './tools'
 import type { FileDiff } from './events'
 
+async function runWithCommandStream(
+  ctx: ToolContext,
+  run: () => Promise<{ output: string; exitCode: number | null }>
+): Promise<{ output: string; exitCode: number | null }> {
+  const unsub = ctx.onProgress
+    ? window.api.onCommandOutput((text) => ctx.onProgress!(text))
+    : null
+  try {
+    return await run()
+  } finally {
+    unsub?.()
+  }
+}
+
 // ── read_file ──
 export const readFileTool: Tool & Previewer = {
   name: 'read_file',
@@ -115,7 +129,9 @@ export const runCommandTool: Tool = {
       const command = String(args.command || '')
       const prep = await window.api.prepareBuild(ctx.projectPath)
       const fullCmd = prep.ok ? prep.cmdPrefix + command : command
-      const res = await window.api.runCommandStream(fullCmd, ctx.projectPath)
+      const res = await runWithCommandStream(ctx, () =>
+        window.api.runCommandStream(fullCmd, ctx.projectPath!)
+      )
       const output = res.output || '(no output)'
       const exitInfo = res.exitCode !== null ? `\n[exit code: ${res.exitCode}]` : ''
       if (!prep.ok && prep.error) return `环境准备失败: ${prep.error}\n${output}${exitInfo}`
@@ -208,7 +224,9 @@ export const triggerBuildTool: Tool = {
     }
 
     try {
-      const res = await window.api.runGradleTask(ctx.projectPath, task)
+      const res = await runWithCommandStream(ctx, () =>
+        window.api.runGradleTask(ctx.projectPath!, task)
+      )
       const output = res.output || `Task "${task}" completed (exit: ${res.exitCode})`
       const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : ''
       const fallbackNote = res.usedOnlineFallback ? '\n[已联网补全依赖缓存]' : ''
@@ -233,9 +251,16 @@ export const completeStepTool: Tool = {
     },
     required: ['stepId']
   },
-  readOnly: () => false,
-  async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+  readOnly: () => true,
+  async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
     const stepId = String(args.stepId || '')
+    if (ctx.planTracker) {
+      const result = ctx.planTracker.advance(stepId)
+      if (result.ok) {
+        ctx.onPlanStateChange?.(ctx.planTracker.snapshot())
+      }
+      return result.message
+    }
     return `[STEP_DONE:${stepId}]`
   }
 }

@@ -4,7 +4,8 @@
 
 import type { Sink, Event } from './events'
 import { EventKind } from './events'
-import { type Registry, executeBatch, parseToolCalls, type ToolContext } from './tools'
+import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from './tools'
+import type { PlanTracker } from './plan-tracker'
 import { logger } from '../utils/logger'
 
 let _toolCallIdCounter = 0
@@ -20,11 +21,29 @@ export interface AgentOptions {
 export interface RunOptions {
   phase?: 'plan' | 'execute'
   emitLifecycle?: boolean
+  planTracker?: PlanTracker | null
+  opsOnlyPlan?: boolean
 }
 
 const MAX_READONLY_ROUNDS = 3
-// Tools considered "exploration only" (no progress toward completion)
-const EXPLORATION_TOOLS = ['list_directory', 'read_file', 'read_error_log', 'run_command']
+const REPEAT_SUCCESS_THRESHOLD = 2
+const MAX_FINAL_READINESS_BLOCKS = 3
+const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'read_error_log', 'run_command']
+const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES
+const REPEAT_GUARD_TOOLS = new Set([
+  'list_directory', 'read_file', 'run_command', 'trigger_build', 'write_file', 'read_error_log'
+])
+
+function stableStringify(args: Record<string, unknown>): string {
+  const keys = Object.keys(args).sort()
+  const sorted: Record<string, unknown> = {}
+  for (const k of keys) sorted[k] = args[k]
+  return JSON.stringify(sorted)
+}
+
+function repeatSuccessSignature(name: string, args: Record<string, unknown>): string {
+  return `${name}\0${stableStringify(args)}`
+}
 
 export class Agent {
   private registry: Registry
@@ -38,6 +57,9 @@ export class Agent {
   // Track written files to detect duplicate writes
   private writtenFiles = new Map<string, string>()
   private consecutiveWriteOnlyRounds = 0
+  private repeatSuccessCounts = new Map<string, number>()
+  private finalReadinessBlocks = 0
+  private graceRound = false
 
   constructor(opts: AgentOptions) {
     this.registry = opts.registry
@@ -51,6 +73,32 @@ export class Agent {
     this.readonlyLocked = false
     this.writtenFiles.clear()
     this.consecutiveWriteOnlyRounds = 0
+    this.repeatSuccessCounts.clear()
+    this.finalReadinessBlocks = 0
+    this.graceRound = false
+  }
+
+  private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
+    if (!REPEAT_GUARD_TOOLS.has(name)) return null
+    const sig = repeatSuccessSignature(name, args)
+    const count = this.repeatSuccessCounts.get(sig) ?? 0
+    if (count < REPEAT_SUCCESS_THRESHOLD) return null
+    return (
+      `blocked: [loop guard] "${name}" 已用相同参数成功执行 ${count} 次。` +
+      `请调用 complete_step 推进计划，或换用其他工具，勿重复执行。`
+    )
+  }
+
+  private recordRepeatSuccess(name: string, args: Record<string, unknown>, hadError: boolean): void {
+    if (hadError || !REPEAT_GUARD_TOOLS.has(name)) return
+    const sig = repeatSuccessSignature(name, args)
+    this.repeatSuccessCounts.set(sig, (this.repeatSuccessCounts.get(sig) ?? 0) + 1)
+  }
+
+  private filterExplorationTools(
+    tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+  ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+    return tools.filter((t) => !EXPLORATION_TOOL_NAMES.includes(t.name))
   }
 
   private emit(e: Event): void { this.sink.emit(e) }
@@ -71,6 +119,11 @@ export class Agent {
   ): Promise<string> {
     const phase = options.phase ?? 'execute'
     const emitLifecycle = options.emitLifecycle ?? true
+    const planTracker = options.planTracker ?? null
+
+    if (options.opsOnlyPlan) {
+      this.readonlyLocked = true
+    }
 
     if (emitLifecycle) {
       this.emit({ kind: EventKind.TurnStarted })
@@ -80,8 +133,34 @@ export class Agent {
     let finalContent = ''
     let readonlyRounds = 0
 
-    for (let step = 0; this.maxSteps === 0 || step < this.maxSteps; step++) {
-      logger.agent(`Step ${step + 1}${this.maxSteps > 0 ? '/' + this.maxSteps : ''}`)
+    for (let step = 0; ; step++) {
+      const pastMax = this.maxSteps > 0 && step >= this.maxSteps
+      if (pastMax && !this.graceRound) {
+        this.graceRound = true
+        const incomplete = planTracker && !planTracker.allDone()
+          ? `\n未完成步骤：\n${planTracker.toContextBlock()}`
+          : ''
+        messages.push({
+          role: 'user',
+          content:
+            `【系统】已达工具轮次上限（${this.maxSteps}）。不要再调用任何工具。` +
+            `输出当前进度总结。${incomplete}`
+        })
+        this.emit({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: incomplete ? '部分步骤未完成（已达轮次上限）' : `已达轮次上限（${this.maxSteps}）`
+          }
+        })
+        continue
+      }
+      if (pastMax && this.graceRound) {
+        break
+      }
+      if (this.maxSteps === 0 || step < this.maxSteps) {
+        logger.agent(`Step ${step + 1}${this.maxSteps > 0 ? '/' + this.maxSteps : ''}`)
+      }
       if (abortSignal?.aborted) {
         this.finishRun(emitLifecycle, 'Cancelled')
         return finalContent
@@ -95,13 +174,15 @@ export class Agent {
 
       // Plan phase: no tools; execute phase: full registry with exploration limits
       let availableTools = phase === 'plan' ? [] : this.registry.schemas()
-      if (phase === 'execute') {
+      if (this.graceRound) {
+        availableTools = []
+      } else if (phase === 'execute') {
         if (this.readonlyLocked) {
-          availableTools = availableTools.filter((t) => !['list_directory', 'read_file', 'read_error_log', 'run_command'].includes(t.name))
+          availableTools = this.filterExplorationTools(availableTools)
         } else if (readonlyRounds >= MAX_READONLY_ROUNDS) {
           this.readonlyLocked = true
           readonlyRounds = 0
-          availableTools = availableTools.filter((t) => !['list_directory', 'read_file', 'read_error_log', 'run_command'].includes(t.name))
+          availableTools = this.filterExplorationTools(availableTools)
           const kick = 'STOP EXPLORING. You have spent too many rounds reading files, listing directories, and running diagnostic commands. run_command, read_file, and list_directory are now LOCKED. You can ONLY write files (write_file), build (trigger_build), or mark steps done (complete_step). Make a decision and execute it NOW.'
           messages.push({ role: 'user', content: kick })
           apiMessages.push({ role: 'user', content: kick })
@@ -150,11 +231,35 @@ export class Agent {
 
         // Final answer — plan phase always ends here; execute phase may kick if idle
         if (toolCalls.length === 0) {
+          if (phase === 'execute' && planTracker && !planTracker.allDone() && !this.graceRound) {
+            this.finalReadinessBlocks++
+            const remaining = planTracker.toContextBlock()
+            const cur = planTracker.currentStep
+            const stepHint = cur
+              ? `请继续执行步骤 #${cur.id}，完成后调用 complete_step { stepId: "${cur.id}" }。`
+              : ''
+            messages.push({
+              role: 'user',
+              content: `【系统】尚有未完成步骤，不可结束本轮。\n${remaining}\n${stepHint}`
+            })
+            logger.agent('finalReadinessCheck blocked', { blocks: this.finalReadinessBlocks })
+            if (this.finalReadinessBlocks >= MAX_FINAL_READINESS_BLOCKS) {
+              finalContent = finalContent || `执行未完成。剩余计划：\n${remaining}`
+              this.emit({
+                kind: EventKind.Notice,
+                notice: { level: 'warn', text: '步骤未全部完成，已结束本轮' }
+              })
+              logger.agent('Final answer (readiness cap)', { step, phase })
+              this.finishRun(emitLifecycle)
+              return finalContent
+            }
+            continue
+          }
           if (phase === 'execute') {
             const anyToolCalled = messages.some((m) =>
               m.role === 'system' && m.content.includes('[SYSTEM:')
             )
-            if (!anyToolCalled && (cleanText || streamContent).length > 80) {
+            if (!anyToolCalled && (cleanText || streamContent).length > 80 && !planTracker) {
               const kick = '【系统警告】你只输出了文字，没有调用任何工具！立即调用 write_file 或其他工具来实际操作项目，不要只说话不做事。可用的工具：write_file（写入文件）、trigger_build（触发构建）。'
               messages.push({ role: 'user', content: kick })
               logger.agent('KICK: no tools called, forcing action')
@@ -186,26 +291,74 @@ export class Agent {
         if (allExploration) readonlyRounds++
         else readonlyRounds = 0
 
-        // 2. Execute tools
+        // 2. Execute tools (with repeat-success loop guard)
         logger.agent(`Executing ${toolCalls.length} tool(s)`, toolCalls.map((t) => t.name))
-        const ctx: ToolContext = { projectPath, callId: `step_${step}`, abortSignal }
 
-        const results = await executeBatch(
-          toolCalls.map((tc) => ({ ...tc, id: `call_${++_toolCallIdCounter}` })),
-          this.registry, ctx,
-          (name, id) => {
-            const tool = this.registry.get(name)
-            this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: '', readOnly: tool?.readOnly() } })
-            this.onToolDispatch?.(name, id)
-          },
-          (name, id, result) => {
+        const callsWithIds = toolCalls.map((tc) => ({ ...tc, id: `call_${++_toolCallIdCounter}` }))
+        const executableCalls: typeof callsWithIds = []
+        const blockedResults = new Map<string, ToolResult>()
+
+        for (const call of callsWithIds) {
+          const blockMsg = this.checkRepeatedSuccessBlock(call.name, call.args)
+          if (blockMsg) {
+            const tool = this.registry.get(call.name)
+            this.emit({
+              kind: EventKind.ToolDispatch,
+              tool: { id: call.id, name: call.name, args: JSON.stringify(call.args), readOnly: tool?.readOnly() }
+            })
+            this.onToolDispatch?.(call.name, call.id)
+            blockedResults.set(call.id, { output: blockMsg, error: blockMsg, durationMs: 0 })
             this.emit({
               kind: EventKind.ToolResult,
-              tool: { id, name, args: '', output: result.output, error: result.error, durationMs: result.durationMs }
+              tool: { id: call.id, name: call.name, args: '', output: blockMsg, error: blockMsg, durationMs: 0 }
             })
-            this.onToolResult?.(name, id, result.output)
+            this.onToolResult?.(call.name, call.id, blockMsg)
+            logger.agent('loop guard blocked', { tool: call.name, args: call.args })
+            continue
           }
-        )
+          executableCalls.push(call)
+        }
+
+        const ctx: ToolContext = {
+          projectPath,
+          callId: `step_${step}`,
+          abortSignal,
+          planTracker,
+          onPlanStateChange: (steps) => {
+            this.emit({ kind: EventKind.PlanState, planSteps: steps })
+          }
+        }
+
+        const results = blockedResults
+        if (executableCalls.length > 0) {
+          const batchResults = await executeBatch(
+            executableCalls,
+            this.registry, ctx,
+            (name, id) => {
+              const tool = this.registry.get(name)
+              this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: '', readOnly: tool?.readOnly() } })
+              this.onToolDispatch?.(name, id)
+            },
+            (name, id, result) => {
+              const call = executableCalls.find((c) => c.id === id)
+              if (call) this.recordRepeatSuccess(name, call.args, Boolean(result.error))
+              this.emit({
+                kind: EventKind.ToolResult,
+                tool: { id, name, args: '', output: result.output, error: result.error, durationMs: result.durationMs }
+              })
+              this.onToolResult?.(name, id, result.output)
+            },
+            (id, chunk) => {
+              this.emit({
+                kind: EventKind.ToolProgress,
+                tool: { id, name: '', args: '', partial: true, output: chunk }
+              })
+            }
+          )
+          for (const [id, r] of batchResults) results.set(id, r)
+        }
+
+        const executedCalls = [...callsWithIds]
 
         // 3. Append to conversation — ONLY meaningful messages
         if (streamContent.trim()) {
@@ -218,7 +371,7 @@ export class Agent {
           for (const [, r] of results) lines.push(r.output)
 
           let dupWarning = ''
-          for (const tc of toolCalls) {
+          for (const tc of executedCalls) {
             if (tc.name === 'write_file' && typeof tc.args.path === 'string') {
               const path = tc.args.path
               const content = String(tc.args.content || '')
@@ -232,9 +385,10 @@ export class Agent {
             }
           }
 
-          const hasWrite = toolCalls.some((tc) => tc.name === 'write_file')
-          const hasBuild = toolCalls.some((tc) => tc.name === 'trigger_build')
-          const hasStepDone = toolCalls.some((tc) => tc.name === 'complete_step')
+          const hasWrite = executedCalls.some((tc) => tc.name === 'write_file')
+          const hasBuild = executedCalls.some((tc) => tc.name === 'trigger_build')
+          const hasStepDone = executedCalls.some((tc) => tc.name === 'complete_step')
+          const combinedOutput = lines.join('\n')
 
           if (hasWrite && !hasBuild && !hasStepDone) {
             this.consecutiveWriteOnlyRounds++
@@ -248,16 +402,33 @@ export class Agent {
             this.consecutiveWriteOnlyRounds = 0
           } else if (dupWarning) {
             instruction = dupWarning
+          } else if (hasBuild && combinedOutput.includes('BUILD SUCCESSFUL')) {
+            const cur = planTracker?.currentStep
+            const stepId = cur?.id ?? ''
+            instruction =
+              `\n\n[SYSTEM: 构建已成功完成。不要再次调用 trigger_build。` +
+              `请立即调用 complete_step { stepId: "${stepId}" } 标记当前步骤完成，然后执行下一步。]`
           } else if (hasBuild) {
             instruction = '\n\n[SYSTEM: 构建完成。检查结果后决定下一步。]'
           } else if (hasStepDone) {
-            instruction = '\n\n[SYSTEM: 步骤已标记。继续下一步或调用 trigger_build。]'
+            const cur = planTracker?.currentStep
+            if (cur) {
+              instruction =
+                `\n\n[SYSTEM: 步骤已推进。当前步骤 #${cur.id}：${cur.description}。请执行该步骤，完成后再次 complete_step。]`
+            } else if (planTracker?.allDone()) {
+              instruction = '\n\n[SYSTEM: 全部计划步骤已完成。请输出总结，不要再调用工具。]'
+            } else {
+              instruction = '\n\n[SYSTEM: 步骤已标记。继续下一步或调用 trigger_build。]'
+            }
           } else if (hasWrite) {
             instruction = '\n\n[SYSTEM: 文件已写入。如需继续写文件请继续，否则调用 trigger_build 构建。]'
           } else {
             instruction = '\n\n[SYSTEM: 工具执行完毕。决定下一步。]'
           }
-          messages.push({ role: 'system', content: lines.join('\n') + instruction })
+          if (planTracker && !hasStepDone) {
+            instruction += `\n\n当前计划进度：\n${planTracker.toContextBlock()}`
+          }
+          messages.push({ role: 'system', content: combinedOutput + instruction })
         }
 
       } catch (err: unknown) {
@@ -273,7 +444,7 @@ export class Agent {
       }
     }
 
-    if (this.maxSteps > 0) {
+    if (this.maxSteps > 0 && !this.graceRound) {
       this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: `Max steps (${this.maxSteps}) reached` } })
     }
     this.finishRun(emitLifecycle)

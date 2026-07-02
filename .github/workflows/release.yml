@@ -59,6 +59,10 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Cleanup duplicate GitHub Release
+        shell: bash
+        run: node scripts/cleanup-github-release.mjs "${{ github.ref_name }}"
+
       - name: Build Setup (NSIS) and publish GitHub Release
         run: node scripts/run-electron-builder.mjs --win nsis --publish always
 

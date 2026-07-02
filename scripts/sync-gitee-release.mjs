@@ -78,9 +78,65 @@ async function findReleaseByTag(tagName) {
   } catch {
     /* list fallback */
   }
-  const releases = await giteeApi('GET', `/repos/${owner}/${repo}/releases?per_page=100&page=1`)
-  if (!Array.isArray(releases)) return null
+  const releases = await listAllReleases()
   return releases.find((r) => r.tag_name === tagName) || null
+}
+
+async function listAllReleases() {
+  const all = []
+  for (let page = 1; page <= 10; page++) {
+    const batch = await giteeApi('GET', `/repos/${owner}/${repo}/releases?per_page=100&page=${page}`)
+    if (!Array.isArray(batch) || batch.length === 0) break
+    all.push(...batch)
+    if (batch.length < 100) break
+  }
+  return all
+}
+
+/** 同 tag 多条 Release 时删除旧的，只保留最新一条 */
+async function cleanupDuplicateReleasesForTag(tagName) {
+  const matches = (await listAllReleases()).filter((r) => r.tag_name === tagName)
+  if (matches.length <= 1) return matches[0] || null
+
+  matches.sort((a, b) => b.id - a.id)
+  const keep = matches[0]
+  for (const dup of matches.slice(1)) {
+    console.log(`[gitee] Deleting duplicate release #${dup.id} for ${tagName}`)
+    await giteeApi('DELETE', `/repos/${owner}/${repo}/releases/${dup.id}`)
+  }
+  console.log(`[gitee] Kept release #${keep.id} for ${tagName}`)
+  return keep
+}
+
+async function listAttachFiles(releaseId) {
+  try {
+    const data = await giteeApi('GET', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files`)
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+}
+
+/** 删除旧附件：builder-debug.yml、以及即将重新上传的同名文件 */
+async function cleanupStaleAttachments(releaseId, expectedBasenames) {
+  const expected = new Set(expectedBasenames.map((n) => n.toLowerCase()))
+  const files = await listAttachFiles(releaseId)
+  if (files.length === 0) return
+
+  for (const file of files) {
+    const name = file.name || file.file_name || ''
+    const id = file.id
+    if (!id || !name) continue
+
+    const stale =
+      /^builder-debug\.yml$/i.test(name) ||
+      expected.has(name.toLowerCase())
+
+    if (!stale) continue
+
+    console.log(`[gitee] Removing stale attachment: ${name} (#${id})`)
+    await giteeApi('DELETE', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files/${id}`)
+  }
 }
 
 /** 仅同步用户需要的发布附件，排除 builder-debug.yml / 内部 7z 等 */
@@ -172,6 +228,7 @@ async function createRelease(body) {
 
 async function ensureRelease() {
   const body = readReleaseBody()
+  await cleanupDuplicateReleasesForTag(tag)
   const existing = await findReleaseByTag(tag)
 
   if (existing?.id) {
@@ -266,6 +323,8 @@ async function main() {
 
   await verifyRepoAccess()
   const release = await ensureRelease()
+  const expectedNames = assets.map((a) => path.basename(a))
+  await cleanupStaleAttachments(release.id, expectedNames)
 
   const failed = []
   for (const asset of assets) {

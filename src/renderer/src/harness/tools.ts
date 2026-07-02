@@ -3,6 +3,7 @@
 
 import { logger } from '../utils/logger'
 import type { FileDiff } from './events'
+import type { PlanTracker, PlanStepState } from './plan-tracker'
 
 // A single tool that the agent can call
 export interface Tool {
@@ -23,6 +24,9 @@ export interface ToolContext {
   projectPath: string | null
   callId: string
   abortSignal?: AbortSignal
+  onProgress?: (chunk: string) => void
+  planTracker?: PlanTracker | null
+  onPlanStateChange?: (steps: PlanStepState[]) => void
 }
 
 const MAX_TOOL_OUTPUT = 32 * 1024 // 32KB max output
@@ -137,7 +141,8 @@ export async function executeBatch(
   registry: Registry,
   ctx: ToolContext,
   onDispatch?: (name: string, id: string) => void,
-  onResult?: (name: string, id: string, result: ToolResult) => void
+  onResult?: (name: string, id: string, result: ToolResult) => void,
+  onProgress?: (id: string, chunk: string) => void
 ): Promise<Map<string, ToolResult>> {
   const results = new Map<string, ToolResult>()
 
@@ -162,7 +167,12 @@ export async function executeBatch(
         onDispatch?.(call.name, call.id)
         const tool = registry.get(call.name)
         if (tool) {
-          const result = await executeTool(tool, call.args, ctx)
+          const callCtx: ToolContext = {
+            ...ctx,
+            callId: call.id,
+            onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
+          }
+          const result = await executeTool(tool, call.args, callCtx)
           results.set(call.id, result)
           onResult?.(call.name, call.id, result)
         }
@@ -181,7 +191,12 @@ export async function executeBatch(
       if (diff) {
         logger.tool(`Preview: ${call.name}`, diff)
       }
-      const result = await executeTool(tool, call.args, ctx)
+      const callCtx: ToolContext = {
+        ...ctx,
+        callId: call.id,
+        onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
+      }
+      const result = await executeTool(tool, call.args, callCtx)
       results.set(call.id, result)
       onResult?.(call.name, call.id, result)
     }

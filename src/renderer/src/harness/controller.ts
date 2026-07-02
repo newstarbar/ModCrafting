@@ -5,6 +5,8 @@
 import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from './events'
 import { Agent } from './agent'
 import { Registry } from './tools'
+import { PlanTracker } from './plan-tracker'
+import { isOpsOnlyPlan, parsePlanSteps, planHasActionableSteps } from '../utils/plan-steps'
 import { logger } from '../utils/logger'
 
 export interface ControllerOptions {
@@ -12,6 +14,8 @@ export interface ControllerOptions {
   projectPath: string | null
   apiConfig: { endpoint: string; apiKey: string; model: string }
   onEvent?: (event: Event) => void
+  onAgentStatus?: (status: string) => void
+  onStreamUpdate?: (text: string, reasoning?: string) => void
 }
 
 export class Controller {
@@ -28,6 +32,7 @@ export class Controller {
   private abortController: AbortController | null = null
 
   private _phase: 'plan' | 'execute' = 'plan'
+  private planTracker: PlanTracker | null = null
   private pendingApproval: { id: string; resolve: (allow: boolean) => void } | null = null
 
   // Callbacks
@@ -40,6 +45,8 @@ export class Controller {
     this._projectPath = opts.projectPath
     this.apiConfig = opts.apiConfig
     this.onEvent = opts.onEvent
+    this.onAgentStatus = opts.onAgentStatus
+    this.onStreamUpdate = opts.onStreamUpdate
 
     this.sink = new LoggerSink(
       new FuncSink((event) => {
@@ -99,16 +106,41 @@ export class Controller {
     return true
   }
 
-  /** Skip execute when plan has no concrete file operations */
+  /** Skip execute when plan has no concrete steps */
   private isActionablePlan(planText: string): boolean {
     const text = planText.trim()
     if (!text) return false
     if (/无法制定|暂无.*计划|等待用户|未提供.*需求|仅打招呼|无法输出.*计划/i.test(text)) {
       return false
     }
+    if (!planHasActionableSteps(text)) return false
+    const steps = parsePlanSteps(text)
     const hasFileRef = /\.(java|json|gradle|properties|toml)|src\/|gradle\//i.test(text)
-    const hasNumberedSteps = /^\s*\d+[.\、\s]/m.test(text)
-    return hasFileRef && hasNumberedSteps
+    const hasOpsRef = isOpsOnlyPlan(steps) || /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行/i.test(text)
+    return hasFileRef || hasOpsRef
+  }
+
+  private buildExecuteConfirmMessage(tracker: PlanTracker): string {
+    const current = tracker.currentStep
+    if (!current) {
+      return '计划已确认。全部步骤已完成，请输出总结。'
+    }
+    let content =
+      `计划已确认。当前执行步骤 #${current.id}：${current.description}\n` +
+      `串行工作流：1) 执行当前步骤所需工具；2) 完成后调用 complete_step { stepId: "${current.id}" }；` +
+      `3) 主机自动推进到下一步。禁止重复已成功工具，禁止跳过步骤。\n` +
+      tracker.toContextBlock()
+    if (tracker.isOpsOnly()) {
+      content += '\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。'
+    }
+    return content
+  }
+
+  private emitPlanState(tracker: PlanTracker): void {
+    this.emitEvent({
+      kind: EventKind.PlanState,
+      planSteps: tracker.snapshot()
+    })
   }
 
   private async buildProjectInfo(): Promise<string> {
@@ -302,15 +334,27 @@ ${projectInfo}`
         )
 
         this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: planResult })
+        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
 
         if (!this.isActionablePlan(planResult)) {
           this.onAgentStatus?.('')
+          this.emitEvent({ kind: EventKind.TurnDone })
           return planResult
         }
 
         this._phase = 'execute'
         await this.updateSystemPrompt('execute')
-        this.messages.push({ role: 'user', content: '计划已确认。现在开始执行计划，调用工具实现上述方案。' })
+        this.planTracker = PlanTracker.fromPlanText(planResult)
+        if (this.planTracker.steps.length > 0) {
+          this.planTracker.markRunning()
+          this.emitPlanState(this.planTracker)
+        }
+        this.messages.push({
+          role: 'user',
+          content: this.planTracker.steps.length > 0
+            ? this.buildExecuteConfirmMessage(this.planTracker)
+            : '计划已确认。现在开始执行计划，调用工具实现上述方案。'
+        })
 
         this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
         this.onAgentStatus?.('执行中...')
@@ -323,7 +367,12 @@ ${projectInfo}`
           this._projectPath,
           this.abortController.signal,
           streamCb,
-          { phase: 'execute', emitLifecycle: true }
+          {
+            phase: 'execute',
+            emitLifecycle: true,
+            planTracker: this.planTracker,
+            opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
+          }
         )
 
         this.onAgentStatus?.('')
@@ -340,7 +389,12 @@ ${projectInfo}`
         this._projectPath,
         this.abortController.signal,
         streamCb,
-        { phase: 'execute', emitLifecycle: true }
+        {
+          phase: 'execute',
+          emitLifecycle: true,
+          planTracker: this.planTracker,
+          opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
+        }
       )
 
       this.onAgentStatus?.('')
@@ -375,6 +429,7 @@ ${projectInfo}`
   clearSession(): void {
     this.messages = []
     this._phase = 'plan'
+    this.planTracker = null
     this.agent.resetRunState()
     logger.agent('Session cleared')
   }

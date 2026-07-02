@@ -9,6 +9,7 @@ import { EventKind } from '../harness/events'
 import type { Event } from '../harness/events'
 import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
+import { parsePlanSteps } from '../utils/plan-steps'
 import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, type UsageStats } from '../utils/usage'
 
 interface ChatPanelProps {
@@ -39,9 +40,18 @@ interface ToolCallDisplay {
 
 // A single chronologically-ordered entry in an assistant message
 type ChronoEntry =
-  | { kind: 'reasoning'; content: string }
+  | { kind: 'reasoning'; content: string; done?: boolean }
   | { kind: 'text'; content: string }
-  | { kind: 'tool'; id: string; name: string; status: 'pending' | 'running' | 'done' | 'error'; output?: string; durationMs?: number }
+  | {
+      kind: 'tool'
+      id: string
+      name: string
+      status: 'pending' | 'running' | 'done' | 'error'
+      output?: string
+      liveOutput?: string
+      durationMs?: number
+      startMs?: number
+    }
 
 interface DisplayMessage {
   id: string
@@ -76,26 +86,14 @@ function getToolDisplayName(name: string): string {
   return TOOL_DISPLAY_NAMES[name] || name
 }
 
-// Parse plan steps from AI text output
-// Looks for numbered lines like "1. 创建文件..." or "- 创建文件..."
-function parsePlanSteps(text: string): PlanStep[] {
-  const steps: PlanStep[] = []
-  const lines = text.split('\n')
-  let idCounter = 0
-  for (const line of lines) {
-    const trimmed = line.replace(/^[\s*\-]+/, '').trim()
-    // Match: "1. something" or "1、something" or "- something"
-    const match = trimmed.match(/^(\d+)[.\、\s]+(.+)$/)
-    if (match) {
-      idCounter++
-      steps.push({
-        id: String(idCounter),
-        description: match[2].trim(),
-        status: 'pending'
-      })
-    }
-  }
-  return steps
+function toPlanSteps(steps: Array<{ id: string; description: string; status: string }>): PlanStep[] {
+  return steps.map((s) => ({
+    id: s.id,
+    description: s.description,
+    status: (s.status === 'completed' || s.status === 'running' || s.status === 'error'
+      ? s.status
+      : 'pending') as PlanStep['status']
+  }))
 }
 
 const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onAppendToSession, onNewSession, onRenameSession, toolchainReady = true }) => {
@@ -113,6 +111,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const controllerRef = useRef<Controller | null>(null)
 
   const [collapsedToolIds, setCollapsedToolIds] = useState<Set<string>>(new Set())
+  const [collapsedReasoningKeys, setCollapsedReasoningKeys] = useState<Set<string>>(new Set())
+  const [runTick, setRunTick] = useState(0)
+  const toolOutputRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [usageAccum, setUsageAccum] = useState<UsageStats>(EMPTY_USAGE)
   const turnUsageRef = useRef({ promptTokens: 0, completionTokens: 0 })
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([])
@@ -133,6 +134,44 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       return next
     })
   }, [])
+
+  const toggleReasoning = useCallback((key: string) => {
+    setCollapsedReasoningKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const collapseAllReasoning = useCallback((msgId: string, entries: ChronoEntry[]) => {
+    const keys: string[] = []
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]
+      if (e.kind === 'reasoning') {
+        e.done = true
+        keys.push(`${msgId}-${i}`)
+      }
+    }
+    if (keys.length === 0) return
+    setCollapsedReasoningKeys((prev) => {
+      const next = new Set(prev)
+      keys.forEach((k) => next.add(k))
+      return next
+    })
+  }, [])
+
+  const markLastReasoningDone = useCallback((msgId: string, entries: ChronoEntry[]) => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i]
+      if (e.kind === 'reasoning' && !e.done) {
+        e.done = true
+        setCollapsedReasoningKeys((prev) => new Set(prev).add(`${msgId}-${i}`))
+        break
+      }
+      if (e.kind !== 'reasoning') break
+    }
+  }, [])
   const turnRef = useRef({
     msgId: '',
     entries: [] as ChronoEntry[],
@@ -150,7 +189,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   useEffect(() => {
     if (isUserScrolledUpRef.current) return
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [displayMessages, agentStatus])
+  }, [displayMessages, agentStatus, runTick])
+
+  useEffect(() => {
+    if (!isLoading) return
+    const id = window.setInterval(() => setRunTick((t) => t + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [isLoading])
 
   // Init controller once
   useEffect(() => {
@@ -237,10 +282,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             .join('\n')
           const steps = parsePlanSteps(planText)
           if (steps.length > 0) {
-            setPlanSteps(steps)
+            setPlanSteps(toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' }))))
           }
+        } else if (event.phase === 'plan_stream_end') {
+          if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
+          refreshDisplay()
         } else if (event.phase === 'execute_start') {
           setAgentStatus('执行中...')
+        }
+        break
+
+      case EventKind.PlanState:
+        if (event.planSteps && event.planSteps.length > 0) {
+          setPlanSteps(toPlanSteps(event.planSteps))
         }
         break
 
@@ -289,6 +343,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
       case EventKind.Text:
         if (event.text) {
+          markLastReasoningDone(t.msgId, t.entries)
           const last = t.entries[t.entries.length - 1]
           if (last?.kind === 'text') {
             // Append to the last text entry (streaming chunk)
@@ -303,24 +358,47 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
       case EventKind.ToolDispatch:
         if (event.tool && event.tool.name) {
-          // Always add new tool entry (breaks reasoning/text stream)
+          markLastReasoningDone(t.msgId, t.entries)
+          setCollapsedToolIds((prev) => {
+            const next = new Set(prev)
+            next.delete(event.tool!.id)
+            return next
+          })
           t.entries.push({
             kind: 'tool',
             id: event.tool.id,
             name: event.tool.name,
-            status: 'pending'
+            status: 'running',
+            startMs: Date.now()
           })
           refreshDisplay()
         }
         break
 
+      case EventKind.ToolProgress:
+        if (event.tool?.id && event.tool.output) {
+          for (const entry of t.entries) {
+            if (entry.kind === 'tool' && entry.id === event.tool.id) {
+              entry.status = 'running'
+              entry.liveOutput = (entry.liveOutput || '') + event.tool.output
+              break
+            }
+          }
+          refreshDisplay()
+          const outEl = toolOutputRefs.current.get(event.tool.id)
+          if (outEl) outEl.scrollTop = outEl.scrollHeight
+        }
+        break
+
       case EventKind.ToolResult:
         if (event.tool) {
+          setCollapsedToolIds((prev) => new Set(prev).add(event.tool!.id))
           // Find existing tool entry by id and update it
           for (const entry of t.entries) {
             if (entry.kind === 'tool' && entry.id === event.tool.id) {
               entry.status = event.tool.error ? 'error' : 'done'
-              entry.output = event.tool.output || event.tool.error || ''
+              entry.output = event.tool.output || event.tool.error || entry.liveOutput || ''
+              entry.liveOutput = undefined
               entry.durationMs = event.tool.durationMs
               break
             }
@@ -370,6 +448,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
       case EventKind.TurnDone:
         t.streamDone = true
+        if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
         setIsLoading(false)
         setAgentStatus('')
         onRunningChangeRef.current?.(false)
@@ -402,7 +481,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         }
         break
     }
-  }, [refreshDisplay])
+  }, [refreshDisplay, collapseAllReasoning, markLastReasoningDone])
 
   // Session helpers — delegated to App (single source of truth)
   const appendToSession = useCallback((role: string, content: string) => {
@@ -503,40 +582,96 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               )}
               {msg.entries && msg.entries.length > 0 && msg.entries.map((entry, i) => {
                 switch (entry.kind) {
-                  case 'reasoning':
-                    return <div key={`r-${i}`} className="reasoning-line">{entry.content}</div>
+                  case 'reasoning': {
+                    const rKey = `${msg.id}-${i}`
+                    const isCollapsed = collapsedReasoningKeys.has(rKey)
+                    const isActiveStream = Boolean(
+                      msg.isStreaming && !entry.done && i === msg.entries!.length - 1
+                    )
+                    const showExpanded = isActiveStream || !isCollapsed
+                    const preview = entry.content.trim().replace(/\s+/g, ' ').slice(0, 80)
+                    return (
+                      <div key={`r-${i}`} className="reasoning-block">
+                        <button
+                          type="button"
+                          className="reasoning-block-hd"
+                          onClick={() => { if (!isActiveStream) toggleReasoning(rKey) }}
+                          disabled={isActiveStream}
+                        >
+                          <span className="reasoning-block-icon">{showExpanded ? '▾' : '▸'}</span>
+                          <span>{isActiveStream ? '思考中…' : '思考过程'}</span>
+                          {!showExpanded && preview && (
+                            <span className="reasoning-preview">{preview}{entry.content.length > 80 ? '…' : ''}</span>
+                          )}
+                        </button>
+                        {showExpanded && (
+                          <div className="reasoning-block-bd reasoning-line">{entry.content}</div>
+                        )}
+                      </div>
+                    )
+                  }
                   case 'text':
                     return <div key={`t-${i}`}>{renderContent(entry.content)}</div>
                   case 'tool': {
                     const isCollapsed = collapsedToolIds.has(entry.id)
+                    const displayOutput = entry.liveOutput || entry.output
+                    const elapsedSec = entry.startMs && entry.status === 'running'
+                      ? Math.max(1, Math.floor((Date.now() - entry.startMs) / 1000))
+                      : null
                     const statusMark =
                       entry.status === 'done' ? <span className="ok">✓</span>
                         : entry.status === 'running' ? <span className="run">⟳</span>
                           : entry.status === 'error' ? <span className="err">✗</span>
                             : <span className="mc-dim">·</span>
                     return (
-                      <div key={`tool-${entry.id}`} className="tool-line">
+                      <div
+                        key={`tool-${entry.id}`}
+                        className={`tool-line${entry.status === 'running' ? ' running' : ''}`}
+                      >
                         {statusMark}
                         <span className="tool-line-name">{getToolDisplayName(entry.name)}</span>
                         {entry.durationMs != null && (
-                          <span className="mc-dim" style={{ fontSize: '10px' }}>({entry.durationMs}ms)</span>
+                          <span className="mc-dim" style={{ fontSize: '10px' }}>
+                            ({entry.durationMs >= 1000
+                              ? `${(entry.durationMs / 1000).toFixed(1)}s`
+                              : `${entry.durationMs}ms`})
+                          </span>
                         )}
-                        {(entry.status === 'done' || entry.status === 'error') && entry.output && (
+                        {elapsedSec != null && (
+                          <span className="mc-dim" style={{ fontSize: '10px' }}>({elapsedSec}s)</span>
+                        )}
+                        {(entry.status === 'done' || entry.status === 'error') && displayOutput && (
                           <span
                             className="tool-line-toggle"
                             onClick={() => toggleToolOutput(entry.id)}
                           >
-                            {isCollapsed ? `${extractPreview(entry.name, entry.output)} ▶` : '收起 ▲'}
+                            {isCollapsed
+                              ? `${extractPreview(entry.name, displayOutput)} ▶`
+                              : '收起 ▲'}
                           </span>
                         )}
-                        {(entry.status === 'pending' || entry.status === 'running') && (
-                          <span className="tool-line-toggle mc-dim">
-                            {entry.status === 'running' ? '执行中…' : '等待中…'}
+                        {entry.status === 'running' && (
+                          <span
+                            className="tool-line-toggle mc-dim"
+                            onClick={() => toggleToolOutput(entry.id)}
+                          >
+                            {isCollapsed ? '展开日志 ▶' : '收起 ▲'}
                           </span>
                         )}
-                        {entry.output && !isCollapsed && (
-                          <div className="tool-line-output">
-                            <pre className={entry.status === 'error' ? 'is-error' : undefined}>{entry.output}</pre>
+                        {entry.status === 'pending' && (
+                          <span className="tool-line-toggle mc-dim">等待中…</span>
+                        )}
+                        {displayOutput && !isCollapsed && (
+                          <div
+                            className="tool-line-output"
+                            ref={(el) => {
+                              if (el) toolOutputRefs.current.set(entry.id, el)
+                              else toolOutputRefs.current.delete(entry.id)
+                            }}
+                          >
+                            <pre className={entry.status === 'error' ? 'is-error' : undefined}>
+                              {displayOutput}
+                            </pre>
                           </div>
                         )}
                       </div>
@@ -611,7 +746,18 @@ function extractPreview(toolName: string, output: string): string {
     if (lines.length <= 3) return lines.join(', ')
     return `${first} 等 ${lines.length} 项`
   }
-  // read_file: show first line
+  if (toolName === 'run_command' || toolName === 'trigger_build') {
+    if (output.includes('BUILD SUCCESSFUL')) return 'BUILD SUCCESSFUL'
+    if (output.includes('BUILD FAILED')) return 'BUILD FAILED'
+    const exitMatch = output.match(/\[exit code: (\d+)\]|\[退出码: (\d+)\]/)
+    const exitCode = exitMatch?.[1] ?? exitMatch?.[2]
+    const lines = output.split('\n').filter((l) => l.trim())
+    const last = lines[lines.length - 1]?.trim() || ''
+    if (last && last.length <= 60) {
+      return exitCode && exitCode !== '0' ? `${last} (exit ${exitCode})` : last
+    }
+    return exitCode ? `exit ${exitCode}` : last.slice(0, 60) || '(完成)'
+  }
   const firstLine = output.split('\n')[0]?.trim() || ''
   return firstLine.slice(0, 60) + (firstLine.length > 60 ? '...' : '')
 }

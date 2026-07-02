@@ -681,6 +681,8 @@ html, body, #root {
 .tool-line-output {
   width: 100%;
   margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .tool-line-output pre {
@@ -709,6 +711,65 @@ html, body, #root {
   margin-bottom: 6px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.reasoning-block {
+  margin-bottom: 8px;
+  border-left: 2px solid var(--border-color);
+  padding-left: 8px;
+}
+
+.reasoning-block-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 4px;
+  border: none;
+  background: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  cursor: pointer;
+  text-align: left;
+}
+
+.reasoning-block-hd:disabled {
+  cursor: default;
+}
+
+.reasoning-block-hd:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.reasoning-block-icon {
+  flex-shrink: 0;
+  font-style: normal;
+}
+
+.reasoning-preview {
+  color: var(--text-muted);
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.reasoning-block-bd {
+  margin-bottom: 0;
+}
+
+.tool-line.running {
+  border-color: rgba(255, 200, 80, 0.35);
+  animation: tool-line-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tool-line-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.82; }
 }
 
 .chat-header-brand,

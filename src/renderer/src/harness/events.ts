@@ -15,6 +15,7 @@ export const EventKind = {
   Usage: 'Usage',
   Notice: 'Notice',
   Phase: 'Phase',
+  PlanState: 'PlanState',
   ApprovalRequest: 'ApprovalRequest',
   AskRequest: 'AskRequest',
   TurnDone: 'TurnDone',
@@ -106,6 +107,7 @@ export interface Event {
   retryAttempt?: number
   retryMax?: number
   phase?: string
+  planSteps?: Array<{ id: string; description: string; status: string }>
 }
 
 // Sink interface — same contract as Reasonix event.Sink

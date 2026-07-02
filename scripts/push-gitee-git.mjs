@@ -46,8 +46,9 @@ run(`git remote add gitee "${remoteUrl}"`)
 run('git config user.name "github-actions[bot]"')
 run('git config user.email "github-actions[bot]@users.noreply.github.com"')
 
-// Gitee Release 需要远程仓库存在对应 commit；同步 main 到当前 tag 提交
-run(`git push gitee ${sha}:refs/heads/main`)
+// Gitee 为 GitHub 镜像仓：远端 main 可能与 GitHub 分叉（手动提交、旧 CI 等），强制对齐到当前发布提交
+console.log('[gitee] Force-pushing main (mirror sync — overwrites remote main)')
+run(`git push gitee ${sha}:refs/heads/main --force`)
 run(`git push gitee refs/tags/${normalizedTag}:refs/tags/${normalizedTag} --force`)
 
 // 避免后续 git checkout main 歧义（origin/main vs gitee/main）
