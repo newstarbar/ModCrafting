@@ -4,6 +4,7 @@
 import { logger } from '../utils/logger'
 import type { FileDiff } from './events'
 import type { PlanTracker, PlanStepState } from './plan-tracker'
+import { recipePath } from './recipe-utils'
 
 // A single tool that the agent can call
 export interface Tool {
@@ -41,11 +42,41 @@ function truncateOutput(output: string): string {
   )
 }
 
+function parseExitCode(output: string): number | null {
+  const match = output.match(/\[exit code: (-?\d+)\]|\[退出码: (-?\d+)\]/)
+  if (!match) return null
+  return Number(match[1] ?? match[2])
+}
+
+function inferToolError(toolName: string, output: string, exitCode: number | null): string | undefined {
+  if (/^(Error|No project open)/i.test(output)) return output
+  if (/环境准备失败/.test(output)) return output
+  if (exitCode !== null && exitCode !== 0) return output
+  if (toolName === 'trigger_build' && /BUILD FAILED/i.test(output)) return output
+  return undefined
+}
+
+function artifactPathFor(toolName: string, args: Record<string, unknown>): string | undefined {
+  if (toolName === 'write_file' || toolName === 'read_file') {
+    return typeof args.path === 'string' ? args.path : undefined
+  }
+  if (toolName === 'create_recipe' && typeof args.namespace === 'string' && typeof args.name === 'string') {
+    return recipePath(args.namespace, args.name)
+  }
+  return undefined
+}
+
 // Tool execution result
 export interface ToolResult {
   output: string
   error?: string
   durationMs: number
+  ok?: boolean
+  toolName?: string
+  args?: Record<string, unknown>
+  artifactPath?: string
+  exitCode?: number | null
+  errorKind?: string
 }
 
 // ======== Registry ========
@@ -119,6 +150,8 @@ export async function executeTool(
     const output = await tool.execute(ctx, args)
     const duration = Date.now() - start
     const truncated = truncateOutput(output)
+    const exitCode = parseExitCode(output)
+    const inferredError = inferToolError(tool.name, output, exitCode)
 
     logger.tool(`Result: ${tool.name}`, {
       duration: `${duration}ms`,
@@ -126,12 +159,31 @@ export async function executeTool(
       outputPreview: truncated.slice(0, 100)
     })
 
-    return { output: truncated, durationMs: duration }
+    return {
+      output: truncated,
+      error: inferredError ? truncateOutput(inferredError) : undefined,
+      durationMs: duration,
+      ok: !inferredError,
+      toolName: tool.name,
+      args,
+      artifactPath: artifactPathFor(tool.name, args),
+      exitCode
+    }
   } catch (err) {
     const duration = Date.now() - start
     const errMsg = err instanceof Error ? err.message : String(err)
     logger.tool(`Error: ${tool.name}`, errMsg)
-    return { output: errMsg, error: errMsg, durationMs: duration }
+    return {
+      output: errMsg,
+      error: errMsg,
+      durationMs: duration,
+      ok: false,
+      toolName: tool.name,
+      args,
+      artifactPath: artifactPathFor(tool.name, args),
+      exitCode: null,
+      errorKind: 'exception'
+    }
   }
 }
 

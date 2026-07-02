@@ -6,7 +6,7 @@ import type { Sink, Event } from './events'
 import { EventKind } from './events'
 import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from './tools'
 import type { PlanTracker } from './plan-tracker'
-import { OPS_STEP_PATTERN } from '../utils/plan-steps'
+import { findAdvanceEvidence } from './step-evidence'
 import { logger } from '../utils/logger'
 
 let _toolCallIdCounter = 0
@@ -31,6 +31,7 @@ const REPEAT_SUCCESS_THRESHOLD = 2
 const MAX_FINAL_READINESS_BLOCKS = 3
 const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'read_error_log', 'run_command']
 const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES
+const CONTROL_TOOL_NAMES = ['complete_step']
 const REPEAT_GUARD_TOOLS = new Set([
   'list_directory', 'read_file', 'run_command', 'trigger_build', 'write_file', 'read_error_log'
 ])
@@ -92,7 +93,7 @@ export class Agent {
     if (count < REPEAT_SUCCESS_THRESHOLD) return null
     return (
       `blocked: [loop guard] "${name}" 已用相同参数成功执行 ${count} 次。` +
-      `请调用 complete_step 推进计划，或换用其他工具，勿重复执行。`
+      `请换用当前步骤所需的其他工具，勿重复执行。`
     )
   }
 
@@ -106,6 +107,12 @@ export class Agent {
     tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
   ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
     return tools.filter((t) => !EXPLORATION_TOOL_NAMES.includes(t.name))
+  }
+
+  private filterControlTools(
+    tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+  ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+    return tools.filter((t) => !CONTROL_TOOL_NAMES.includes(t.name))
   }
 
   private emit(e: Event): void { this.sink.emit(e) }
@@ -181,7 +188,7 @@ export class Agent {
         : messages
 
       // Plan phase: no tools; execute phase: full registry with exploration limits
-      let availableTools = phase === 'plan' ? [] : this.registry.schemas()
+      let availableTools = phase === 'plan' ? [] : this.filterControlTools(this.registry.schemas())
       if (this.graceRound) {
         availableTools = []
       } else if (phase === 'execute') {
@@ -191,7 +198,7 @@ export class Agent {
           this.readonlyLocked = true
           readonlyRounds = 0
           availableTools = this.filterExplorationTools(availableTools)
-          const kick = 'STOP EXPLORING. You have spent too many rounds reading files, listing directories, and running diagnostic commands. run_command, read_file, and list_directory are now LOCKED. You can ONLY write files (write_file), build (trigger_build), or mark steps done (complete_step). Make a decision and execute it NOW.'
+          const kick = 'STOP EXPLORING. You have spent too many rounds reading files, listing directories, and running diagnostic commands. run_command, read_file, and list_directory are now LOCKED. You can ONLY write files (write_file) or build/run (trigger_build). Make a decision and execute it NOW.'
           messages.push({ role: 'user', content: kick })
           apiMessages.push({ role: 'user', content: kick })
           logger.agent('KICK: exploration tools permanently removed')
@@ -244,7 +251,7 @@ export class Agent {
             const remaining = planTracker.toContextBlock()
             const cur = planTracker.currentStep
             const stepHint = cur
-              ? `请继续执行步骤 #${cur.id}，完成后调用 complete_step { stepId: "${cur.id}" }。`
+              ? `请继续执行步骤 #${cur.id}：${cur.description}。系统会根据工具结果推进步骤。`
               : ''
             messages.push({
               role: 'user',
@@ -315,7 +322,16 @@ export class Agent {
               tool: { id: call.id, name: call.name, args: JSON.stringify(call.args), readOnly: tool?.readOnly() }
             })
             this.onToolDispatch?.(call.name, call.id)
-            blockedResults.set(call.id, { output: blockMsg, error: blockMsg, durationMs: 0 })
+            blockedResults.set(call.id, {
+              output: blockMsg,
+              error: blockMsg,
+              durationMs: 0,
+              ok: false,
+              toolName: call.name,
+              args: call.args,
+              exitCode: null,
+              errorKind: 'loop_guard'
+            })
             this.emit({
               kind: EventKind.ToolResult,
               tool: { id: call.id, name: call.name, args: '', output: blockMsg, error: blockMsg, durationMs: 0 }
@@ -379,6 +395,9 @@ export class Agent {
           for (const [, r] of results) lines.push(r.output)
 
           let dupWarning = ''
+          // The model rewrote a file it had already written this run → it is
+          // stuck re-editing instead of moving on to the next plan step.
+          let rewroteExistingFile = false
           for (const tc of executedCalls) {
             if (tc.name === 'write_file' && typeof tc.args.path === 'string') {
               const path = tc.args.path
@@ -386,8 +405,10 @@ export class Agent {
               const prev = this.writtenFiles.get(path)
               if (prev === content) {
                 dupWarning = `\n\n【警告】文件 ${path} 已经写入过相同内容！不要重复写入。改用 trigger_build 构建。`
+                rewroteExistingFile = true
               } else if (prev !== undefined) {
                 dupWarning = `\n\n【注意】文件 ${path} 将被覆盖写入（内容已变更）。`
+                rewroteExistingFile = true
               }
               this.writtenFiles.set(path, content)
             }
@@ -397,6 +418,10 @@ export class Agent {
           const hasBuild = executedCalls.some((tc) => tc.name === 'trigger_build')
           const hasStepDone = executedCalls.some((tc) => tc.name === 'complete_step')
           const combinedOutput = lines.join('\n')
+          const successfulWrites = executableCalls.filter((tc) =>
+            tc.name === 'write_file' && !results.get(tc.id)?.error
+          )
+          const hasSuccessfulWrite = successfulWrites.length > 0
 
           if (hasWrite && !hasBuild && !hasStepDone) {
             this.consecutiveWriteOnlyRounds++
@@ -404,29 +429,30 @@ export class Agent {
             this.consecutiveWriteOnlyRounds = 0
           }
 
-          // ---- Loop-breaking: don't rely on weak models to call complete_step ----
+          // ---- Step advancement: host-owned, evidence-driven ----
           // Every call this round was rejected by the loop guard → no progress made.
           const roundFullyBlocked = executableCalls.length === 0 && blockedResults.size > 0
-          const buildSucceeded = combinedOutput.includes('BUILD SUCCESSFUL')
           const curStep = planTracker?.currentStep ?? null
-          const curIsOps = !!curStep && (opsOnlyPlan || OPS_STEP_PATTERN.test(curStep.description))
-
-          // Auto-advance the current ops/build step when its build actually
-          // succeeded, or when the model is stuck re-calling an already-successful
-          // tool (loop guard keeps blocking). Previously this waited forever for the
-          // model to call complete_step, causing the infinite trigger_build loop.
+          const advanceDecision = findAdvanceEvidence(curStep, results.values())
           let autoAdvanceMsg = ''
-          if (planTracker && curStep && !hasStepDone && curIsOps && (buildSucceeded || roundFullyBlocked)) {
-            const res = planTracker.advance(curStep.id)
+          if (planTracker && curStep && !hasStepDone && advanceDecision.ok) {
+            const res = planTracker.advanceCurrent(advanceDecision.reason)
             if (res.ok) {
               autoAdvanceMsg = res.message
               this.consecutiveBlockedRounds = 0
               this.emit({ kind: EventKind.PlanState, planSteps: planTracker.snapshot() })
-              logger.agent('Auto-advance step (build ok / loop-guard block)', {
+              logger.agent('Auto-advance step', {
                 stepId: curStep.id,
-                reason: buildSucceeded ? 'build_successful' : 'loop_guard_block'
+                reason: advanceDecision.reason
               })
             }
+          }
+
+          if (hasSuccessfulWrite && planTracker?.currentStep && !hasStepDone && !autoAdvanceMsg) {
+            // Once a write step has produced a file, stop offering exploration
+            // tools. Otherwise weak models often go back to list/read loops
+            // instead of marking the current step complete.
+            this.readonlyLocked = true
           }
 
           // All steps finished via auto-advance → end the run instead of looping.
@@ -435,7 +461,7 @@ export class Agent {
               role: 'system',
               content: combinedOutput + `\n\n[SYSTEM: ${autoAdvanceMsg}]`
             })
-            finalContent = finalContent.trim() || '构建已成功完成，全部计划步骤已完成。'
+            finalContent = finalContent.trim() || '全部计划步骤已完成。'
             this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
             logger.agent('Auto-advance: all steps done, ending run', { step, phase })
             this.finishRun(emitLifecycle)
@@ -492,32 +518,33 @@ export class Agent {
 
           let instruction
           if (autoAdvanceMsg) {
-            instruction = `\n\n[SYSTEM: ${autoAdvanceMsg} 请直接执行下一步，不要重复已完成的构建。]`
+            instruction = `\n\n[SYSTEM: ${autoAdvanceMsg} 请直接执行下一步，不要重复上一步已完成的操作。]`
           } else if (this.consecutiveWriteOnlyRounds >= 3) {
             instruction = '\n\n【系统警告】你已经连续多次只写入文件而没有构建！立即调用 trigger_build 来构建项目，不要继续写文件！'
             this.consecutiveWriteOnlyRounds = 0
           } else if (dupWarning) {
             instruction = dupWarning
           } else if (hasBuild && combinedOutput.includes('BUILD SUCCESSFUL')) {
-            const cur = planTracker?.currentStep
-            const stepId = cur?.id ?? ''
             instruction =
-              `\n\n[SYSTEM: 构建已成功完成。不要再次调用 trigger_build。` +
-              `请立即调用 complete_step { stepId: "${stepId}" } 标记当前步骤完成，然后执行下一步。]`
+              '\n\n[SYSTEM: 构建已成功完成。不要再次调用 trigger_build，系统会根据构建结果推进步骤。]'
           } else if (hasBuild) {
             instruction = '\n\n[SYSTEM: 构建完成。检查结果后决定下一步。]'
           } else if (hasStepDone) {
             const cur = planTracker?.currentStep
             if (cur) {
               instruction =
-                `\n\n[SYSTEM: 步骤已推进。当前步骤 #${cur.id}：${cur.description}。请执行该步骤，完成后再次 complete_step。]`
+                `\n\n[SYSTEM: 步骤已推进。当前步骤 #${cur.id}：${cur.description}。请执行该步骤，系统会根据工具结果继续推进。]`
             } else if (planTracker?.allDone()) {
               instruction = '\n\n[SYSTEM: 全部计划步骤已完成。请输出总结，不要再调用工具。]'
             } else {
               instruction = '\n\n[SYSTEM: 步骤已标记。继续下一步或调用 trigger_build。]'
             }
-          } else if (hasWrite) {
-            instruction = '\n\n[SYSTEM: 文件已写入。如需继续写文件请继续，否则调用 trigger_build 构建。]'
+          } else if (hasSuccessfulWrite) {
+            const cur = planTracker?.currentStep
+            instruction = cur
+              ? `\n\n[SYSTEM: 文件已写入。当前步骤 #${cur.id}：${cur.description}。` +
+                '请检查是否需要执行下一步；不要 list_directory/read_file，不要重写同一个文件。]'
+              : '\n\n[SYSTEM: 文件已写入。不要重复写入同一个文件，继续下一步或输出总结。]'
           } else {
             instruction = '\n\n[SYSTEM: 工具执行完毕。决定下一步。]'
           }

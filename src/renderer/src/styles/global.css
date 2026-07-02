@@ -1466,6 +1466,11 @@ body,
 	background: color-mix(in srgb, var(--success) 15%, transparent);
 }
 
+.turn-badge--partial {
+	color: var(--mc-yellow);
+	background: color-mix(in srgb, var(--mc-yellow) 15%, transparent);
+}
+
 .turn-badge--error {
 	color: var(--error);
 	background: color-mix(in srgb, var(--error) 15%, transparent);

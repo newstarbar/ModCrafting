@@ -15,7 +15,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   entries?: PersistedChronoEntry[]
-  turnStatus?: 'completed' | 'error' | 'cancelled'
+  turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled'
   embeddedPlan?: PlanStep[]
   timestamp?: number
   displayId?: string

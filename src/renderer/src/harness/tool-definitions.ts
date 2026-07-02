@@ -3,6 +3,7 @@
 
 import { type Tool, type ToolContext, type Previewer } from './tools'
 import type { FileDiff } from './events'
+import { buildShapelessRecipeContent, parseRecipeIngredients, recipePath } from './recipe-utils'
 
 async function runWithCommandStream(
   ctx: ToolContext,
@@ -78,6 +79,83 @@ export const writeFileTool: Tool & Previewer = {
     const content = String(args.content || '')
     return {
       path,
+      added: content.split('\n').length,
+      removed: 0,
+      content
+    }
+  }
+}
+
+// ── create_recipe ──
+export const createRecipeTool: Tool & Previewer = {
+  name: 'create_recipe',
+  description: 'Create a Minecraft shapeless crafting recipe JSON. Prefer this for recipe/合成 tasks instead of hand-writing JSON.',
+  schema: {
+    type: 'object',
+    properties: {
+      namespace: { type: 'string', description: 'Recipe namespace / mod id, e.g. my-mod' },
+      name: { type: 'string', description: 'Recipe file name without .json, e.g. dirt_to_diamond' },
+      ingredients: {
+        type: 'array',
+        description: 'Ingredients. Use repeated strings or objects with { item, count }.',
+        items: {
+          anyOf: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: {
+                item: { type: 'string' },
+                count: { type: 'number' }
+              },
+              required: ['item']
+            }
+          ]
+        }
+      },
+      result: { type: 'string', description: 'Result item id, e.g. minecraft:diamond' },
+      count: { type: 'number', description: 'Result count, default 1' }
+    },
+    required: ['namespace', 'name', 'ingredients', 'result']
+  },
+  readOnly: () => false,
+  async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+    if (!ctx.projectPath) return 'No project open'
+    const namespace = String(args.namespace || '')
+    const name = String(args.name || '')
+    const ingredients = parseRecipeIngredients(args.ingredients)
+    const result = String(args.result || '')
+    const count = Number(args.count ?? 1)
+    if (!namespace || !name || ingredients.length === 0 || !result) {
+      return 'Error creating recipe: namespace, name, ingredients and result are required'
+    }
+    const path = recipePath(namespace, name)
+    const content = buildShapelessRecipeContent({
+      ingredients,
+      result: { item: result, count: Number.isFinite(count) ? count : 1 }
+    })
+    try {
+      const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content)
+      if (res.success) {
+        logger.file(`Recipe written: ${path}`, `${content.length} bytes`)
+        return `✅ Recipe written: ${path} (${content.length} bytes)`
+      }
+      return `Error creating recipe: ${res.error}`
+    } catch (err) {
+      return `Error creating recipe: ${err}`
+    }
+  },
+  preview(args: Record<string, unknown>): FileDiff | null {
+    const namespace = String(args.namespace || '')
+    const name = String(args.name || '')
+    const ingredients = parseRecipeIngredients(args.ingredients)
+    const result = String(args.result || '')
+    if (!namespace || !name || ingredients.length === 0 || !result) return null
+    const content = buildShapelessRecipeContent({
+      ingredients,
+      result: { item: result, count: Number(args.count ?? 1) || 1 }
+    })
+    return {
+      path: recipePath(namespace, name),
       added: content.split('\n').length,
       removed: 0,
       content
@@ -258,8 +336,9 @@ export const completeStepTool: Tool = {
       const result = ctx.planTracker.advance(stepId)
       if (result.ok) {
         ctx.onPlanStateChange?.(ctx.planTracker.snapshot())
+        return result.message
       }
-      return result.message
+      return `Error: ${result.message}`
     }
     return `[STEP_DONE:${stepId}]`
   }
@@ -272,6 +351,7 @@ import { logger } from '../utils/logger'
 export function registerModCraftingTools(registry: Registry): void {
   registry.add(readFileTool)
   registry.add(writeFileTool)
+  registry.add(createRecipeTool)
   registry.add(listDirectoryTool)
   registry.add(runCommandTool)
   registry.add(readErrorLogTool)

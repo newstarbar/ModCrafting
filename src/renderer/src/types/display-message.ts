@@ -20,7 +20,7 @@ export interface DisplayMessage {
   content: string
   entries?: ChronoEntry[]
   isStreaming?: boolean
-  turnStatus?: 'completed' | 'error' | 'cancelled'
+  turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled'
   embeddedPlan?: PlanStep[]
   timestamp: number
 }

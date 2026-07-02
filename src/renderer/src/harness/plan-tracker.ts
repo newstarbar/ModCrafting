@@ -1,4 +1,4 @@
-import { isOpsOnlyPlan, parsePlanSteps, type ParsedPlanStep } from '../utils/plan-steps'
+import { isOpsOnlyPlan, parsePlanSteps, type ParsedPlanStep } from '../utils/plan-steps.ts'
 
 export type PlanStepStatus = 'pending' | 'running' | 'completed'
 
@@ -56,26 +56,10 @@ export class PlanTracker {
     if (cur) cur.status = 'running'
   }
 
-  advance(stepId: string): { ok: boolean; message: string } {
-    const normalized = stepId.trim()
+  private completeCurrent(): { ok: boolean; message: string } {
     const cur = this.currentStep
     if (!cur) {
-      return { ok: false, message: '所有计划步骤已完成，无需再调用 complete_step。' }
-    }
-    // 弱模型常常传错编号（例如反复传已完成步骤的 id）。串行工作流下
-    // 只能完成"当前步骤"，因此对错误编号采取宽容策略：只有当目标明确指向
-    // 一个尚未开始的未来步骤（真正的跳步）时才拒绝，其余情况一律完成当前步骤，
-    // 避免模型陷入反复调用 complete_step 的死循环导致上下文爆满。
-    if (cur.id !== normalized) {
-      const targetIdx = this.steps.findIndex((s) => s.id === normalized)
-      const target = targetIdx >= 0 ? this.steps[targetIdx] : null
-      if (target && targetIdx > this.currentIndex && target.status !== 'completed') {
-        return {
-          ok: false,
-          message: `请先完成当前步骤 #${cur.id}（${cur.description}），不能跳到 #${normalized}。`
-        }
-      }
-      // 编号错误 / 指向已完成步骤 / 未知编号 → 宽容完成当前步骤
+      return { ok: false, message: '所有计划步骤已完成，无需再推进。' }
     }
     cur.status = 'completed'
     this.currentIndex++
@@ -91,6 +75,25 @@ export class PlanTracker {
       ok: true,
       message: `[STEP_DONE:${cur.id}] 步骤 #${cur.id} 已完成。全部计划步骤已完成，请输出总结。`
     }
+  }
+
+  advance(stepId: string): { ok: boolean; message: string } {
+    const normalized = stepId.trim()
+    const cur = this.currentStep
+    if (!cur) {
+      return { ok: false, message: '所有计划步骤已完成，无需再调用 complete_step。' }
+    }
+    if (cur.id !== normalized) {
+      return {
+        ok: false,
+        message: `当前步骤是 #${cur.id}（${cur.description}），不能用 #${normalized || '空'} 完成。`
+      }
+    }
+    return this.completeCurrent()
+  }
+
+  advanceCurrent(_reason: string): { ok: boolean; message: string } {
+    return this.completeCurrent()
   }
 
   toContextBlock(): string {

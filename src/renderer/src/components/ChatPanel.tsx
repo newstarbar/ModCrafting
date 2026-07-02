@@ -74,6 +74,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   list_directory: '列出目录',
   run_command: '运行命令',
   trigger_build: '触发构建',
+  create_recipe: '创建配方',
   read_error_log: '读取错误日志',
   complete_step: '完成任务步骤'
 }
@@ -548,15 +549,33 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
         const hasError = Boolean(event.error)
         t.entries = finalizeRunningTools(t.entries, hasError)
-        const turnStatus = resolveTurnStatus(event.error)
         const planSnapshot = activePlanRef.current
+
+        const finalSteps = planSnapshot
+          ? planSnapshot.steps.map((s) => ({
+              ...s,
+              status: hasError && s.status === 'running'
+                ? 'error' as const
+                : s.status
+            }))
+          : undefined
+        const finalPlanDone = finalSteps ? finalSteps.every((s) => s.status === 'completed') : true
+        const turnStatus: DisplayMessage['turnStatus'] = hasError
+          ? resolveTurnStatus(event.error)
+          : finalPlanDone
+            ? 'completed'
+            : 'partial'
 
         setIsLoading(false)
         setAgentStatus('')
         onRunningChangeRef.current?.(false)
 
-        if (!hasError) {
+        if (!hasError && finalPlanDone) {
           setCompletionFlash('任务已完成')
+          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+        } else if (!hasError && !finalPlanDone) {
+          setCompletionFlash('任务部分完成')
           if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
           completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
         }
@@ -565,17 +584,6 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           onUsageChangeRef.current?.(prev)
           return prev
         })
-
-        const finalSteps = planSnapshot
-          ? planSnapshot.steps.map((s) => ({
-              ...s,
-              status: hasError && s.status === 'running'
-                ? 'error' as const
-                : !hasError && s.status !== 'error'
-                  ? 'completed' as const
-                  : s.status
-            }))
-          : undefined
 
         const anchorId = planSnapshot?.anchorMsgId || t.msgId
 
@@ -784,6 +792,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               <img src={installerIcon} alt="" />
               <span className="role">AI 助手</span>
               {msg.turnStatus === 'completed' && <span className="turn-badge turn-badge--done">已完成</span>}
+              {msg.turnStatus === 'partial' && <span className="turn-badge turn-badge--partial">部分完成</span>}
               {msg.turnStatus === 'error' && <span className="turn-badge turn-badge--error">已中断</span>}
               {msg.turnStatus === 'cancelled' && <span className="turn-badge turn-badge--cancelled">已取消</span>}
               {msg.isStreaming && !msg.turnStatus && <span className="streaming-dot">●</span>}

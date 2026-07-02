@@ -118,8 +118,8 @@ export class Controller {
     }
     let content =
       `计划已确认。当前执行步骤 #${current.id}：${current.description}\n` +
-      `串行工作流：1) 执行当前步骤所需工具；2) 完成后调用 complete_step { stepId: "${current.id}" }；` +
-      `3) 主机自动推进到下一步。禁止重复已成功工具，禁止跳过步骤。\n` +
+      `串行工作流：执行当前步骤所需工具；主机会根据工具结果自动推进到下一步。` +
+      `禁止重复已成功工具，禁止跳过步骤。\n` +
       tracker.toContextBlock()
     if (tracker.isOpsOnly()) {
       content += '\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。'
@@ -181,10 +181,11 @@ export class Controller {
       list_directory: '列出目录',
       run_command: '运行命令',
       trigger_build: '触发构建',
+      create_recipe: '创建配方',
       read_error_log: '读取错误日志',
       complete_step: '完成任务步骤'
     }
-    const toolDescs = this.registry.names().map((name) => {
+    const toolDescs = this.registry.names().filter((name) => name !== 'complete_step').map((name) => {
       const t = this.registry.get(name)
       const cn = toolNameMap[name] || name
       const kind = t?.readOnly() ? '（只读）' : '（写入）'
@@ -230,12 +231,13 @@ ${projectInfo}`
 计划输出后系统会自动进入执行阶段。`
       : `## 🔧 第二阶段：执行计划
 
-严格按照之前的计划执行。**不要重新规划**，每完成一个步骤就调用 **complete_step** 工具标记完成。
+严格按照之前的计划执行。**不要重新规划**。步骤完成由主机根据工具结果自动判定。
 
 规则：
 - **每个文件只写一次。** 不要重复写入。
+- **配方/合成任务优先调用 create_recipe。** 不要手写重复 recipe JSON。
 - **写完全部文件后调用 trigger_build 构建。**
-- **每完成一个步骤，调用 complete_step { stepId: "1" }**（stepId 是步骤编号）。
+- **不要主动调用 complete_step。** 直接执行当前步骤需要的工具。
 - **全部步骤完成后输出总结。**`
 
     const extraRules = mode === 'execute'
@@ -260,6 +262,7 @@ ${mode === 'plan' ? '## 当前：输出计划阶段\n只输出计划文本，不
 - **没有步骤限制。**
 - **最多 3 轮探索。** 之后探索工具将被锁定。
 - 使用 write_file 编写完整、可编译的 Java 代码。
+- 创建配方/合成表时优先使用 create_recipe，不要手写 recipe JSON。
 - 使用 Yarn mappings。
 - 主类 → ModInitializer，客户端类 → ClientModInitializer。
 
