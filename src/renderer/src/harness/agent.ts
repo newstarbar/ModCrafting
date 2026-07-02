@@ -7,6 +7,8 @@ import { EventKind } from './events'
 import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from './tools'
 import type { PlanTracker } from './plan-tracker'
 import { findAdvanceEvidence } from './step-evidence'
+import { normalizeWorkflowSteps } from './plan-normalizer'
+import { WorkflowEngine } from './workflow-engine'
 import { logger } from '../utils/logger'
 
 let _toolCallIdCounter = 0
@@ -123,6 +125,81 @@ export class Agent {
     }
   }
 
+  private async runWorkflow(
+    apiEndpoint: string,
+    apiKey: string,
+    apiModel: string,
+    messages: Array<{ role: string; content: string }>,
+    projectPath: string | null,
+    planTracker: PlanTracker,
+    emitLifecycle: boolean,
+    abortSignal?: AbortSignal,
+    onStream?: (text: string, reasoning?: string) => void
+  ): Promise<string> {
+    const engine = new WorkflowEngine({
+      steps: normalizeWorkflowSteps(planTracker.steps),
+      planTracker,
+      registry: this.registry,
+      projectPath,
+      abortSignal,
+      emit: (event) => this.emit(event),
+      onToolDispatch: this.onToolDispatch,
+      onToolResult: this.onToolResult,
+      modelCall: async (workflowMessages, tools, onChunk) => {
+        let text = ''
+        let reasoningText = ''
+        const result = await this.streamFromAPI(
+          apiEndpoint,
+          apiKey,
+          apiModel,
+          workflowMessages,
+          tools,
+          abortSignal,
+          (chunk, reasoning) => {
+            if (chunk) {
+              text += chunk
+              this.emit({ kind: EventKind.Text, text: chunk })
+            }
+            if (reasoning) {
+              reasoningText += reasoning
+              this.emit({ kind: EventKind.Reasoning, text: reasoning })
+            }
+            onChunk(chunk, reasoning)
+            onStream?.(text, reasoningText)
+          }
+        )
+        this.emit({ kind: EventKind.Message, text, reasoning: reasoningText })
+        if (result.usage && (result.usage.promptTokens || result.usage.totalTokens || result.usage.completionTokens)) {
+          const u = result.usage
+          this.emit({
+            kind: EventKind.Usage,
+            usage: {
+              promptTokens: u.promptTokens ?? 0,
+              completionTokens: u.completionTokens ?? 0,
+              totalTokens: u.totalTokens ?? ((u.promptTokens ?? 0) + (u.completionTokens ?? 0)),
+              cacheHitTokens: u.cacheHitTokens,
+              cacheMissTokens: u.cacheMissTokens,
+              finishReason: result.finishReason
+            }
+          })
+        }
+        return {
+          finishReason: result.finishReason,
+          toolCalls: result.toolCalls,
+          text,
+          reasoning: reasoningText,
+          usage: result.usage
+        }
+      }
+    })
+    const result = await engine.run(messages)
+    if (result.finalContent.trim()) {
+      messages.push({ role: 'assistant', content: result.finalContent })
+    }
+    this.finishRun(emitLifecycle)
+    return result.finalContent
+  }
+
   async run(
     apiEndpoint: string, apiKey: string, apiModel: string,
     messages: Array<{ role: string; content: string }>,
@@ -144,6 +221,20 @@ export class Agent {
       this.emit({ kind: EventKind.TurnStarted })
     }
     logger.agent('Run started', { model: apiModel, phase, steps: this.maxSteps || 'unlimited' })
+
+    if (phase === 'execute' && planTracker) {
+      return this.runWorkflow(
+        apiEndpoint,
+        apiKey,
+        apiModel,
+        messages,
+        projectPath,
+        planTracker,
+        emitLifecycle,
+        abortSignal,
+        onStream
+      )
+    }
 
     let finalContent = ''
     let readonlyRounds = 0

@@ -1,10 +1,10 @@
 // ======== Tool System ========
 // Ported from Reasonix internal/tool/tool.go
 
-import { logger } from '../utils/logger'
-import type { FileDiff } from './events'
-import type { PlanTracker, PlanStepState } from './plan-tracker'
-import { recipePath } from './recipe-utils'
+import { logger } from '../utils/logger.ts'
+import type { FileDiff } from './events.ts'
+import type { PlanTracker, PlanStepState } from './plan-tracker.ts'
+import { recipePath } from './recipe-utils.ts'
 
 // A single tool that the agent can call
 export interface Tool {

@@ -1,7 +1,7 @@
 // ======== Event System ========
 // Ported from Reasonix internal/event/event.go
 
-import { logger } from '../utils/logger'
+import { logger } from '../utils/logger.ts'
 
 // Event kinds
 export const EventKind = {
@@ -117,7 +117,12 @@ export interface Sink {
 
 // FuncSink adapter: wraps a function as a Sink
 export class FuncSink implements Sink {
-  constructor(private fn: (event: Event) => void) {}
+  private fn: (event: Event) => void
+
+  constructor(fn: (event: Event) => void) {
+    this.fn = fn
+  }
+
   emit(event: Event): void {
     this.fn(event)
   }
@@ -137,7 +142,12 @@ export class AccumulatorSink implements Sink {
 
 // LoggerSink: wraps a Sink with console logging
 export class LoggerSink implements Sink {
-  constructor(private inner: Sink) {}
+  private inner: Sink
+
+  constructor(inner: Sink) {
+    this.inner = inner
+  }
+
   emit(event: Event): void {
     const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text]
     if (!skipKinds.includes(event.kind)) {
