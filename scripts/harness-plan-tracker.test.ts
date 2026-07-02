@@ -17,6 +17,7 @@ import { ensureDevTerminalSteps, parsePlanSteps } from '../src/renderer/src/util
 import { finalizeTerminalSteps } from '../src/renderer/src/harness/finalize-terminal.ts'
 import { registerPanelBridge } from '../src/renderer/src/utils/panel-bridge.ts'
 import { EventKind } from '../src/renderer/src/harness/events.ts'
+import { isRepeatGuardedToolCall } from '../src/renderer/src/harness/repeat-guard.ts'
 
 test('PlanTracker.advance rejects stale step ids without moving current step', () => {
   const tracker = PlanTracker.fromSteps([
@@ -158,14 +159,36 @@ test('workflow normalizer treats reading fabric.mod.json as inspect, not write',
   assert.ok(steps[0].allowedTools.includes('fabric_mod_json_validate'))
 })
 
-test('recipe step allows reading fabric.mod.json but still requires create_recipe to complete', () => {
+test('recipe step allows reading fabric.mod.json and recipe json but rejects unrelated files', () => {
   const [step] = normalizeWorkflowSteps([
     { id: '2', description: '创建配方 JSON 文件 `resources/data/<modid>/recipes/dirt_to_diamond.json`', status: 'running' }
   ])
 
   assert.equal(step.kind, 'recipe')
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }), true)
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my_mod/recipes/dirt_to_diamond.json' } }),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'data/my-mod/recipes/dirt_to_diamond.json' } }),
+    true
+  )
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/other.json' } }), false)
+})
+
+test('recipe troubleshooting step allows reading recipe json for path or format diagnosis', () => {
+  const [step] = normalizeWorkflowSteps([
+    { id: '1', description: '配方文件路径或格式错误', status: 'running' }
+  ])
+
+  assert.equal(step.kind, 'recipe')
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my_mod/recipes/dirt_to_diamond.json' } }),
+    true
+  )
+  assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }), true)
+  assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/java/MyMod.java' } }), false)
 })
 
 test('workflow engine completes recipe step after first create_recipe and does not execute repeats', async () => {
@@ -438,6 +461,21 @@ test('fabric log classifier recognizes mixin and client-server classloading erro
 
   assert.equal(mixin.kind, 'mixin-error')
   assert.equal(side.kind, 'side-error')
+})
+
+test('repeat guard does not block trigger_build or build-like run_command', () => {
+  assert.equal(isRepeatGuardedToolCall('trigger_build', { task: 'build' }), false)
+  assert.equal(isRepeatGuardedToolCall('trigger_build', { task: 'runClient' }), false)
+  assert.equal(isRepeatGuardedToolCall('trigger_build', { task: 'runDatagen' }), false)
+  assert.equal(isRepeatGuardedToolCall('run_command', { command: 'gradlew build' }), false)
+  assert.equal(isRepeatGuardedToolCall('run_command', { command: './gradlew runClient' }), false)
+})
+
+test('repeat guard still blocks exploratory read_file and generic run_command', () => {
+  assert.equal(isRepeatGuardedToolCall('read_file', { path: 'src/main/resources/fabric.mod.json' }), true)
+  assert.equal(isRepeatGuardedToolCall('list_directory', { path: 'src' }), true)
+  assert.equal(isRepeatGuardedToolCall('write_file', { path: 'foo.java', content: 'x' }), true)
+  assert.equal(isRepeatGuardedToolCall('run_command', { command: 'dir' }), true)
 })
 
 test('scaffold build.gradle includes datagen run configuration and fabric.mod.json keeps Fabric constraints', () => {

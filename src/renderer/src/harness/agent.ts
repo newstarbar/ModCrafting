@@ -11,6 +11,9 @@ import { normalizeWorkflowSteps } from './plan-normalizer'
 import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
+import { isRepeatGuardedToolCall } from './repeat-guard.ts'
+
+export { isRepeatGuardedToolCall } from './repeat-guard.ts'
 
 let _toolCallIdCounter = 0
 
@@ -35,9 +38,6 @@ const MAX_FINAL_READINESS_BLOCKS = 3
 const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'read_error_log', 'run_command']
 const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES
 const CONTROL_TOOL_NAMES = ['complete_step']
-const REPEAT_GUARD_TOOLS = new Set([
-  'list_directory', 'read_file', 'run_command', 'trigger_build', 'write_file', 'read_error_log'
-])
 
 function stableStringify(args: Record<string, unknown>): string {
   const keys = Object.keys(args).sort()
@@ -90,7 +90,7 @@ export class Agent {
   }
 
   private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
-    if (!REPEAT_GUARD_TOOLS.has(name)) return null
+    if (!isRepeatGuardedToolCall(name, args)) return null
     const sig = repeatSuccessSignature(name, args)
     const count = this.repeatSuccessCounts.get(sig) ?? 0
     if (count < REPEAT_SUCCESS_THRESHOLD) return null
@@ -101,7 +101,7 @@ export class Agent {
   }
 
   private recordRepeatSuccess(name: string, args: Record<string, unknown>, hadError: boolean): void {
-    if (hadError || !REPEAT_GUARD_TOOLS.has(name)) return
+    if (hadError || !isRepeatGuardedToolCall(name, args)) return
     const sig = repeatSuccessSignature(name, args)
     this.repeatSuccessCounts.set(sig, (this.repeatSuccessCounts.get(sig) ?? 0) + 1)
   }
