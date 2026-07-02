@@ -615,7 +615,85 @@ body,
 	padding: 14px 16px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: 0;
+}
+
+.chat-turn {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-bottom: 28px;
+}
+
+.chat-turn:last-child {
+	margin-bottom: 12px;
+}
+
+.bubble-ft {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 4px;
+	padding: 0 2px;
+	font-size: 10px;
+	color: var(--text-muted);
+	min-height: 18px;
+}
+
+.bubble.user .bubble-ft {
+	justify-content: flex-end;
+}
+
+.bubble.ai .bubble-ft {
+	justify-content: flex-start;
+}
+
+.bubble-ft__time {
+	opacity: 0.55;
+	flex-shrink: 0;
+}
+
+.bubble-ft__actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.bubble:hover .bubble-ft__actions,
+.bubble-ft__feedback {
+	opacity: 1;
+}
+
+.bubble-ft__feedback {
+	color: var(--mc-yellow);
+	font-size: 10px;
+}
+
+.bubble-ft__btn {
+	background: none;
+	border: none;
+	padding: 0 2px;
+	font: inherit;
+	font-size: 10px;
+	color: var(--text-muted);
+	cursor: pointer;
+	text-shadow: var(--mc-shadow-sm);
+}
+
+.bubble-ft__btn:hover:not(:disabled) {
+	color: var(--mc-yellow);
+}
+
+.bubble-ft__btn:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+
+.bubble-ft__dot {
+	opacity: 0.4;
+	user-select: none;
 }
 
 /* 聊天气泡 — 对齐预览 ws-msgs / bubble */

@@ -16,8 +16,13 @@ import {
   serializeDisplayMessages,
   deserializeToDisplay,
   restoreActivePlan,
+  buildRestoredCollapseState,
   toControllerMessages
 } from '../utils/chat-persist'
+import { groupMessagesIntoTurns } from '../utils/chat-turns'
+import type { ChatTurn } from '../utils/chat-turns'
+import type { DisplayMessage, ChronoEntry } from '../types/display-message'
+import MessageFooter from './MessageFooter'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -43,32 +48,6 @@ interface ToolCallDisplay {
   id: string; name: string
   status: 'pending' | 'running' | 'done' | 'error'
   output?: string; durationMs?: number
-}
-
-// A single chronologically-ordered entry in an assistant message
-type ChronoEntry =
-  | { kind: 'reasoning'; content: string; done?: boolean }
-  | { kind: 'text'; content: string }
-  | {
-      kind: 'tool'
-      id: string
-      name: string
-      status: 'pending' | 'running' | 'done' | 'error'
-      output?: string
-      liveOutput?: string
-      durationMs?: number
-      startMs?: number
-    }
-
-interface DisplayMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string  // kept for user messages
-  entries?: ChronoEntry[]  // used for assistant messages — chronologically ordered
-  isStreaming?: boolean
-  turnStatus?: 'completed' | 'error' | 'cancelled'
-  embeddedPlan?: PlanStep[]
-  timestamp: number
 }
 
 interface ActivePlan {
@@ -294,6 +273,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       restoredSessionIdRef.current = null
       setDisplayMessages([])
       setActivePlan(null)
+      setCollapsedToolIds(new Set())
+      setCollapsedReasoningKeys(new Set())
       turnRef.current = { msgId: '', entries: [], streamDone: false }
       controllerRef.current?.clearSession()
       return
@@ -308,6 +289,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     turnRef.current = { msgId: '', entries: [], streamDone: false }
     const display = deserializeToDisplay(session.messages, uid) as DisplayMessage[]
     const restoredPlan = restoreActivePlan(display, session.messages)
+    const { toolIds, reasoningKeys } = buildRestoredCollapseState(display)
+    setCollapsedToolIds(toolIds)
+    setCollapsedReasoningKeys(reasoningKeys)
     setDisplayMessages(display)
     setActivePlan(restoredPlan)
     controllerRef.current?.restoreSnapshot(toControllerMessages(session.messages))
@@ -717,6 +701,52 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     t.msgId = ''
   }, [flushPersist])
 
+  const handleRetryTurn = useCallback(async (turnId: string) => {
+    if (isLoading) return
+
+    const resolvedKey = ensureApiKey
+      ? await ensureApiKey()
+      : apiConfig.apiKey.trim()
+    if (!resolvedKey) {
+      alert('请先配置 API Key（左侧「设置」→ 保存密钥）')
+      return
+    }
+    if (resolvedKey !== apiConfig.apiKey) {
+      controllerRef.current?.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
+    }
+
+    const turnIndex = displayMessages.findIndex((m) => m.id === turnId)
+    if (turnIndex < 0) return
+
+    const truncated = displayMessages.slice(0, turnIndex + 1)
+
+    setIsLoading(true)
+    setAgentStatus('思考中...')
+    setActivePlan(null)
+    setCompletionFlash('')
+    turnRef.current = { msgId: '', entries: [], streamDone: false }
+
+    setDisplayMessages(truncated)
+    flushPersist(truncated, null)
+
+    const sid = currentSessionIdRef.current
+    const session = sid ? sessionsRef.current.find((s) => s.id === sid) : undefined
+    const systemMsgs = session?.messages.filter((m) => m.role === 'system') ?? []
+    const serialized = serializeDisplayMessages(truncated, null)
+    controllerRef.current?.restoreSnapshot(
+      toControllerMessages([...serialized, ...systemMsgs])
+    )
+
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    try { await ctrl.retryFromUser() }
+    catch {
+      setIsLoading(false)
+      setAgentStatus('')
+      onRunningChangeRef.current?.(false)
+    }
+  }, [isLoading, apiConfig, ensureApiKey, displayMessages, flushPersist])
+
   // ======== RENDER ========
   const renderContent = (content: string) => {
     if (!content) return null
@@ -735,7 +765,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     })
   }
 
-  const renderMessage = (msg: DisplayMessage) => {
+  const renderMessage = (msg: DisplayMessage, turn: ChatTurn) => {
     const isUser = msg.role === 'user'
     const suppressPlanText = Boolean(
       msg.embeddedPlan?.length
@@ -880,6 +910,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             </>
           )}
         </div>
+        <MessageFooter
+          role={isUser ? 'user' : 'assistant'}
+          message={msg}
+          turn={turn}
+          isLoading={isLoading}
+          onRetry={handleRetryTurn}
+        />
       </div>
     )
   }
@@ -908,8 +945,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             {projectPath ? '描述你想开发的功能，AI 会自动规划并执行' : '请先打开或新建一个项目'}
           </div>
         )}
-        {displayMessages.map((msg) => (
-          <React.Fragment key={msg.id}>{renderMessage(msg)}</React.Fragment>
+        {groupMessagesIntoTurns(displayMessages).map((turn) => (
+          <div key={turn.id} className="chat-turn">
+            {turn.user && renderMessage(turn.user, turn)}
+            {turn.assistant && renderMessage(turn.assistant, turn)}
+          </div>
         ))}
         <div ref={messagesEndRef} />
       </div>

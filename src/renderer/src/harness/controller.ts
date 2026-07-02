@@ -276,20 +276,28 @@ ${projectInfo}`
     }
   }
 
-  // Send user message — main entry point
-  async send(input: string): Promise<string> {
-    if (this._running) {
-      logger.agent('Queuing steer message')
-      this.messages.push({ role: 'user', content: '[mid-turn] ' + input })
-      return ''
+  private trimTrailingAssistants(): void {
+    while (this.messages.length > 0) {
+      const last = this.messages[this.messages.length - 1]
+      if (last.role === 'assistant') {
+        this.messages.pop()
+        continue
+      }
+      break
     }
+  }
+
+  private async runTurn(input: string, options: { pushUser: boolean }): Promise<string> {
+    if (this._running) return ''
 
     this._running = true
     this.abortController = new AbortController()
     this.agent.resetRunState()
 
     const isDev = this.isDevelopmentTask(input)
-    this.messages.push({ role: 'user', content: input })
+    if (options.pushUser) {
+      this.messages.push({ role: 'user', content: input })
+    }
     this.onAgentStatus?.('思考中...')
 
     let planStreamReasoning = ''
@@ -301,7 +309,6 @@ ${projectInfo}`
     }
 
     try {
-      // Q&A: direct answer, no plan/execute, no tools
       if (!isDev) {
         await this.updateSystemPrompt('chat')
         const result = await this.agent.run(
@@ -394,7 +401,6 @@ ${projectInfo}`
         return execResult || planResult
       }
 
-      // Follow-up development messages: execute phase only
       await this.updateSystemPrompt('execute')
       const result = await this.agent.run(
         this.apiConfig.endpoint,
@@ -424,6 +430,39 @@ ${projectInfo}`
       this._running = false
       this.abortController = null
     }
+  }
+
+  // Send user message — main entry point
+  async send(input: string): Promise<string> {
+    if (this._running) {
+      logger.agent('Queuing steer message')
+      this.messages.push({ role: 'user', content: '[mid-turn] ' + input })
+      return ''
+    }
+    return this.runTurn(input, { pushUser: true })
+  }
+
+  /** Re-run the last user turn without duplicating the user message */
+  async retryFromUser(): Promise<string> {
+    if (this._running) return ''
+
+    this.trimTrailingAssistants()
+    const lastUser = [...this.messages].reverse().find((m) => m.role === 'user')
+    if (!lastUser) return ''
+
+    // Drop injected execute-confirm prompts so plan phase can run again
+    while (this.messages.length > 0) {
+      const last = this.messages[this.messages.length - 1]
+      if (last.role === 'user' && last !== lastUser) {
+        this.messages.pop()
+        continue
+      }
+      break
+    }
+
+    this._phase = 'plan'
+    this.planTracker = null
+    return this.runTurn(lastUser.content, { pushUser: false })
   }
 
   cancel(): void {

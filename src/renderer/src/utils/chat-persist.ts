@@ -106,6 +106,24 @@ export function deserializeToDisplay(
     })
 }
 
+export function buildRestoredCollapseState(
+  messages: SerializableDisplayMessage[]
+): { toolIds: Set<string>; reasoningKeys: Set<string> } {
+  const toolIds = new Set<string>()
+  const reasoningKeys = new Set<string>()
+  for (const msg of messages) {
+    if (!msg.entries?.length) continue
+    msg.entries.forEach((entry, i) => {
+      if (entry.kind === 'tool' && entry.id) {
+        toolIds.add(entry.id)
+      } else if (entry.kind === 'reasoning') {
+        reasoningKeys.add(`${msg.id}-${i}`)
+      }
+    })
+  }
+  return { toolIds, reasoningKeys }
+}
+
 export function restoreActivePlan(
   display: SerializableDisplayMessage[],
   persisted: PersistedMessage[]
