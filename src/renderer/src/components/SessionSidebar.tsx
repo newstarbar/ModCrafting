@@ -3,13 +3,7 @@ import FileTree from './FileTree'
 import FileViewer from './FileViewer'
 import { IconFile, IconMessage, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
 
-interface Session {
-  id: string
-  name: string
-  messages: { role: string; content: string }[]
-  createdAt: number
-  updatedAt: number
-}
+import type { ChatSession } from '../types/chat'
 
 interface FileChange {
   time: string
@@ -19,7 +13,7 @@ interface FileChange {
 interface SessionSidebarProps {
   projectPath: string | null
   projectName: string
-  sessions: Session[]
+  sessions: ChatSession[]
   currentSessionId: string | null
   onOpenSession: (id: string) => void
   onNewSession: () => void

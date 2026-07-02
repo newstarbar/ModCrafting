@@ -14,6 +14,13 @@ import ToolchainInitOverlay, { type ToolchainInitState } from "./components/Tool
 import UpdateBanner from "./components/UpdateBanner";
 import { IconCode, IconGamepad } from "./components/Icon";
 import { EMPTY_USAGE, type UsageStats } from "./utils/usage";
+import type { ChatSession, PersistedMessage } from "./types/chat";
+import {
+	loadSessions,
+	saveSessions,
+	loadCurrentSessionId,
+	saveCurrentSessionId
+} from "./utils/session-storage";
 
 const DEFAULT_API_CONFIG = {
 	endpoint: "https://api.deepseek.com/v1",
@@ -54,8 +61,14 @@ const App: React.FC = () => {
 		chatContext: [],
 		fileTreeRefreshKey: 0
 	});
-	const [sessions, setSessions] = useState<{ id: string; name: string; messages: { role: string; content: string }[]; createdAt: number; updatedAt: number }[]>([]);
+	const [sessions, setSessions] = useState<ChatSession[]>([]);
 	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+	const sessionsHydratedRef = useRef(false);
+	const projectPathForSessionsRef = useRef<string | null | undefined>(undefined);
+	const sessionsRef = useRef(sessions);
+	const currentSessionIdRef = useRef(currentSessionId);
+	sessionsRef.current = sessions;
+	currentSessionIdRef.current = currentSessionId;
 	const [fileChanges, setFileChanges] = useState<{ time: string; entry: string }[]>([]);
 	const [apiConfig, setApiConfig] = useState(DEFAULT_API_CONFIG);
 	const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
@@ -90,16 +103,35 @@ const App: React.FC = () => {
 	}, []);
 
 	useEffect(() => {
-		try {
-			const raw = localStorage.getItem("modcrafting-sessions");
-			if (raw) setSessions(JSON.parse(raw));
-		} catch {
-			/* ignore */
+		const path = state.projectPath;
+		if (projectPathForSessionsRef.current === path) return;
+
+		if (projectPathForSessionsRef.current !== undefined && sessionsHydratedRef.current) {
+			saveSessions(projectPathForSessionsRef.current, sessionsRef.current);
+			saveCurrentSessionId(projectPathForSessionsRef.current, currentSessionIdRef.current);
 		}
-	}, []);
+
+		projectPathForSessionsRef.current = path;
+		const loaded = loadSessions(path);
+		const loadedSessionId = loadCurrentSessionId(path);
+		const validSessionId = loadedSessionId && loaded.some((s) => s.id === loadedSessionId)
+			? loadedSessionId
+			: loaded[0]?.id ?? null;
+
+		setSessions(loaded);
+		setCurrentSessionId(validSessionId);
+		sessionsHydratedRef.current = true;
+	}, [state.projectPath]);
+
 	useEffect(() => {
-		localStorage.setItem("modcrafting-sessions", JSON.stringify(sessions));
-	}, [sessions]);
+		if (!sessionsHydratedRef.current) return;
+		saveSessions(state.projectPath, sessions);
+	}, [sessions, state.projectPath]);
+
+	useEffect(() => {
+		if (!sessionsHydratedRef.current) return;
+		saveCurrentSessionId(state.projectPath, currentSessionId);
+	}, [currentSessionId, state.projectPath]);
 	useEffect(() => {
 		if (!currentSessionId) {
 			setFileChanges([]);
@@ -406,6 +438,41 @@ const App: React.FC = () => {
 		});
 	}, []);
 
+	const handlePersistSession = useCallback((sessionId: string, messages: PersistedMessage[]) => {
+		setSessions((prev) => prev.map((s) => (
+			s.id === sessionId ? { ...s, messages, updatedAt: Date.now() } : s
+		)));
+	}, []);
+
+	const handleOpenSession = useCallback((id: string) => {
+		setCurrentSessionId(id);
+	}, []);
+
+	const handleNewSession = useCallback(() => {
+		const id = `session-${Date.now()}`;
+		const now = Date.now();
+		setSessions((p) => [...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]);
+		setCurrentSessionId(id);
+	}, []);
+
+	const handleDeleteSession = useCallback((id: string) => {
+		setSessions((p) => p.filter((s) => s.id !== id));
+		setCurrentSessionId((cur) => (cur === id ? null : cur));
+		localStorage.removeItem(`modcrafting-changelog-${id}`);
+	}, []);
+
+	const handleNewSessionFromChat = useCallback((firstMessage?: string) => {
+		const id = `session-${Date.now()}`;
+		const now = Date.now();
+		const msg = firstMessage || "";
+		const name = msg ? msg.slice(0, 30) + (msg.length > 30 ? "..." : "") : `会话 ${Math.floor(Math.random() * 1000)}`;
+		const initialMessages: PersistedMessage[] = msg
+			? [{ role: "user", content: msg, timestamp: now }]
+			: [];
+		setSessions((p) => [...p, { id, name, messages: initialMessages, createdAt: now, updatedAt: now }]);
+		setCurrentSessionId(id);
+		return id;
+	}, []);
 	const addToChatContext = useCallback((text: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, text] })), []);
 	const handleCrashToChat = useCallback((c: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 崩溃报告 ---\n${c}`], rightPanelTab: "game" })), []);
 
@@ -420,7 +487,7 @@ const App: React.FC = () => {
 				projectPath={state.projectPath}
 			/>
 			<div className="app-shell">
-				{appView === "hub" ? (
+				<div className={`app-shell-view app-shell-view--hub${appView !== "hub" ? " app-shell-view--hidden" : ""}`}>
 					<ProjectHub
 						recentProjects={recentProjects}
 						lastProjectPath={lastProjectPath}
@@ -429,29 +496,18 @@ const App: React.FC = () => {
 						onContinueLast={() => void handleContinueLast()}
 						onOpenRecent={(path) => openProjectDialog(path)}
 					/>
-				) : (
-					<div className={`app-layout workspace-view${overlayLocked ? " app-layout--locked" : ""}`}>
+				</div>
+				<div
+					className={`app-layout workspace-view app-shell-view${overlayLocked ? " app-layout--locked" : ""}${appView !== "workspace" ? " app-shell-view--hidden" : ""}`}
+				>
 						<SessionSidebar
 							projectPath={state.projectPath}
 							projectName={state.projectName}
 							sessions={sessions}
 							currentSessionId={currentSessionId}
-							onOpenSession={(id) => setCurrentSessionId(id)}
-							onNewSession={() => {
-								const id = `session-${Date.now()}`;
-								const now = Date.now();
-								setSessions((p) => [...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]);
-								setCurrentSessionId(id);
-								localStorage.setItem("modcrafting-current-session", id);
-							}}
-							onDeleteSession={(id) => {
-								setSessions((p) => p.filter((s) => s.id !== id));
-								if (currentSessionId === id) {
-									setCurrentSessionId(null);
-									localStorage.removeItem("modcrafting-current-session");
-								}
-								localStorage.removeItem(`modcrafting-changelog-${id}`);
-							}}
+							onOpenSession={handleOpenSession}
+							onNewSession={handleNewSession}
+							onDeleteSession={handleDeleteSession}
 							onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 							fileChanges={fileChanges}
 							apiConfig={apiConfig}
@@ -481,19 +537,8 @@ const App: React.FC = () => {
 									onRunningChange={(r) => setIsRunning(r)}
 									currentSessionId={currentSessionId}
 									sessions={sessions}
-									onAppendToSession={(sessionId, role, content) => {
-										setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, { role, content }], updatedAt: Date.now() } : s)));
-									}}
-									onNewSession={(firstMessage) => {
-										const id = `session-${Date.now()}`;
-										const now = Date.now();
-										const msg = firstMessage || "";
-										const name = msg ? msg.slice(0, 30) + (msg.length > 30 ? "..." : "") : `会话 ${Math.floor(Math.random() * 1000)}`;
-										setSessions((p) => [...p, { id, name, messages: msg ? [{ role: "user", content: msg }] : [], createdAt: now, updatedAt: now }]);
-										setCurrentSessionId(id);
-										localStorage.setItem("modcrafting-current-session", id);
-										return id;
-									}}
+									onPersistSession={handlePersistSession}
+									onNewSession={handleNewSessionFromChat}
 									onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 								/>
 							) : (
@@ -533,8 +578,7 @@ const App: React.FC = () => {
 								</div>
 							</div>
 						</div>
-					</div>
-				)}
+				</div>
 			</div>
 			<NewProjectWizard open={projectDialog === "new"} onClose={() => setProjectDialog("none")} onCreated={(dir) => void loadProjectDir(dir)} />
 			<OpenProjectDialog

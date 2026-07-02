@@ -11,6 +11,13 @@ import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
 import { parsePlanSteps } from '../utils/plan-steps'
 import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, type UsageStats } from '../utils/usage'
+import type { ChatSession, PersistedMessage } from '../types/chat'
+import {
+  serializeDisplayMessages,
+  deserializeToDisplay,
+  restoreActivePlan,
+  toControllerMessages
+} from '../utils/chat-persist'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -22,8 +29,8 @@ interface ChatPanelProps {
   onUsageChange?: (usage: UsageStats) => void
   onRunningChange?: (running: boolean) => void
   currentSessionId: string | null
-  sessions: Session[]
-  onAppendToSession: (sessionId: string, role: string, content: string) => void
+  sessions: ChatSession[]
+  onPersistSession: (sessionId: string, messages: PersistedMessage[]) => void
   onNewSession: (firstMessage?: string) => string
   onRenameSession: (id: string, name: string) => void
   toolchainReady?: boolean
@@ -69,13 +76,6 @@ interface ActivePlan {
   anchorMsgId: string
   pinned: boolean
 }
-
-interface Session {
-  id: string; name: string
-  messages: Array<{ role: string; content: string }>
-  createdAt: number; updatedAt: number
-}
-
 
 let msgId = 0
 function uid(): string { return `msg-${++msgId}` }
@@ -133,7 +133,7 @@ function resolveTurnStatus(error?: string): DisplayMessage['turnStatus'] {
   return 'error'
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onAppendToSession, onNewSession, onRenameSession, toolchainReady = true }) => {
+const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true }) => {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -158,8 +158,28 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   activePlanRef.current = activePlan
   const [completionFlash, setCompletionFlash] = useState('')
   const completionFlashTimerRef = useRef<number | null>(null)
+  const displayMessagesRef = useRef<DisplayMessage[]>([])
+  displayMessagesRef.current = displayMessages
 
-  const appendToSessionRef = useRef<(role: string, content: string) => void>(() => {})
+  const onPersistSessionRef = useRef(onPersistSession)
+  onPersistSessionRef.current = onPersistSession
+
+  const flushPersist = useCallback((
+    messages: DisplayMessage[],
+    plan: ActivePlan | null,
+    options?: { appendSystem?: PersistedMessage[] }
+  ) => {
+    const sid = currentSessionIdRef.current
+    if (!sid) return
+    const serialized = serializeDisplayMessages(messages, plan)
+    const session = sessionsRef.current.find((s) => s.id === sid)
+    let systemMsgs = session?.messages.filter((m) => m.role === 'system') ?? []
+    if (options?.appendSystem?.length) {
+      systemMsgs = [...systemMsgs, ...options.appendSystem]
+    }
+    onPersistSessionRef.current(sid, [...serialized, ...systemMsgs])
+  }, [])
+
   const onRunningChangeRef = useRef(onRunningChange)
   const onUsageChangeRef = useRef(onUsageChange)
   const apiConfigRef = useRef(apiConfig)
@@ -276,21 +296,18 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     const session = sessionsRef.current.find((s) => s.id === currentSessionId)
     if (!session) return
 
-    // Skip restore when first message just created this session (UI already set)
-    if (prev === null && session.messages.length <= 1) return
-
-    const display: DisplayMessage[] = session.messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({
-        id: uid(),
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-        timestamp: Date.now()
-      }))
+    const display = deserializeToDisplay(session.messages, uid) as DisplayMessage[]
+    const restoredPlan = restoreActivePlan(display, session.messages)
     setDisplayMessages(display)
-    setActivePlan(null)
-    controllerRef.current?.restoreSnapshot(session.messages)
+    setActivePlan(restoredPlan)
+    controllerRef.current?.restoreSnapshot(toControllerMessages(session.messages))
   }, [currentSessionId])
+
+  useEffect(() => {
+    return () => {
+      flushPersist(displayMessagesRef.current, activePlanRef.current)
+    }
+  }, [flushPersist])
 
   // Refresh display from turnRef
   const refreshDisplay = useCallback(() => {
@@ -330,9 +347,16 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           const steps = parsePlanSteps(planText)
           if (steps.length > 0 && t.msgId) {
             const planStepList = toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' })))
-            setActivePlan({ steps: planStepList, anchorMsgId: t.msgId, pinned: true })
+            const nextPlan = { steps: planStepList, anchorMsgId: t.msgId, pinned: true }
             t.entries = replacePlanEntriesWithSummary(t.entries, steps.length)
-            refreshDisplay()
+            setActivePlan(nextPlan)
+            setDisplayMessages((prev) => {
+              const next = prev.map((m) => (
+                m.id === t.msgId ? { ...m, entries: [...t.entries] } : m
+              ))
+              flushPersist(next, nextPlan)
+              return next
+            })
           }
         } else if (event.phase === 'plan_stream_end') {
           if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
@@ -345,11 +369,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       case EventKind.PlanState:
         if (event.planSteps && event.planSteps.length > 0) {
           const nextSteps = toPlanSteps(event.planSteps)
-          setActivePlan((prev) => prev
-            ? { ...prev, steps: nextSteps }
+          const nextPlan = activePlanRef.current
+            ? { ...activePlanRef.current, steps: nextSteps }
             : t.msgId
               ? { steps: nextSteps, anchorMsgId: t.msgId, pinned: true }
-              : null)
+              : null
+          if (nextPlan) {
+            setActivePlan(nextPlan)
+            flushPersist(displayMessagesRef.current, nextPlan)
+          }
         }
         break
 
@@ -463,16 +491,30 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           const stepDoneMatch = output.match(/\[STEP_DONE:(\d+)\]/)
           if (stepDoneMatch) {
             const stepIdx = parseInt(stepDoneMatch[1]) - 1
-            setActivePlan((prev) => prev
-              ? {
-                  ...prev,
-                  steps: prev.steps.map((s, i) =>
-                    i === stepIdx ? { ...s, status: 'completed' as const } : s
-                  )
-                }
-              : prev)
+            setActivePlan((prev) => {
+              const next = prev
+                ? {
+                    ...prev,
+                    steps: prev.steps.map((s, i) =>
+                      i === stepIdx ? { ...s, status: 'completed' as const } : s
+                    )
+                  }
+                : prev
+              if (next) flushPersist(displayMessagesRef.current, next)
+              return next
+            })
           }
-          refreshDisplay()
+          if (t.msgId) {
+            setDisplayMessages((prev) => {
+              const next = prev.map((m) => (
+                m.id === t.msgId ? { ...m, entries: [...t.entries], isStreaming: !t.streamDone } : m
+              ))
+              flushPersist(next, activePlanRef.current)
+              return next
+            })
+          } else {
+            refreshDisplay()
+          }
         }
         break
 
@@ -540,33 +582,27 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             }))
           : undefined
 
-        const combinedText = t.entries
-          .filter((e): e is { kind: 'text' | 'reasoning'; content: string } & ChronoEntry =>
-            e.kind === 'text' || e.kind === 'reasoning'
-          )
-          .map((e) => e.content)
-          .join('\n') || '(完成)'
-
         const anchorId = planSnapshot?.anchorMsgId || t.msgId
 
-        setDisplayMessages((prev) => prev.map((m) => {
-          if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
-            const isAnchor = m.id === anchorId || m.id === t.msgId
-            if (isAnchor) {
-              appendToSessionRef.current('assistant', combinedText)
+        setDisplayMessages((prev) => {
+          const next = prev.map((m) => {
+            if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
+              const isAnchor = m.id === anchorId || m.id === t.msgId
+              return {
+                ...m,
+                ...(isAnchor ? { entries: [...t.entries] } : {}),
+                isStreaming: false,
+                ...(isAnchor ? {
+                  turnStatus,
+                  embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
+                } : {})
+              }
             }
-            return {
-              ...m,
-              ...(isAnchor ? { entries: [...t.entries] } : {}),
-              isStreaming: false,
-              ...(isAnchor ? {
-                turnStatus,
-                embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
-              } : {})
-            }
-          }
-          return m
-        }))
+            return m
+          })
+          flushPersist(next, null)
+          return next
+        })
 
         setActivePlan(null)
         t.msgId = ''
@@ -576,24 +612,18 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       case EventKind.Notice:
         if (event.notice) {
           if (event.notice.level === 'error') {
-            appendToSessionRef.current('system', event.notice.text)
+            flushPersist(displayMessagesRef.current, activePlanRef.current, {
+              appendSystem: [{ role: 'system', content: event.notice.text, timestamp: Date.now() }]
+            })
           } else if (event.notice.level === 'warn') {
             setAgentStatus(event.notice.text)
           }
         }
         break
     }
-  }, [refreshDisplay, collapseAllReasoning, markLastReasoningDone])
+  }, [refreshDisplay, collapseAllReasoning, markLastReasoningDone, flushPersist])
 
   // Session helpers — delegated to App (single source of truth)
-  const appendToSession = useCallback((role: string, content: string) => {
-    const sid = currentSessionIdRef.current
-    if (sid) {
-      onAppendToSession(sid, role, content)
-    }
-  }, [onAppendToSession])
-  appendToSessionRef.current = appendToSession
-
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading || !toolchainReady) return
 
@@ -621,8 +651,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       setDisplayMessages([{ id: uid(), role: 'user', content: userMsg, timestamp: Date.now() }])
       controllerRef.current?.clearSession()
     } else {
-      setDisplayMessages((prev) => [...prev, { id: uid(), role: 'user', content: userMsg, timestamp: Date.now() }])
-      appendToSession('user', userMsg)
+      setDisplayMessages((prev) => {
+        const next = [...prev, { id: uid(), role: 'user' as const, content: userMsg, timestamp: Date.now() }]
+        flushPersist(next, null)
+        return next
+      })
     }
 
     const ctrl = controllerRef.current
@@ -633,7 +666,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, appendToSession, onNewSession])
+  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession])
 
   const handleCancel = useCallback(() => {
     controllerRef.current?.cancel()
@@ -649,25 +682,29 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     const anchorId = planSnapshot?.anchorMsgId || t.msgId
     const finalSteps = planSnapshot?.steps
 
-    setDisplayMessages((prev) => prev.map((m) => {
-      if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
-        const isAnchor = m.id === anchorId || m.id === t.msgId
-        return {
-          ...m,
-          ...(isAnchor && t.msgId ? { entries: [...t.entries] } : {}),
-          isStreaming: false,
-          ...(isAnchor ? {
-            turnStatus: 'cancelled' as const,
-            embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
-          } : {})
+    setDisplayMessages((prev) => {
+      const next = prev.map((m) => {
+        if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
+          const isAnchor = m.id === anchorId || m.id === t.msgId
+          return {
+            ...m,
+            ...(isAnchor && t.msgId ? { entries: [...t.entries] } : {}),
+            isStreaming: false,
+            ...(isAnchor ? {
+              turnStatus: 'cancelled' as const,
+              embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
+            } : {})
+          }
         }
-      }
-      return m
-    }))
+        return m
+      })
+      flushPersist(next, null)
+      return next
+    })
 
     setActivePlan(null)
     t.msgId = ''
-  }, [])
+  }, [flushPersist])
 
   // ======== RENDER ========
   const renderContent = (content: string) => {
