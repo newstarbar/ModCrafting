@@ -22,7 +22,7 @@ export const EMPTY_USAGE: UsageStats = {
   cost: 0
 }
 
-/** Rough USD estimate (DeepSeek-style: cached input cheaper, output pricier). */
+/** Rough CNY estimate (DeepSeek-style: cached input cheaper, output pricier). */
 export function estimateCostDelta(
   promptTokens: number,
   completionTokens: number,

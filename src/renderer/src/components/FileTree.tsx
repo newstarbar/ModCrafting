@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { IconFile, IconFolder, IconFolderOpen, IconLoader } from './Icon'
 import type { FileEntry } from '../vite-env'
 
 interface FileTreeProps {
@@ -98,7 +99,11 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, selectedFile, onSelectFil
           }}
         >
           <span className="icon">
-            {isDir ? (node.loading ? '⏳' : node.expanded ? '📂' : '📁') : getFileIcon(node.name)}
+            {isDir ? (
+              node.loading ? <IconLoader size="sm" className="icon-spin" /> : node.expanded ? <IconFolderOpen size="sm" /> : <IconFolder size="sm" />
+            ) : (
+              <IconFile size="sm" />
+            )}
           </span>
           <span className="name">{node.name}</span>
         </div>
@@ -108,25 +113,6 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, selectedFile, onSelectFil
   }
 
   return <>{tree.map((node) => renderNode(node))}</>
-}
-
-function getFileIcon(fileName: string): string {
-  const ext = fileName.split('.').pop()?.toLowerCase()
-  switch (ext) {
-    case 'java': return '☕'
-    case 'json': return '📋'
-    case 'gradle':
-    case 'kts': return '📦'
-    case 'properties': return '⚙️'
-    case 'xml': return '📄'
-    case 'md': return '📝'
-    case 'toml': return '🔧'
-    case 'png':
-    case 'jpg':
-    case 'gif':
-    case 'svg': return '🖼️'
-    default: return '📄'
-  }
 }
 
 export default FileTree

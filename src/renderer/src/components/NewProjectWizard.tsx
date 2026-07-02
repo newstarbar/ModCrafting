@@ -160,7 +160,7 @@ const NewProjectWizard: React.FC<NewProjectWizardProps> = ({ open, onClose, onCr
 
   return (
     <div className="project-modal-overlay" onClick={onClose}>
-      <div className="project-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="project-modal mc-frame" onClick={(e) => e.stopPropagation()}>
         <div className="project-modal-header">
           <h2>新建 Fabric 模组</h2>
           <button type="button" className="project-modal-close" onClick={onClose}>×</button>

@@ -84,19 +84,39 @@ async function findReleaseByTag(tagName) {
 }
 
 /** 仅同步用户需要的发布附件，排除 builder-debug.yml / 内部 7z 等 */
+function resolveAsset(dir, exactNames, fallbackMatch) {
+  for (const name of exactNames) {
+    const full = path.join(dir, name)
+    if (existsSync(full) && statSync(full).isFile()) return full
+  }
+  if (fallbackMatch) {
+    const hit = readdirSync(dir).find(fallbackMatch)
+    if (hit) return path.join(dir, hit)
+  }
+  return null
+}
+
 function collectReleaseAssets(dir) {
   if (!existsSync(dir)) return []
 
-  const candidates = [
-    'latest.yml',
-    `ModCrafting Setup ${ver}.exe.blockmap`,
-    `ModCrafting Setup ${ver}.exe`,
-    `ModCrafting ${ver} Portable.exe`
-  ]
+  const setup = resolveAsset(
+    dir,
+    [`ModCrafting Setup ${ver}.exe`, `ModCrafting-Setup-${ver}.exe`],
+    (n) => /^ModCrafting[- ]Setup[- ].*\.exe$/i.test(n)
+  )
+  const portable = resolveAsset(
+    dir,
+    [`ModCrafting ${ver} Portable.exe`, `ModCrafting-${ver}-Portable.exe`],
+    (n) => /^ModCrafting[- ].*Portable\.exe$/i.test(n)
+  )
+  const latest = resolveAsset(dir, ['latest.yml'], (n) => n === 'latest.yml')
+  const blockmap = resolveAsset(
+    dir,
+    [`ModCrafting Setup ${ver}.exe.blockmap`, `ModCrafting-Setup-${ver}.exe.blockmap`],
+    (n) => /^ModCrafting[- ]Setup[- ].*\.blockmap$/i.test(n)
+  )
 
-  const files = candidates
-    .map((name) => path.join(dir, name))
-    .filter((p) => existsSync(p) && statSync(p).isFile())
+  const files = [latest, blockmap, setup, portable].filter(Boolean)
 
   if (files.length === 0) {
     console.warn('[gitee] expected filenames missing, listing release/:')
@@ -156,8 +176,10 @@ async function ensureRelease() {
 
   if (existing?.id) {
     await giteeApi('PATCH', `/repos/${owner}/${repo}/releases/${existing.id}`, {
+      tag_name: tag,
+      name: `ModCrafting ${tag}`,
       body,
-      name: `ModCrafting ${tag}`
+      prerelease: false
     })
     console.log(`[gitee] Updated release body #${existing.id}`)
     return existing

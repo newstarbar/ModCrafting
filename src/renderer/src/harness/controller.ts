@@ -51,10 +51,10 @@ export class Controller {
       registry: this.registry,
       sink: this.sink,
       onToolDispatch: (name) => {
-        this.onAgentStatus?.(`🔧 执行: ${name}...`)
+        this.onAgentStatus?.(`执行: ${name}...`)
       },
       onToolResult: (name, _id, output) => {
-        this.onAgentStatus?.(`✅ ${name} 完成`)
+        this.onAgentStatus?.(`${name} 完成`)
         logger.tool(`${name} completed`, output.slice(0, 100))
       }
     })
@@ -262,7 +262,7 @@ ${projectInfo}`
 
     const isDev = this.isDevelopmentTask(input)
     this.messages.push({ role: 'user', content: input })
-    this.onAgentStatus?.('🤔 思考中...')
+    this.onAgentStatus?.('思考中...')
 
     const streamCb = (text: string, reasoning?: string) => {
       this.onStreamUpdate?.(text, reasoning)
@@ -313,7 +313,7 @@ ${projectInfo}`
         this.messages.push({ role: 'user', content: '计划已确认。现在开始执行计划，调用工具实现上述方案。' })
 
         this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
-        this.onAgentStatus?.('🔧 执行中...')
+        this.onAgentStatus?.('执行中...')
 
         const execResult = await this.agent.run(
           this.apiConfig.endpoint,
@@ -348,7 +348,7 @@ ${projectInfo}`
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err)
       logger.error('Controller send error', errMsg)
-      this.onAgentStatus?.(`❌ ${errMsg}`)
+      this.onAgentStatus?.(`错误: ${errMsg}`)
       this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
       return `Error: ${errMsg}`
     } finally {

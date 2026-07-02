@@ -221,80 +221,85 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
 
     return (
       <div className="advanced-panel">
-        <div className="advanced-section">
-          <div className="advanced-section-header">
-            <span className="advanced-section-title">编译检查</span>
-            {!toolchainReady && (
-              <span className="advanced-waiting">环境初始化中…</span>
-            )}
-          </div>
-          <p className="advanced-hint">检查代码能否成功编译（不启动游戏）。日常测试请使用「游戏」面板。</p>
-          <div className="advanced-toolbar">
-            <button
-              className="btn btn-primary advanced-build-btn"
-              onClick={() => void runBuild()}
-              disabled={processRunning || !toolchainReady || !projectPath}
-            >
-              {processRunning ? '构建中…' : '🔨 构建'}
-            </button>
-            {processRunning && (
-              <button className="btn advanced-stop-btn" onClick={() => void stopProcess()}>
-                停止
-              </button>
-            )}
-          </div>
-          <p className="advanced-build-summary">{buildSummary}</p>
-
-          {logs.length > 0 && (
-            <div className="advanced-collapsible">
-              <button
-                type="button"
-                className="advanced-collapse-toggle"
-                onClick={() => setBuildLogsExpanded((v) => !v)}
-              >
-                {buildLogsExpanded ? '▾ 收起构建记录' : '▸ 查看构建记录'}
-                <span className="advanced-collapse-meta">（{logs.length} 条）</span>
-              </button>
-              {buildLogsExpanded && (
-                <div className="advanced-build-logs">
-                  <div className="advanced-build-logs-toolbar">
-                    {detectedErrors.length > 0 && (
-                      <button className="btn advanced-fix-btn" onClick={autoFix}>
-                        发送错误给 AI ({detectedErrors.length})
-                      </button>
-                    )}
-                    <button
-                      className="btn"
-                      style={{ fontSize: '11px', marginLeft: 'auto' }}
-                      onClick={() => onAddToChatContext(`--- 构建日志 ---\n${logs.slice(-50).join('\n')}`)}
-                    >
-                      发送给 AI
-                    </button>
-                    <button
-                      className="btn"
-                      style={{ fontSize: '11px' }}
-                      onClick={() => setLogs([])}
-                    >
-                      清空
-                    </button>
-                  </div>
-                  <div className="advanced-build-logs-content" ref={logRef}>
-                    {logs.map((line, i) => (
-                      <div
-                        key={i}
-                        className={
-                          line.includes('[ERROR]') || line.includes('FAILED') ? 'log-error'
-                            : line.includes('[WARN]') ? 'log-warn' : ''
-                        }
-                      >
-                        {line}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+        <div className="advanced-card mc-panel">
+          <div className="advanced-section">
+            <div className="advanced-section-header">
+              <span className="advanced-section-title mc-t">编译检查</span>
+              {!toolchainReady && (
+                <span className="advanced-waiting">环境初始化中…</span>
               )}
             </div>
-          )}
+            <p className="advanced-hint mc-dim">检查代码能否成功编译（不启动游戏）。日常测试请使用「游戏」面板。</p>
+            <div className="advanced-toolbar">
+              <button
+                type="button"
+                className="mc-btn mc-btn--primary advanced-build-btn"
+                onClick={() => void runBuild()}
+                disabled={processRunning || !toolchainReady || !projectPath}
+              >
+                {processRunning ? '构建中…' : '构建'}
+              </button>
+              {processRunning && (
+                <button type="button" className="mc-btn mc-btn--red" onClick={() => void stopProcess()}>
+                  停止
+                </button>
+              )}
+            </div>
+            <p className="advanced-build-summary mc-dim">{buildSummary}</p>
+
+            {logs.length > 0 && (
+              <div className="advanced-collapsible">
+                <button
+                  type="button"
+                  className="advanced-collapse-toggle mc-dim"
+                  onClick={() => setBuildLogsExpanded((v) => !v)}
+                >
+                  {buildLogsExpanded ? '▾ 收起构建记录' : '▸ 查看构建记录'}
+                  <span className="advanced-collapse-meta">（{logs.length} 条）</span>
+                </button>
+                {buildLogsExpanded && (
+                  <div className="advanced-build-logs">
+                    <div className="advanced-build-logs-toolbar">
+                      {detectedErrors.length > 0 && (
+                        <button type="button" className="mc-btn advanced-fix-btn" onClick={autoFix}>
+                          发送错误给 AI ({detectedErrors.length})
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="mc-btn"
+                        style={{ fontSize: '11px', marginLeft: 'auto' }}
+                        onClick={() => onAddToChatContext(`--- 构建日志 ---\n${logs.slice(-50).join('\n')}`)}
+                      >
+                        发送给 AI
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-btn"
+                        style={{ fontSize: '11px' }}
+                        onClick={() => setLogs([])}
+                      >
+                        清空
+                      </button>
+                    </div>
+                    <div className="advanced-build-logs-content term" ref={logRef}>
+                      {logs.map((line, i) => (
+                        <div
+                          key={i}
+                          className={
+                            line.includes('[ERROR]') || line.includes('FAILED') ? 'log-error'
+                              : line.includes('[WARN]') ? 'log-warn' : ''
+                          }
+                        >
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="advanced-section advanced-section--terminal">

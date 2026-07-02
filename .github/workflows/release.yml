@@ -77,6 +77,14 @@ jobs:
             exit 1
           fi
 
+      - name: Apply release notes to GitHub Release
+        shell: bash
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" \
+            --title "ModCrafting ${GITHUB_REF_NAME}" \
+            --notes-file build/release-body.md \
+            --draft=false
+
       - name: Push git ref and tag to Gitee
         continue-on-error: false
         env:

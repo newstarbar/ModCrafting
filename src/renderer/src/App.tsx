@@ -6,10 +6,13 @@ import DevLogPanel from "./components/DevLogPanel";
 import SessionSidebar from "./components/SessionSidebar";
 import StatusBar from "./components/StatusBar";
 import ProjectHub from "./components/ProjectHub";
+import AppChrome, { type AppView } from "./components/AppChrome";
+import WorkspaceEmpty from "./components/WorkspaceEmpty";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import UpdateBanner from "./components/UpdateBanner";
+import { IconCode, IconGamepad } from "./components/Icon";
 import { EMPTY_USAGE, type UsageStats } from "./utils/usage";
 
 const DEFAULT_API_CONFIG = {
@@ -76,6 +79,7 @@ const App: React.FC = () => {
 	const [projectDialog, setProjectDialog] = useState<ProjectDialog>("none");
 	const [openDialogInitialPath, setOpenDialogInitialPath] = useState<string | null>(null);
 	const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+	const [appView, setAppView] = useState<AppView>("hub");
 	const bottomPanelRef = useRef<BottomPanelHandle>(null);
 	const mcRuntimeRef = useRef<McRuntimePanelHandle>(null);
 
@@ -193,6 +197,7 @@ const App: React.FC = () => {
 
 			const name = dir.split(/[/\\]/).pop() || "未知项目";
 			setState((prev) => ({ ...prev, projectPath: dir, projectName: name, selectedFile: null, fileContent: null, fileTreeRefreshKey: prev.fileTreeRefreshKey + 1, rightPanelTab: "game" }));
+			setAppView("workspace");
 			window.api.setTitle(`ModCrafting - ${name}`);
 			await window.api.saveRecentProject(dir);
 			await refreshRecentProjects();
@@ -264,18 +269,21 @@ const App: React.FC = () => {
 		const u2 = window.api.onMenuOpenProject(() => openProject());
 		const u3 = window.api.onFileChanged(() => setState((prev) => ({ ...prev, fileTreeRefreshKey: prev.fileTreeRefreshKey + 1 })));
 		const u4 = window.api.onToolBuild(() => {
+			setAppView("workspace");
 			setState((p) => ({ ...p, rightPanelTab: "advanced" }));
 			window.setTimeout(() => {
 				void bottomPanelRef.current?.runBuild();
 			}, 150);
 		});
 		const u5 = window.api.onToolRunClient(() => {
+			setAppView("workspace");
 			setState((p) => ({ ...p, rightPanelTab: "game" }));
 			window.setTimeout(() => {
 				void mcRuntimeRef.current?.startDefaultForProject();
 			}, 150);
 		});
 		const u6 = window.api.onToolStop(() => {
+			setAppView("workspace");
 			setState((p) => ({ ...p, rightPanelTab: "game" }));
 			window.setTimeout(() => {
 				void mcRuntimeRef.current?.stopAllRunning();
@@ -405,104 +413,128 @@ const App: React.FC = () => {
 
 	return (
 		<>
-			<div className={`app-layout${overlayLocked ? " app-layout--locked" : ""}`}>
-				<SessionSidebar
-					projectPath={state.projectPath}
-					projectName={state.projectName}
-					sessions={sessions}
-					currentSessionId={currentSessionId}
-					onOpenSession={(id) => setCurrentSessionId(id)}
-					onNewSession={() => {
-						const id = `session-${Date.now()}`;
-						const now = Date.now();
-						setSessions((p) => [...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]);
-						setCurrentSessionId(id);
-						localStorage.setItem("modcrafting-current-session", id);
-					}}
-					onDeleteSession={(id) => {
-						setSessions((p) => p.filter((s) => s.id !== id));
-						if (currentSessionId === id) {
-							setCurrentSessionId(null);
-							localStorage.removeItem("modcrafting-current-session");
-						}
-						localStorage.removeItem(`modcrafting-changelog-${id}`);
-					}}
-					onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
-					fileChanges={fileChanges}
-					apiConfig={apiConfig}
-					hasSavedApiKey={hasSavedApiKey}
-					encryptionAvailable={encryptionAvailable}
-					onApiSettingsChange={handleApiSettingsChange}
-					onApiKeySave={handleApiKeySave}
-					onOpenProject={openProject}
-					onCreateProject={createProject}
-					fileTreeRefreshKey={state.fileTreeRefreshKey}
-					selectedFilePath={state.selectedFile?.path}
-					selectedFile={state.selectedFile}
-					fileContent={state.fileContent}
-					onSelectFile={selectFile}
-				/>
-				<div className="main-area">
-					{state.projectPath ? (
-						<ChatPanel
+			<AppChrome
+				appView={appView}
+				onViewChange={setAppView}
+				projectName={state.projectName}
+				projectPath={state.projectPath}
+			/>
+			<div className="app-shell">
+				{appView === "hub" ? (
+					<ProjectHub
+						recentProjects={recentProjects}
+						lastProjectPath={lastProjectPath}
+						onNewProject={createProject}
+						onOpenProject={openProject}
+						onContinueLast={() => void handleContinueLast()}
+						onOpenRecent={(path) => openProjectDialog(path)}
+					/>
+				) : (
+					<div className={`app-layout workspace-view${overlayLocked ? " app-layout--locked" : ""}`}>
+						<SessionSidebar
 							projectPath={state.projectPath}
-							contextFiles={state.chatContext}
-							setContextFiles={(f) => setState((p) => ({ ...p, chatContext: f }))}
-							selectedFile={state.selectedFile}
-							apiConfig={apiConfig}
-							ensureApiKey={ensureApiKey}
-							toolchainReady={toolchainReady}
-							onUsageChange={(u) => setUsage(u)}
-							onRunningChange={(r) => setIsRunning(r)}
-							currentSessionId={currentSessionId}
+							projectName={state.projectName}
 							sessions={sessions}
-							onAppendToSession={(sessionId, role, content) => {
-								setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, { role, content }], updatedAt: Date.now() } : s)));
-							}}
-							onNewSession={(firstMessage) => {
+							currentSessionId={currentSessionId}
+							onOpenSession={(id) => setCurrentSessionId(id)}
+							onNewSession={() => {
 								const id = `session-${Date.now()}`;
 								const now = Date.now();
-								const msg = firstMessage || "";
-								const name = msg ? msg.slice(0, 30) + (msg.length > 30 ? "..." : "") : `会话 ${Math.floor(Math.random() * 1000)}`;
-								setSessions((p) => [...p, { id, name, messages: msg ? [{ role: "user", content: msg }] : [], createdAt: now, updatedAt: now }]);
+								setSessions((p) => [...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]);
 								setCurrentSessionId(id);
 								localStorage.setItem("modcrafting-current-session", id);
-								return id;
+							}}
+							onDeleteSession={(id) => {
+								setSessions((p) => p.filter((s) => s.id !== id));
+								if (currentSessionId === id) {
+									setCurrentSessionId(null);
+									localStorage.removeItem("modcrafting-current-session");
+								}
+								localStorage.removeItem(`modcrafting-changelog-${id}`);
 							}}
 							onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
-						/>
-					) : (
-						<ProjectHub
-							recentProjects={recentProjects}
-							lastProjectPath={lastProjectPath}
-							onNewProject={createProject}
+							fileChanges={fileChanges}
+							apiConfig={apiConfig}
+							hasSavedApiKey={hasSavedApiKey}
+							encryptionAvailable={encryptionAvailable}
+							onApiSettingsChange={handleApiSettingsChange}
+							onApiKeySave={handleApiKeySave}
 							onOpenProject={openProject}
-							onContinueLast={() => void handleContinueLast()}
-							onOpenRecent={(path) => openProjectDialog(path)}
+							onCreateProject={createProject}
+							fileTreeRefreshKey={state.fileTreeRefreshKey}
+							selectedFilePath={state.selectedFile?.path}
+							selectedFile={state.selectedFile}
+							fileContent={state.fileContent}
+							onSelectFile={selectFile}
 						/>
-					)}
-				</div>
-				<div className="right-panel">
-					<div className="right-panel-tabs">
-						<div className={`right-panel-tab ${state.rightPanelTab === "game" ? "active" : ""}`} onClick={() => setState((p) => ({ ...p, rightPanelTab: "game" }))}>
-							🎮 游戏
+						<div className="main-area">
+							{state.projectPath ? (
+								<ChatPanel
+									projectPath={state.projectPath}
+									contextFiles={state.chatContext}
+									setContextFiles={(f) => setState((p) => ({ ...p, chatContext: f }))}
+									selectedFile={state.selectedFile}
+									apiConfig={apiConfig}
+									ensureApiKey={ensureApiKey}
+									toolchainReady={toolchainReady}
+									onUsageChange={(u) => setUsage(u)}
+									onRunningChange={(r) => setIsRunning(r)}
+									currentSessionId={currentSessionId}
+									sessions={sessions}
+									onAppendToSession={(sessionId, role, content) => {
+										setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, { role, content }], updatedAt: Date.now() } : s)));
+									}}
+									onNewSession={(firstMessage) => {
+										const id = `session-${Date.now()}`;
+										const now = Date.now();
+										const msg = firstMessage || "";
+										const name = msg ? msg.slice(0, 30) + (msg.length > 30 ? "..." : "") : `会话 ${Math.floor(Math.random() * 1000)}`;
+										setSessions((p) => [...p, { id, name, messages: msg ? [{ role: "user", content: msg }] : [], createdAt: now, updatedAt: now }]);
+										setCurrentSessionId(id);
+										localStorage.setItem("modcrafting-current-session", id);
+										return id;
+									}}
+									onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
+								/>
+							) : (
+								<WorkspaceEmpty
+									onGoHub={() => setAppView("hub")}
+									onOpenProject={openProject}
+									onNewProject={createProject}
+								/>
+							)}
 						</div>
-						<div className={`right-panel-tab ${state.rightPanelTab === "advanced" ? "active" : ""}`} onClick={() => setState((p) => ({ ...p, rightPanelTab: "advanced" }))}>
-							⚙️ 高级
-						</div>
-					</div>
-					<div className="right-panel-content">
-						<div style={{ display: state.rightPanelTab === "game" ? "flex" : "none", height: "100%", flexDirection: "column" }}>
-							<McRuntimePanel ref={mcRuntimeRef} projectPath={state.projectPath} onAddCrashToChat={handleCrashToChat} toolchainReady={toolchainReady} />
-						</div>
-						<div style={{ display: state.rightPanelTab === "advanced" ? "flex" : "none", height: "100%", flexDirection: "column", overflow: "hidden" }}>
-							<BottomPanel ref={bottomPanelRef} projectPath={state.projectPath} onAddToChatContext={addToChatContext} toolchainReady={toolchainReady} />
-							<div className="advanced-devlog-wrap">
-								<DevLogPanel />
+						<div className="right-panel">
+							<div className="right-panel-tabs">
+								<button
+									type="button"
+									className={`mc-tab ${state.rightPanelTab === "game" ? "active" : ""}`}
+									onClick={() => setState((p) => ({ ...p, rightPanelTab: "game" }))}
+								>
+									<IconGamepad size="sm" /> 游戏
+								</button>
+								<button
+									type="button"
+									className={`mc-tab ${state.rightPanelTab === "advanced" ? "active" : ""}`}
+									onClick={() => setState((p) => ({ ...p, rightPanelTab: "advanced" }))}
+								>
+									<IconCode size="sm" /> 高级
+								</button>
+							</div>
+							<div className="right-panel-content">
+								<div className="right-panel-body" style={{ display: state.rightPanelTab === "game" ? "block" : "none" }}>
+									<McRuntimePanel ref={mcRuntimeRef} projectPath={state.projectPath} onAddCrashToChat={handleCrashToChat} toolchainReady={toolchainReady} />
+								</div>
+								<div className="right-panel-body" style={{ display: state.rightPanelTab === "advanced" ? "flex" : "none", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+									<BottomPanel ref={bottomPanelRef} projectPath={state.projectPath} onAddToChatContext={addToChatContext} toolchainReady={toolchainReady} />
+									<div className="advanced-devlog-wrap">
+										<DevLogPanel />
+									</div>
+								</div>
 							</div>
 						</div>
 					</div>
-				</div>
+				)}
 			</div>
 			<NewProjectWizard open={projectDialog === "new"} onClose={() => setProjectDialog("none")} onCreated={(dir) => void loadProjectDir(dir)} />
 			<OpenProjectDialog
@@ -517,14 +549,16 @@ const App: React.FC = () => {
 			/>
 			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} />
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
-			<StatusBar
-				usage={usage}
-				running={isRunning}
-				modelLabel={apiConfig.model}
-				toolchain={toolchainStatus}
-				toolchainProgress={toolchainProgress}
-				toolchainPercent={overlayLocked ? toolchainInit.percent : undefined}
-			/>
+			{appView === "workspace" && (
+				<StatusBar
+					usage={usage}
+					running={isRunning}
+					modelLabel={apiConfig.model}
+					toolchain={toolchainStatus}
+					toolchainProgress={toolchainProgress}
+					toolchainPercent={overlayLocked ? toolchainInit.percent : undefined}
+				/>
+			)}
 		</>
 	);
 };

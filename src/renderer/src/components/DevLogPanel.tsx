@@ -73,7 +73,7 @@ const DevLogPanel: React.FC = () => {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#0d1117', color: '#c9d1d9' }}>
       {/* Toolbar */}
       <div style={{ padding: '4px 8px', borderBottom: '1px solid #30363d', display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#8b949e' }}>🐛 调试日志</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#8b949e' }}>调试日志</span>
         <div style={{ display: 'flex', gap: '2px', flexWrap: 'wrap' }}>
           {tags.slice(0, 10).map((t) => (
             <button key={t} onClick={() => setFilter(t)}
@@ -93,11 +93,11 @@ const DevLogPanel: React.FC = () => {
         </label>
         <button onClick={copyAll}
           style={{ padding: '2px 8px', fontSize: '10px', border: '1px solid #30363d', borderRadius: '4px', cursor: 'pointer', background: '#21262d', color: '#c9d1d9' }}>
-          {copied ? '✅ 已复制' : '📋 复制全部'}
+          {copied ? '已复制' : '复制全部'}
         </button>
         <button onClick={() => { logBuffer.splice(0); setLogs([]) }}
           style={{ padding: '2px 8px', fontSize: '10px', border: '1px solid #30363d', borderRadius: '4px', cursor: 'pointer', background: '#21262d', color: '#c9d1d9' }}>
-          🗑️ 清空
+          清空
         </button>
       </div>
       {/* Log content */}

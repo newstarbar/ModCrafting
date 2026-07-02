@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
+import { IconGamepad } from './Icon'
 import { logger } from '../utils/logger'
 import { parseMcLogs, PHASE_LABELS, PHASE_ORDER, phaseStepIndex, splitLogChunks } from '../utils/mc-phase-parser'
 
@@ -166,7 +167,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
             <div className="mc-runtime-subtitle">启动 Minecraft 预览模组；多实例使用独立存档目录，可联机测试</div>
           </div>
           <button
-            className="btn btn-primary mc-btn-new"
+            type="button"
+            className="mc-btn mc-btn-new"
             onClick={() => void handleCreateInstance()}
             disabled={!projectPath || !toolchainReady}
             title={!toolchainReady ? '等待构建环境初始化完成' : '联机测试时可添加多个实例'}
@@ -176,19 +178,20 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
         </div>
 
         {!projectPath && (
-          <div className="mc-empty-state">
-            <div className="mc-empty-icon">🎮</div>
-            <p>请先打开一个 Fabric 项目</p>
+          <div className="mc-panel game-card mc-empty-state">
+            <div className="mc-empty-icon"><IconGamepad size="lg" /></div>
+            <p className="mc-dim">请先打开一个 Fabric 项目</p>
           </div>
         )}
 
         {projectPath && projectInstances.length === 0 && (
-          <div className="mc-empty-state mc-empty-state--action">
-            <div className="mc-empty-icon">🎮</div>
-            <p>点击下方按钮开始测试模组</p>
+          <div className="mc-panel game-card mc-empty-state mc-empty-state--action">
+            <div className="mc-empty-icon"><IconGamepad size="lg" /></div>
+            <p className="mc-t">点击下方按钮开始测试模组</p>
             <p className="mc-empty-hint">将自动创建「玩家 1」实例；联机 mod 可再添加更多实例</p>
             <button
-              className="btn btn-primary mc-btn-launch"
+              type="button"
+              className="mc-btn mc-btn--primary mc-btn-launch"
               onClick={() => void startDefaultForProject()}
               disabled={!toolchainReady}
             >
@@ -208,11 +211,12 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
             <div className="mc-crash-actions">
               {crashMessage.path && (
                 <>
-                  <button className="btn mc-crash-btn" onClick={() => void handleSendCrashToAi()}>
+                  <button type="button" className="mc-btn mc-crash-btn" onClick={() => void handleSendCrashToAi()}>
                     发送给 AI 修复
                   </button>
                   <button
-                    className="btn mc-crash-btn-secondary"
+                    type="button"
+                    className="mc-btn mc-crash-btn-secondary"
                     onClick={async () => {
                       const result = await window.api.mcGetCrashReport(crashMessage.path!)
                       if (result.success) {
@@ -225,7 +229,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
                   </button>
                 </>
               )}
-              <button className="btn mc-crash-dismiss" onClick={() => setCrashMessage(null)}>×</button>
+              <button type="button" className="mc-btn mc-crash-dismiss" onClick={() => setCrashMessage(null)}>×</button>
             </div>
           </div>
         )}
@@ -248,7 +252,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
             }
 
             return (
-              <div key={inst.id} className={`mc-instance-card${isActive ? ' mc-instance-card--active' : ''}`}>
+              <div key={inst.id} className={`mc-panel mc-instance-card${isActive ? ' mc-instance-card--active' : ''}`}>
                 <div className="mc-card-header">
                   <span className="mc-card-name">{inst.name}</span>
                   <span className={`mc-badge ${badge.className}`}>{badge.label}</span>
@@ -279,7 +283,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
                 <div className="mc-card-actions">
                   {(inst.status === 'stopped' || inst.status === 'crashed') && (
                     <button
-                      className="btn btn-primary mc-btn-launch"
+                      type="button"
+                      className="mc-btn mc-btn--primary mc-btn-launch"
                       onClick={() => void handleStart(inst.id)}
                       disabled={!toolchainReady}
                     >
@@ -287,15 +292,15 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
                     </button>
                   )}
                   {(inst.status === 'running' || inst.status === 'starting') && (
-                    <button className="btn mc-btn-stop" onClick={() => void handleStop(inst.id)}>
+                    <button type="button" className="mc-btn mc-btn--red mc-btn-stop" onClick={() => void handleStop(inst.id)}>
                       停止游戏
                     </button>
                   )}
                   {inst.status === 'stopping' && (
-                    <button className="btn mc-btn-stop" disabled>正在停止…</button>
+                    <button type="button" className="mc-btn mc-btn--red mc-btn-stop" disabled>正在停止…</button>
                   )}
                   {!isActive && (
-                    <button className="btn mc-btn-delete" onClick={() => void handleDelete(inst.id)} title="删除实例">
+                    <button type="button" className="mc-btn mc-btn-delete" onClick={() => void handleDelete(inst.id)} title="删除实例">
                       删除
                     </button>
                   )}

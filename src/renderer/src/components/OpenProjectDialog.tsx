@@ -111,7 +111,7 @@ const OpenProjectDialog: React.FC<OpenProjectDialogProps> = ({
 
   return (
     <div className="project-modal-overlay" onClick={onClose}>
-      <div className="project-modal wide" onClick={(e) => e.stopPropagation()}>
+      <div className="project-modal mc-frame wide" onClick={(e) => e.stopPropagation()}>
         <div className="project-modal-header">
           <h2>打开项目</h2>
           <button type="button" className="project-modal-close" onClick={onClose}>×</button>

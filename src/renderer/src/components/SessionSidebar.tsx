@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import FileTree from './FileTree'
 import FileViewer from './FileViewer'
+import { IconFile, IconMessage, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
 
 interface Session {
   id: string
@@ -91,45 +92,69 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     window.setTimeout(() => setKeySaveHint(''), 2000)
   }, [apiKeyDraft, onApiKeySave])
 
-  const tabs: { id: SidebarTab; label: string; icon: string }[] = [
-    { id: 'sessions', label: '对话', icon: '💬' },
-    { id: 'files', label: '项目', icon: '📁' },
-    { id: 'tools', label: '工具', icon: '🛠' },
-    { id: 'settings', label: '设置', icon: '⚙️' }
-  ]
+  const tabLabels: Record<SidebarTab, string> = {
+    sessions: '对话',
+    files: '项目',
+    tools: '工具',
+    settings: '设置'
+  }
 
   return (
     <div className="sidebar">
-      <div className="sidebar-header">
-        <span className="project-name" title={projectPath || projectName}>{projectName}</span>
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <button className="btn" onClick={onOpenProject} title="打开项目" style={{ padding: '2px 8px', fontSize: '11px' }}>打开</button>
-          <button className="btn btn-primary" onClick={onCreateProject} title="新建项目" style={{ padding: '2px 8px', fontSize: '11px' }}>新建</button>
-        </div>
-      </div>
+      <nav className="activity-bar">
+        <button
+          type="button"
+          className={`activity-item ${activeTab === 'sessions' ? 'active' : ''}`}
+          title="对话"
+          onClick={() => setActiveTab('sessions')}
+        >
+          <IconMessage size="lg" />
+        </button>
+        <button
+          type="button"
+          className={`activity-item ${activeTab === 'files' ? 'active' : ''}`}
+          title="项目"
+          onClick={() => setActiveTab('files')}
+        >
+          <IconFile size="lg" />
+        </button>
+        <button
+          type="button"
+          className={`activity-item ${activeTab === 'tools' ? 'active' : ''}`}
+          title="工具"
+          onClick={() => setActiveTab('tools')}
+        >
+          <IconWrench size="lg" />
+        </button>
+        <div className="activity-spacer" />
+        <button
+          type="button"
+          className={`activity-item ${activeTab === 'settings' ? 'active' : ''}`}
+          title="设置"
+          onClick={() => setActiveTab('settings')}
+        >
+          <IconSettings size="lg" />
+        </button>
+      </nav>
 
-      {/* Tab bar */}
-      <div className="sidebar-panel-tabs">
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={`sidebar-panel-tab ${activeTab === tab.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.icon} {tab.label}
+      <div className="sidebar-panel">
+        <div className="sidebar-panel-header">
+          <div className="sidebar-panel-header-main">
+            <span className="sidebar-panel-title mc-label-sm">{tabLabels[activeTab]}</span>
+            {projectPath && (
+              <span className="project-name" title={projectPath}>{projectName}</span>
+            )}
           </div>
-        ))}
-      </div>
+          {activeTab === 'sessions' && (
+            <button type="button" className="mc-btn" onClick={onNewSession} title="新建对话" style={{ padding: '4px 8px' }}>
+              <IconPlus size="sm" />
+            </button>
+          )}
+        </div>
 
-      {/* Tab content */}
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="sidebar-panel-body">
         {activeTab === 'sessions' && (
           <>
-            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '6px' }}>
-              <button className="btn btn-primary" style={{ padding: '3px 10px', fontSize: '11px', flex: 1 }} onClick={onNewSession}>
-                + 新建对话
-              </button>
-            </div>
             <div className="session-list">
               {sessions.length === 0 ? (
                 <div style={{ padding: '24px 12px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '12px' }}>
@@ -139,7 +164,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                 [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).map((s) => (
                   <div
                     key={s.id}
-                    className={`session-item ${s.id === currentSessionId ? 'active' : ''}`}
+                    className={`session-item mc-inset ${s.id === currentSessionId ? 'active' : ''}`}
                     onClick={() => onOpenSession(s.id)}
                   >
                     {renamingId === s.id ? (
@@ -163,11 +188,14 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     )}
                     <div className="session-time">
                       {formatTime(s.updatedAt)}
-                      <span
-                        style={{ marginLeft: '8px', cursor: 'pointer', opacity: 0.5 }}
+                      <button
+                        type="button"
+                        className="session-delete-btn"
                         onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id) }}
                         title="删除"
-                      >🗑️</span>
+                      >
+                        <IconTrash size="sm" />
+                      </button>
                     </div>
                   </div>
                 ))
@@ -181,7 +209,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                   style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}
                   onClick={() => setExpandedChanges(!expandedChanges)}
                 >
-                  <span>📝 文件改动 ({fileChanges.length})</span>
+                  <span>文件改动 ({fileChanges.length})</span>
                   <span>{expandedChanges ? '▲' : '▼'}</span>
                 </div>
                 {expandedChanges && (
@@ -216,7 +244,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               {selectedFile ? (
                 <>
                   <div className="sidebar-file-preview-header">
-                    <span className="filename">📄 {selectedFile.name}</span>
+                    <span className="filename"><IconFile size="sm" /> {selectedFile.name}</span>
                   </div>
                   <div className="sidebar-file-preview-body">
                     <FileViewer fileName={selectedFile.name} content={fileContent || ''} />
@@ -234,8 +262,8 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 600 }}>
               终端 / MC 运行
             </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              终端面板已整合到底部。点击底部 💻 终端 / 📋 日志 / 🎮 MC 运行 切换。
+            <div className="mc-dim" style={{ fontSize: '12px', lineHeight: 1.5 }}>
+              终端与构建日志已整合到右侧「高级」面板。
             </div>
           </div>
         )}
@@ -246,20 +274,21 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               API 配置
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <input className="chat-input" placeholder="API 地址" value={apiConfig.endpoint}
+              <input className="mc-input" placeholder="API 地址" value={apiConfig.endpoint}
                 onChange={(e) => onApiSettingsChange(e.target.value, apiConfig.model)}
-                style={{ fontSize: '12px', minHeight: '28px' }} />
-              <input className="chat-input" placeholder="模型名称" value={apiConfig.model}
+                style={{ fontSize: '12px', minHeight: '32px' }} />
+              <input className="mc-input" placeholder="模型名称" value={apiConfig.model}
                 onChange={(e) => onApiSettingsChange(apiConfig.endpoint, e.target.value)}
-                style={{ fontSize: '12px', minHeight: '28px' }} />
-              <input className="chat-input" type="password"
+                style={{ fontSize: '12px', minHeight: '32px' }} />
+              <input className="mc-input" type="password"
                 placeholder={hasSavedApiKey ? '已保存密钥（输入新值可覆盖）' : 'API 密钥'}
                 value={apiKeyDraft}
                 onChange={(e) => setApiKeyDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && apiKeyDraft.trim()) void handleSaveApiKey() }}
-                style={{ fontSize: '12px', minHeight: '28px' }} />
+                style={{ fontSize: '12px', minHeight: '32px' }} />
               <button
-                className="btn btn-primary"
+                type="button"
+                className="mc-btn mc-btn--primary"
                 style={{ padding: '4px 10px', fontSize: '11px', alignSelf: 'flex-start' }}
                 disabled={!apiKeyDraft.trim() || !encryptionAvailable}
                 onClick={() => void handleSaveApiKey()}
@@ -276,6 +305,13 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               )}
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
+              项目
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+              <button type="button" className="mc-btn" style={{ flex: 1, fontSize: '11px' }} onClick={onOpenProject}>打开项目</button>
+              <button type="button" className="mc-btn mc-btn--primary" style={{ flex: 1, fontSize: '11px' }} onClick={onCreateProject}>新建项目</button>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 600 }}>
               关于 ModCrafting
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
@@ -285,6 +321,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   )

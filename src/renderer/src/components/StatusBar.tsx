@@ -10,101 +10,90 @@ interface StatusBarProps {
   toolchainPercent?: number
 }
 
-const jdkLabel: Record<string, string> = {
-  ready: 'JDK ✓',
-  bundled: 'JDK 复制中',
-  missing: 'JDK ✗'
-}
-
-const gradleLabel: Record<string, string> = {
-  ready: 'Gradle ✓',
-  incomplete: 'Gradle 不完整',
-  missing: 'Gradle ✗'
-}
-
-const depsLabel: Record<string, string> = {
-  ready: '离线依赖 ✓',
-  missing: '离线依赖 ✗'
-}
-
-const StatusBar: React.FC<StatusBarProps> = ({ usage, running, modelLabel, toolchain, toolchainProgress, toolchainPercent }) => {
-  const turnRate = cacheHitRate(usage.turnCacheHitTokens, usage.turnCacheMissTokens)
-  const sessionRate = cacheHitRate(usage.cacheHitTokens, usage.cacheMissTokens)
-
-  const formatTokens = (n: number): string => n > 0 ? n.toLocaleString() : '-'
-  const formatCost = (n: number): string => n > 0 ? `$${n.toFixed(4)}` : '-'
-  const formatRate = (rate: number | null): string => rate !== null ? `${rate.toFixed(1)}%` : '-'
-
-  const rateClass = (rate: number | null): string => {
-    if (rate === null) return 'stat-empty'
-    if (rate >= 80) return 'stat-good'
-    if (rate >= 50) return 'stat-ok'
-    return 'stat-bad'
-  }
+const StatusBar: React.FC<StatusBarProps> = ({
+  usage,
+  running,
+  modelLabel,
+  toolchain,
+  toolchainProgress,
+  toolchainPercent
+}) => {
+  const formatTokens = (n: number): string => (n > 0 ? n.toLocaleString() : '-')
+  const formatCost = (n: number): string => (n > 0 ? `￥${n.toFixed(4)}` : '-')
 
   const envReady = toolchain
     && toolchain.jdk === 'ready'
     && toolchain.gradle === 'ready'
     && toolchain.deps === 'ready'
 
-  const envSummary = toolchain
-    ? `${jdkLabel[toolchain.jdk] || toolchain.jdk} · ${gradleLabel[toolchain.gradle] || toolchain.gradle}${toolchain.deps ? ` · ${depsLabel[toolchain.deps] || toolchain.deps}` : ''}`
-    : ''
+  const envText = toolchainPercent !== undefined
+    ? `初始化 ${toolchainPercent}%`
+    : envReady
+      ? '环境就绪'
+      : toolchainProgress || '环境检查中'
+
+  const xpPercent = usage.contextPercent > 0
+    ? Math.min(100, usage.contextPercent)
+    : running
+      ? 35
+      : 0
 
   return (
     <div className="statusbar">
-      <span className="stat" title="模型">
-        <span className={`dot ${running ? 'dot-busy' : ''}`} />
-        <span className="stat-label">{modelLabel || 'ModCrafting'}</span>
-      </span>
+      <span className={`dot ${running ? 'dot-busy' : 'dot-idle'}`} />
+      <span className="mc-t">{running ? '运行中' : '就绪'}</span>
+      <span className="stat-sep">|</span>
+      <span className="stat mc-dim">{modelLabel || 'ModCrafting'}</span>
 
-      <span className="stat" title="会话累计 Token">
-        <span className="stat-label">会话</span>
-        <b>{formatTokens(usage.sessionTokens)}</b>
-      </span>
+      {usage.sessionTokens > 0 && (
+        <>
+          <span className="stat-sep">|</span>
+          <span className="stat" title="会话累计 Token">
+            <span className="stat-label">会话</span>
+            <span className="stat-value">{formatTokens(usage.sessionTokens)}</span>
+          </span>
+        </>
+      )}
 
-      <span className="stat" title="当前轮次累计 Token（含工具多步调用）">
-        <span className="stat-label">本轮</span>
-        <b className={usage.turnTokens > 0 ? '' : 'stat-empty'}>{formatTokens(usage.turnTokens)}</b>
-      </span>
-
-      <span className="stat" title="本轮缓存命中率">
-        <span className="stat-label">缓存</span>
-        <b className={rateClass(turnRate)}>{formatRate(turnRate)}</b>
-      </span>
-
-      <span className="stat" title="会话平均缓存命中率">
-        <span className="stat-label">平均</span>
-        <b className={rateClass(sessionRate)}>{formatRate(sessionRate)}</b>
-      </span>
-
-      <span className="stat" title="已完成对话轮次">
-        <span className="stat-label">轮次</span>
-        <b>{usage.turns > 0 ? `${usage.turns}` : '-'}</b>
-      </span>
-
-      <span className="stat" title="最近一次请求的 Prompt 占上下文窗口比例">
-        <span className="stat-label">上下文</span>
-        <b className={usage.contextPercent > 80 ? 'stat-bad' : usage.contextPercent > 50 ? 'stat-ok' : ''}>
-          {usage.contextPercent > 0 ? `${usage.contextPercent}%` : '-'}
-        </b>
-      </span>
-
-      <span className="stat" title="会话累计费用估算（美元）">
-        <span className="stat-label">费用</span>
-        <b>{formatCost(usage.cost)}</b>
-      </span>
+      {usage.cost > 0 && (
+        <>
+          <span className="stat-sep">|</span>
+          <span className="stat" title="费用估算">
+            <span className="stat-value">{formatCost(usage.cost)}</span>
+          </span>
+        </>
+      )}
 
       {toolchain && (
-        <span className="stat" title={toolchainProgress || '内置构建环境状态（JDK · Gradle · 离线 Fabric 依赖）'}>
-          <span className="stat-label">环境</span>
-          <b className={envReady ? 'stat-good' : toolchain.jdk === 'missing' || toolchain.deps === 'missing' ? 'stat-bad' : 'stat-ok'}>
-            {toolchainPercent !== undefined
-              ? `初始化 ${toolchainPercent}%`
-              : toolchainProgress || envSummary}
-          </b>
+        <>
+          <span className="stat-sep">|</span>
+          <span
+            className="stat"
+            title={toolchainProgress || 'JDK · Gradle · 离线依赖'}
+          >
+            <span className={`stat-value ${envReady ? 'stat-good' : toolchainPercent !== undefined ? 'stat-ok' : ''}`}>
+              {envText}
+            </span>
+          </span>
+        </>
+      )}
+
+      {xpPercent > 0 && (
+        <span className="statusbar-xp" title={`上下文占用约 ${xpPercent}%`}>
+          <i style={{ width: `${xpPercent}%` }} />
         </span>
       )}
+
+      <span className="statusbar-tail mc-dim">
+        {usage.turnTokens > 0 && (
+          <span title="本轮 Token">{formatTokens(usage.turnTokens)} tok</span>
+        )}
+        {cacheHitRate(usage.turnCacheHitTokens, usage.turnCacheMissTokens) !== null && (
+          <span title="缓存命中率">
+            缓存 {cacheHitRate(usage.turnCacheHitTokens, usage.turnCacheMissTokens)!.toFixed(0)}%
+          </span>
+        )}
+      </span>
     </div>
   )
 }

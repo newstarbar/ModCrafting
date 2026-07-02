@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import appIcon from '../../../../build/appIcon.png'
 import installerIcon from '../../../../build/installerIcon.png'
+import { IconSend, IconSquare } from './Icon'
 import { Controller } from '../harness/controller'
 import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'
@@ -239,7 +240,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             setPlanSteps(steps)
           }
         } else if (event.phase === 'execute_start') {
-          setAgentStatus('🔧 执行中...')
+          setAgentStatus('执行中...')
         }
         break
 
@@ -429,7 +430,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     const userMsg = input.trim()
     setInput('')
     setIsLoading(true)
-    setAgentStatus('🤔 思考中...')
+    setAgentStatus('思考中...')
     setPlanSteps([])
 
     if (!currentSessionId) {
@@ -473,127 +474,96 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     })
   }
 
-  const renderMessage = (msg: DisplayMessage) => (
-    <div key={msg.id} className={`chat-message ${msg.role}`}>
-      <div className="role">
-        {msg.role === 'user' ? (
-          '你'
-        ) : (
-          <span className="chat-role-brand">
-            <img src={installerIcon} alt="" className="chat-role-brand-icon" />
-            AI 助手
-          </span>
-        )}
-        {msg.isStreaming && <span className="streaming-dot">●</span>}
-      </div>
-      <div className="message-content">
-        {/* User messages: show content as-is */}
-        {msg.role === 'user' && (
-          <div style={{ minHeight: '1em' }}>{renderContent(msg.content)}</div>
-        )}
-
-        {/* Assistant messages: render entries in chronological order */}
-        {msg.role === 'assistant' && (
-          <div>
-            {msg.entries && msg.entries.length === 0 && msg.isStreaming && (
-              <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px' }}>思考中...</span>
-            )}
-            {msg.entries && msg.entries.length > 0 && msg.entries.map((entry, i) => {
-              switch (entry.kind) {
-                case 'reasoning':
-                  return (
-                    <div key={`r-${i}`} style={{
-                      fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic',
-                      padding: '2px 0', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word'
-                    }}>
-                      💭 {entry.content}
-                    </div>
-                  )
-                case 'text':
-                  return (
-                    <div key={`t-${i}`} style={{ padding: '2px 0' }}>
-                      {renderContent(entry.content)}
-                    </div>
-                  )
-                case 'tool': {
-                  const isCollapsed = collapsedToolIds.has(entry.id)
-                  return (
-                    <div key={`tool-${entry.id}`} style={{
-                      padding: '3px 0', borderBottom: '1px solid var(--border-color)',
-                      display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px', fontSize: '12px'
-                    }}>
-                      <span style={{ flexShrink: 0 }}>
-                        {entry.status === 'pending' && '⏳'}
-                        {entry.status === 'running' && '🔄'}
-                        {entry.status === 'done' && '✅'}
-                        {entry.status === 'error' && '❌'}
-                      </span>
-                      <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{getToolDisplayName(entry.name)}</span>
-                      {entry.durationMs && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({entry.durationMs}ms)</span>}
-
-                      {/* Preview / expand toggle for completed tools */}
-                      {(entry.status === 'done' || entry.status === 'error') && entry.output && (
-                        isCollapsed ? (
-                          <span onClick={() => toggleToolOutput(entry.id)}
-                            style={{ fontSize: '10px', color: 'var(--accent)', cursor: 'pointer', marginLeft: 'auto', flexShrink: 0 }}>
-                            {extractPreview(entry.name, entry.output)} ▶
+  const renderMessage = (msg: DisplayMessage) => {
+    const isUser = msg.role === 'user'
+    return (
+      <div key={msg.id} className={`bubble ${isUser ? 'user' : 'ai'}`}>
+        <div className="bubble-hd">
+          {isUser ? (
+            <>
+              <span className="bubble-av">你</span>
+              <span className="role mc-dim">用户</span>
+            </>
+          ) : (
+            <>
+              <img src={installerIcon} alt="" />
+              <span className="role">AI 助手</span>
+              {msg.isStreaming && <span className="streaming-dot">●</span>}
+            </>
+          )}
+        </div>
+        <div className="bubble-bd">
+          {isUser && (
+            <div>{renderContent(msg.content)}</div>
+          )}
+          {!isUser && (
+            <>
+              {msg.entries && msg.entries.length === 0 && msg.isStreaming && (
+                <span className="mc-dim" style={{ fontSize: '12px', fontStyle: 'italic' }}>思考中...</span>
+              )}
+              {msg.entries && msg.entries.length > 0 && msg.entries.map((entry, i) => {
+                switch (entry.kind) {
+                  case 'reasoning':
+                    return <div key={`r-${i}`} className="reasoning-line">{entry.content}</div>
+                  case 'text':
+                    return <div key={`t-${i}`}>{renderContent(entry.content)}</div>
+                  case 'tool': {
+                    const isCollapsed = collapsedToolIds.has(entry.id)
+                    const statusMark =
+                      entry.status === 'done' ? <span className="ok">✓</span>
+                        : entry.status === 'running' ? <span className="run">⟳</span>
+                          : entry.status === 'error' ? <span className="err">✗</span>
+                            : <span className="mc-dim">·</span>
+                    return (
+                      <div key={`tool-${entry.id}`} className="tool-line">
+                        {statusMark}
+                        <span className="tool-line-name">{getToolDisplayName(entry.name)}</span>
+                        {entry.durationMs != null && (
+                          <span className="mc-dim" style={{ fontSize: '10px' }}>({entry.durationMs}ms)</span>
+                        )}
+                        {(entry.status === 'done' || entry.status === 'error') && entry.output && (
+                          <span
+                            className="tool-line-toggle"
+                            onClick={() => toggleToolOutput(entry.id)}
+                          >
+                            {isCollapsed ? `${extractPreview(entry.name, entry.output)} ▶` : '收起 ▲'}
                           </span>
-                        ) : (
-                          <span onClick={() => toggleToolOutput(entry.id)}
-                            style={{ fontSize: '10px', color: 'var(--accent)', cursor: 'pointer', marginLeft: 'auto', flexShrink: 0 }}>
-                            收起 ▲
+                        )}
+                        {(entry.status === 'pending' || entry.status === 'running') && (
+                          <span className="tool-line-toggle mc-dim">
+                            {entry.status === 'running' ? '执行中…' : '等待中…'}
                           </span>
-                        )
-                      )}
-
-                      {/* Pending/running status */}
-                      {(entry.status === 'pending' || entry.status === 'running') && (
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto', flexShrink: 0 }}>
-                          {entry.status === 'running' ? '执行中...' : '等待中...'}
-                        </span>
-                      )}
-
-                      {/* Full output when expanded */}
-                      {entry.output && !isCollapsed && (
-                        <div style={{ width: '100%', marginTop: '2px' }}>
-                          <pre style={{
-                            margin: 0, padding: '6px 8px', fontSize: '11px', fontFamily: 'var(--font-mono)',
-                            background: entry.status === 'error' ? 'rgba(243,139,168,0.1)' : 'var(--bg-tertiary)',
-                            borderRadius: '4px', maxHeight: '200px', overflow: 'auto',
-                            whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5,
-                            color: entry.status === 'error' ? 'var(--error)' : undefined
-                          }}>{entry.output}</pre>
-                        </div>
-                      )}
-                    </div>
-                  )
+                        )}
+                        {entry.output && !isCollapsed && (
+                          <div className="tool-line-output">
+                            <pre className={entry.status === 'error' ? 'is-error' : undefined}>{entry.output}</pre>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  }
+                  default:
+                    return null
                 }
-                default:
-                  return null
-              }
-            })}
-            {/* Fallback for restored sessions (messages with content but no entries) */}
-            {(!msg.entries || msg.entries.length === 0) && msg.content && (
-              <div>{renderContent(msg.content)}</div>
-            )}
-          </div>
-        )}
+              })}
+              {(!msg.entries || msg.entries.length === 0) && msg.content && (
+                <div>{renderContent(msg.content)}</div>
+              )}
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="chat-panel">
       <div className="chat-header">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span className="chat-header-brand">
-            <img src={appIcon} alt="" className="chat-brand-icon" />
-            AI 智能体
-          </span>
-          <div style={{ display: 'flex', gap: '4px' }}>
-          </div>
+        <div className="chat-header-left">
+          <img src={appIcon} alt="" className="chat-brand-icon" />
+          <span className="chat-header-brand">AI 智能体</span>
         </div>
-        {agentStatus && <div style={{ fontSize: '12px', color: 'var(--accent)', marginTop: '4px' }}>{agentStatus}</div>}
+        {agentStatus && <span className="chat-header-status">{agentStatus}</span>}
       </div>
       {planSteps.length > 0 && (
         <TaskPlan steps={planSteps} />
@@ -613,15 +583,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             构建环境初始化中，AI 开发与构建功能暂时锁定，请等待进度条完成。
           </div>
         )}
-        <textarea className="chat-input"
+        <textarea className="mc-input"
           placeholder={!toolchainReady ? '等待构建环境就绪…' : projectPath ? '描述功能或问题...' : '请先打开项目'}
           value={input} onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
           disabled={!projectPath || isLoading || !toolchainReady} />
         {isLoading ? (
-          <button className="chat-send-btn" style={{ background: 'var(--error)', color: 'white' }} onClick={handleCancel}>⏹ 停止</button>
+          <button type="button" className="mc-btn mc-btn--red chat-send-btn" onClick={handleCancel}>
+            <IconSquare size="sm" /> 停止
+          </button>
         ) : (
-          <button className="chat-send-btn" onClick={handleSend} disabled={!projectPath || !input.trim() || !toolchainReady}>发送</button>
+          <button type="button" className="mc-btn mc-btn--primary chat-send-btn" onClick={handleSend} disabled={!projectPath || !input.trim() || !toolchainReady}>
+            <IconSend size="sm" />
+          </button>
         )}
       </div>
     </div>
@@ -633,8 +607,8 @@ function extractPreview(toolName: string, output: string): string {
   if (toolName === 'list_directory') {
     const lines = output.split('\n').filter((l) => l.trim())
     if (lines.length === 0) return '(空)'
-    const first = lines[0].replace(/^[📁📄]\s*/, '').trim()
-    if (lines.length <= 3) return output.replace(/[📁📄]\s*/g, '').split('\n').join(', ')
+    const first = lines[0].trim()
+    if (lines.length <= 3) return lines.join(', ')
     return `${first} 等 ${lines.length} 项`
   }
   // read_file: show first line

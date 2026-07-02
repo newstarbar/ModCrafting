@@ -88,7 +88,7 @@ export const listDirectoryTool: Tool = {
     try {
       const entries = await window.api.listDirectory(dirPath)
       const lines = entries.map((e: { name: string; isDirectory: boolean }) =>
-        e.isDirectory ? `📁 ${e.name}/` : `📄 ${e.name}`
+        e.isDirectory ? `${e.name}/` : e.name
       )
       return lines.join('\n') || '(empty directory)'
     } catch (err) {
