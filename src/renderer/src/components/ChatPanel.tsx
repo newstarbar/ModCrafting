@@ -873,14 +873,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                           <span className="mc-dim" style={{ fontSize: '10px' }}>({elapsedSec}s)</span>
                         )}
                         {(entry.status === 'done' || entry.status === 'error') && displayOutput && (
-                          <span
-                            className="tool-line-toggle"
-                            onClick={() => toggleToolOutput(entry.id)}
-                          >
-                            {isCollapsed
-                              ? `${extractPreview(entry.name, displayOutput)} ▶`
-                              : '收起 ▲'}
-                          </span>
+                          <>
+                            {isCollapsed && (
+                              <span className="tool-line-preview" title={displayOutput}>
+                                {extractPreview(entry.name, displayOutput)}
+                              </span>
+                            )}
+                            <span
+                              className="tool-line-toggle"
+                              onClick={() => toggleToolOutput(entry.id)}
+                            >
+                              {isCollapsed ? '展开 ▶' : '收起 ▲'}
+                            </span>
+                          </>
                         )}
                         {entry.status === 'running' && (
                           <span
@@ -996,12 +1001,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
 // Extract a preview summary from tool output (for collapsed view)
 function extractPreview(toolName: string, output: string): string {
+  const cap = (text: string, max = 48): string =>
+    text.length > max ? `${text.slice(0, max)}…` : text
+
   if (toolName === 'list_directory') {
     const lines = output.split('\n').filter((l) => l.trim())
     if (lines.length === 0) return '(空)'
     const first = lines[0].trim()
-    if (lines.length <= 3) return lines.join(', ')
-    return `${first} 等 ${lines.length} 项`
+    if (lines.length === 1) return cap(first)
+    return cap(`${first} 等 ${lines.length} 项`)
   }
   if (toolName === 'run_command' || toolName === 'trigger_build') {
     if (output.includes('BUILD SUCCESSFUL')) return 'BUILD SUCCESSFUL'
@@ -1016,7 +1024,7 @@ function extractPreview(toolName: string, output: string): string {
     return exitCode ? `exit ${exitCode}` : last.slice(0, 60) || '(完成)'
   }
   const firstLine = output.split('\n')[0]?.trim() || ''
-  return firstLine.slice(0, 60) + (firstLine.length > 60 ? '...' : '')
+  return cap(firstLine)
 }
 
 export default ChatPanel

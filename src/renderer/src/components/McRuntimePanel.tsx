@@ -123,16 +123,18 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
       if (active) {
         const badge = statusBadge(active)
-        if (active.status === 'running') {
+        const rawLogs = logs.get(active.id) || []
+        const phaseInfo = parseMcLogs(rawLogs, active.status)
+        if (active.status === 'running' && phaseInfo.phase === 'playing') {
           game = { label: '游戏运行中', variant: 'running' }
+        } else if (active.status === 'running') {
+          game = { label: phaseInfo.summaryLine || '正在启动游戏', variant: 'starting' }
         } else if (active.status === 'starting' || active.status === 'stopping') {
           game = { label: badge.label, variant: 'starting' }
         } else if (active.status === 'crashed' || active.exitReason === 'crash' || active.exitReason === 'start_failed') {
           game = { label: badge.label, variant: 'crashed' }
         }
 
-        const rawLogs = logs.get(active.id) || []
-        const phaseInfo = parseMcLogs(rawLogs, active.status)
         if (phaseInfo.summaryLine && active.status !== 'crashed') {
           phase = { label: phaseInfo.summaryLine }
         }
@@ -344,8 +346,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
                 <div className="mc-phase-stepper">
                   {PHASE_ORDER.map((step, i) => {
-                    const done = stepIdx > i || inst.status === 'running'
-                    const current = stepIdx === i && (inst.status === 'starting' || inst.status === 'stopping')
+                    const done = stepIdx > i
+                    const current = stepIdx === i && (inst.status === 'starting' || inst.status === 'running' || inst.status === 'stopping')
                     return (
                       <React.Fragment key={step}>
                         <div className={`mc-phase-step${done ? ' mc-phase-step--done' : ''}${current ? ' mc-phase-step--current' : ''}`}>

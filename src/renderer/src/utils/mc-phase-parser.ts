@@ -112,13 +112,16 @@ function phaseFromLine(line: string): { phase: McPhase; summary: string } | null
   }
 
   if (isMcClientStarted(line)) {
-    if (lower.includes('setting user:') || lower.includes('sound engine started') || lower.includes('backend library: lwjgl')) {
+    if (lower.includes('setting user:') || lower.includes('sound engine started')) {
+      return { phase: 'playing', summary: 'Minecraft 已启动，可在弹出的窗口中游戏' }
+    }
+    if (lower.includes('backend library: lwjgl') || lower.includes('openal initialized')) {
       return { phase: 'playing', summary: 'Minecraft 已启动，可在弹出的窗口中游戏' }
     }
     if (lower.includes('loading minecraft')) {
       return { phase: 'launch', summary: '正在加载游戏…' }
     }
-    return { phase: 'playing', summary: 'Minecraft 已启动，可在弹出的窗口中游戏' }
+    return { phase: 'launch', summary: '正在启动 Minecraft 客户端…' }
   }
 
   if (lower.includes('build successful')) {
@@ -130,18 +133,10 @@ function phaseFromLine(line: string): { phase: McPhase; summary: string } | null
 
 /** Derive human-readable phase + summary from accumulated MC runtime log lines. */
 export function parseMcLogs(logChunks: string[], status: string): McPhaseInfo {
-  if (status === 'running') {
-    return {
-      phase: 'playing',
-      summaryLine: '游戏运行中，可在弹出的窗口中游玩',
-      hasError: false
-    }
-  }
-
   const lines = splitLogChunks(logChunks)
 
   if (lines.length === 0) {
-    if (status === 'starting') {
+    if (status === 'starting' || status === 'running') {
       return { phase: 'prepare', summaryLine: '正在准备启动环境…', hasError: false }
     }
     return { phase: 'idle', summaryLine: '点击「启动游戏」开始测试模组', hasError: false }
@@ -170,7 +165,7 @@ export function parseMcLogs(logChunks: string[], status: string): McPhaseInfo {
     }
   }
 
-  if (status === 'starting' && phase === 'idle') {
+  if ((status === 'starting' || status === 'running') && phase === 'idle') {
     phase = 'prepare'
   }
 
@@ -188,6 +183,10 @@ export function parseMcLogs(logChunks: string[], status: string): McPhaseInfo {
   return { phase, summaryLine, hasError }
 }
 
+export function isMcPlayingPhase(phase: McPhase): boolean {
+  return phase === 'playing'
+}
+
 export const PHASE_LABELS: Record<McPhase, string> = {
   idle: '待命',
   prepare: '准备环境',
@@ -201,9 +200,8 @@ export const PHASE_LABELS: Record<McPhase, string> = {
 export const PHASE_ORDER: McPhase[] = ['prepare', 'compile', 'launch', 'playing']
 
 export function phaseStepIndex(phase: McPhase, status: string): number {
-  if (status === 'running') return 3
   const idx = PHASE_ORDER.indexOf(phase)
   if (idx >= 0) return idx
-  if (phase === 'done') return 3
+  if (phase === 'done' || (phase === 'playing' && status === 'running')) return PHASE_ORDER.length - 1
   return -1
 }

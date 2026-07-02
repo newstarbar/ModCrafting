@@ -775,6 +775,8 @@ body,
 	align-items: baseline;
 	flex-wrap: wrap;
 	gap: 6px;
+	max-width: 100%;
+	overflow: hidden;
 }
 
 .tool-line .ok {
@@ -805,10 +807,22 @@ body,
 	flex-shrink: 0;
 }
 
+.tool-line-preview {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-muted);
+	font-size: 10px;
+}
+
 .tool-line-output {
 	width: 100%;
+	min-width: 0;
 	margin-top: 4px;
 	max-height: 200px;
+	overflow-x: auto;
 	overflow-y: auto;
 }
 
@@ -822,7 +836,8 @@ body,
 	max-height: 200px;
 	overflow: auto;
 	white-space: pre-wrap;
-	word-break: break-all;
+	word-break: break-word;
+	overflow-wrap: anywhere;
 	line-height: 1.5;
 }
 

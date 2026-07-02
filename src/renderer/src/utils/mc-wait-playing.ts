@@ -1,4 +1,4 @@
-import { parseMcLogs, type McPhase } from './mc-phase-parser'
+import { parseMcLogs, isMcPlayingPhase, type McPhase } from './mc-phase-parser'
 
 export interface WaitForMcPlayingOptions {
   instanceId: string
@@ -20,9 +20,8 @@ function isFailureStatus(status: string, exitReason?: string): boolean {
   return false
 }
 
-function isPlayingPhase(phase: McPhase, status: string): boolean {
-  if (status === 'running') return true
-  return phase === 'playing'
+function isPlayingPhase(phase: McPhase, _status: string): boolean {
+  return isMcPlayingPhase(phase)
 }
 
 /** Wait until MC instance reaches playing phase or fails/times out. */

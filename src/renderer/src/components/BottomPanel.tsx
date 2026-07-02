@@ -87,7 +87,14 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     }, [terminalId])
 
     useEffect(() => {
-      if (!terminalExpanded) return
+      if (!terminalExpanded) {
+        if (xtermRef.current) {
+          xtermRef.current.dispose()
+          xtermRef.current = null
+          fitAddonRef.current = null
+        }
+        return
+      }
       initXterm()
       const fitFn = (): void => {
         try { fitAddonRef.current?.fit() } catch { /* ignore */ }
@@ -97,6 +104,11 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       return () => {
         clearTimeout(timer)
         window.removeEventListener('resize', fitFn)
+        if (xtermRef.current) {
+          xtermRef.current.dispose()
+          xtermRef.current = null
+          fitAddonRef.current = null
+        }
       }
     }, [terminalExpanded, initXterm])
 
@@ -119,11 +131,21 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     }, [terminalId])
 
     useEffect(() => {
-      if (!projectPath || !terminalExpanded) return
+      if (!projectPath || !terminalExpanded) {
+        if (!terminalExpanded) {
+          setTerminalId(null)
+          terminalMountedRef.current = false
+        }
+        return
+      }
 
+      let cancelled = false
       const initTerminal = async (): Promise<void> => {
-        if (terminalId) await window.api.terminalKill(terminalId)
         const id = await window.api.terminalCreate(projectPath)
+        if (cancelled) {
+          await window.api.terminalKill(id)
+          return
+        }
         logger.terminal('Terminal session created', id)
         setTerminalId(id)
         terminalMountedRef.current = true
@@ -132,9 +154,12 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       void initTerminal()
 
       return () => {
-        if (terminalMountedRef.current && terminalId) {
-          void window.api.terminalKill(terminalId)
-        }
+        cancelled = true
+        terminalMountedRef.current = false
+        setTerminalId((prev) => {
+          if (prev) void window.api.terminalKill(prev)
+          return null
+        })
       }
     }, [projectPath, terminalExpanded])
 
