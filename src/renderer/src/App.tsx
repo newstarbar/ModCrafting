@@ -14,6 +14,14 @@ import ToolchainInitOverlay, { type ToolchainInitState } from "./components/Tool
 import UpdateBanner from "./components/UpdateBanner";
 import { IconCode, IconGamepad } from "./components/Icon";
 import { EMPTY_USAGE, type UsageStats } from "./utils/usage";
+import { loadProjectVersions, type ProjectVersions } from "./utils/project-versions";
+import {
+	pickMcRuntimeSlot,
+	type BuildDevStatus,
+	type GameDevStatus,
+	type McRuntimeSlot,
+	type PhaseDevStatus
+} from "./types/dev-status";
 import type { ChatSession, PersistedMessage } from "./types/chat";
 import {
 	loadSessions,
@@ -75,6 +83,11 @@ const App: React.FC = () => {
 	const [encryptionAvailable, setEncryptionAvailable] = useState(true);
 	const [usage, setUsage] = useState<UsageData>(EMPTY_USAGE);
 	const [isRunning, setIsRunning] = useState(false);
+	const [projectVersions, setProjectVersions] = useState<ProjectVersions | null>(null);
+	const [buildDevStatus, setBuildDevStatus] = useState<BuildDevStatus>({ running: false });
+	const [gameDevStatus, setGameDevStatus] = useState<GameDevStatus>({ label: '', variant: 'idle' });
+	const [phaseDevStatus, setPhaseDevStatus] = useState<PhaseDevStatus | null>(null);
+	const mcRuntimeSlot: McRuntimeSlot = pickMcRuntimeSlot(buildDevStatus, gameDevStatus, phaseDevStatus);
 	const [toolchainStatus, setToolchainStatus] = useState<{ jdk: string; gradle: string; deps: string; isPackaged?: boolean }>({ jdk: "missing", gradle: "missing", deps: "missing" });
 	const [toolchainProgress, setToolchainProgress] = useState("");
 	const [toolchainInit, setToolchainInit] = useState<ToolchainInitState>({
@@ -246,6 +259,10 @@ const App: React.FC = () => {
 				setToolchainProgress("");
 			}
 			setToolchainStatus(await window.api.getToolchainStatus());
+			void loadProjectVersions(dir).then(setProjectVersions);
+			setBuildDevStatus({ running: false });
+			setGameDevStatus({ label: '', variant: 'idle' });
+			setPhaseDevStatus(null);
 		},
 		[refreshRecentProjects]
 	);
@@ -438,6 +455,24 @@ const App: React.FC = () => {
 		});
 	}, []);
 
+	const handleRuntimeStatusChange = useCallback((game: GameDevStatus, phase: PhaseDevStatus | null) => {
+		setGameDevStatus((prev) => (
+			prev.label === game.label && prev.variant === game.variant ? prev : game
+		));
+		setPhaseDevStatus((prev) => {
+			const prevLabel = prev?.label ?? '';
+			const nextLabel = phase?.label ?? '';
+			if (prevLabel === nextLabel) return prev;
+			return phase;
+		});
+	}, []);
+
+	const handleBuildStatusChange = useCallback((status: BuildDevStatus) => {
+		setBuildDevStatus((prev) => (
+			prev.running === status.running && prev.failed === status.failed ? prev : status
+		));
+	}, []);
+
 	const handlePersistSession = useCallback((sessionId: string, messages: PersistedMessage[]) => {
 		setSessions((prev) => prev.map((s) => (
 			s.id === sessionId ? { ...s, messages, updatedAt: Date.now() } : s
@@ -568,10 +603,22 @@ const App: React.FC = () => {
 							</div>
 							<div className="right-panel-content">
 								<div className="right-panel-body" style={{ display: state.rightPanelTab === "game" ? "block" : "none" }}>
-									<McRuntimePanel ref={mcRuntimeRef} projectPath={state.projectPath} onAddCrashToChat={handleCrashToChat} toolchainReady={toolchainReady} />
+									<McRuntimePanel
+										ref={mcRuntimeRef}
+										projectPath={state.projectPath}
+										onAddCrashToChat={handleCrashToChat}
+										toolchainReady={toolchainReady}
+										onRuntimeStatusChange={handleRuntimeStatusChange}
+									/>
 								</div>
 								<div className="right-panel-body" style={{ display: state.rightPanelTab === "advanced" ? "flex" : "none", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-									<BottomPanel ref={bottomPanelRef} projectPath={state.projectPath} onAddToChatContext={addToChatContext} toolchainReady={toolchainReady} />
+									<BottomPanel
+										ref={bottomPanelRef}
+										projectPath={state.projectPath}
+										onAddToChatContext={addToChatContext}
+										toolchainReady={toolchainReady}
+										onBuildStatusChange={handleBuildStatusChange}
+									/>
 									<div className="advanced-devlog-wrap">
 										<DevLogPanel />
 									</div>
@@ -601,6 +648,8 @@ const App: React.FC = () => {
 					toolchain={toolchainStatus}
 					toolchainProgress={toolchainProgress}
 					toolchainPercent={overlayLocked ? toolchainInit.percent : undefined}
+					projectVersions={projectVersions}
+					mcRuntime={mcRuntimeSlot}
 				/>
 			)}
 		</>

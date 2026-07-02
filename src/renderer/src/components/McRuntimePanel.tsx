@@ -17,10 +17,13 @@ interface McInstanceView {
   logLength: number
 }
 
+import type { GameDevStatus, PhaseDevStatus } from '../types/dev-status'
+
 interface McRuntimePanelProps {
   projectPath: string | null
   onAddCrashToChat: (crashContent: string) => void
   toolchainReady?: boolean
+  onRuntimeStatusChange?: (game: GameDevStatus, phase: PhaseDevStatus | null) => void
 }
 
 export interface McRuntimePanelHandle {
@@ -43,7 +46,7 @@ function statusBadge(inst: McInstanceView): { label: string; className: string }
 }
 
 const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
-  ({ projectPath, onAddCrashToChat, toolchainReady = true }, ref) => {
+  ({ projectPath, onAddCrashToChat, toolchainReady = true, onRuntimeStatusChange }, ref) => {
     const [instances, setInstances] = useState<McInstanceView[]>([])
     const [logs, setLogs] = useState<Map<string, string[]>>(new Map())
     const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set())
@@ -93,6 +96,45 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
     const projectInstances = projectPath
       ? instances.filter((i) => i.projectPath === projectPath)
       : instances
+
+    const onRuntimeStatusChangeRef = useRef(onRuntimeStatusChange)
+    onRuntimeStatusChangeRef.current = onRuntimeStatusChange
+    const lastRuntimeStatusKeyRef = useRef('')
+
+    useEffect(() => {
+      if (!onRuntimeStatusChangeRef.current) return
+
+      const active = projectInstances.find((i) =>
+        i.status === 'running' || i.status === 'starting' || i.status === 'stopping'
+      ) ?? projectInstances.find((i) =>
+        i.status === 'crashed' || i.exitReason === 'crash' || i.exitReason === 'start_failed'
+      )
+
+      let game: GameDevStatus = { label: '', variant: 'idle' }
+      let phase: PhaseDevStatus | null = null
+
+      if (active) {
+        const badge = statusBadge(active)
+        if (active.status === 'running') {
+          game = { label: '游戏运行中', variant: 'running' }
+        } else if (active.status === 'starting' || active.status === 'stopping') {
+          game = { label: badge.label, variant: 'starting' }
+        } else if (active.status === 'crashed' || active.exitReason === 'crash' || active.exitReason === 'start_failed') {
+          game = { label: badge.label, variant: 'crashed' }
+        }
+
+        const rawLogs = logs.get(active.id) || []
+        const phaseInfo = parseMcLogs(rawLogs, active.status)
+        if (phaseInfo.summaryLine && active.status !== 'crashed') {
+          phase = { label: phaseInfo.summaryLine }
+        }
+      }
+
+      const statusKey = `${game.variant}|${game.label}|${phase?.label ?? ''}`
+      if (lastRuntimeStatusKeyRef.current === statusKey) return
+      lastRuntimeStatusKeyRef.current = statusKey
+      onRuntimeStatusChangeRef.current(game, phase)
+    }, [projectInstances, logs])
 
     const handleCreateInstance = useCallback(async () => {
       if (!projectPath) return

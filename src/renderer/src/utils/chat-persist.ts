@@ -86,18 +86,24 @@ export function deserializeToDisplay(
   messages: PersistedMessage[],
   newId: () => string
 ): SerializableDisplayMessage[] {
+  const seen = new Set<string>()
   return messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({
-      id: m.displayId || newId(),
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      entries: m.entries as SerializableChronoEntry[] | undefined,
-      turnStatus: m.turnStatus,
-      embeddedPlan: m.embeddedPlan,
-      timestamp: m.timestamp ?? Date.now(),
-      isStreaming: false
-    }))
+    .map((m) => {
+      let id = m.displayId || newId()
+      if (seen.has(id)) id = newId()
+      seen.add(id)
+      return {
+        id,
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        entries: m.entries as SerializableChronoEntry[] | undefined,
+        turnStatus: m.turnStatus,
+        embeddedPlan: m.embeddedPlan,
+        timestamp: m.timestamp ?? Date.now(),
+        isStreaming: false
+      }
+    })
 }
 
 export function restoreActivePlan(

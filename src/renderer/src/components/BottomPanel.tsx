@@ -9,6 +9,7 @@ interface BottomPanelProps {
   projectPath: string | null
   onAddToChatContext: (text: string) => void
   toolchainReady?: boolean
+  onBuildStatusChange?: (status: { running: boolean; failed?: boolean }) => void
 }
 
 export interface BottomPanelHandle {
@@ -17,7 +18,7 @@ export interface BottomPanelHandle {
 }
 
 const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
-  ({ projectPath, onAddToChatContext, toolchainReady = true }, ref) => {
+  ({ projectPath, onAddToChatContext, toolchainReady = true, onBuildStatusChange }, ref) => {
     const [logs, setLogs] = useState<string[]>([])
     const [buildLogsExpanded, setBuildLogsExpanded] = useState(false)
     const [terminalExpanded, setTerminalExpanded] = useState(false)
@@ -173,13 +174,16 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
 
       logger.terminal('Build started', { projectPath })
       setProcessRunning(true)
+      onBuildStatusChange?.({ running: true, failed: false })
       addLog('info', '开始构建…')
 
       const unsub = window.api.onCommandOutput((text) => appendBuildOutput(text.trimEnd()))
+      let buildFailed = false
       try {
         const res = await window.api.runGradleTask(projectPath, 'build')
         if (res.usedOnlineFallback) addLog('info', '已联网下载缺失依赖，后续可离线构建')
         if (res.exitCode !== 0) {
+          buildFailed = true
           addLog('error', `构建失败 (退出码 ${res.exitCode})`)
           if (res.output?.trim()) appendBuildOutput(res.output.trim().slice(-4000), 'error')
           setBuildLogsExpanded(true)
@@ -187,13 +191,15 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
           addLog('info', '构建完成')
         }
       } catch (err) {
+        buildFailed = true
         addLog('error', String(err))
         setBuildLogsExpanded(true)
       } finally {
         unsub()
         setProcessRunning(false)
+        onBuildStatusChange?.({ running: false, failed: buildFailed })
       }
-    }, [projectPath, toolchainReady, addLog, appendBuildOutput])
+    }, [projectPath, toolchainReady, addLog, appendBuildOutput, onBuildStatusChange])
 
     const stopProcess = useCallback(async () => {
       if (!terminalId) return

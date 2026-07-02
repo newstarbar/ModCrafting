@@ -77,8 +77,16 @@ interface ActivePlan {
   pinned: boolean
 }
 
-let msgId = 0
-function uid(): string { return `msg-${++msgId}` }
+function generateMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `msg-${crypto.randomUUID()}`
+  }
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
+function uid(): string {
+  return generateMessageId()
+}
 
 // 工具中文名映射
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
@@ -279,29 +287,31 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   useEffect(() => { controllerRef.current?.setProjectPath(projectPath) }, [projectPath])
   useEffect(() => { controllerRef.current?.setApiConfig(apiConfig) }, [apiConfig])
 
-  // Restore UI + controller only when switching sessions (not on every session update)
-  const prevSessionIdRef = useRef<string | null>(null)
+  // Restore UI + controller when switching sessions; wait until session payload is available
+  const restoredSessionIdRef = useRef<string | null>(null)
   useEffect(() => {
-    const prev = prevSessionIdRef.current
-    if (prev === currentSessionId) return
-    prevSessionIdRef.current = currentSessionId
-
     if (!currentSessionId) {
+      restoredSessionIdRef.current = null
       setDisplayMessages([])
       setActivePlan(null)
+      turnRef.current = { msgId: '', entries: [], streamDone: false }
       controllerRef.current?.clearSession()
       return
     }
 
+    if (restoredSessionIdRef.current === currentSessionId) return
+
     const session = sessionsRef.current.find((s) => s.id === currentSessionId)
     if (!session) return
 
+    restoredSessionIdRef.current = currentSessionId
+    turnRef.current = { msgId: '', entries: [], streamDone: false }
     const display = deserializeToDisplay(session.messages, uid) as DisplayMessage[]
     const restoredPlan = restoreActivePlan(display, session.messages)
     setDisplayMessages(display)
     setActivePlan(restoredPlan)
     controllerRef.current?.restoreSnapshot(toControllerMessages(session.messages))
-  }, [currentSessionId])
+  }, [currentSessionId, sessions])
 
   useEffect(() => {
     return () => {
@@ -390,8 +400,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             turns: prev.turns + 1,
             turnTokens: 0,
             turnCacheHitTokens: 0,
-            turnCacheMissTokens: 0,
-            contextPercent: 0
+            turnCacheMissTokens: 0
           }
           onUsageChangeRef.current?.(next)
           return next
@@ -531,6 +540,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             completionTokens: turnUsageRef.current.completionTokens + cT
           }
           setUsageAccum((prev) => {
+            const promptTotal = turnUsageRef.current.promptTokens
             const next = {
               ...prev,
               sessionTokens: prev.sessionTokens + stepTokens,
@@ -539,7 +549,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               cacheMissTokens: prev.cacheMissTokens + miss,
               turnCacheHitTokens: prev.turnCacheHitTokens + hit,
               turnCacheMissTokens: prev.turnCacheMissTokens + miss,
-              contextPercent: contextPercentFromPrompt(pT, apiConfigRef.current.model),
+              lastPromptTokens: promptTotal,
+              contextPercent: contextPercentFromPrompt(promptTotal, apiConfigRef.current.model),
               cost: prev.cost + estimateCostDelta(pT, cT, hit, miss)
             }
             onUsageChangeRef.current?.(next)
@@ -731,7 +742,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       || (activePlan?.pinned && activePlan.anchorMsgId === msg.id)
     )
     return (
-      <div key={msg.id} className={`bubble ${isUser ? 'user' : 'ai'}${msg.turnStatus === 'completed' ? ' bubble--done' : ''}`}>
+      <div className={`bubble ${isUser ? 'user' : 'ai'}${msg.turnStatus === 'completed' ? ' bubble--done' : ''}`}>
         <div className="bubble-hd">
           {isUser ? (
             <>
@@ -897,7 +908,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             {projectPath ? '描述你想开发的功能，AI 会自动规划并执行' : '请先打开或新建一个项目'}
           </div>
         )}
-        {displayMessages.map(renderMessage)}
+        {displayMessages.map((msg) => (
+          <React.Fragment key={msg.id}>{renderMessage(msg)}</React.Fragment>
+        ))}
         <div ref={messagesEndRef} />
       </div>
       <div className="chat-input-area">
@@ -906,20 +919,27 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             构建环境初始化中，AI 开发与构建功能暂时锁定，请等待进度条完成。
           </div>
         )}
-        <textarea className="mc-input"
-          placeholder={!toolchainReady ? '等待构建环境就绪…' : projectPath ? '描述功能或问题...' : '请先打开项目'}
-          value={input} onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-          disabled={!projectPath || isLoading || !toolchainReady} />
-        {isLoading ? (
-          <button type="button" className="mc-btn mc-btn--red chat-send-btn" onClick={handleCancel}>
-            <IconSquare size="sm" /> 停止
-          </button>
-        ) : (
-          <button type="button" className="mc-btn mc-btn--primary chat-send-btn" onClick={handleSend} disabled={!projectPath || !input.trim() || !toolchainReady}>
-            <IconSend size="sm" />
-          </button>
-        )}
+        <div className="chat-input-composite">
+          <textarea
+            className="chat-input-composite__field"
+            placeholder={!toolchainReady ? '等待构建环境就绪…' : projectPath ? '描述功能或问题...' : '请先打开项目'}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+            disabled={!projectPath || isLoading || !toolchainReady}
+          />
+          <div className="chat-input-composite__actions">
+            {isLoading ? (
+              <button type="button" className="mc-btn mc-btn--red chat-send-btn" onClick={handleCancel}>
+                <IconSquare size="sm" /> 停止
+              </button>
+            ) : (
+              <button type="button" className="mc-btn mc-btn--primary chat-send-btn" onClick={handleSend} disabled={!projectPath || !input.trim() || !toolchainReady}>
+                <IconSend size="sm" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

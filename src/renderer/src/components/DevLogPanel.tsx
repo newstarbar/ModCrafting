@@ -41,9 +41,13 @@ const DevLogPanel: React.FC = () => {
   const [copied, setCopied] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
+  const logLenRef = useRef(0)
+
   // Poll log buffer
   useEffect(() => {
     const interval = setInterval(() => {
+      if (logBuffer.length === logLenRef.current) return
+      logLenRef.current = logBuffer.length
       setLogs([...logBuffer])
     }, 300)
     return () => clearInterval(interval)
