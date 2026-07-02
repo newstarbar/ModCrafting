@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, forwardRef, useImperat
 import { IconGamepad } from './Icon'
 import { logger } from '../utils/logger'
 import { parseMcLogs, PHASE_LABELS, PHASE_ORDER, phaseStepIndex, splitLogChunks } from '../utils/mc-phase-parser'
+import { waitForMcPlaying } from '../utils/mc-wait-playing'
 
 export type McExitReason = 'none' | 'normal' | 'crash' | 'manual' | 'start_failed'
 
@@ -26,8 +27,15 @@ interface McRuntimePanelProps {
   onRuntimeStatusChange?: (game: GameDevStatus, phase: PhaseDevStatus | null) => void
 }
 
+export interface GameStartWaitResult {
+  instanceId: string
+  ok: boolean
+  error?: string
+}
+
 export interface McRuntimePanelHandle {
   startDefaultForProject: () => Promise<void>
+  startDefaultAndWait: () => Promise<GameStartWaitResult>
   stopAllRunning: () => Promise<void>
 }
 
@@ -172,14 +180,48 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
       await window.api.mcStartOrCreate(projectPath)
     }, [projectPath, toolchainReady, projectInstances])
 
+    const startDefaultAndWait = useCallback(async (): Promise<GameStartWaitResult> => {
+      if (!projectPath || !toolchainReady) {
+        return { instanceId: '', ok: false, error: '项目未打开或构建环境未就绪' }
+      }
+      setCrashMessage(null)
+
+      const running = projectInstances.find((i) => i.status === 'running' || i.status === 'starting')
+      if (running) {
+        const waitResult = await waitForMcPlaying({ instanceId: running.id })
+        return {
+          instanceId: running.id,
+          ok: waitResult.ok,
+          error: waitResult.error
+        }
+      }
+
+      const res = await window.api.mcStartOrCreate(projectPath)
+      if (!res.success) {
+        return { instanceId: res.id || '', ok: false, error: res.error || '启动失败' }
+      }
+      const instanceId = res.id || ''
+      if (!instanceId) {
+        return { instanceId: '', ok: false, error: '未获取到游戏实例 ID' }
+      }
+
+      const waitResult = await waitForMcPlaying({ instanceId })
+      return {
+        instanceId,
+        ok: waitResult.ok,
+        error: waitResult.error
+      }
+    }, [projectPath, toolchainReady, projectInstances])
+
     const stopAllRunning = useCallback(async () => {
       await window.api.mcStopAll()
     }, [])
 
     useImperativeHandle(ref, () => ({
       startDefaultForProject,
+      startDefaultAndWait,
       stopAllRunning
-    }), [startDefaultForProject, stopAllRunning])
+    }), [startDefaultForProject, startDefaultAndWait, stopAllRunning])
 
     const handleSendCrashToAi = useCallback(async () => {
       if (!crashMessage?.path) return

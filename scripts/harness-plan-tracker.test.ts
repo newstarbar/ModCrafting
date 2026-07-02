@@ -8,6 +8,10 @@ import { filterToolCallsForStep, isToolAllowedForStep } from '../src/renderer/sr
 import { WorkflowEngine } from '../src/renderer/src/harness/workflow-engine.ts'
 import { Registry } from '../src/renderer/src/harness/tools.ts'
 import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
+import { ensureDevTerminalSteps, parsePlanSteps } from '../src/renderer/src/utils/plan-steps.ts'
+import { finalizeTerminalSteps } from '../src/renderer/src/harness/finalize-terminal.ts'
+import { registerPanelBridge } from '../src/renderer/src/utils/panel-bridge.ts'
+import { EventKind } from '../src/renderer/src/harness/events.ts'
 
 test('PlanTracker.advance rejects stale step ids without moving current step', () => {
   const tracker = PlanTracker.fromSteps([
@@ -255,4 +259,93 @@ test('workflow engine permits mod id read during recipe step before create_recip
 
   assert.equal(result.allDone, true)
   assert.deepEqual(executed, ['read:src/main/resources/fabric.mod.json', 'recipe:my-mod/dirt_to_diamond'])
+})
+
+test('ensureDevTerminalSteps appends build and run when missing from dev plan', () => {
+  const steps = parsePlanSteps(`1. 创建 src/main/java/MyMod.java
+2. 创建 fabric.mod.json`)
+  const ensured = ensureDevTerminalSteps(steps)
+
+  assert.equal(ensured.length, 4)
+  assert.match(ensured[2].description, /构建/)
+  assert.match(ensured[3].description, /启动游戏|runClient/i)
+})
+
+test('ensureDevTerminalSteps does not duplicate when build and run already exist', () => {
+  const steps = parsePlanSteps(`1. 运行 gradlew build
+2. 启动游戏 runClient`)
+  const ensured = ensureDevTerminalSteps(steps)
+
+  assert.equal(ensured.length, 2)
+})
+
+test('run step does not advance on trigger_build build task', () => {
+  const buildOnly: ToolResult = {
+    output: '构建已在右侧高级面板完成。[退出码: 0]',
+    durationMs: 1,
+    ok: true,
+    toolName: 'trigger_build',
+    exitCode: 0,
+    args: { task: 'build' }
+  }
+  const runOk: ToolResult = {
+    output: '已在右侧游戏面板启动并进入游戏。[MC_PHASE:playing]',
+    durationMs: 1,
+    ok: true,
+    toolName: 'trigger_build',
+    args: { task: 'runClient' },
+    meta: { mcPhase: 'playing', runClientStarted: true }
+  }
+
+  assert.equal(
+    canToolResultAdvanceStep(
+      { id: '4', description: '启动游戏进行真实测试（runClient）', status: 'running' },
+      buildOnly
+    ).ok,
+    false
+  )
+  assert.equal(
+    canToolResultAdvanceStep(
+      { id: '4', description: '启动游戏进行真实测试（runClient）', status: 'running' },
+      runOk
+    ).ok,
+    true
+  )
+})
+
+test('finalizeTerminalSteps runs host build and run via panel bridge', async () => {
+  const calls: string[] = []
+  registerPanelBridge({
+    switchTab: () => {},
+    runBuild: async () => {
+      calls.push('build')
+      return { ok: true, exitCode: 0, failed: false }
+    },
+    startGameAndWait: async () => {
+      calls.push('run')
+      return { ok: true, instanceId: 'mc-1', phase: 'playing' }
+    }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '创建 MyMod.java', status: 'completed' },
+    { id: '2', description: '构建项目（gradlew build）', status: 'pending' },
+    { id: '3', description: '启动游戏进行真实测试（runClient）', status: 'pending' }
+  ])
+  tracker.currentIndex = 1
+  tracker.steps[1].status = 'running'
+
+  const events: string[] = []
+  await finalizeTerminalSteps({
+    planTracker: tracker,
+    projectPath: 'D:/fake',
+    emit: (event) => {
+      if (event.kind === EventKind.PlanState) events.push('plan')
+    }
+  })
+
+  registerPanelBridge(null)
+  assert.deepEqual(calls, ['build', 'run'])
+  assert.equal(tracker.allDone(), true)
+  assert.ok(events.length >= 2)
 })

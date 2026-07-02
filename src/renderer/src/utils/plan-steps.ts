@@ -6,7 +6,56 @@ export interface ParsedPlanStep {
 export const OPS_STEP_PATTERN = /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行|build/i
 
 /** Upper bound on plan steps to guard against runaway/verbose plans */
-export const MAX_PLAN_STEPS = 10
+export const MAX_PLAN_STEPS = 12
+
+const BUILD_STEP_PATTERN = /gradlew|gradle\s|trigger_build|编译|构建|build/i
+const RUN_STEP_PATTERN = /runclient|启动游戏|运行游戏|真实测试/i
+const GENERIC_TEST_PATTERN = /测试|检查|确认|验证/
+
+function stepTerminalKind(description: string): 'build' | 'run' | 'other' {
+  const d = description.toLowerCase()
+  if (RUN_STEP_PATTERN.test(d)) return 'run'
+  if (BUILD_STEP_PATTERN.test(d)) return 'build'
+  return 'other'
+}
+
+function renumberPlanSteps(steps: ParsedPlanStep[]): ParsedPlanStep[] {
+  return steps.map((s, i) => ({ ...s, id: String(i + 1) }))
+}
+
+/** Ensure dev plans end with build + runClient steps for real testing. */
+export function ensureDevTerminalSteps(steps: ParsedPlanStep[]): ParsedPlanStep[] {
+  if (steps.length === 0) return steps
+
+  const hasBuild = steps.some((s) => stepTerminalKind(s.description) === 'build')
+  const hasRun = steps.some((s) => stepTerminalKind(s.description) === 'run')
+
+  if (isOpsOnlyPlan(steps) && hasBuild && hasRun) {
+    return renumberPlanSteps(steps)
+  }
+
+  let result = [...steps]
+  if (!hasBuild) result.push({ id: '0', description: '构建项目（gradlew build）' })
+  if (!hasRun) result.push({ id: '0', description: '启动游戏进行真实测试（runClient）' })
+
+  while (result.length > MAX_PLAN_STEPS) {
+    const genericIdx = result.findIndex(
+      (s, i) => i < result.length - 2 && stepTerminalKind(s.description) === 'other' && GENERIC_TEST_PATTERN.test(s.description)
+    )
+    if (genericIdx >= 0) {
+      result.splice(genericIdx, 1)
+      continue
+    }
+    const otherIdx = result.findIndex((s, i) => i < result.length - 2 && stepTerminalKind(s.description) === 'other')
+    if (otherIdx >= 0) {
+      result.splice(otherIdx, 1)
+      continue
+    }
+    break
+  }
+
+  return renumberPlanSteps(result.slice(0, MAX_PLAN_STEPS))
+}
 
 /** Normalize a step description for duplicate detection */
 function normalizeStepDescription(desc: string): string {

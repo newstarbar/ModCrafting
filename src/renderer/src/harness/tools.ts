@@ -2,6 +2,7 @@
 // Ported from Reasonix internal/tool/tool.go
 
 import { logger } from '../utils/logger.ts'
+import type { McPhase } from '../utils/mc-phase-parser.ts'
 import type { FileDiff } from './events.ts'
 import type { PlanTracker, PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
@@ -77,6 +78,19 @@ export interface ToolResult {
   artifactPath?: string
   exitCode?: number | null
   errorKind?: string
+  meta?: {
+    mcPhase?: McPhase
+    runClientStarted?: boolean
+  }
+}
+
+function parseTriggerBuildMeta(output: string): ToolResult['meta'] | undefined {
+  const phaseMatch = output.match(/\[MC_PHASE:(\w+)\]/)
+  if (!phaseMatch) return undefined
+  return {
+    mcPhase: phaseMatch[1] as McPhase,
+    runClientStarted: phaseMatch[1] === 'playing'
+  }
 }
 
 // ======== Registry ========
@@ -152,6 +166,7 @@ export async function executeTool(
     const truncated = truncateOutput(output)
     const exitCode = parseExitCode(output)
     const inferredError = inferToolError(tool.name, output, exitCode)
+    const meta = tool.name === 'trigger_build' ? parseTriggerBuildMeta(output) : undefined
 
     logger.tool(`Result: ${tool.name}`, {
       duration: `${duration}ms`,
@@ -167,7 +182,8 @@ export async function executeTool(
       toolName: tool.name,
       args,
       artifactPath: artifactPathFor(tool.name, args),
-      exitCode
+      exitCode,
+      meta
     }
   } catch (err) {
     const duration = Date.now() - start

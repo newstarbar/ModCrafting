@@ -1,4 +1,4 @@
-import { isOpsOnlyPlan, parsePlanSteps, type ParsedPlanStep } from '../utils/plan-steps.ts'
+import { ensureDevTerminalSteps, isOpsOnlyPlan, parsePlanSteps, type ParsedPlanStep } from '../utils/plan-steps.ts'
 
 export type PlanStepStatus = 'pending' | 'running' | 'completed'
 
@@ -18,7 +18,7 @@ export class PlanTracker {
   }
 
   static fromPlanText(text: string): PlanTracker {
-    const parsed = parsePlanSteps(text)
+    const parsed = ensureDevTerminalSteps(parsePlanSteps(text))
     const steps: PlanStepState[] = parsed.map((s) => ({
       id: s.id,
       description: s.description,

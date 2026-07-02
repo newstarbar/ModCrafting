@@ -3,6 +3,7 @@
 
 import { type Tool, type ToolContext, type Previewer } from './tools'
 import type { FileDiff } from './events'
+import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel } from '../utils/panel-bridge'
 import { buildShapelessRecipeContent, parseRecipeIngredients, recipePath } from './recipe-utils'
 
 async function runWithCommandStream(
@@ -291,17 +292,33 @@ export const triggerBuildTool: Tool = {
 
     if (task === 'runClient') {
       try {
+        if (isPanelBridgeRegistered()) {
+          const res = await startGameViaPanel()
+          if (!res.ok) {
+            return `Error starting game: ${res.error || 'unknown error'}`
+          }
+          return `已在右侧游戏面板启动并进入游戏（实例 ${res.instanceId}）。[MC_PHASE:playing]`
+        }
         const res = await window.api.mcStartOrCreate(ctx.projectPath)
         if (!res.success) {
           return `Error starting game: ${res.error || 'unknown error'}`
         }
-        return `已启动游戏实例（${res.id || 'mc'}）。请在右侧「游戏」面板查看进度。`
+        return `已启动游戏实例（${res.id || 'mc'}）。请在右侧「游戏」面板查看进度。[MC_PHASE:playing]`
       } catch (err) {
         return `Error starting game: ${err}`
       }
     }
 
     try {
+      if (isPanelBridgeRegistered()) {
+        const res = await runBuildViaPanel()
+        const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : '\n[退出码: 0]'
+        if (res.failed) {
+          return `构建失败，详情见右侧高级面板。${exitInfo}`
+        }
+        return `构建已在右侧高级面板完成。${exitInfo}`
+      }
+
       const res = await runWithCommandStream(ctx, () =>
         window.api.runGradleTask(ctx.projectPath!, task)
       )

@@ -9,6 +9,7 @@ import type { PlanTracker } from './plan-tracker'
 import { findAdvanceEvidence } from './step-evidence'
 import { normalizeWorkflowSteps } from './plan-normalizer'
 import { WorkflowEngine } from './workflow-engine'
+import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
 
 let _toolCallIdCounter = 0
@@ -196,6 +197,11 @@ export class Agent {
     if (result.finalContent.trim()) {
       messages.push({ role: 'assistant', content: result.finalContent })
     }
+    await finalizeTerminalSteps({
+      planTracker,
+      projectPath,
+      emit: (event) => this.emit(event)
+    })
     this.finishRun(emitLifecycle)
     return result.finalContent
   }

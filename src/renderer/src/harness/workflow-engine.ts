@@ -58,11 +58,18 @@ function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
       return result.toolName === 'write_file' || result.toolName === 'create_recipe'
     case 'build':
       return (
-        (result.toolName === 'trigger_build' && (result.exitCode == null || result.exitCode === 0)) ||
+        (result.toolName === 'trigger_build' &&
+          String(result.args?.task || 'build') === 'build' &&
+          (result.exitCode == null || result.exitCode === 0)) ||
         (result.toolName === 'run_command' && result.exitCode === 0)
       )
     case 'run':
-      return result.toolName === 'trigger_build' || (result.toolName === 'run_command' && result.exitCode !== 1)
+      return (
+        (result.toolName === 'trigger_build' &&
+          String(result.args?.task || '') === 'runClient' &&
+          (result.meta?.runClientStarted || result.meta?.mcPhase === 'playing')) ||
+        (result.toolName === 'run_command' && /runClient/i.test(String(result.args?.command || '')) && result.exitCode === 0)
+      )
     case 'answer':
       return true
   }

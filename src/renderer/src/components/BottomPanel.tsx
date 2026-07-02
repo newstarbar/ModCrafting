@@ -12,8 +12,13 @@ interface BottomPanelProps {
   onBuildStatusChange?: (status: { running: boolean; failed?: boolean }) => void
 }
 
+export interface BuildRunResult {
+  exitCode: number
+  failed: boolean
+}
+
 export interface BottomPanelHandle {
-  runBuild: () => Promise<void>
+  runBuild: () => Promise<BuildRunResult>
   stopProcess: () => Promise<void>
 }
 
@@ -162,14 +167,14 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       }
     }, [addLog, terminalExpanded])
 
-    const runBuild = useCallback(async () => {
+    const runBuild = useCallback(async (): Promise<BuildRunResult> => {
       if (!projectPath) {
         addLog('warn', '请先打开项目')
-        return
+        return { exitCode: 1, failed: true }
       }
       if (!toolchainReady) {
         addLog('warn', '构建环境尚未就绪，请等待初始化完成')
-        return
+        return { exitCode: 1, failed: true }
       }
 
       logger.terminal('Build started', { projectPath })
@@ -179,8 +184,10 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
 
       const unsub = window.api.onCommandOutput((text) => appendBuildOutput(text.trimEnd()))
       let buildFailed = false
+      let exitCode = 0
       try {
         const res = await window.api.runGradleTask(projectPath, 'build')
+        exitCode = res.exitCode ?? 0
         if (res.usedOnlineFallback) addLog('info', '已联网下载缺失依赖，后续可离线构建')
         if (res.exitCode !== 0) {
           buildFailed = true
@@ -192,6 +199,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
         }
       } catch (err) {
         buildFailed = true
+        exitCode = 1
         addLog('error', String(err))
         setBuildLogsExpanded(true)
       } finally {
@@ -199,6 +207,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
         setProcessRunning(false)
         onBuildStatusChange?.({ running: false, failed: buildFailed })
       }
+      return { exitCode, failed: buildFailed }
     }, [projectPath, toolchainReady, addLog, appendBuildOutput, onBuildStatusChange])
 
     const stopProcess = useCallback(async () => {

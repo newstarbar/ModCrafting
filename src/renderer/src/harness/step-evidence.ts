@@ -89,19 +89,23 @@ export function canToolResultAdvanceStep(
   }
 
   if (kind === 'build') {
-    const command = String(result.args?.command || result.args?.task || '')
+    const task = String(result.args?.task || result.args?.command || '')
     const ok = (
-      (toolName === 'trigger_build' && (result.exitCode == null || result.exitCode === 0)) ||
-      (toolName === 'run_command' && /gradlew|gradle|build/i.test(command) && result.exitCode === 0)
+      (toolName === 'trigger_build' &&
+        (task === 'build' || (!task && (result.exitCode == null || result.exitCode === 0))) &&
+        (result.exitCode == null || result.exitCode === 0)) ||
+      (toolName === 'run_command' && /gradlew|gradle|build/i.test(task) && result.exitCode === 0)
     )
     return { ok, reason: ok ? 'build_successful' : 'build_tool_mismatch' }
   }
 
   if (kind === 'run') {
-    const command = String(result.args?.command || result.args?.task || '')
+    const task = String(result.args?.task || result.args?.command || '')
     const ok = (
-      (toolName === 'trigger_build' && /runClient/i.test(command || String(result.output))) ||
-      (toolName === 'run_command' && /runClient/i.test(command) && (result.exitCode == null || result.exitCode === 0))
+      (toolName === 'trigger_build' &&
+        task === 'runClient' &&
+        (result.meta?.runClientStarted || result.meta?.mcPhase === 'playing' || /\[MC_PHASE:playing\]/i.test(String(result.output)))) ||
+      (toolName === 'run_command' && /runClient/i.test(task) && (result.exitCode == null || result.exitCode === 0))
     )
     return { ok, reason: ok ? 'run_started' : 'run_tool_mismatch' }
   }

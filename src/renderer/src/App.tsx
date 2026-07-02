@@ -29,6 +29,7 @@ import {
 	loadCurrentSessionId,
 	saveCurrentSessionId
 } from "./utils/session-storage";
+import { registerPanelBridge } from "./utils/panel-bridge";
 
 const DEFAULT_API_CONFIG = {
 	endpoint: "https://api.deepseek.com/v1",
@@ -347,6 +348,33 @@ const App: React.FC = () => {
 			u6();
 		};
 	}, [createProject, openProject]);
+
+	useEffect(() => {
+		registerPanelBridge({
+			switchTab: (tab) => {
+				setAppView("workspace");
+				setState((p) => ({ ...p, rightPanelTab: tab }));
+			},
+			runBuild: async () => {
+				const res = await bottomPanelRef.current?.runBuild() ?? { exitCode: 1, failed: true };
+				return { ok: !res.failed, exitCode: res.exitCode, failed: res.failed };
+			},
+			startGameAndWait: async () => {
+				const res = await mcRuntimeRef.current?.startDefaultAndWait() ?? {
+					instanceId: "",
+					ok: false,
+					error: "游戏面板未就绪"
+				};
+				return {
+					ok: res.ok,
+					instanceId: res.instanceId,
+					phase: res.ok ? "playing" as const : "error" as const,
+					error: res.error
+				};
+			}
+		});
+		return () => registerPanelBridge(null);
+	}, []);
 
 	useLayoutEffect(() => {
 		const unsubDownload = window.api.onDownloadProgress((msg) => setToolchainProgress(msg));
