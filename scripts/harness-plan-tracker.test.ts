@@ -4,7 +4,7 @@ import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
 import { canToolResultAdvanceStep, inferStepKind } from '../src/renderer/src/harness/step-evidence.ts'
 import { buildShapelessRecipeContent, recipePath } from '../src/renderer/src/harness/recipe-utils.ts'
 import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
-import { filterToolCallsForStep } from '../src/renderer/src/harness/step-policy.ts'
+import { filterToolCallsForStep, isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
 import { WorkflowEngine } from '../src/renderer/src/harness/workflow-engine.ts'
 import { Registry } from '../src/renderer/src/harness/tools.ts'
 import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
@@ -138,6 +138,25 @@ test('step policy rejects create_recipe while current step is build', () => {
   assert.equal(decision.rejected[0].errorKind, 'tool_not_allowed')
 })
 
+test('workflow normalizer treats reading fabric.mod.json as inspect, not write', () => {
+  const steps = normalizeWorkflowSteps([
+    { id: '1', description: '读取 fabric.mod.json 文件获取模组 ID（如 `my_mod`），用于确定资源路径', status: 'running' }
+  ])
+
+  assert.equal(steps[0].kind, 'inspect')
+  assert.deepEqual(steps[0].allowedTools, ['read_file', 'list_directory'])
+})
+
+test('recipe step allows reading fabric.mod.json but still requires create_recipe to complete', () => {
+  const [step] = normalizeWorkflowSteps([
+    { id: '2', description: '创建配方 JSON 文件 `resources/data/<modid>/recipes/dirt_to_diamond.json`', status: 'running' }
+  ])
+
+  assert.equal(step.kind, 'recipe')
+  assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }), true)
+  assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/other.json' } }), false)
+})
+
 test('workflow engine completes recipe step after first create_recipe and does not execute repeats', async () => {
   const registry = new Registry()
   const executed: string[] = []
@@ -180,4 +199,60 @@ test('workflow engine completes recipe step after first create_recipe and does n
   assert.equal(result.allDone, true)
   assert.equal(executed.length, 1)
   assert.equal(tracker.allDone(), true)
+})
+
+test('workflow engine permits mod id read during recipe step before create_recipe', async () => {
+  const registry = new Registry()
+  const executed: string[] = []
+  registry.add({
+    name: 'read_file',
+    description: 'read file',
+    schema: { type: 'object' },
+    readOnly: () => true,
+    async execute(_ctx, args) {
+      executed.push(`read:${args.path}`)
+      return '{"id":"my-mod"}'
+    }
+  })
+  registry.add({
+    name: 'create_recipe',
+    description: 'create recipe',
+    schema: { type: 'object' },
+    readOnly: () => false,
+    async execute(_ctx, args) {
+      executed.push(`recipe:${args.namespace}/${args.name}`)
+      return '✅ Recipe written: src/main/resources/data/my-mod/recipes/dirt_to_diamond.json (200 bytes)'
+    }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '创建配方 JSON 文件 `resources/data/<modid>/recipes/dirt_to_diamond.json`', status: 'running' }
+  ])
+  const steps = normalizeWorkflowSteps(tracker.steps)
+  let call = 0
+  const engine = new WorkflowEngine({
+    steps,
+    planTracker: tracker,
+    registry,
+    projectPath: 'D:/fake',
+    emit: () => {},
+    onToolDispatch: () => {},
+    onToolResult: () => {},
+    modelCall: async () => {
+      call++
+      return {
+        finishReason: undefined,
+        toolCalls: call === 1
+          ? [{ name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }]
+          : [{ name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } }],
+        text: '',
+        reasoning: ''
+      }
+    }
+  })
+
+  const result = await engine.run([])
+
+  assert.equal(result.allDone, true)
+  assert.deepEqual(executed, ['read:src/main/resources/fabric.mod.json', 'recipe:my-mod/dirt_to_diamond'])
 })

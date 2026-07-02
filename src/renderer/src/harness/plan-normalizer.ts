@@ -8,9 +8,9 @@ function inferKind(description: string): StepKind {
   const d = description.toLowerCase()
   if (/runclient|启动游戏|运行游戏/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
+  if (/读取|查看|检查|获取|确认|read|list|fabric\.mod\.json/.test(d)) return 'inspect'
   if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
   if (/创建|写入|生成|修改|\.json|\.java|\.gradle|\.properties|\.toml/.test(d)) return 'write'
-  if (/读取|查看|检查|获取|确认|read|list|fabric\.mod\.json/.test(d)) return 'inspect'
   return 'answer'
 }
 
@@ -32,7 +32,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
     case 'inspect':
       return ['read_file', 'list_directory']
     case 'recipe':
-      return ['create_recipe']
+      return ['create_recipe', 'read_file']
     case 'write':
       return ['write_file', 'create_recipe']
     case 'build':
@@ -45,7 +45,8 @@ function defaultAllowedTools(kind: StepKind): string[] {
 }
 
 function defaultMaxAttempts(kind: StepKind): number {
-  if (kind === 'recipe' || kind === 'write') return 2
+  if (kind === 'recipe') return 4
+  if (kind === 'write') return 2
   if (kind === 'inspect') return 2
   return 2
 }

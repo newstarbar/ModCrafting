@@ -13,6 +13,10 @@ export interface ToolGateResult {
 }
 
 function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId): boolean {
+  if (call.name === 'read_file' && step.kind === 'recipe') {
+    const path = String(call.args.path || '').replace(/\\/g, '/').toLowerCase()
+    return path.endsWith('fabric.mod.json')
+  }
   if (call.name === 'run_command') {
     const command = String(call.args.command || '')
     if (step.kind === 'build') return /gradlew|gradle|build/i.test(command)
