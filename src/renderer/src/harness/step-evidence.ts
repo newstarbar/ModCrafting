@@ -84,7 +84,14 @@ export function canToolResultAdvanceStep(
 
   if (kind === 'write') {
     const artifactPath = result.artifactPath || String(result.args?.path || '')
-    const ok = (toolName === 'write_file' || toolName === 'create_recipe') && writePathMatchesStep(step, artifactPath)
+    const ok = (
+      toolName === 'write_file' ||
+      toolName === 'create_recipe' ||
+      toolName === 'fabric_recipe_generate' ||
+      toolName === 'fabric_content_register' ||
+      toolName === 'fabric_data_assets_generate' ||
+      toolName === 'fabric_mixin_scaffold'
+    ) && (writePathMatchesStep(step, artifactPath) || Boolean(result.artifactPath))
     return { ok, reason: ok ? 'file_written' : 'write_path_mismatch' }
   }
 

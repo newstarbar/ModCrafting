@@ -13,6 +13,24 @@ export interface ShapelessRecipeInput {
   result: RecipeResult
 }
 
+export type RecipeKind = 'shapeless' | 'shaped' | 'smelting' | 'blasting' | 'stonecutting'
+
+export interface RecipeKey {
+  item?: string
+  tag?: string
+}
+
+export interface GeneralRecipeInput {
+  type: RecipeKind
+  ingredients?: RecipeIngredient[]
+  pattern?: string[]
+  keys?: Record<string, RecipeKey>
+  ingredient?: RecipeKey
+  result: RecipeResult
+  experience?: number
+  cookingTime?: number
+}
+
 function normalizeResourcePart(value: string, fallback: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_\-./]/g, '_').replace(/^\/+|\/+$/g, '')
   return normalized || fallback
@@ -38,6 +56,54 @@ export function buildShapelessRecipeContent(input: ShapelessRecipeInput): string
       item: input.result.item,
       count: resultCount
     }
+  }, null, 2)
+}
+
+function normalizeResult(result: RecipeResult): { item: string; count?: number } {
+  const count = Math.max(1, Math.floor(result.count ?? 1))
+  return { item: result.item, count }
+}
+
+function normalizeIngredient(input: RecipeKey | undefined): RecipeKey {
+  if (!input) return { item: 'minecraft:air' }
+  if (input.tag) return { tag: input.tag }
+  return { item: input.item || 'minecraft:air' }
+}
+
+export function buildRecipeContent(input: GeneralRecipeInput): string {
+  if (input.type === 'shapeless') {
+    return buildShapelessRecipeContent({
+      ingredients: input.ingredients || [],
+      result: input.result
+    })
+  }
+
+  if (input.type === 'shaped') {
+    return JSON.stringify({
+      type: 'minecraft:crafting_shaped',
+      category: 'misc',
+      pattern: input.pattern || [],
+      key: input.keys || {},
+      result: normalizeResult(input.result)
+    }, null, 2)
+  }
+
+  if (input.type === 'stonecutting') {
+    return JSON.stringify({
+      type: 'minecraft:stonecutting',
+      ingredient: normalizeIngredient(input.ingredient),
+      result: input.result.item,
+      count: Math.max(1, Math.floor(input.result.count ?? 1))
+    }, null, 2)
+  }
+
+  return JSON.stringify({
+    type: input.type === 'blasting' ? 'minecraft:blasting' : 'minecraft:smelting',
+    category: 'misc',
+    ingredient: normalizeIngredient(input.ingredient),
+    result: input.result.item,
+    experience: Number.isFinite(input.experience) ? input.experience : 0,
+    cookingtime: Math.max(1, Math.floor(input.cookingTime ?? (input.type === 'blasting' ? 100 : 200)))
   }, null, 2)
 }
 

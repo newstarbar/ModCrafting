@@ -8,6 +8,7 @@ import { Registry } from './tools'
 import { PlanTracker } from './plan-tracker'
 import { parsePlanSteps, planHasActionableSteps, selectPlanText, isActionablePlanText } from '../utils/plan-steps'
 import { logger } from '../utils/logger'
+import { buildFabricAgentPolicyPrompt } from './fabric-agent-policy'
 
 export interface ControllerOptions {
   registry: Registry
@@ -182,6 +183,16 @@ export class Controller {
       run_command: '运行命令',
       trigger_build: '触发构建',
       create_recipe: '创建配方',
+      fabric_docs_search: '查询 Fabric 文档',
+      fabric_javadoc_lookup: '查询 Fabric JavaDoc',
+      vanilla_mc_wiki_query: '查询原版 Wiki',
+      fabric_meta_version_check: '查询 Fabric 版本',
+      fabric_mod_json_validate: '校验 fabric.mod.json',
+      fabric_recipe_generate: '生成 Fabric 配方',
+      fabric_content_register: '生成内容注册',
+      fabric_data_assets_generate: '生成资源数据',
+      fabric_mixin_scaffold: '生成 Mixin 脚手架',
+      fabric_log_debugger: '分析 Fabric 日志',
       read_error_log: '读取错误日志',
       complete_step: '完成任务步骤'
     }
@@ -193,6 +204,7 @@ export class Controller {
     }).join('\n')
 
     const projectInfo = await this.buildProjectInfo()
+    const fabricPolicy = buildFabricAgentPolicyPrompt(mode)
 
     if (mode === 'chat') {
       return `# ModCrafting AI 助手
@@ -207,6 +219,8 @@ export class Controller {
 - **不要调用任何工具**。
 - 可以提供 Java/JSON 代码示例（markdown 代码块）。
 - 如果用户后续明确要求开发功能，再进入实施流程。
+
+${fabricPolicy}
 
 ${projectInfo}`
     }
@@ -264,9 +278,11 @@ ${mode === 'plan' ? '## 当前：输出计划阶段\n只输出计划文本，不
 - **没有步骤限制。**
 - **最多 3 轮探索。** 之后探索工具将被锁定。
 - 使用 write_file 编写完整、可编译的 Java 代码。
-- 创建配方/合成表时优先使用 create_recipe，不要手写 recipe JSON。
+- 创建配方/合成表时优先使用 fabric_recipe_generate 或 create_recipe，不要手写 recipe JSON。
 - 使用 Yarn mappings。
 - 主类 → ModInitializer，客户端类 → ClientModInitializer。
+
+${fabricPolicy}
 
 ${projectInfo}`
   }

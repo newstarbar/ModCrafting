@@ -51,11 +51,28 @@ function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
   if (!result.ok || result.error) return false
   switch (step.kind) {
     case 'inspect':
-      return result.toolName === 'read_file' || result.toolName === 'list_directory'
+      return Boolean(result.toolName) && [
+        'read_file',
+        'list_directory',
+        'fabric_docs_search',
+        'fabric_javadoc_lookup',
+        'vanilla_mc_wiki_query',
+        'fabric_meta_version_check',
+        'fabric_mod_json_validate',
+        'fabric_log_debugger',
+        'read_error_log'
+      ].includes(result.toolName)
     case 'recipe':
-      return result.toolName === 'create_recipe'
+      return result.toolName === 'create_recipe' || result.toolName === 'fabric_recipe_generate'
     case 'write':
-      return result.toolName === 'write_file' || result.toolName === 'create_recipe'
+      return Boolean(result.toolName) && [
+        'write_file',
+        'create_recipe',
+        'fabric_recipe_generate',
+        'fabric_content_register',
+        'fabric_data_assets_generate',
+        'fabric_mixin_scaffold'
+      ].includes(result.toolName)
     case 'build':
       return (
         (result.toolName === 'trigger_build' &&

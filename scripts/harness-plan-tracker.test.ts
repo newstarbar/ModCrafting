@@ -8,6 +8,11 @@ import { filterToolCallsForStep, isToolAllowedForStep } from '../src/renderer/sr
 import { WorkflowEngine } from '../src/renderer/src/harness/workflow-engine.ts'
 import { Registry } from '../src/renderer/src/harness/tools.ts'
 import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
+import { buildFabricAgentPolicyPrompt, FABRIC_KNOWLEDGE_SOURCES } from '../src/renderer/src/harness/fabric-agent-policy.ts'
+import { buildFabricDocsSearchSummary } from '../src/renderer/src/harness/fabric-knowledge.ts'
+import { buildRecipeContent } from '../src/renderer/src/harness/recipe-utils.ts'
+import { classifyFabricLog, validateFabricModJsonContent } from '../src/renderer/src/harness/fabric-utils.ts'
+import { generateBuildGradle, generateFabricModJson } from '../src/renderer/src/project/scaffold.ts'
 import { ensureDevTerminalSteps, parsePlanSteps } from '../src/renderer/src/utils/plan-steps.ts'
 import { finalizeTerminalSteps } from '../src/renderer/src/harness/finalize-terminal.ts'
 import { registerPanelBridge } from '../src/renderer/src/utils/panel-bridge.ts'
@@ -148,7 +153,9 @@ test('workflow normalizer treats reading fabric.mod.json as inspect, not write',
   ])
 
   assert.equal(steps[0].kind, 'inspect')
-  assert.deepEqual(steps[0].allowedTools, ['read_file', 'list_directory'])
+  assert.ok(steps[0].allowedTools.includes('read_file'))
+  assert.ok(steps[0].allowedTools.includes('list_directory'))
+  assert.ok(steps[0].allowedTools.includes('fabric_mod_json_validate'))
 })
 
 test('recipe step allows reading fabric.mod.json but still requires create_recipe to complete', () => {
@@ -348,4 +355,117 @@ test('finalizeTerminalSteps runs host build and run via panel bridge', async () 
   assert.deepEqual(calls, ['build', 'run'])
   assert.equal(tracker.allDone(), true)
   assert.ok(events.length >= 2)
+})
+
+test('fabric agent policy is product focused and includes Fabric guardrails', () => {
+  const prompt = buildFabricAgentPolicyPrompt('execute')
+
+  assert.match(prompt, /优先使用 Fabric API/)
+  assert.match(prompt, /客户端\/服务端/)
+  assert.match(prompt, /DataGen/)
+  assert.doesNotMatch(prompt, /Cursor 配置/)
+})
+
+test('fabric knowledge sources include authoritative URLs for product runtime lookup', () => {
+  const urls = FABRIC_KNOWLEDGE_SOURCES.map((source) => source.url)
+
+  assert.ok(urls.includes('https://docs.fabricmc.net/zh_cn/develop/'))
+  assert.ok(urls.includes('https://meta.fabricmc.net/'))
+  assert.ok(urls.includes('https://minecraft.wiki/api.php'))
+})
+
+test('fabric docs search summary returns source URLs and keyword matches without writing files', () => {
+  const summary = buildFabricDocsSearchSummary({ keyword: '方块实体', mcVersion: '1.21.4', limit: 3 })
+
+  assert.match(summary, /方块实体/)
+  assert.match(summary, /https:\/\/docs\.fabricmc\.net\/zh_cn\/develop\//)
+  assert.match(summary, /只读/)
+})
+
+test('workflow normalizer allows product Fabric specialist tools for matching steps', () => {
+  const steps = normalizeWorkflowSteps([
+    { id: '1', description: '查询 Fabric 文档确认方块实体 API', status: 'running' },
+    { id: '2', description: '生成有序合成配方', status: 'pending' },
+    { id: '3', description: '校验 fabric.mod.json 配置', status: 'pending' }
+  ])
+
+  assert.equal(steps[0].kind, 'inspect')
+  assert.ok(steps[0].allowedTools.includes('fabric_docs_search'))
+  assert.equal(steps[1].kind, 'recipe')
+  assert.ok(steps[1].allowedTools.includes('fabric_recipe_generate'))
+  assert.equal(steps[2].kind, 'inspect')
+  assert.ok(steps[2].allowedTools.includes('fabric_mod_json_validate'))
+})
+
+test('fabric recipe generator supports shaped crafting recipes', () => {
+  const content = buildRecipeContent({
+    type: 'shaped',
+    pattern: ['##', ' S'],
+    keys: {
+      '#': { item: 'minecraft:cobblestone' },
+      S: { item: 'minecraft:stick' }
+    },
+    result: { item: 'minecraft:stone_axe', count: 1 }
+  })
+  const parsed = JSON.parse(content)
+
+  assert.equal(parsed.type, 'minecraft:crafting_shaped')
+  assert.deepEqual(parsed.pattern, ['##', ' S'])
+  assert.equal(parsed.key['#'].item, 'minecraft:cobblestone')
+  assert.deepEqual(parsed.result, { item: 'minecraft:stone_axe', count: 1 })
+})
+
+test('fabric.mod.json validator reports missing icon and invalid entrypoints', () => {
+  const result = validateFabricModJsonContent(JSON.stringify({
+    schemaVersion: 1,
+    id: 'bad mod',
+    version: '${version}',
+    name: 'Bad Mod',
+    icon: 'icon.png',
+    entrypoints: { main: [] },
+    depends: { minecraft: '~1.21.4', java: '>=21' }
+  }))
+
+  assert.equal(result.ok, false)
+  assert.ok(result.issues.some((issue) => /id/.test(issue)))
+  assert.ok(result.issues.some((issue) => /entrypoints\.main/.test(issue)))
+  assert.ok(result.warnings.some((warning) => /icon/.test(warning)))
+})
+
+test('fabric log classifier recognizes mixin and client-server classloading errors', () => {
+  const mixin = classifyFabricLog('org.spongepowered.asm.mixin.injection.throwables.InvalidInjectionException')
+  const side = classifyFabricLog('java.lang.RuntimeException: Attempted to load class net/minecraft/client/render/Screen for invalid dist DEDICATED_SERVER')
+
+  assert.equal(mixin.kind, 'mixin-error')
+  assert.equal(side.kind, 'side-error')
+})
+
+test('scaffold build.gradle includes datagen run configuration and fabric.mod.json keeps Fabric constraints', () => {
+  const versions = {
+    minecraft_version: '1.21.4',
+    loader_version: '0.16.10',
+    fabric_version: '0.116.0+1.21.4',
+    yarn_mappings: '1.21.4+build.1',
+    loom_version: '1.17.12',
+    gradle_version: '9.5.0'
+  }
+  const config = {
+    projectDir: 'D:/fake',
+    folderName: 'my-mod',
+    displayName: 'My Mod',
+    modId: 'my-mod',
+    groupId: 'com.example',
+    javaPackage: 'mymod',
+    authors: 'ModCrafting',
+    description: 'Test mod',
+    modVersion: '1.0.0',
+    versions
+  }
+  const buildGradle = generateBuildGradle(config)
+  const modJson = JSON.parse(generateFabricModJson(config))
+
+  assert.match(buildGradle, /runDatagen/)
+  assert.match(buildGradle, /DataGen/)
+  assert.equal(modJson.depends.java, '>=21')
+  assert.deepEqual(modJson.mixins, [])
 })

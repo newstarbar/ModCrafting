@@ -50,8 +50,18 @@ loom { splitEnvironmentSourceSets()
   runs {
     client { vmArgs "-Dfile.encoding=UTF-8" }
     server { vmArgs "-Dfile.encoding=UTF-8" }
+    datagen {
+      name "DataGen"
+      inherit client
+      vmArg "-Dfabric-api.datagen"
+      vmArg "-Dfabric-api.datagen.output-dir=\${file('src/main/generated')}"
+      vmArg "-Dfabric-api.datagen.modid=${modId}"
+      runDir "build/datagen"
+    }
   }
   mods { "${modId}" { sourceSet sourceSets.main; sourceSet sourceSets.client } } }
+// Loom creates the runDatagen task from the datagen run configuration above.
+sourceSets { main { resources { srcDirs += ["src/main/generated"] } } }
 dependencies {
   minecraft "com.mojang:minecraft:\${project.minecraft_version}"
   mappings "net.fabricmc:yarn:\${project.yarn_mappings}:v2"
@@ -107,7 +117,6 @@ export function generateFabricModJson(config: ProjectCreateConfig): string {
     authors: authors.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
     contact: {},
     license: 'MIT',
-    icon: 'assets/' + modId + '/icon.png',
     environment: '*',
     entrypoints: { main: [mainEntry], client: [clientEntry] },
     mixins: [],
@@ -125,12 +134,6 @@ export function generateMainModClass(config: ProjectCreateConfig): string {
   return `package ${groupId}.${javaPackage};
 
 import net.fabricmc.api.ModInitializer;
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -138,18 +141,37 @@ public class ${cn} implements ModInitializer {
     public static final String MOD_ID = "${modId}";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    public static Item TEST_ITEM;
-
     @Override
     public void onInitialize() {
-        Identifier itemId = Identifier.of(MOD_ID, "test_item");
-        RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, itemId);
-        TEST_ITEM = Registry.register(
-            Registries.ITEM,
-            itemKey,
-            new Item(new Item.Settings().registryKey(itemKey))
-        );
+        ModItems.registerModItems();
         LOGGER.info("{} 模组已加载！", MOD_ID);
+    }
+}
+`
+}
+
+export function generateModItemsClass(config: ProjectCreateConfig): string {
+  const { modId, groupId, javaPackage } = config
+  return `package ${groupId}.${javaPackage};
+
+import net.minecraft.item.Item;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ModItems {
+    public static final Item TEST_ITEM = register("test_item", new Item.Settings());
+
+    private static Item register(String name, Item.Settings settings) {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, name);
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        return Registry.register(Registries.ITEM, key, new Item(settings.registryKey(key)));
+    }
+
+    public static void registerModItems() {
+        ${mainClassName(javaPackage)}.LOGGER.info("Registering items for ${modId}");
     }
 }
 `
@@ -234,9 +256,15 @@ export async function scaffoldProject(config: ProjectCreateConfig): Promise<void
     `${pd}/${javaPath}`,
     `${pd}/${clientJavaPath}`,
     `${pd}/src/main/resources`,
+    `${pd}/src/main/generated`,
     `${pd}/src/client/resources`,
     `${pd}/src/main/resources/assets/${modId}/lang`,
     `${pd}/src/main/resources/assets/${modId}/models/item`,
+    `${pd}/src/main/resources/assets/${modId}/models/block`,
+    `${pd}/src/main/resources/assets/${modId}/blockstates`,
+    `${pd}/src/main/resources/data/${modId}/loot_tables/blocks`,
+    `${pd}/src/main/resources/data/${modId}/tags/blocks`,
+    `${pd}/src/main/resources/data/${modId}/tags/items`,
     `${pd}/gradle/wrapper`
   ]
   for (const d of dirs) {
@@ -250,6 +278,7 @@ export async function scaffoldProject(config: ProjectCreateConfig): Promise<void
   await window.api.writeFile(`${pd}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId))
   await window.api.writeFile(`${pd}/src/main/resources/assets/${modId}/models/item/test_item.json`, generateItemModel())
   await window.api.writeFile(`${pd}/${javaPath}/${mainCn}.java`, generateMainModClass(config))
+  await window.api.writeFile(`${pd}/${javaPath}/ModItems.java`, generateModItemsClass(config))
   await window.api.writeFile(`${pd}/${clientJavaPath}/${mainCn}Client.java`, generateClientModClass(config))
   await window.api.writeFile(`${pd}/gradle/wrapper/gradle-wrapper.properties`, generateGradleWrapperProperties(config.versions))
   await window.api.writeFile(`${pd}/.gitignore`, generateGitignore())

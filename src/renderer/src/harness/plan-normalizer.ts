@@ -8,9 +8,9 @@ function inferKind(description: string): StepKind {
   const d = description.toLowerCase()
   if (/runclient|启动游戏|运行游戏/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
-  if (/读取|查看|检查|获取|确认|read|list|fabric\.mod\.json/.test(d)) return 'inspect'
+  if (/读取|查看|检查|获取|确认|查询|搜索|校验|验证|文档|javadoc|wiki|mappings|read|list|fabric\.mod\.json/.test(d)) return 'inspect'
   if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
-  if (/创建|写入|生成|修改|\.json|\.java|\.gradle|\.properties|\.toml/.test(d)) return 'write'
+  if (/创建|写入|生成|修改|物品|方块|blockentity|mixin|datagen|资源|模型|战利品|标签|\.json|\.java|\.gradle|\.properties|\.toml/.test(d)) return 'write'
   return 'answer'
 }
 
@@ -30,13 +30,30 @@ function targetPathFromDescription(description: string): string | undefined {
 function defaultAllowedTools(kind: StepKind): string[] {
   switch (kind) {
     case 'inspect':
-      return ['read_file', 'list_directory']
+      return [
+        'read_file',
+        'list_directory',
+        'fabric_docs_search',
+        'fabric_javadoc_lookup',
+        'vanilla_mc_wiki_query',
+        'fabric_meta_version_check',
+        'fabric_mod_json_validate',
+        'fabric_log_debugger',
+        'read_error_log'
+      ]
     case 'recipe':
-      return ['create_recipe', 'read_file']
+      return ['fabric_recipe_generate', 'create_recipe', 'read_file', 'fabric_docs_search']
     case 'write':
-      return ['write_file', 'create_recipe']
+      return [
+        'write_file',
+        'fabric_content_register',
+        'fabric_data_assets_generate',
+        'fabric_mixin_scaffold',
+        'fabric_recipe_generate',
+        'create_recipe'
+      ]
     case 'build':
-      return ['trigger_build', 'run_command']
+      return ['trigger_build', 'run_command', 'fabric_log_debugger']
     case 'run':
       return ['trigger_build', 'run_command']
     case 'answer':

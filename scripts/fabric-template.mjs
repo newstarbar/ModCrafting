@@ -16,8 +16,18 @@ loom { splitEnvironmentSourceSets()
   runs {
     client { vmArgs "-Dfile.encoding=UTF-8" }
     server { vmArgs "-Dfile.encoding=UTF-8" }
+    datagen {
+      name "DataGen"
+      inherit client
+      vmArg "-Dfabric-api.datagen"
+      vmArg "-Dfabric-api.datagen.output-dir=\${file('src/main/generated')}"
+      vmArg "-Dfabric-api.datagen.modid=${modId}"
+      runDir "build/datagen"
+    }
   }
   mods { "${modId}" { sourceSet sourceSets.main; sourceSet sourceSets.client } } }
+// Loom creates the runDatagen task from the datagen run configuration above.
+sourceSets { main { resources { srcDirs += ["src/main/generated"] } } }
 dependencies {
   minecraft "com.mojang:minecraft:\${project.minecraft_version}"
   mappings "net.fabricmc:yarn:\${project.yarn_mappings}:v2"
@@ -70,7 +80,6 @@ export function generateFabricModJson(projectName, groupId) {
     authors: ['ModCrafting'],
     contact: {},
     license: 'MIT',
-    icon: 'assets/' + modId + '/icon.png',
     environment: '*',
     entrypoints: {
       main: [`${groupId}.${projectName.replace(/-/g, '_')}.${capitalize(projectName.replace(/-/g, '_'))}`],
@@ -91,12 +100,6 @@ export function generateMainModClass(projectName, groupId, pkg) {
   return `package ${groupId}.${pkg};
 
 import net.fabricmc.api.ModInitializer;
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -104,18 +107,38 @@ public class ${cn} implements ModInitializer {
     public static final String MOD_ID = "${modId}";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    public static Item TEST_ITEM;
-
     @Override
     public void onInitialize() {
-        Identifier itemId = Identifier.of(MOD_ID, "test_item");
-        RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, itemId);
-        TEST_ITEM = Registry.register(
-            Registries.ITEM,
-            itemKey,
-            new Item(new Item.Settings().registryKey(itemKey))
-        );
+        ModItems.registerModItems();
         LOGGER.info("{} mod loaded", MOD_ID);
+    }
+}
+`
+}
+
+export function generateModItemsClass(projectName, groupId, pkg) {
+  const cn = capitalize(pkg)
+  const modId = projectName.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
+  return `package ${groupId}.${pkg};
+
+import net.minecraft.item.Item;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ModItems {
+    public static final Item TEST_ITEM = register("test_item", new Item.Settings());
+
+    private static Item register(String name, Item.Settings settings) {
+        Identifier id = Identifier.of(${cn}.MOD_ID, name);
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        return Registry.register(Registries.ITEM, key, new Item(settings.registryKey(key)));
+    }
+
+    public static void registerModItems() {
+        ${cn}.LOGGER.info("Registering items for ${modId}");
     }
 }
 `
@@ -194,9 +217,15 @@ export async function setupPrefetchProject(projectDir, runtimeRoot, gradleSrc) {
   mkdirSync(pathMod.join(projectDir, javaPath), { recursive: true })
   mkdirSync(pathMod.join(projectDir, clientJavaPath), { recursive: true })
   mkdirSync(pathMod.join(projectDir, 'src/main/resources'), { recursive: true })
+  mkdirSync(pathMod.join(projectDir, 'src/main/generated'), { recursive: true })
   mkdirSync(pathMod.join(projectDir, 'src/client/resources'), { recursive: true })
   mkdirSync(pathMod.join(projectDir, `src/main/resources/assets/${modId}/lang`), { recursive: true })
   mkdirSync(pathMod.join(projectDir, `src/main/resources/assets/${modId}/models/item`), { recursive: true })
+  mkdirSync(pathMod.join(projectDir, `src/main/resources/assets/${modId}/models/block`), { recursive: true })
+  mkdirSync(pathMod.join(projectDir, `src/main/resources/assets/${modId}/blockstates`), { recursive: true })
+  mkdirSync(pathMod.join(projectDir, `src/main/resources/data/${modId}/loot_tables/blocks`), { recursive: true })
+  mkdirSync(pathMod.join(projectDir, `src/main/resources/data/${modId}/tags/blocks`), { recursive: true })
+  mkdirSync(pathMod.join(projectDir, `src/main/resources/data/${modId}/tags/items`), { recursive: true })
   mkdirSync(pathMod.join(projectDir, 'gradle/wrapper'), { recursive: true })
   mkdirSync(pathMod.join(projectDir, '.modcrafting'), { recursive: true })
 
@@ -205,6 +234,7 @@ export async function setupPrefetchProject(projectDir, runtimeRoot, gradleSrc) {
   writeFileSync(pathMod.join(projectDir, 'gradle.properties'), generateGradleProperties(), 'utf-8')
   writeFileSync(pathMod.join(projectDir, 'src/main/resources/fabric.mod.json'), generateFabricModJson(projectName, groupId), 'utf-8')
   writeFileSync(pathMod.join(projectDir, `${javaPath}/${capitalize(pkg)}.java`), generateMainModClass(projectName, groupId, pkg), 'utf-8')
+  writeFileSync(pathMod.join(projectDir, `${javaPath}/ModItems.java`), generateModItemsClass(projectName, groupId, pkg), 'utf-8')
   writeFileSync(pathMod.join(projectDir, `${clientJavaPath}/${capitalize(pkg)}Client.java`), generateClientModClass(projectName, groupId, pkg), 'utf-8')
   writeFileSync(pathMod.join(projectDir, 'gradle/wrapper/gradle-wrapper.properties'), generateGradleWrapperProperties(), 'utf-8')
   writeFileSync(pathMod.join(projectDir, '.gitignore'), '.gradle/\nbuild/\nrun/\n', 'utf-8')

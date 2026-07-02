@@ -21,6 +21,7 @@
 		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
+		"test:harness": "node --experimental-strip-types --test scripts/harness-plan-tracker.test.ts",
 		"generate:icon": "node scripts/generate-icon-ico.mjs",
 		"postinstall": "node scripts/ensure-native-deps.mjs",
 		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/patch-nsis-install-ui.mjs",
@@ -80,6 +81,13 @@
 			{
 				"from": "resources/fabric-versions.json",
 				"to": "fabric-versions.json"
+			},
+			{
+				"from": "resources/agent-knowledge",
+				"to": "agent-knowledge",
+				"filter": [
+					"**/*.md"
+				]
 			},
 			{
 				"from": "build/appIcon.png",

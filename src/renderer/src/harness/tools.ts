@@ -64,6 +64,21 @@ function artifactPathFor(toolName: string, args: Record<string, unknown>): strin
   if (toolName === 'create_recipe' && typeof args.namespace === 'string' && typeof args.name === 'string') {
     return recipePath(args.namespace, args.name)
   }
+  if (toolName === 'fabric_recipe_generate' && typeof args.namespace === 'string' && typeof args.name === 'string') {
+    return recipePath(args.namespace, args.name)
+  }
+  if (toolName === 'fabric_data_assets_generate' && typeof args.namespace === 'string' && typeof args.name === 'string') {
+    const kind = typeof args.kind === 'string' ? args.kind : 'item'
+    return kind === 'block'
+      ? `src/main/resources/assets/${args.namespace}/blockstates/${args.name}.json`
+      : `src/main/resources/assets/${args.namespace}/models/item/${args.name}.json`
+  }
+  if (toolName === 'fabric_content_register' && typeof args.packagePath === 'string') {
+    return `src/main/java/${String(args.packagePath).replace(/\./g, '/')}/ModItems.java`
+  }
+  if (toolName === 'fabric_mixin_scaffold' && typeof args.mixinClass === 'string') {
+    return `src/main/java/${String(args.mixinClass).replace(/\./g, '/')}.java`
+  }
   return undefined
 }
 
