@@ -1,8 +1,12 @@
 import type { PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
+import { isCombinedBuildRunDescription } from '../utils/plan-steps.ts'
 import type { StepKind, WorkflowStep, WorkflowStatus } from './workflow-types.ts'
 
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/i
+
+const BUILD_STEP_TITLE = '构建项目（gradlew build / trigger_build build）'
+const RUN_STEP_TITLE = '启动游戏进行真实测试（runClient）'
 
 function inferKind(description: string): StepKind {
   const d = description.toLowerCase()
@@ -46,6 +50,8 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_recipe_generate',
         'create_recipe',
         'read_file',
+        'list_directory',
+        'run_command',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
         'vanilla_mc_wiki_query',
@@ -60,6 +66,9 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_mixin_scaffold',
         'fabric_recipe_generate',
         'create_recipe',
+        'read_file',
+        'list_directory',
+        'run_command',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
         'vanilla_mc_wiki_query',
@@ -67,9 +76,25 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_mod_json_validate'
       ]
     case 'build':
-      return ['trigger_build', 'run_command', 'fabric_log_debugger']
+      return [
+        'trigger_build',
+        'run_command',
+        'fabric_log_debugger',
+        'fabric_docs_search',
+        'read_error_log',
+        'list_directory',
+        'read_file'
+      ]
     case 'run':
-      return ['trigger_build', 'run_command']
+      return [
+        'trigger_build',
+        'run_command',
+        'fabric_log_debugger',
+        'fabric_docs_search',
+        'read_error_log',
+        'list_directory',
+        'read_file'
+      ]
     case 'answer':
       return []
   }
@@ -77,9 +102,38 @@ function defaultAllowedTools(kind: StepKind): string[] {
 
 function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'recipe') return 4
+  if (kind === 'build') return 4
   if (kind === 'write') return 2
   if (kind === 'inspect') return 2
   return 2
+}
+
+function splitStatusForCombinedStep(status: PlanStepState['status']): {
+  buildStatus: PlanStepState['status']
+  runStatus: PlanStepState['status']
+} {
+  if (status === 'completed') {
+    return { buildStatus: 'completed', runStatus: 'completed' }
+  }
+  if (status === 'running') {
+    return { buildStatus: 'running', runStatus: 'pending' }
+  }
+  return { buildStatus: 'pending', runStatus: 'pending' }
+}
+
+/** Expand a combined build+run plan line into two workflow steps. */
+export function expandCombinedTerminalSteps(steps: PlanStepState[]): PlanStepState[] {
+  const expanded: PlanStepState[] = []
+  for (const step of steps) {
+    if (!isCombinedBuildRunDescription(step.description)) {
+      expanded.push(step)
+      continue
+    }
+    const { buildStatus, runStatus } = splitStatusForCombinedStep(step.status)
+    expanded.push({ ...step, description: BUILD_STEP_TITLE, status: buildStatus })
+    expanded.push({ ...step, description: RUN_STEP_TITLE, status: runStatus })
+  }
+  return expanded.map((step, index) => ({ ...step, id: String(index + 1) }))
 }
 
 function normalizeStep(step: PlanStepState): WorkflowStep {
@@ -107,5 +161,5 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
 }
 
 export function normalizeWorkflowSteps(steps: PlanStepState[]): WorkflowStep[] {
-  return steps.map(normalizeStep)
+  return expandCombinedTerminalSteps(steps).map(normalizeStep)
 }

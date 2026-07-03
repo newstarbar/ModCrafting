@@ -156,11 +156,22 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
       return instance
     }, [projectPath])
 
+    const clearInstanceUiState = useCallback((instanceId: string) => {
+      if (!instanceId) return
+      setLogs((prev) => {
+        const next = new Map(prev)
+        next.delete(instanceId)
+        return next
+      })
+      setCrashMessage((prev) => (prev?.id === instanceId ? null : prev))
+      lastRuntimeStatusKeyRef.current = ''
+    }, [])
+
     const handleStart = useCallback(async (id: string) => {
       if (!toolchainReady) return
-      setCrashMessage(null)
+      clearInstanceUiState(id)
       await window.api.mcStart(id)
-    }, [toolchainReady])
+    }, [toolchainReady, clearInstanceUiState])
 
     const handleStop = useCallback(async (id: string) => {
       await window.api.mcStop(id)
@@ -176,17 +187,16 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
     const startDefaultForProject = useCallback(async () => {
       if (!projectPath || !toolchainReady) return
-      setCrashMessage(null)
       const running = projectInstances.find((i) => i.status === 'running' || i.status === 'starting')
       if (running) return
-      await window.api.mcStartOrCreate(projectPath)
-    }, [projectPath, toolchainReady, projectInstances])
+      const res = await window.api.mcStartOrCreate(projectPath)
+      if (res.id) clearInstanceUiState(res.id)
+    }, [projectPath, toolchainReady, projectInstances, clearInstanceUiState])
 
     const startDefaultAndWait = useCallback(async (): Promise<GameStartWaitResult> => {
       if (!projectPath || !toolchainReady) {
         return { instanceId: '', ok: false, error: '项目未打开或构建环境未就绪' }
       }
-      setCrashMessage(null)
 
       const running = projectInstances.find((i) => i.status === 'running' || i.status === 'starting')
       if (running) {
@@ -207,13 +217,15 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
         return { instanceId: '', ok: false, error: '未获取到游戏实例 ID' }
       }
 
+      clearInstanceUiState(instanceId)
+
       const waitResult = await waitForMcPlaying({ instanceId })
       return {
         instanceId,
         ok: waitResult.ok,
         error: waitResult.error
       }
-    }, [projectPath, toolchainReady, projectInstances])
+    }, [projectPath, toolchainReady, projectInstances, clearInstanceUiState])
 
     const stopAllRunning = useCallback(async () => {
       await window.api.mcStopAll()

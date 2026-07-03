@@ -4,8 +4,8 @@ import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
 import { canToolResultAdvanceStep, inferStepKind } from '../src/renderer/src/harness/step-evidence.ts'
 import { buildShapelessRecipeContent, recipePath } from '../src/renderer/src/harness/recipe-utils.ts'
 import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
-import { filterToolCallsForStep, isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import { WorkflowEngine } from '../src/renderer/src/harness/workflow-engine.ts'
+import { filterToolCallsForStep, isRecipeCleanupCommand, isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
+import { WorkflowEngine, isTerminalFailure } from '../src/renderer/src/harness/workflow-engine.ts'
 import { Registry } from '../src/renderer/src/harness/tools.ts'
 import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
 import { buildFabricAgentPolicyPrompt, FABRIC_KNOWLEDGE_SOURCES } from '../src/renderer/src/harness/fabric-agent-policy.ts'
@@ -223,6 +223,364 @@ test('recipe troubleshooting step allows reading recipe json for path or format 
   )
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }), true)
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/java/MyMod.java' } }), false)
+})
+
+test('recipe step allows list_directory and recipe cleanup run_command', () => {
+  const [step] = normalizeWorkflowSteps([
+    { id: '3', description: '调整配方：删除旧路径残留文件', status: 'running' }
+  ])
+
+  assert.equal(step.kind, 'recipe')
+  assert.ok(step.allowedTools.includes('list_directory'))
+  assert.ok(step.allowedTools.includes('run_command'))
+  assert.equal(isToolAllowedForStep(step, { name: 'list_directory', args: { path: 'src/main/resources/data/my_mod/recipes/' } }), true)
+  assert.equal(
+    isToolAllowedForStep(step, {
+      name: 'run_command',
+      args: { command: 'rm src/main/resources/data/my-mod/recipes/dirt_to_diamond.json' }
+    }),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'run_command', args: { command: 'rm -rf src' } }),
+    false
+  )
+})
+
+test('isRecipeCleanupCommand allows single recipe json delete and rejects destructive patterns', () => {
+  assert.equal(
+    isRecipeCleanupCommand('rm src/main/resources/data/my-mod/recipes/dirt_to_diamond.json'),
+    true
+  )
+  assert.equal(
+    isRecipeCleanupCommand('del src/main/resources/data/my_mod/recipe/old.json'),
+    true
+  )
+  assert.equal(isRecipeCleanupCommand('rm -rf src'), false)
+  assert.equal(isRecipeCleanupCommand('rm src/main/resources/data/*/recipes/*.json'), false)
+  assert.equal(isRecipeCleanupCommand('rm src/main/java/MyMod.java'), false)
+})
+
+test('combined build+run plan line splits into separate build and run workflow steps', () => {
+  const steps = normalizeWorkflowSteps([
+    {
+      id: '4',
+      description: '重新构建项目 (`trigger_build build`) 并启动游戏测试 (`trigger_build runClient`)',
+      status: 'running'
+    }
+  ])
+
+  assert.equal(steps.length, 2)
+  assert.equal(steps[0].id, '1')
+  assert.equal(steps[0].kind, 'build')
+  assert.equal(steps[0].status, 'running')
+  assert.equal(steps[1].id, '2')
+  assert.equal(steps[1].kind, 'run')
+  assert.equal(steps[1].status, 'pending')
+  assert.ok(steps[0].allowedTools.includes('fabric_docs_search'))
+  assert.ok(steps[0].allowedTools.includes('read_error_log'))
+  assert.ok(steps[1].allowedTools.includes('fabric_log_debugger'))
+})
+
+test('build and run steps allow matching trigger_build tasks only', () => {
+  const [buildStep, runStep] = normalizeWorkflowSteps([
+    {
+      id: '4',
+      description: '重新构建项目并启动游戏测试（trigger_build build / runClient）',
+      status: 'running'
+    }
+  ])
+
+  assert.equal(
+    isToolAllowedForStep(buildStep, { name: 'trigger_build', args: { task: 'build' } }),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(buildStep, { name: 'trigger_build', args: { task: 'runClient' } }),
+    false
+  )
+  assert.equal(
+    isToolAllowedForStep(runStep, { name: 'trigger_build', args: { task: 'runClient' } }),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(runStep, { name: 'trigger_build', args: { task: 'build' } }),
+    false
+  )
+})
+
+test('repair mode allows write_file on build step but not without repair flag', () => {
+  const [buildStep] = normalizeWorkflowSteps([
+    { id: '1', description: '构建项目（gradlew build）', status: 'running' }
+  ])
+
+  assert.equal(
+    isToolAllowedForStep(buildStep, { name: 'write_file', args: { path: 'src/main/java/Fix.java', content: 'x' } }),
+    false
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      buildStep,
+      { name: 'write_file', args: { path: 'src/main/java/Fix.java', content: 'x' } },
+      { repairMode: true }
+    ),
+    true
+  )
+})
+
+test('repair write gate blocks trigger_build until write_file', () => {
+  const [buildStep] = normalizeWorkflowSteps([
+    { id: '1', description: '构建项目（gradlew build）', status: 'running' }
+  ])
+
+  assert.equal(
+    isToolAllowedForStep(
+      buildStep,
+      { name: 'trigger_build', args: { task: 'build' } },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    false
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      buildStep,
+      { name: 'trigger_build', args: { task: 'build' } },
+      { repairMode: true, repairWriteRequired: false }
+    ),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      buildStep,
+      { name: 'write_file', args: { path: 'src/main/java/Fix.java', content: 'x' } },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      buildStep,
+      { name: 'read_error_log', args: {} },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    true
+  )
+})
+
+test('isTerminalFailure detects build tool failures', () => {
+  const [buildStep] = normalizeWorkflowSteps([
+    { id: '1', description: '构建项目（gradlew build）', status: 'running' }
+  ])
+  const failed: ToolResult = {
+    output: 'BUILD FAILED\nsymbol not found',
+    error: 'BUILD FAILED\nsymbol not found',
+    durationMs: 1,
+    ok: false,
+    toolName: 'trigger_build',
+    args: { task: 'build' },
+    exitCode: 1
+  }
+  const ok: ToolResult = {
+    output: 'BUILD SUCCESSFUL',
+    durationMs: 1,
+    ok: true,
+    toolName: 'trigger_build',
+    args: { task: 'build' },
+    exitCode: 0
+  }
+
+  assert.equal(isTerminalFailure(buildStep, failed), true)
+  assert.equal(isTerminalFailure(buildStep, ok), false)
+})
+
+test('workflow engine repairs after build failure then completes build step', async () => {
+  const registry = new Registry()
+  let buildCalls = 0
+  registry.add({
+    name: 'trigger_build',
+    description: 'build',
+    schema: { type: 'object' },
+    readOnly: () => false,
+    async execute(_ctx, args) {
+      buildCalls++
+      if (buildCalls === 1) return 'BUILD FAILED\nerror: symbol not found'
+      return 'BUILD SUCCESSFUL\n[退出码: 0]'
+    }
+  })
+  registry.add({
+    name: 'write_file',
+    description: 'write',
+    schema: { type: 'object' },
+    readOnly: () => false,
+    async execute() {
+      return 'Written src/main/java/Fix.java (10 bytes)'
+    }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '构建项目（gradlew build）', status: 'running' }
+  ])
+  const steps = normalizeWorkflowSteps(tracker.steps)
+  let round = 0
+  const engine = new WorkflowEngine({
+    steps,
+    planTracker: tracker,
+    registry,
+    projectPath: 'D:/fake',
+    emit: () => {},
+    onToolDispatch: () => {},
+    onToolResult: () => {},
+    modelCall: async () => {
+      round++
+      if (round === 1) {
+        return {
+          finishReason: undefined,
+          toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }],
+          text: '',
+          reasoning: ''
+        }
+      }
+      if (round === 2) {
+        return {
+          finishReason: undefined,
+          toolCalls: [{ name: 'write_file', args: { path: 'src/main/java/Fix.java', content: 'fix' } }],
+          text: '',
+          reasoning: ''
+        }
+      }
+      return {
+        finishReason: undefined,
+        toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }],
+        text: '',
+        reasoning: ''
+      }
+    }
+  })
+
+  const result = await engine.run([])
+
+  assert.equal(result.allDone, true)
+  assert.equal(buildCalls, 2)
+  assert.equal(tracker.allDone(), true)
+})
+
+test('workflow engine blocks rebuild in repair until write_file then succeeds', async () => {
+  const registry = new Registry()
+  let buildCalls = 0
+  registry.add({
+    name: 'trigger_build',
+    description: 'build',
+    schema: { type: 'object' },
+    readOnly: () => false,
+    async execute(_ctx, args) {
+      buildCalls++
+      if (buildCalls === 1) return 'BUILD FAILED\nerror: symbol not found'
+      return 'BUILD SUCCESSFUL\n[退出码: 0]'
+    }
+  })
+  registry.add({
+    name: 'write_file',
+    description: 'write',
+    schema: { type: 'object' },
+    readOnly: () => false,
+    async execute() {
+      return 'Written src/main/java/Fix.java (10 bytes)'
+    }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '构建项目（gradlew build）', status: 'running' }
+  ])
+  const steps = normalizeWorkflowSteps(tracker.steps)
+  let round = 0
+  const engine = new WorkflowEngine({
+    steps,
+    planTracker: tracker,
+    registry,
+    projectPath: 'D:/fake',
+    emit: () => {},
+    onToolDispatch: () => {},
+    onToolResult: () => {},
+    modelCall: async () => {
+      round++
+      if (round === 1) {
+        return {
+          finishReason: undefined,
+          toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }],
+          text: '',
+          reasoning: ''
+        }
+      }
+      if (round === 2) {
+        return {
+          finishReason: undefined,
+          toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }],
+          text: '',
+          reasoning: ''
+        }
+      }
+      if (round === 3) {
+        return {
+          finishReason: undefined,
+          toolCalls: [{ name: 'write_file', args: { path: 'src/main/java/Fix.java', content: 'fix' } }],
+          text: '',
+          reasoning: ''
+        }
+      }
+      return {
+        finishReason: undefined,
+        toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }],
+        text: '',
+        reasoning: ''
+      }
+    }
+  })
+
+  const result = await engine.run([])
+
+  assert.equal(result.allDone, true)
+  assert.equal(buildCalls, 2)
+  assert.equal(tracker.allDone(), true)
+  assert.equal(round, 4)
+})
+
+test('workflow engine ends with friendly partial after repair rounds exhausted', async () => {
+  const registry = new Registry()
+  registry.add({
+    name: 'trigger_build',
+    description: 'build',
+    schema: { type: 'object' },
+    readOnly: () => false,
+    async execute() {
+      return 'BUILD FAILED\npersistent error'
+    }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '构建项目（gradlew build）', status: 'running' }
+  ])
+  const steps = normalizeWorkflowSteps(tracker.steps)
+  const engine = new WorkflowEngine({
+    steps,
+    planTracker: tracker,
+    registry,
+    projectPath: 'D:/fake',
+    emit: () => {},
+    onToolDispatch: () => {},
+    onToolResult: () => {},
+    modelCall: async () => ({
+      finishReason: undefined,
+      toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }],
+      text: '',
+      reasoning: ''
+    })
+  })
+
+  const result = await engine.run([])
+
+  assert.equal(result.allDone, false)
+  assert.equal(result.partial, true)
+  assert.match(result.finalContent, /修复|BUILD FAILED|未能自动完成/)
 })
 
 test('workflow engine completes recipe step after first create_recipe and does not execute repeats', async () => {
@@ -542,4 +900,29 @@ test('scaffold build.gradle includes datagen run configuration and fabric.mod.js
   assert.match(buildGradle, /DataGen/)
   assert.equal(modJson.depends.java, '>=21')
   assert.deepEqual(modJson.mixins, [])
+})
+
+test('appendToolRoundHistory writes paired assistant.tool_calls and role:tool messages', async () => {
+  const { appendToolRoundHistory } = await import('../src/renderer/src/harness/chat-message.ts')
+
+  const messages: Array<Record<string, unknown>> = []
+  const calls = [{
+    id: 'call_abc',
+    name: 'list_directory',
+    args: { path: 'src' },
+    rawArguments: '{"path":"src"}'
+  }]
+  const results = new Map([['call_abc', { output: 'src/main/java\nsrc/main/resources' }]])
+
+  appendToolRoundHistory(messages as never, '', calls, results, '[SYSTEM: 继续下一步]')
+
+  assert.equal(messages.length, 3)
+  assert.equal(messages[0].role, 'assistant')
+  assert.deepEqual((messages[0].tool_calls as Array<{ id: string }>).map((tc) => tc.id), ['call_abc'])
+  assert.equal(messages[1].role, 'tool')
+  assert.equal(messages[1].tool_call_id, 'call_abc')
+  assert.equal(messages[1].name, 'list_directory')
+  assert.match(String(messages[1].content), /src\/main\/java/)
+  assert.equal(messages[2].role, 'system')
+  assert.match(String(messages[2].content), /继续下一步/)
 })

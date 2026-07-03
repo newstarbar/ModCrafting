@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import MarkdownContent from './MarkdownContent'
 
 export interface PlanStep {
   id: string
@@ -77,9 +78,11 @@ const TaskPlan: React.FC<TaskPlanProps> = ({
       <span className={`task-plan-step-tag task-plan-step-tag-${step.status}`}>
         {STATUS_LABEL[step.status]}
       </span>
-      <span className={`task-plan-step-text ${step.status === 'completed' ? 'task-plan-step-done-text' : ''}`}>
-        {step.description}
-      </span>
+      <div
+        className={`task-plan-step-text ${step.status === 'completed' ? 'task-plan-step-done-text' : ''}`}
+      >
+        <MarkdownContent content={step.description} className="task-plan-step-markdown" />
+      </div>
     </div>
   )
 

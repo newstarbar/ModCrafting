@@ -178,6 +178,12 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       setDetectedErrors(errors)
     }, [logs])
 
+    const resetBuildSession = useCallback(() => {
+      setLogs([])
+      setDetectedErrors([])
+      setBuildLogsExpanded(true)
+    }, [])
+
     const addLog = useCallback((level: 'info' | 'warn' | 'error', message: string) => {
       const timestamp = new Date().toLocaleTimeString()
       setLogs((prev) => [...prev, `[${timestamp}] [${level.toUpperCase()}] ${message}`])
@@ -202,6 +208,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
         return { exitCode: 1, failed: true }
       }
 
+      resetBuildSession()
       logger.terminal('Build started', { projectPath })
       setProcessRunning(true)
       onBuildStatusChange?.({ running: true, failed: false })
@@ -233,7 +240,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
         onBuildStatusChange?.({ running: false, failed: buildFailed })
       }
       return { exitCode, failed: buildFailed }
-    }, [projectPath, toolchainReady, addLog, appendBuildOutput, onBuildStatusChange])
+    }, [projectPath, toolchainReady, addLog, appendBuildOutput, onBuildStatusChange, resetBuildSession])
 
     const stopProcess = useCallback(async () => {
       if (!terminalId) return
@@ -317,7 +324,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
                         type="button"
                         className="mc-btn"
                         style={{ fontSize: '11px' }}
-                        onClick={() => setLogs([])}
+                        onClick={resetBuildSession}
                       >
                         清空
                       </button>

@@ -1,5 +1,6 @@
 import type { PlanStepState } from './plan-tracker.ts'
 import type { ToolResult } from './tools.ts'
+import { isCombinedBuildRunDescription } from '../utils/plan-steps.ts'
 
 export type StepKind = 'inspect' | 'write' | 'build' | 'run' | 'unknown'
 
@@ -12,6 +13,7 @@ const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/g
 
 export function inferStepKind(description: string): StepKind {
   const d = description.toLowerCase()
+  if (isCombinedBuildRunDescription(description)) return 'build'
   if (/runclient|启动游戏|运行游戏/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
   if (/读取|查看|检查|获取|确认|read|list|fabric\.mod\.json/.test(d)) return 'inspect'

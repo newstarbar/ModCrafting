@@ -2006,11 +2006,31 @@ body,
 	display: -webkit-box;
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
+	min-width: 0;
+}
+
+.task-plan-step-text .task-plan-step-markdown {
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.task-plan-step-text .task-plan-step-markdown p {
+	margin: 0;
+}
+
+.task-plan-step-text .task-plan-step-markdown .inline-code,
+.task-plan-step-text .task-plan-step-markdown code:not(.code-block code) {
+	font-size: 10px;
 }
 
 .task-plan-step-done-text {
 	text-decoration: line-through;
 	color: var(--text-muted);
+}
+
+.task-plan-step-done-text .task-plan-step-markdown {
+	color: inherit;
+	text-decoration: inherit;
 }
 
 .task-plan-step-completed {

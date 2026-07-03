@@ -1,12 +1,18 @@
 import { EventKind, type Event } from './events.ts'
 import type { PlanTracker } from './plan-tracker.ts'
-import { filterToolCallsForStep, type ToolCallWithId } from './step-policy.ts'
+import { filterToolCallsForStep, isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from './step-policy.ts'
 import { executeBatch, type Registry, type ToolContext, type ToolResult } from './tools.ts'
 import type { WorkflowRunResult, WorkflowStep } from './workflow-types.ts'
+import {
+  assistantToolCallMessage,
+  type ChatMessage,
+  type ModelToolCall,
+  toolResultMessage
+} from './chat-message.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
-  toolCalls: Array<{ name: string; args: Record<string, unknown> }>
+  toolCalls: ModelToolCall[]
   text: string
   reasoning: string
   usage?: {
@@ -19,7 +25,7 @@ export interface WorkflowModelResult {
 }
 
 export type WorkflowModelCall = (
-  messages: Array<{ role: string; content: string }>,
+  messages: ChatMessage[],
   tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
   onChunk: (text: string, reasoning?: string) => void
 ) => Promise<WorkflowModelResult>
@@ -38,13 +44,73 @@ export interface WorkflowEngineOptions {
 
 let workflowToolId = 0
 
+const MAX_REPAIR_ROUNDS = 3
+const REPAIR_EXTRA_TOOLS = [
+  'write_file',
+  'read_file',
+  'read_error_log',
+  'fabric_log_debugger',
+  'fabric_docs_search'
+] as const
+
+export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boolean {
+  if (step.kind !== 'build' && step.kind !== 'run') return false
+  const output = String(result.output || '')
+  if (step.kind === 'build') {
+    if (result.toolName !== 'trigger_build' && result.toolName !== 'run_command') return false
+    if (/BUILD FAILED|构建失败/i.test(output)) return true
+    if (result.exitCode != null && result.exitCode !== 0) return true
+    return Boolean(result.error)
+  }
+  if (result.toolName === 'trigger_build') {
+    if (String(result.args?.task || '') !== 'runClient') return false
+    if (/Error starting game|启动失败|failed to start/i.test(output)) return true
+    if (result.exitCode != null && result.exitCode !== 0) return true
+    return Boolean(result.error)
+  }
+  if (result.toolName === 'run_command') {
+    if (!/runClient/i.test(String(result.args?.command || ''))) return false
+    if (result.exitCode != null && result.exitCode !== 0) return true
+    return Boolean(result.error)
+  }
+  return false
+}
+
+function repairExtraTools(step: WorkflowStep): string[] {
+  return [...new Set([...step.allowedTools, ...REPAIR_EXTRA_TOOLS])]
+}
+
+function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
+  const tail = output.trim().split('\n').slice(-80).join('\n')
+  const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
+  return (
+    `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
+    `必须先 read_error_log 或 fabric_log_debugger 分析错误，再用 write_file 修改代码。\n` +
+    `在成功 write_file 之前禁止直接调用 ${retry}。\n` +
+    `修改代码后再调用 ${retry} 验证修复结果。\n\n` +
+    `--- 错误摘要 ---\n${tail}`
+  )
+}
+
+function writeFileRetryInstruction(kind: 'build' | 'run'): string {
+  const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
+  return `【SYSTEM: 文件已修改，可以重新构建。请调用 ${retry} 验证修复结果。】`
+}
+
 function statusForPlan(step: WorkflowStep): string {
   if (step.status === 'failed') return 'error'
   return step.status
 }
 
-function summarizeStep(step: WorkflowStep): string {
-  return `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n允许工具: ${step.allowedTools.join(', ') || '无'}`
+function normalizeModelToolCalls(
+  toolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; rawArguments?: string }>
+): ModelToolCall[] {
+  return toolCalls.map((call) => ({
+    id: call.id || `workflow_call_${++workflowToolId}`,
+    name: call.name,
+    args: call.args,
+    rawArguments: call.rawArguments || JSON.stringify(call.args)
+  }))
 }
 
 function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
@@ -133,15 +199,23 @@ export class WorkflowEngine {
       ?? null
   }
 
-  private toolSchemasFor(step: WorkflowStep): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-    return this.registry.schemas().filter((tool) => step.allowedTools.includes(tool.name))
+  private toolSchemasFor(step: WorkflowStep, repairMode: boolean): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+    const names = repairMode ? repairExtraTools(step) : step.allowedTools
+    return this.registry.schemas().filter((tool) => names.includes(tool.name))
   }
 
-  private workflowPrompt(step: WorkflowStep): { role: string; content: string } {
+  private workflowPrompt(step: WorkflowStep, repairMode: boolean, repairWriteRequired: boolean): ChatMessage {
+    const tools = repairMode ? repairExtraTools(step) : step.allowedTools
+    const prefix = repairMode ? '【修复模式】' : '【工作流步骤】'
+    const repairGate =
+      repairMode && repairWriteRequired
+        ? '必须先 write_file 修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
+        : ''
     return {
       role: 'user',
       content:
-        `【工作流步骤】只执行当前步骤，不要重复已完成操作。\n${summarizeStep(step)}\n` +
+        `${prefix}${repairGate}只执行当前步骤，不要重复已完成操作。\n` +
+        `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n允许工具: ${tools.join(', ') || '无'}\n` +
         `如果需要工具，只能调用允许工具列表中的工具。工具成功后主机会自动推进。`
     }
   }
@@ -196,7 +270,24 @@ export class WorkflowEngine {
     )
   }
 
-  async run(baseMessages: Array<{ role: string; content: string }>): Promise<WorkflowRunResult> {
+  private appendToolRound(
+    baseMessages: ChatMessage[],
+    streamContent: string,
+    calls: ModelToolCall[],
+    resultsById: Map<string, ToolResult>,
+    instruction?: string
+  ): void {
+    baseMessages.push(assistantToolCallMessage(streamContent, calls))
+    for (const call of calls) {
+      const result = resultsById.get(call.id)
+      baseMessages.push(toolResultMessage(call, result?.output ?? ''))
+    }
+    if (instruction?.trim()) {
+      baseMessages.push({ role: 'system', content: instruction.trim() })
+    }
+  }
+
+  async run(baseMessages: ChatMessage[]): Promise<WorkflowRunResult> {
     let finalContent = ''
     this.emitPlanState()
 
@@ -207,9 +298,22 @@ export class WorkflowEngine {
       this.emitPlanState()
 
       let completed = false
-      for (let attempt = 0; attempt < step.maxAttempts && !completed; attempt++) {
-        const modelMessages = [...baseMessages, this.workflowPrompt(step)]
-        const allowedTools = this.toolSchemasFor(step)
+      let repairMode = false
+      let repairWriteRequired = false
+      let repairRounds = 0
+      let lastFailureOutput = ''
+      let attempt = 0
+      let loopIterations = 0
+      const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS
+      const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS * 4
+
+      while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
+        loopIterations++
+        const policyOptions: ToolGateOptions | undefined = repairMode
+          ? { repairMode: true, repairWriteRequired }
+          : undefined
+        const modelMessages = [...baseMessages, this.workflowPrompt(step, repairMode, repairWriteRequired)]
+        const allowedTools = this.toolSchemasFor(step, repairMode)
         let streamText = ''
         let streamReasoning = ''
         const modelResult = await this.modelCall(modelMessages, allowedTools, (text, reasoning) => {
@@ -218,53 +322,132 @@ export class WorkflowEngine {
         })
         finalContent = modelResult.text || streamText || finalContent
 
-        const calls = modelResult.toolCalls.map((call) => ({
-          ...call,
-          id: `workflow_call_${++workflowToolId}`
-        }))
+        const calls = normalizeModelToolCalls(modelResult.toolCalls)
         if (calls.length === 0) {
           baseMessages.push({
             role: 'user',
             content: `【系统】当前步骤尚未完成：#${step.id} ${step.title}。请调用允许工具完成该步骤。`
           })
+          attempt++
           continue
         }
 
-        const gate = filterToolCallsForStep(step, calls)
-        for (const rejected of gate.rejected) {
-          this.emitRejected(`workflow_rejected_${++workflowToolId}`, rejected)
+        const gate = filterToolCallsForStep(step, calls, policyOptions)
+        const firstAllowed = gate.allowed[0] ?? null
+        const resultsById = new Map<string, ToolResult>()
+
+        for (const call of calls) {
+          if (!isToolAllowedForStep(step, call, policyOptions)) {
+            const rejected = createRejectedToolResult(step, call, policyOptions)
+            this.emitRejected(call.id, rejected)
+            resultsById.set(call.id, rejected)
+            continue
+          }
+          if (!firstAllowed || call.id !== firstAllowed.id) {
+            resultsById.set(call.id, {
+              output: 'skipped: 本轮仅执行第一个允许的工具调用。',
+              durationMs: 0,
+              ok: false,
+              toolName: call.name,
+              args: call.args,
+              exitCode: null,
+              errorKind: 'skipped'
+            })
+          }
         }
 
-        if (gate.allowed.length === 0) {
-          baseMessages.push({
-            role: 'system',
-            content: gate.rejected.map((r) => r.output).join('\n')
-          })
+        if (!firstAllowed) {
+          const repairWriteBlockedOnly =
+            repairMode &&
+            repairWriteRequired &&
+            calls.length > 0 &&
+            calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
+          const rejectionHint = [
+            gate.rejected.map((r) => r.output).join('\n'),
+            repairWriteBlockedOnly
+              ? '修复模式下必须先 write_file 修改代码，再重新构建。'
+              : `本步骤允许的工具：${(repairMode ? repairExtraTools(step) : step.allowedTools).join(', ') || '无'}。请改用其中之一完成当前步骤。`
+          ].join('\n\n')
+          this.appendToolRound(
+            baseMessages,
+            modelResult.text || streamText,
+            calls,
+            resultsById,
+            rejectionHint
+          )
+          if (!repairWriteBlockedOnly) attempt++
           continue
         }
 
-        const results = await this.executeAllowedCalls(step, gate.allowed)
-        const allResults = [...results.values()]
-        const success = allResults.find((result) => resultCompletesStep(step, result))
-        baseMessages.push({
-          role: 'system',
-          content: allResults.map((r) => r.output).join('\n')
-        })
+        const executed = await this.executeAllowedCalls(step, [firstAllowed])
+        for (const [id, result] of executed) {
+          resultsById.set(id, result)
+        }
+
+        const primaryResult = resultsById.get(firstAllowed.id)
+        const success = primaryResult ? resultCompletesStep(step, primaryResult) : undefined
+        let roundInstruction: string | undefined
 
         if (success) {
+          repairMode = false
+          repairWriteRequired = false
+          repairRounds = 0
+          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
           step.status = 'completed'
-          this.planTracker.advanceCurrent(success.toolName || 'workflow evidence')
+          this.planTracker.advanceCurrent(primaryResult!.toolName || 'workflow evidence')
           completed = true
           this.emitPlanState()
           break
         }
+
+        if (primaryResult && isTerminalFailure(step, primaryResult)) {
+          repairMode = true
+          repairWriteRequired = true
+          repairRounds++
+          lastFailureOutput = primaryResult.output
+          roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as 'build' | 'run')
+          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+          if (repairRounds > MAX_REPAIR_ROUNDS) {
+            attempt = maxIterations
+            break
+          }
+          continue
+        }
+
+        if (
+          repairMode &&
+          primaryResult?.toolName === 'write_file' &&
+          primaryResult.ok &&
+          !primaryResult.error
+        ) {
+          repairWriteRequired = false
+          roundInstruction = writeFileRetryInstruction(step.kind as 'build' | 'run')
+          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+          continue
+        }
+
+        this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
+        attempt++
       }
 
       if (!completed && step.status !== 'completed') {
         step.status = 'failed'
         this.emitPlanState()
+        const remaining = this.steps
+          .filter((s) => s.status !== 'completed')
+          .map((s) => `#${s.id} ${s.title}`)
+          .join('\n')
+        const repairNote =
+          repairRounds > MAX_REPAIR_ROUNDS
+            ? `已尝试 ${MAX_REPAIR_ROUNDS} 轮自动修复仍未成功。\n\n最后错误：\n${lastFailureOutput.trim().split('\n').slice(-40).join('\n')}\n\n`
+            : ''
         return {
-          finalContent: finalContent || `步骤 #${step.id} 未能完成：${step.title}`,
+          finalContent:
+            finalContent.trim() ||
+            `步骤 #${step.id}「${step.title}」未能自动完成，已暂停执行。\n\n` +
+            repairNote +
+            `建议：请根据错误日志使用 write_file 修复后，可手动点击面板「发送给 AI 修复」继续。\n\n` +
+            `未完成步骤：\n${remaining}`,
           allDone: false,
           partial: true,
           steps: this.steps

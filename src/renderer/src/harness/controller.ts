@@ -4,6 +4,7 @@
 
 import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from './events'
 import { Agent } from './agent'
+import type { ChatMessage } from './chat-message'
 import { Registry } from './tools'
 import { PlanTracker } from './plan-tracker'
 import { parsePlanSteps, planHasActionableSteps, selectPlanText, isActionablePlanText } from '../utils/plan-steps'
@@ -28,7 +29,7 @@ export class Controller {
   apiConfig: { endpoint: string; apiKey: string; model: string }
 
   // Session
-  messages: Array<{ role: string; content: string }> = []
+  messages: ChatMessage[] = []
   private _running = false
   private abortController: AbortController | null = null
 
@@ -515,11 +516,11 @@ ${projectInfo}`
     logger.agent('Session cleared')
   }
 
-  getSnapshot(): Array<{ role: string; content: string }> {
+  getSnapshot(): ChatMessage[] {
     return [...this.messages]
   }
 
-  restoreSnapshot(messages: Array<{ role: string; content: string }>): void {
+  restoreSnapshot(messages: ChatMessage[]): void {
     this.messages = [...messages]
     this._phase = messages.some((m) => m.role === 'user' || m.role === 'assistant') ? 'execute' : 'plan'
     this.agent.resetRunState()

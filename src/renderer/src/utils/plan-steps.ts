@@ -8,8 +8,14 @@ export const OPS_STEP_PATTERN = /gradlew|gradle\s|runClient|trigger_build|run_co
 /** Upper bound on plan steps to guard against runaway/verbose plans */
 export const MAX_PLAN_STEPS = 12
 
-const BUILD_STEP_PATTERN = /gradlew|gradle\s|trigger_build|编译|构建|build/i
-const RUN_STEP_PATTERN = /runclient|启动游戏|运行游戏|真实测试/i
+export const BUILD_STEP_PATTERN = /gradlew|gradle\s|trigger_build|编译|构建|build/i
+export const RUN_STEP_PATTERN = /runclient|启动游戏|运行游戏|真实测试/i
+
+/** True when a single plan line asks for both build and runClient in one step. */
+export function isCombinedBuildRunDescription(description: string): boolean {
+  const d = description.toLowerCase()
+  return BUILD_STEP_PATTERN.test(d) && RUN_STEP_PATTERN.test(d)
+}
 const GENERIC_TEST_PATTERN = /测试|检查|确认|验证/
 
 function stepTerminalKind(description: string): 'build' | 'run' | 'other' {

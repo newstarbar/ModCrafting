@@ -12,8 +12,14 @@ import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
 import { isRepeatGuardedToolCall } from './repeat-guard.ts'
+import {
+  appendToolRoundHistory,
+  type ChatMessage,
+  type ModelToolCall
+} from './chat-message.ts'
 
 export { isRepeatGuardedToolCall } from './repeat-guard.ts'
+export type { ChatMessage } from './chat-message.ts'
 
 let _toolCallIdCounter = 0
 
@@ -134,7 +140,7 @@ export class Agent {
     apiEndpoint: string,
     apiKey: string,
     apiModel: string,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     projectPath: string | null,
     planTracker: PlanTracker,
     emitLifecycle: boolean,
@@ -212,7 +218,7 @@ export class Agent {
 
   async run(
     apiEndpoint: string, apiKey: string, apiModel: string,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     projectPath: string | null,
     abortSignal?: AbortSignal,
     onStream?: (text: string, reasoning?: string) => void,
@@ -284,8 +290,8 @@ export class Agent {
 
       // Build clean API messages: first system + everything else
       const systemIdx = messages.findIndex((m) => m.role === 'system')
-      const apiMessages = systemIdx >= 0
-        ? [{ role: 'system', content: messages[systemIdx].content }, ...messages.slice(systemIdx + 1)]
+      const apiMessages: ChatMessage[] = systemIdx >= 0
+        ? [{ ...messages[systemIdx] }, ...messages.slice(systemIdx + 1)]
         : messages
 
       // Plan phase: no tools; execute phase: full registry with exploration limits
@@ -373,7 +379,7 @@ export class Agent {
           }
           if (phase === 'execute') {
             const anyToolCalled = messages.some((m) =>
-              m.role === 'system' && m.content.includes('[SYSTEM:')
+              m.role === 'tool' || (m.role === 'assistant' && (m.tool_calls?.length ?? 0) > 0)
             )
             if (!anyToolCalled && (cleanText || streamContent).length > 80 && !planTracker) {
               const kick = '【系统警告】你只输出了文字，没有调用任何工具！立即调用 write_file 或其他工具来实际操作项目，不要只说话不做事。可用的工具：write_file（写入文件）、trigger_build（触发构建）。'
@@ -410,7 +416,12 @@ export class Agent {
         // 2. Execute tools (with repeat-success loop guard)
         logger.agent(`Executing ${toolCalls.length} tool(s)`, toolCalls.map((t) => t.name))
 
-        const callsWithIds = toolCalls.map((tc) => ({ ...tc, id: `call_${++_toolCallIdCounter}` }))
+        const callsWithIds: ModelToolCall[] = toolCalls.map((tc) => ({
+          id: tc.id || `call_${++_toolCallIdCounter}`,
+          name: tc.name,
+          args: tc.args,
+          rawArguments: tc.rawArguments || JSON.stringify(tc.args)
+        }))
         const executableCalls: typeof callsWithIds = []
         const blockedResults = new Map<string, ToolResult>()
 
@@ -485,31 +496,26 @@ export class Agent {
 
         const executedCalls = [...callsWithIds]
 
-        // 3. Append to conversation — ONLY meaningful messages
-        if (streamContent.trim()) {
-          messages.push({ role: 'assistant', content: streamContent })
-        }
-
-        // Tool results as system messages (clearer than 'user' role)
+        // 3. Append native function-calling history (assistant.tool_calls + role:tool)
         if (results.size > 0) {
           const lines: string[] = []
-          for (const [, r] of results) lines.push(r.output)
+          for (const call of executedCalls) {
+            const r = results.get(call.id)
+            if (r) lines.push(r.output)
+          }
 
           let dupWarning = ''
           // The model rewrote a file it had already written this run → it is
           // stuck re-editing instead of moving on to the next plan step.
-          let rewroteExistingFile = false
           for (const tc of executedCalls) {
             if (tc.name === 'write_file' && typeof tc.args.path === 'string') {
               const path = tc.args.path
               const content = String(tc.args.content || '')
               const prev = this.writtenFiles.get(path)
               if (prev === content) {
-                dupWarning = `\n\n【警告】文件 ${path} 已经写入过相同内容！不要重复写入。改用 trigger_build 构建。`
-                rewroteExistingFile = true
+                dupWarning = `【警告】文件 ${path} 已经写入过相同内容！不要重复写入。改用 trigger_build 构建。`
               } else if (prev !== undefined) {
-                dupWarning = `\n\n【注意】文件 ${path} 将被覆盖写入（内容已变更）。`
-                rewroteExistingFile = true
+                dupWarning = `【注意】文件 ${path} 将被覆盖写入（内容已变更）。`
               }
               this.writtenFiles.set(path, content)
             }
@@ -556,12 +562,13 @@ export class Agent {
             this.readonlyLocked = true
           }
 
+          const pushRoundHistory = (instruction: string): void => {
+            appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction)
+          }
+
           // All steps finished via auto-advance → end the run instead of looping.
           if (autoAdvanceMsg && planTracker?.allDone()) {
-            messages.push({
-              role: 'system',
-              content: combinedOutput + `\n\n[SYSTEM: ${autoAdvanceMsg}]`
-            })
+            pushRoundHistory(`[SYSTEM: ${autoAdvanceMsg}]`)
             finalContent = finalContent.trim() || '全部计划步骤已完成。'
             this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
             logger.agent('Auto-advance: all steps done, ending run', { step, phase })
@@ -572,10 +579,7 @@ export class Agent {
           // complete_step marked the last step done → end immediately so the
           // model can't keep spamming complete_step against a finished plan.
           if (hasStepDone && planTracker?.allDone()) {
-            messages.push({
-              role: 'system',
-              content: combinedOutput + '\n\n[SYSTEM: 全部计划步骤已完成。]'
-            })
+            pushRoundHistory('[SYSTEM: 全部计划步骤已完成。]')
             finalContent = finalContent.trim() || '全部计划步骤已完成。'
             this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
             logger.agent('complete_step: all steps done, ending run', { step, phase })
@@ -589,6 +593,7 @@ export class Agent {
           else this.consecutiveStepDoneOnlyRounds = 0
           if (this.consecutiveStepDoneOnlyRounds >= 4) {
             const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
+            pushRoundHistory('检测到反复标记步骤但无实质进展。')
             finalContent = finalContent.trim() || `检测到反复标记步骤但无实质进展，已自动结束本轮。${remaining}`
             this.emit({
               kind: EventKind.Notice,
@@ -607,6 +612,7 @@ export class Agent {
           }
           if (this.consecutiveBlockedRounds >= 2) {
             const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
+            pushRoundHistory('检测到重复调用已完成的操作。')
             finalContent = finalContent.trim() || `检测到重复调用已完成的操作，已自动结束本轮。${remaining}`
             this.emit({
               kind: EventKind.Notice,
@@ -617,42 +623,42 @@ export class Agent {
             return finalContent
           }
 
-          let instruction
+          let instruction = ''
           if (autoAdvanceMsg) {
-            instruction = `\n\n[SYSTEM: ${autoAdvanceMsg} 请直接执行下一步，不要重复上一步已完成的操作。]`
+            instruction = `[SYSTEM: ${autoAdvanceMsg} 请直接执行下一步，不要重复上一步已完成的操作。]`
           } else if (this.consecutiveWriteOnlyRounds >= 3) {
-            instruction = '\n\n【系统警告】你已经连续多次只写入文件而没有构建！立即调用 trigger_build 来构建项目，不要继续写文件！'
+            instruction = '【系统警告】你已经连续多次只写入文件而没有构建！立即调用 trigger_build 来构建项目，不要继续写文件！'
             this.consecutiveWriteOnlyRounds = 0
           } else if (dupWarning) {
             instruction = dupWarning
           } else if (hasBuild && combinedOutput.includes('BUILD SUCCESSFUL')) {
             instruction =
-              '\n\n[SYSTEM: 构建已成功完成。不要再次调用 trigger_build，系统会根据构建结果推进步骤。]'
+              '[SYSTEM: 构建已成功完成。不要再次调用 trigger_build，系统会根据构建结果推进步骤。]'
           } else if (hasBuild) {
-            instruction = '\n\n[SYSTEM: 构建完成。检查结果后决定下一步。]'
+            instruction = '[SYSTEM: 构建完成。检查结果后决定下一步。]'
           } else if (hasStepDone) {
             const cur = planTracker?.currentStep
             if (cur) {
               instruction =
-                `\n\n[SYSTEM: 步骤已推进。当前步骤 #${cur.id}：${cur.description}。请执行该步骤，系统会根据工具结果继续推进。]`
+                `[SYSTEM: 步骤已推进。当前步骤 #${cur.id}：${cur.description}。请执行该步骤，系统会根据工具结果继续推进。]`
             } else if (planTracker?.allDone()) {
-              instruction = '\n\n[SYSTEM: 全部计划步骤已完成。请输出总结，不要再调用工具。]'
+              instruction = '[SYSTEM: 全部计划步骤已完成。请输出总结，不要再调用工具。]'
             } else {
-              instruction = '\n\n[SYSTEM: 步骤已标记。继续下一步或调用 trigger_build。]'
+              instruction = '[SYSTEM: 步骤已标记。继续下一步或调用 trigger_build。]'
             }
           } else if (hasSuccessfulWrite) {
             const cur = planTracker?.currentStep
             instruction = cur
-              ? `\n\n[SYSTEM: 文件已写入。当前步骤 #${cur.id}：${cur.description}。` +
+              ? `[SYSTEM: 文件已写入。当前步骤 #${cur.id}：${cur.description}。` +
                 '请检查是否需要执行下一步；不要 list_directory/read_file，不要重写同一个文件。]'
-              : '\n\n[SYSTEM: 文件已写入。不要重复写入同一个文件，继续下一步或输出总结。]'
+              : '[SYSTEM: 文件已写入。不要重复写入同一个文件，继续下一步或输出总结。]'
           } else {
-            instruction = '\n\n[SYSTEM: 工具执行完毕。决定下一步。]'
+            instruction = '[SYSTEM: 工具执行完毕。决定下一步。]'
           }
           if (planTracker && !hasStepDone) {
             instruction += `\n\n当前计划进度：\n${planTracker.toContextBlock()}`
           }
-          messages.push({ role: 'system', content: combinedOutput + instruction })
+          pushRoundHistory(instruction)
         }
 
       } catch (err: unknown) {
@@ -677,11 +683,15 @@ export class Agent {
 
   private async streamFromAPI(
     endpoint: string, apiKey: string, model: string,
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatMessage[],
     tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
     abortSignal?: AbortSignal,
     onChunk?: (text: string, reasoning?: string) => void
-  ): Promise<{ finishReason?: string; toolCalls: Array<{ name: string; args: Record<string, unknown> }>; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number } }> {
+  ): Promise<{
+    finishReason?: string
+    toolCalls: ModelToolCall[]
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number }
+  }> {
     const body: Record<string, unknown> = {
       model, messages, stream: true, max_tokens: 8192,
       stream_options: { include_usage: true }
@@ -755,11 +765,20 @@ export class Agent {
       }
     }
 
-    const nativeCalls = collected.filter((tc) => tc.name).map((tc) => {
-      try { return { name: tc.name, args: JSON.parse(tc.args || '{}') } }
-      catch { return { name: tc.name, args: {} } }
+    const nativeCalls: ModelToolCall[] = collected.filter((tc) => tc.name).map((tc) => {
+      const rawArguments = tc.args || '{}'
+      try {
+        return { id: tc.id, name: tc.name, args: JSON.parse(rawArguments), rawArguments }
+      } catch {
+        return { id: tc.id, name: tc.name, args: {}, rawArguments }
+      }
     })
-    const textCalls = parseToolCalls(fullText)
+    const textCalls: ModelToolCall[] = parseToolCalls(fullText).map((tc) => ({
+      id: `text_call_${++_toolCallIdCounter}`,
+      name: tc.name,
+      args: tc.args,
+      rawArguments: JSON.stringify(tc.args)
+    }))
     return { finishReason, toolCalls: nativeCalls.length > 0 ? nativeCalls : textCalls, usage }
   }
 }
