@@ -1,7 +1,7 @@
 /**
  * Shared helpers for gradle-home-seed generation, validation, and offline verification.
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { spawn } from 'child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -120,7 +120,132 @@ export function sanitizeGradleHomeForSeed(gradleHome, { log = console.log } = {}
     }
   }
 
+  const locks = removeGradleLockFiles(gradleHome, { log })
+  removed += locks
+
   return { removed }
+}
+
+/** Remove Gradle daemon lock files that block electron-builder from copying the seed. */
+export function removeGradleLockFiles(gradleHome, { log = console.log } = {}) {
+  let removed = 0
+  function walk(dir) {
+    if (!existsSync(dir)) return
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith('.lock')) continue
+      try {
+        rmSync(full, { force: true, maxRetries: 5, retryDelay: 200 })
+        log(`[seed] removing lock ${path.relative(gradleHome, full)}`)
+        removed++
+      } catch (err) {
+        console.warn(`[seed] failed to remove lock ${full}: ${err?.message || err}`)
+      }
+    }
+  }
+  walk(gradleHome)
+  return removed
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Stop Gradle daemons that may hold locks under the bundled seed directory. */
+export async function stopGradleDaemonsForHome(
+  gradleHome,
+  { root = PROJECT_ROOT, timeoutMs = 20_000, log = console.log } = {}
+) {
+  const jdkJava = path.join(root, 'resources', 'jdk-21', 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+  const gradleLauncher = path.join(root, 'resources', GRADLE_RUNTIME_DIR, 'lib', GRADLE_LAUNCHER)
+  if (!existsSync(gradleHome) || !existsSync(jdkJava) || !existsSync(gradleLauncher)) return false
+
+  log(`[seed] stopping Gradle daemons (GRADLE_USER_HOME=${gradleHome})`)
+  await new Promise((resolve) => {
+    const child = spawn(
+      jdkJava,
+      ['-classpath', gradleLauncher, 'org.gradle.launcher.GradleMain', '--stop'],
+      {
+        env: {
+          ...process.env,
+          GRADLE_USER_HOME: gradleHome,
+          JAVA_HOME: path.join(root, 'resources', 'jdk-21')
+        },
+        stdio: 'ignore',
+        windowsHide: true
+      }
+    )
+    const timer = setTimeout(() => {
+      try { child.kill() } catch { /* ignore */ }
+      resolve()
+    }, timeoutMs)
+    child.on('close', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+  await sleep(2000)
+  return true
+}
+
+/** Prepare resources/gradle-home-seed before electron-builder copies ~1GB into the installer. */
+export async function prepareGradleHomeSeedForPackaging({
+  root = PROJECT_ROOT,
+  log = console.log
+} = {}) {
+  const seedDir = path.join(root, 'resources', 'gradle-home-seed')
+  if (!existsSync(seedDir)) {
+    throw new Error('gradle-home-seed missing; run npm run prefetch:deps')
+  }
+
+  await stopGradleDaemonsForHome(seedDir, { root, log })
+  const { removed } = sanitizeGradleHomeForSeed(seedDir, { log })
+  const integrity = validateSeedIntegrity(seedDir)
+  if (!integrity.ok) {
+    throw new Error(`Seed invalid after sanitize: ${integrity.errors.join('; ')}`)
+  }
+  return { seedDir, removed }
+}
+
+/** Copy gradle-home into seed destination via staging, with retries when the old seed is locked. */
+export async function copyGradleHomeToSeedDir(src, dest, { log = console.log, stopHome = dest } = {}) {
+  const staging = `${dest}.staging`
+  const maxAttempts = 6
+
+  if (existsSync(staging)) removeDirSafe(staging)
+  log(`[seed] copying gradle-home to staging...`)
+  cpSync(src, staging, { recursive: true })
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await stopGradleDaemonsForHome(stopHome, { log })
+      if (existsSync(dest)) removeDirSafe(dest)
+      renameSync(staging, dest)
+      return
+    } catch (err) {
+      const retryable = ['EBUSY', 'EPERM', 'EDOM', 'EACCES', 'ENOTEMPTY'].includes(err?.code)
+      if (!retryable || attempt === maxAttempts) {
+        if (existsSync(staging)) {
+          throw new Error(
+            `${err?.message || err}\n` +
+            `Seed copy is ready at ${staging} but could not replace ${dest}. ` +
+            'Close ModCrafting / Java processes and Explorer windows on that folder, then retry.'
+          )
+        }
+        throw err
+      }
+      log(`[seed] replace locked (${err.code}), retry ${attempt}/${maxAttempts} in 5s...`)
+      await sleep(5000)
+    }
+  }
 }
 
 function fabricApiModuleDir(gradleHome, moduleName) {

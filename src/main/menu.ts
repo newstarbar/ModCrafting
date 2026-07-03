@@ -4,6 +4,10 @@ import { getAppEdition } from './edition'
 
 export function setupMenu(): void {
   const isMac = process.platform === 'darwin'
+  if (!isMac) {
+    Menu.setApplicationMenu(null)
+    return
+  }
   const edition = getAppEdition()
   const editionLabel = edition === 'portable' ? '便携版' : edition === 'full' ? '完整版' : '开发版'
 

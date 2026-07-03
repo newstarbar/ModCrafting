@@ -5,6 +5,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import {
   countDirStats,
+  copyGradleHomeToSeedDir,
   sanitizeGradleHomeForSeed,
   validateSeedContent,
   writeSeedMarker,
@@ -31,9 +32,8 @@ if (fileCount < 100 || totalBytes < 50_000_000) {
 console.log('Sanitizing prefetch gradle-home...')
 sanitizeGradleHomeForSeed(gradleHome)
 
-if (existsSync(seedDir)) rmSync(seedDir, { recursive: true, force: true })
-mkdirSync(path.dirname(seedDir), { recursive: true })
-cpSync(gradleHome, seedDir, { recursive: true })
+console.log('Copying gradle-home into seed directory...')
+await copyGradleHomeToSeedDir(gradleHome, seedDir)
 sanitizeGradleHomeForSeed(seedDir)
 
 const integrity = validateSeedContent(seedDir)

@@ -14,7 +14,8 @@ import {
   validateSeedContent,
   validateSeedIntegrity,
   writeSeedMarker,
-  runOfflineBuildVerification
+  runOfflineBuildVerification,
+  copyGradleHomeToSeedDir
 } from './gradle-seed-utils.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -144,19 +145,7 @@ async function stopGradleDaemons(gradleHome) {
 }
 
 async function copyGradleHomeToSeed(src, dest) {
-  const maxAttempts = 6
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      if (existsSync(dest)) rmSync(dest, { recursive: true, force: true })
-      cpSync(src, dest, { recursive: true })
-      return
-    } catch (err) {
-      const retryable = ['EBUSY', 'EPERM', 'EDOM', 'EACCES'].includes(err?.code)
-      if (!retryable || attempt === maxAttempts) throw err
-      console.warn(`[prefetch] copy locked (${err.code}), retry ${attempt}/${maxAttempts} in 5s...`)
-      await sleep(5000)
-    }
-  }
+  await copyGradleHomeToSeedDir(src, dest)
 }
 
 async function main() {
