@@ -207,11 +207,21 @@ export class Agent {
     if (result.finalContent.trim()) {
       messages.push({ role: 'assistant', content: result.finalContent })
     }
-    await finalizeTerminalSteps({
-      planTracker,
-      projectPath,
-      emit: (event) => this.emit(event)
-    })
+    if (result.allDone) {
+      await finalizeTerminalSteps({
+        planTracker,
+        projectPath,
+        emit: (event) => this.emit(event)
+      })
+    } else if (result.partial) {
+      this.emit({
+        kind: EventKind.Notice,
+        notice: {
+          level: 'warn',
+          text: '部分步骤未完成，已暂停自动执行。可继续对话让 AI 修复后重试。'
+        }
+      })
+    }
     this.finishRun(emitLifecycle)
     return result.finalContent
   }

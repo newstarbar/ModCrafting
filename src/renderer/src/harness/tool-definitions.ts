@@ -3,7 +3,7 @@
 
 import { type Tool, type ToolContext, type Previewer } from './tools'
 import type { FileDiff } from './events'
-import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel } from '../utils/panel-bridge'
+import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from '../utils/panel-bridge'
 import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, type RecipeKind, type RecipeKey } from './recipe-utils'
 import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from './fabric-knowledge'
 import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from './fabric-utils'
@@ -427,6 +427,27 @@ export const runCommandTool: Tool = {
 }
 
 // ── read_error_log ──
+
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, '\n')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+function buildLogTail(text: string, maxChars = 8000): string {
+  const normalized = text.trim()
+  if (normalized.length <= maxChars) return normalized
+  return normalized.slice(-maxChars)
+}
 export const readErrorLogTool: Tool = {
   name: 'read_error_log',
   description: 'Read build error logs or crash reports to help debug issues.',
@@ -456,15 +477,21 @@ export const readErrorLogTool: Tool = {
         }
       }
       if (logType === 'last-build' && _ctx.projectPath) {
+        if (isPanelBridgeRegistered()) {
+          const panelLog = getLastBuildLogText().trim()
+          if (panelLog) return buildLogTail(panelLog)
+        }
         const candidates = [
+          `${_ctx.projectPath}/run/logs/latest.log`,
           `${_ctx.projectPath}/build/reports/problems/problems-report.html`,
-          `${_ctx.projectPath}/build/reports/tests/test/index.html`,
-          `${_ctx.projectPath}/run/logs/latest.log`
+          `${_ctx.projectPath}/build/reports/tests/test/index.html`
         ]
         for (const p of candidates) {
           if (await window.api.exists(p)) {
             const res = await window.api.readFile(p)
-            if (res.success && res.content) return res.content.slice(0, 4000)
+            if (!res.success || !res.content) continue
+            const content = p.endsWith('.html') ? stripHtmlToText(res.content) : res.content
+            if (content.trim()) return buildLogTail(content)
           }
         }
       }
@@ -534,6 +561,10 @@ export const triggerBuildTool: Tool = {
         const res = await runBuildViaPanel()
         const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : '\n[退出码: 0]'
         if (res.failed) {
+          const tail = buildLogTail(getLastBuildLogText())
+          if (tail) {
+            return `构建失败。\n\n--- 构建输出（末尾）---\n${tail}${exitInfo}`
+          }
           return `构建失败，详情见右侧高级面板。${exitInfo}`
         }
         return `构建已在右侧高级面板完成。${exitInfo}`

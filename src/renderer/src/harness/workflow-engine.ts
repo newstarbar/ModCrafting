@@ -97,6 +97,24 @@ function writeFileRetryInstruction(kind: 'build' | 'run'): string {
   return `【SYSTEM: 文件已修改，可以重新构建。请调用 ${retry} 验证修复结果。】`
 }
 
+const REPAIR_DIAGNOSTIC_TOOLS = new Set([
+  'read_error_log',
+  'fabric_log_debugger',
+  'read_file',
+  'list_directory',
+  'fabric_docs_search',
+  'fabric_javadoc_lookup',
+  'vanilla_mc_wiki_query',
+  'fabric_meta_version_check',
+  'fabric_mod_json_validate'
+])
+
+function isRepairDiagnosticResult(step: WorkflowStep, result: ToolResult, repairMode: boolean): boolean {
+  if (!repairMode || !result.ok || result.error) return false
+  if (step.kind !== 'build' && step.kind !== 'run') return false
+  return REPAIR_DIAGNOSTIC_TOOLS.has(result.toolName || '')
+}
+
 function statusForPlan(step: WorkflowStep): string {
   if (step.status === 'failed') return 'error'
   return step.status
@@ -427,7 +445,9 @@ export class WorkflowEngine {
         }
 
         this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
-        attempt++
+        if (!(repairMode && primaryResult && isRepairDiagnosticResult(step, primaryResult, repairMode))) {
+          attempt++
+        }
       }
 
       if (!completed && step.status !== 'completed') {

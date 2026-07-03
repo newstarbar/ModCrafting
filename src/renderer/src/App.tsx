@@ -29,7 +29,7 @@ import {
 	loadCurrentSessionId,
 	saveCurrentSessionId
 } from "./utils/session-storage";
-import { registerPanelBridge } from "./utils/panel-bridge";
+import { registerPanelBridge, setLastBuildLogText } from "./utils/panel-bridge";
 
 const DEFAULT_API_CONFIG = {
 	endpoint: "https://api.deepseek.com/v1",
@@ -357,6 +357,7 @@ const App: React.FC = () => {
 			},
 			runBuild: async () => {
 				const res = await bottomPanelRef.current?.runBuild() ?? { exitCode: 1, failed: true };
+				setLastBuildLogText(bottomPanelRef.current?.getBuildLogText() ?? "");
 				return { ok: !res.failed, exitCode: res.exitCode, failed: res.failed };
 			},
 			startGameAndWait: async () => {

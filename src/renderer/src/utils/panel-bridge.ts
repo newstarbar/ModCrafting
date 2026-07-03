@@ -22,6 +22,15 @@ export interface PanelBridgeHandlers {
 }
 
 let handlers: PanelBridgeHandlers | null = null
+let lastBuildLogText = ''
+
+export function setLastBuildLogText(text: string): void {
+  lastBuildLogText = text
+}
+
+export function getLastBuildLogText(): string {
+  return lastBuildLogText
+}
 
 function delayMs(ms: number): Promise<void> {
   return new Promise((resolve) => {

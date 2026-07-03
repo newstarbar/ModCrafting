@@ -20,6 +20,7 @@ export interface BuildRunResult {
 export interface BottomPanelHandle {
   runBuild: () => Promise<BuildRunResult>
   stopProcess: () => Promise<void>
+  getBuildLogText: () => string
 }
 
 const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
@@ -249,7 +250,11 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       addLog('info', '已发送停止信号')
     }, [terminalId, addLog])
 
-    useImperativeHandle(ref, () => ({ runBuild, stopProcess }), [runBuild, stopProcess])
+    useImperativeHandle(ref, () => ({
+      runBuild,
+      stopProcess,
+      getBuildLogText: () => logs.join('\n')
+    }), [runBuild, stopProcess, logs])
 
     const autoFix = () => {
       if (detectedErrors.length === 0) return
