@@ -93,3 +93,29 @@ export function cacheHitMissForDisplay(
   if (turnHit + turnMiss > 0) return { hit: turnHit, miss: turnMiss }
   return { hit: sessionHit, miss: sessionMiss }
 }
+
+function coerceUsageNumber(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
+/** Restore persisted session usage; clears ephemeral turn fields and recalculates context %. */
+export function normalizeSessionUsage(
+  raw: Partial<UsageStats> | undefined,
+  model?: string
+): UsageStats {
+  if (!raw || typeof raw !== 'object') return { ...EMPTY_USAGE }
+  const lastPromptTokens = coerceUsageNumber(raw.lastPromptTokens)
+  return {
+    sessionTokens: coerceUsageNumber(raw.sessionTokens),
+    turnTokens: 0,
+    cacheHitTokens: coerceUsageNumber(raw.cacheHitTokens),
+    cacheMissTokens: coerceUsageNumber(raw.cacheMissTokens),
+    turnCacheHitTokens: 0,
+    turnCacheMissTokens: 0,
+    turns: coerceUsageNumber(raw.turns),
+    lastPromptTokens,
+    contextPercent: contextPercentFromPrompt(lastPromptTokens, model),
+    cost: coerceUsageNumber(raw.cost)
+  }
+}

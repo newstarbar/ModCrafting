@@ -1,4 +1,5 @@
 import type { ChatSession, PersistedMessage } from '../types/chat'
+import { normalizeSessionUsage, type UsageStats } from './usage.ts'
 
 const NO_PROJECT = '__no_project__'
 const LEGACY_SESSIONS_KEY = 'modcrafting-sessions'
@@ -38,7 +39,10 @@ function normalizeSession(raw: unknown): ChatSession | null {
       }
     }),
     createdAt: s.createdAt ?? Date.now(),
-    updatedAt: s.updatedAt ?? Date.now()
+    updatedAt: s.updatedAt ?? Date.now(),
+    usage: s.usage && typeof s.usage === 'object'
+      ? normalizeSessionUsage(s.usage as Partial<UsageStats>)
+      : undefined
   }
 }
 

@@ -9,6 +9,7 @@ import {
   type ModelToolCall,
   toolResultMessage
 } from './chat-message.ts'
+import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -45,6 +46,7 @@ export interface WorkflowEngineOptions {
 let workflowToolId = 0
 
 const MAX_REPAIR_ROUNDS = 3
+const MAX_MODEL_NETWORK_RETRIES = 2
 const REPAIR_EXTRA_TOOLS = [
   'write_file',
   'read_file',
@@ -322,8 +324,9 @@ export class WorkflowEngine {
       let lastFailureOutput = ''
       let attempt = 0
       let loopIterations = 0
+      let modelNetworkRetries = 0
       const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS
-      const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS * 4
+      const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS * 8
 
       while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
         loopIterations++
@@ -334,10 +337,42 @@ export class WorkflowEngine {
         const allowedTools = this.toolSchemasFor(step, repairMode)
         let streamText = ''
         let streamReasoning = ''
-        const modelResult = await this.modelCall(modelMessages, allowedTools, (text, reasoning) => {
-          if (text) streamText = text
-          if (reasoning) streamReasoning = reasoning
-        })
+        let modelResult: WorkflowModelResult
+        try {
+          modelResult = await this.modelCall(modelMessages, allowedTools, (text, reasoning) => {
+            if (text) streamText = text
+            if (reasoning) streamReasoning = reasoning
+          })
+          modelNetworkRetries = 0
+        } catch (err: unknown) {
+          if (this.abortSignal?.aborted) break
+          const errMsg = err instanceof Error ? err.message : String(err)
+          if (isRetryableFetchError(err) && modelNetworkRetries < MAX_MODEL_NETWORK_RETRIES) {
+            modelNetworkRetries++
+            loopIterations--
+            const delay = fetchRetryDelayMs(modelNetworkRetries - 1)
+            baseMessages.push({
+              role: 'user',
+              content:
+                `【系统】模型 API 暂时不可用（${errMsg}），${Math.round(delay / 1000)}s 后重试本步骤（${modelNetworkRetries}/${MAX_MODEL_NETWORK_RETRIES}）。`
+            })
+            await sleep(delay)
+            continue
+          }
+          const remaining = this.steps
+            .filter((s) => s.status !== 'completed')
+            .map((s) => `#${s.id} ${s.title}`)
+            .join('\n')
+          return {
+            finalContent:
+              finalContent.trim() ||
+              `步骤 #${step.id}「${step.title}」因网络错误中断：${errMsg}\n\n` +
+              `发送「继续」可从当前步骤恢复。\n\n未完成步骤：\n${remaining}`,
+            allDone: false,
+            partial: true,
+            steps: this.steps
+          }
+        }
         finalContent = modelResult.text || streamText || finalContent
 
         const calls = normalizeModelToolCalls(modelResult.toolCalls)

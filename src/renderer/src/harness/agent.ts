@@ -17,6 +17,12 @@ import {
   type ChatMessage,
   type ModelToolCall
 } from './chat-message.ts'
+import {
+  MAX_FETCH_RETRIES,
+  fetchRetryDelayMs,
+  isRetryableFetchError,
+  sleep
+} from './fetch-retry.ts'
 
 export { isRepeatGuardedToolCall } from './repeat-guard.ts'
 export type { ChatMessage } from './chat-message.ts'
@@ -203,27 +209,53 @@ export class Agent {
         }
       }
     })
-    const result = await engine.run(messages)
-    if (result.finalContent.trim()) {
-      messages.push({ role: 'assistant', content: result.finalContent })
-    }
-    if (result.allDone) {
-      await finalizeTerminalSteps({
-        planTracker,
-        projectPath,
-        emit: (event) => this.emit(event)
-      })
-    } else if (result.partial) {
+    try {
+      const result = await engine.run(messages)
+      if (result.finalContent.trim()) {
+        messages.push({ role: 'assistant', content: result.finalContent })
+      }
+      if (result.allDone) {
+        await finalizeTerminalSteps({
+          planTracker,
+          projectPath,
+          emit: (event) => this.emit(event)
+        })
+      } else if (result.partial) {
+        this.emit({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: '部分步骤未完成，已暂停自动执行。发送「继续」可从当前步骤恢复。'
+          }
+        })
+      }
+      this.finishRun(emitLifecycle)
+      return result.finalContent
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        this.finishRun(emitLifecycle, 'Cancelled')
+        return ''
+      }
+      const errMsg = err instanceof Error ? err.message : String(err)
+      logger.error('Workflow error', errMsg)
+      const remaining = planTracker.toContextBlock()
+      const partial =
+        `执行因错误中断：${errMsg}\n\n` +
+        (remaining ? `当前计划进度：\n${remaining}\n\n` : '') +
+        '发送「继续」可从当前步骤恢复执行。'
+      messages.push({ role: 'assistant', content: partial })
       this.emit({
         kind: EventKind.Notice,
         notice: {
-          level: 'warn',
-          text: '部分步骤未完成，已暂停自动执行。可继续对话让 AI 修复后重试。'
+          level: 'error',
+          text: isRetryableFetchError(err)
+            ? `网络请求失败：${errMsg}。计划未完成，可发送「继续」恢复。`
+            : `执行中断：${errMsg}`
         }
       })
+      this.finishRun(emitLifecycle, errMsg)
+      return partial
     }
-    this.finishRun(emitLifecycle)
-    return result.finalContent
   }
 
   async run(
@@ -702,6 +734,41 @@ export class Agent {
     toolCalls: ModelToolCall[]
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number }
   }> {
+    let lastError: unknown
+    for (let attempt = 0; attempt < MAX_FETCH_RETRIES; attempt++) {
+      try {
+        return await this.streamFromAPIOnce(
+          endpoint, apiKey, model, messages, tools, abortSignal, onChunk
+        )
+      } catch (err) {
+        lastError = err
+        if (!isRetryableFetchError(err) || attempt >= MAX_FETCH_RETRIES - 1) throw err
+        const delay = fetchRetryDelayMs(attempt)
+        logger.agent('API fetch retry', { attempt: attempt + 1, delay, error: String(err) })
+        this.emit({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: `API 请求失败，${Math.round(delay / 1000)}s 后重试 (${attempt + 1}/${MAX_FETCH_RETRIES})…`
+          }
+        })
+        await sleep(delay)
+      }
+    }
+    throw lastError
+  }
+
+  private async streamFromAPIOnce(
+    endpoint: string, apiKey: string, model: string,
+    messages: ChatMessage[],
+    tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
+    abortSignal?: AbortSignal,
+    onChunk?: (text: string, reasoning?: string) => void
+  ): Promise<{
+    finishReason?: string
+    toolCalls: ModelToolCall[]
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number }
+  }> {
     const body: Record<string, unknown> = {
       model, messages, stream: true, max_tokens: 8192,
       stream_options: { include_usage: true }
@@ -719,7 +786,10 @@ export class Agent {
       body: JSON.stringify(body),
       signal: abortSignal
     })
-    if (!response.ok) throw new Error(`API error ${response.status}: ${await response.text()}`)
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`API error ${response.status}: ${text}`)
+    }
 
     const reader = response.body?.getReader()
     if (!reader) throw new Error('No response body')

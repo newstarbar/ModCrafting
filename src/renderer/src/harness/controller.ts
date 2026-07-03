@@ -10,6 +10,7 @@ import { PlanTracker } from './plan-tracker'
 import { parsePlanSteps, planHasActionableSteps, selectPlanText, isActionablePlanText } from '../utils/plan-steps'
 import { logger } from '../utils/logger'
 import { buildFabricAgentPolicyPrompt } from './fabric-agent-policy'
+import { isRetryableFetchError } from './fetch-retry'
 
 export interface ControllerOptions {
   registry: Registry
@@ -451,7 +452,23 @@ ${projectInfo}`
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err)
       logger.error('Controller send error', errMsg)
-      this.onAgentStatus?.(`错误: ${errMsg}`)
+      const incompletePlan = this.planTracker && !this.planTracker.allDone()
+      if (incompletePlan && isRetryableFetchError(err)) {
+        this.messages.push({
+          role: 'system',
+          content:
+            `【系统】执行因网络错误中断：${errMsg}。计划未完成，发送「继续」可从当前步骤恢复。`
+        })
+        this.emitEvent({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: `网络请求失败：${errMsg}。计划未完成，可发送「继续」恢复执行。`
+          }
+        })
+      } else {
+        this.onAgentStatus?.(`错误: ${errMsg}`)
+      }
       this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
       return `Error: ${errMsg}`
     } finally {

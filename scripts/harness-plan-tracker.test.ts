@@ -926,3 +926,129 @@ test('appendToolRoundHistory writes paired assistant.tool_calls and role:tool me
   assert.equal(messages[2].role, 'system')
   assert.match(String(messages[2].content), /继续下一步/)
 })
+
+test('isRetryableFetchError detects transient network failures', async () => {
+  const { isRetryableFetchError } = await import('../src/renderer/src/harness/fetch-retry.ts')
+  assert.equal(isRetryableFetchError(new Error('Failed to fetch')), true)
+  assert.equal(isRetryableFetchError(new Error('API error 503: gateway')), true)
+  assert.equal(isRetryableFetchError(new DOMException('Aborted', 'AbortError')), false)
+  assert.equal(isRetryableFetchError(new Error('API error 401: unauthorized')), false)
+})
+
+test('workflow engine returns partial result after model network failure', async () => {
+  const registry = new Registry()
+  registry.add({
+    name: 'read_file',
+    description: 'read',
+    schema: { type: 'object' },
+    readOnly: () => true,
+    async execute() {
+      return 'file content'
+    }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '读取 gradle.properties', status: 'running' }
+  ])
+  const steps = normalizeWorkflowSteps(tracker.steps)
+  let calls = 0
+  const engine = new WorkflowEngine({
+    steps,
+    planTracker: tracker,
+    registry,
+    projectPath: 'D:/fake',
+    emit: () => {},
+    onToolDispatch: () => {},
+    onToolResult: () => {},
+    modelCall: async () => {
+      calls++
+      if (calls <= 3) throw new Error('Failed to fetch')
+      return {
+        finishReason: undefined,
+        toolCalls: [{ name: 'read_file', args: { path: 'gradle.properties' } }],
+        text: '',
+        reasoning: ''
+      }
+    }
+  })
+
+  const result = await engine.run([])
+
+  assert.equal(result.partial, true)
+  assert.equal(result.allDone, false)
+  assert.match(result.finalContent, /网络错误中断/)
+  assert.equal(tracker.allDone(), false)
+})
+
+test('normalizeSessionUsage fills defaults and clears turn-level fields', async () => {
+  const { normalizeSessionUsage } = await import('../src/renderer/src/utils/usage.ts')
+
+  const restored = normalizeSessionUsage({
+    sessionTokens: 12_000,
+    cacheHitTokens: 8000,
+    cacheMissTokens: 2000,
+    turns: 3,
+    lastPromptTokens: 64_000,
+    cost: 0.045,
+    turnTokens: 999,
+    turnCacheHitTokens: 111,
+    turnCacheMissTokens: 222
+  }, 'deepseek-v4-flash')
+
+  assert.equal(restored.sessionTokens, 12_000)
+  assert.equal(restored.cost, 0.045)
+  assert.equal(restored.turnTokens, 0)
+  assert.equal(restored.turnCacheHitTokens, 0)
+  assert.equal(restored.turnCacheMissTokens, 0)
+  assert.equal(restored.lastPromptTokens, 64_000)
+  assert.ok(restored.contextPercent > 0)
+})
+
+test('normalizeSessionUsage returns empty usage for missing input', async () => {
+  const { normalizeSessionUsage, EMPTY_USAGE } = await import('../src/renderer/src/utils/usage.ts')
+  const restored = normalizeSessionUsage(undefined)
+  assert.deepEqual(restored, EMPTY_USAGE)
+})
+
+test('session storage round-trips usage stats', async () => {
+  const { saveSessions, loadSessions } = await import('../src/renderer/src/utils/session-storage.ts')
+  const store: Record<string, string> = {}
+  const original = globalThis.localStorage
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => { store[key] = value },
+      removeItem: (key: string) => { delete store[key] }
+    }
+  })
+  try {
+    const projectPath = 'D:/test-project'
+    saveSessions(projectPath, [{
+      id: 'session-1',
+      name: 'Test',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 2,
+      usage: {
+        sessionTokens: 5000,
+        turnTokens: 0,
+        cacheHitTokens: 3000,
+        cacheMissTokens: 1000,
+        turnCacheHitTokens: 0,
+        turnCacheMissTokens: 0,
+        turns: 2,
+        contextPercent: 4,
+        lastPromptTokens: 5000,
+        cost: 0.0123
+      }
+    }])
+    const loaded = loadSessions(projectPath)
+    assert.equal(loaded.length, 1)
+    assert.equal(loaded[0]?.usage?.sessionTokens, 5000)
+    assert.equal(loaded[0]?.usage?.cost, 0.0123)
+    assert.equal(loaded[0]?.usage?.cacheHitTokens, 3000)
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: original })
+  }
+})

@@ -1,4 +1,5 @@
 import type { PlanStep } from '../components/TaskPlan'
+import type { UsageStats } from '../utils/usage'
 
 export interface PersistedChronoEntry {
   kind: 'reasoning' | 'text' | 'tool'
@@ -27,4 +28,5 @@ export interface ChatSession {
   messages: PersistedMessage[]
   createdAt: number
   updatedAt: number
+  usage?: UsageStats
 }

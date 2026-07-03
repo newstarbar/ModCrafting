@@ -10,7 +10,7 @@ import type { Event } from '../harness/events'
 import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
 import { parsePlanSteps } from '../utils/plan-steps'
-import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, type UsageStats } from '../utils/usage'
+import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, normalizeSessionUsage, type UsageStats } from '../utils/usage'
 import type { ChatSession, PersistedMessage } from '../types/chat'
 import {
   serializeDisplayMessages,
@@ -299,6 +299,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       setCollapsedToolIds(new Set())
       setCollapsedReasoningKeys(new Set())
       turnRef.current = { msgId: '', entries: [], streamDone: false }
+      setUsageAccum(EMPTY_USAGE)
+      onUsageChangeRef.current?.(EMPTY_USAGE)
       controllerRef.current?.clearSession()
       return
     }
@@ -317,6 +319,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     setCollapsedReasoningKeys(reasoningKeys)
     setDisplayMessages(display)
     setActivePlan(restoredPlan)
+    const restoredUsage = normalizeSessionUsage(session.usage, apiConfigRef.current.model)
+    setUsageAccum(restoredUsage)
+    onUsageChangeRef.current?.(restoredUsage)
     controllerRef.current?.restoreSnapshot(toControllerMessages(session.messages))
   }, [currentSessionId, sessions])
 

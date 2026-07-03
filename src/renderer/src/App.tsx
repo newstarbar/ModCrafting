@@ -13,7 +13,7 @@ import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import UpdateBanner from "./components/UpdateBanner";
 import { IconCode, IconGamepad } from "./components/Icon";
-import { EMPTY_USAGE, type UsageStats } from "./utils/usage";
+import { EMPTY_USAGE, normalizeSessionUsage, type UsageStats } from "./utils/usage";
 import { loadProjectVersions, type ProjectVersions } from "./utils/project-versions";
 import {
 	pickMcRuntimeSlot,
@@ -134,6 +134,8 @@ const App: React.FC = () => {
 
 		setSessions(loaded);
 		setCurrentSessionId(validSessionId);
+		const activeSession = validSessionId ? loaded.find((s) => s.id === validSessionId) : null;
+		setUsage(normalizeSessionUsage(activeSession?.usage));
 		sessionsHydratedRef.current = true;
 	}, [state.projectPath]);
 
@@ -508,6 +510,15 @@ const App: React.FC = () => {
 		)));
 	}, []);
 
+	const handleUsageChange = useCallback((nextUsage: UsageStats) => {
+		setUsage(nextUsage);
+		const sid = currentSessionIdRef.current;
+		if (!sid) return;
+		setSessions((prev) => prev.map((s) => (
+			s.id === sid ? { ...s, usage: nextUsage, updatedAt: Date.now() } : s
+		)));
+	}, []);
+
 	const handleOpenSession = useCallback((id: string) => {
 		setCurrentSessionId(id);
 	}, []);
@@ -597,7 +608,7 @@ const App: React.FC = () => {
 									apiConfig={apiConfig}
 									ensureApiKey={ensureApiKey}
 									toolchainReady={toolchainReady}
-									onUsageChange={(u) => setUsage(u)}
+									onUsageChange={handleUsageChange}
 									onRunningChange={(r) => setIsRunning(r)}
 									currentSessionId={currentSessionId}
 									sessions={sessions}
