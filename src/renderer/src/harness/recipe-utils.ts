@@ -11,6 +11,7 @@ export interface RecipeResult {
 export interface ShapelessRecipeInput {
   ingredients: RecipeIngredient[]
   result: RecipeResult
+  mcVersion?: string
 }
 
 export type RecipeKind = 'shapeless' | 'shaped' | 'smelting' | 'blasting' | 'stonecutting'
@@ -29,6 +30,7 @@ export interface GeneralRecipeInput {
   result: RecipeResult
   experience?: number
   cookingTime?: number
+  mcVersion?: string
 }
 
 function normalizeResourcePart(value: string, fallback: string): string {
@@ -36,72 +38,147 @@ function normalizeResourcePart(value: string, fallback: string): string {
   return normalized || fallback
 }
 
-export function recipePath(namespace: string, name: string): string {
+function parseMcVersion(mcVersion?: string): { major: number; minor: number; patch: number } {
+  if (!mcVersion) return { major: 1, minor: 21, patch: 4 }
+  const parts = mcVersion.trim().split('.').map((p) => Number.parseInt(p, 10))
+  return {
+    major: Number.isFinite(parts[0]) ? parts[0] : 1,
+    minor: Number.isFinite(parts[1]) ? parts[1] : 21,
+    patch: Number.isFinite(parts[2]) ? parts[2] : 0
+  }
+}
+
+/** MC 1.21+ uses singular data/<ns>/recipe/ folder. */
+export function usesModernRecipeFolder(mcVersion?: string): boolean {
+  const { major, minor } = parseMcVersion(mcVersion)
+  return major > 1 || (major === 1 && minor >= 21)
+}
+
+/** MC 1.21.2+ uses plain string ingredients and keys. */
+export function usesStringRecipeIngredients(mcVersion?: string): boolean {
+  const { major, minor, patch } = parseMcVersion(mcVersion)
+  if (major > 1) return true
+  if (major === 1 && minor > 21) return true
+  if (major === 1 && minor === 21 && patch >= 2) return true
+  return false
+}
+
+/** MC 1.20.5+ uses result.id instead of result.item. */
+export function usesResultIdField(mcVersion?: string): boolean {
+  const { major, minor, patch } = parseMcVersion(mcVersion)
+  if (major > 1) return true
+  if (major === 1 && minor > 20) return true
+  if (major === 1 && minor === 20 && patch >= 5) return true
+  return false
+}
+
+export function usesModernRecipeFormat(mcVersion?: string): boolean {
+  return usesModernRecipeFolder(mcVersion)
+}
+
+export function recipeFolder(mcVersion?: string): string {
+  return usesModernRecipeFolder(mcVersion) ? 'recipe' : 'recipes'
+}
+
+export function recipePath(namespace: string, name: string, mcVersion?: string): string {
   const ns = normalizeResourcePart(namespace, 'modcrafting')
   const recipeName = normalizeResourcePart(name, 'generated_recipe')
-  return `src/main/resources/data/${ns}/recipes/${recipeName}.json`
+  return `src/main/resources/data/${ns}/${recipeFolder(mcVersion)}/${recipeName}.json`
+}
+
+function formatIngredientKey(key: RecipeKey, mcVersion?: string): RecipeKey | string {
+  if (usesStringRecipeIngredients(mcVersion)) {
+    if (key.tag) return `#${key.tag.replace(/^#/, '')}`
+    return key.item || 'minecraft:air'
+  }
+  if (key.tag) return { tag: key.tag.replace(/^#/, '') }
+  return { item: key.item || 'minecraft:air' }
+}
+
+function formatResult(result: RecipeResult, mcVersion?: string): Record<string, unknown> {
+  const count = Math.max(1, Math.floor(result.count ?? 1))
+  if (usesResultIdField(mcVersion)) {
+    return { id: result.item, count }
+  }
+  return { item: result.item, count }
 }
 
 export function buildShapelessRecipeContent(input: ShapelessRecipeInput): string {
-  const ingredients = input.ingredients.flatMap((ingredient) => {
+  const mcVersion = input.mcVersion
+  const ingredientList = input.ingredients.flatMap((ingredient) => {
     const count = Math.max(1, Math.min(9, Math.floor(ingredient.count ?? 1)))
-    return Array.from({ length: count }, () => ({ item: ingredient.item }))
+    return Array.from({ length: count }, () => ingredient.item)
   })
-  const resultCount = Math.max(1, Math.floor(input.result.count ?? 1))
+
+  const ingredients = usesStringRecipeIngredients(mcVersion)
+    ? ingredientList
+    : ingredientList.map((item) => ({ item }))
+
   return JSON.stringify({
     type: 'minecraft:crafting_shapeless',
     category: 'misc',
     ingredients,
-    result: {
-      item: input.result.item,
-      count: resultCount
-    }
+    result: formatResult(input.result, mcVersion)
   }, null, 2)
 }
 
-function normalizeResult(result: RecipeResult): { item: string; count?: number } {
-  const count = Math.max(1, Math.floor(result.count ?? 1))
-  return { item: result.item, count }
-}
-
-function normalizeIngredient(input: RecipeKey | undefined): RecipeKey {
-  if (!input) return { item: 'minecraft:air' }
-  if (input.tag) return { tag: input.tag }
-  return { item: input.item || 'minecraft:air' }
+function normalizeIngredient(input: RecipeKey | undefined, mcVersion?: string): RecipeKey | string {
+  if (!input) return formatIngredientKey({ item: 'minecraft:air' }, mcVersion)
+  return formatIngredientKey(input, mcVersion)
 }
 
 export function buildRecipeContent(input: GeneralRecipeInput): string {
+  const mcVersion = input.mcVersion
+
   if (input.type === 'shapeless') {
     return buildShapelessRecipeContent({
       ingredients: input.ingredients || [],
-      result: input.result
+      result: input.result,
+      mcVersion
     })
   }
 
   if (input.type === 'shaped') {
+    const keys = input.keys || {}
+    const formattedKeys: Record<string, RecipeKey | string> = {}
+    for (const [symbol, key] of Object.entries(keys)) {
+      formattedKeys[symbol] = formatIngredientKey(key, mcVersion)
+    }
     return JSON.stringify({
       type: 'minecraft:crafting_shaped',
       category: 'misc',
       pattern: input.pattern || [],
-      key: input.keys || {},
-      result: normalizeResult(input.result)
+      key: formattedKeys,
+      result: formatResult(input.result, mcVersion)
     }, null, 2)
   }
 
   if (input.type === 'stonecutting') {
+    const count = Math.max(1, Math.floor(input.result.count ?? 1))
+    if (usesResultIdField(mcVersion)) {
+      return JSON.stringify({
+        type: 'minecraft:stonecutting',
+        ingredient: normalizeIngredient(input.ingredient, mcVersion),
+        result: { id: input.result.item, count }
+      }, null, 2)
+    }
     return JSON.stringify({
       type: 'minecraft:stonecutting',
-      ingredient: normalizeIngredient(input.ingredient),
+      ingredient: normalizeIngredient(input.ingredient, mcVersion),
       result: input.result.item,
-      count: Math.max(1, Math.floor(input.result.count ?? 1))
+      count
     }, null, 2)
   }
+
+  const smeltResult = usesResultIdField(mcVersion)
+    ? input.result.item
+    : input.result.item
 
   return JSON.stringify({
     type: input.type === 'blasting' ? 'minecraft:blasting' : 'minecraft:smelting',
     category: 'misc',
-    ingredient: normalizeIngredient(input.ingredient),
-    result: input.result.item,
+    ingredient: normalizeIngredient(input.ingredient, mcVersion),
+    result: smeltResult,
     experience: Number.isFinite(input.experience) ? input.experience : 0,
     cookingtime: Math.max(1, Math.floor(input.cookingTime ?? (input.type === 'blasting' ? 100 : 200)))
   }, null, 2)

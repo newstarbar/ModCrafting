@@ -12,7 +12,15 @@ export interface ToolGateResult {
   rejected: ToolResult[]
 }
 
-const RECIPE_DATA_PATH_RE = /(?:src\/main\/resources\/)?data\/[^/]+\/recipes\/[^/]+\.json$/i
+const RECIPE_DATA_PATH_RE = /(?:src\/main\/resources\/)?data\/[^/]+\/recipes?\/[^/]+\.json$/i
+
+const READONLY_KNOWLEDGE_TOOLS = new Set([
+  'fabric_docs_search',
+  'fabric_javadoc_lookup',
+  'vanilla_mc_wiki_query',
+  'fabric_meta_version_check',
+  'fabric_mod_json_validate'
+])
 
 /** Paths Agent may read during recipe steps: mod id + existing recipe JSON inspection. */
 export function isRecipeInspectionPath(path: string): boolean {
@@ -22,6 +30,9 @@ export function isRecipeInspectionPath(path: string): boolean {
 }
 
 function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId): boolean {
+  if (READONLY_KNOWLEDGE_TOOLS.has(call.name) && (step.kind === 'write' || step.kind === 'recipe')) {
+    return true
+  }
   if (call.name === 'read_file' && step.kind === 'recipe') {
     return isRecipeInspectionPath(String(call.args.path || ''))
   }

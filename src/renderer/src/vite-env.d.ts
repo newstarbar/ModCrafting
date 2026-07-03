@@ -118,6 +118,26 @@ interface ModCraftingApi {
   saveApiKey: (key: string) => Promise<{ success: boolean; error?: string }>
   getApiKey: () => Promise<{ success: boolean; apiKey?: string; error?: string }>
   clearApiKey: () => Promise<{ success: boolean; error?: string }>
+  loadAgentConfig: () => Promise<{
+    knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
+    disabledTools: string[]
+    mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+  }>
+  saveAgentConfig: (config: {
+    knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
+    disabledTools: string[]
+    mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+  }) => Promise<{ success: boolean; error?: string }>
+  listKnowledgeFiles: () => Promise<Array<{ path: string; bundled: boolean; overridden: boolean }>>
+  knowledgeReadLocal: (relPath: string) => Promise<{ success: boolean; content?: string; source?: 'override' | 'bundled'; error?: string }>
+  knowledgeSaveLocal: (relPath: string, content: string) => Promise<{ success: boolean; error?: string }>
+  knowledgeFetchUrl: (url: string, maxChars?: number) => Promise<{
+    success: boolean
+    text?: string
+    url: string
+    truncated?: boolean
+    error?: string
+  }>
 }
 
 declare global {

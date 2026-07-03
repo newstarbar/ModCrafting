@@ -80,6 +80,11 @@ export class Controller {
     this.apiConfig = config
   }
 
+  setRegistry(registry: Registry): void {
+    this.registry = registry
+    this.agent.setRegistry(registry)
+  }
+
   private emitEvent(event: Event): void {
     this.sink.emit(event)
   }
@@ -279,6 +284,7 @@ ${mode === 'plan' ? '## 当前：输出计划阶段\n只输出计划文本，不
 - **最多 3 轮探索。** 之后探索工具将被锁定。
 - 使用 write_file 编写完整、可编译的 Java 代码。
 - 创建配方/合成表时优先使用 fabric_recipe_generate 或 create_recipe，不要手写 recipe JSON。
+- **写配方/资源/代码前必须先调用 fabric_docs_search 或 fabric_meta_version_check**，确认当前 MC 版本的 JSON 路径与字段格式（1.21+ 使用 data/<modid>/recipe/ 单数目录与 result.id）。
 - 使用 Yarn mappings。
 - 主类 → ModInitializer，客户端类 → ClientModInitializer。
 

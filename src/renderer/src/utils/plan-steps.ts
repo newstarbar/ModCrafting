@@ -23,18 +23,38 @@ function renumberPlanSteps(steps: ParsedPlanStep[]): ParsedPlanStep[] {
   return steps.map((s, i) => ({ ...s, id: String(i + 1) }))
 }
 
+const INSPECT_STEP_PATTERN = /查询.*知识|知识库|fabric_docs_search|fabric_meta_version_check|文档|javadoc|wiki|mappings/i
+
+/** Prepend a knowledge inspect step for dev plans that will write files or recipes. */
+export function ensureKnowledgeInspectStep(steps: ParsedPlanStep[]): ParsedPlanStep[] {
+  if (steps.length === 0) return steps
+  if (isOpsOnlyPlan(steps)) return renumberPlanSteps(steps)
+  const hasInspect = steps.some((s) => INSPECT_STEP_PATTERN.test(s.description))
+  if (hasInspect) return renumberPlanSteps(steps)
+
+  const result: ParsedPlanStep[] = [
+    {
+      id: '0',
+      description: '查询知识库确认当前 Minecraft/Fabric 版本 API 与资源格式（fabric_docs_search / fabric_meta_version_check）'
+    },
+    ...steps
+  ]
+  return renumberPlanSteps(result.slice(0, MAX_PLAN_STEPS))
+}
+
 /** Ensure dev plans end with build + runClient steps for real testing. */
 export function ensureDevTerminalSteps(steps: ParsedPlanStep[]): ParsedPlanStep[] {
-  if (steps.length === 0) return steps
+  const withKnowledge = ensureKnowledgeInspectStep(steps)
+  if (withKnowledge.length === 0) return withKnowledge
 
-  const hasBuild = steps.some((s) => stepTerminalKind(s.description) === 'build')
-  const hasRun = steps.some((s) => stepTerminalKind(s.description) === 'run')
+  const hasBuild = withKnowledge.some((s) => stepTerminalKind(s.description) === 'build')
+  const hasRun = withKnowledge.some((s) => stepTerminalKind(s.description) === 'run')
 
-  if (isOpsOnlyPlan(steps) && hasBuild && hasRun) {
-    return renumberPlanSteps(steps)
+  if (isOpsOnlyPlan(withKnowledge) && hasBuild && hasRun) {
+    return renumberPlanSteps(withKnowledge)
   }
 
-  let result = [...steps]
+  let result = [...withKnowledge]
   if (!hasBuild) result.push({ id: '0', description: '构建项目（gradlew build）' })
   if (!hasRun) result.push({ id: '0', description: '启动游戏进行真实测试（runClient）' })
 

@@ -8,6 +8,16 @@ import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients
 import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from './fabric-knowledge'
 import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from './fabric-utils'
 
+async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
+  if (typeof args.mcVersion === 'string' && args.mcVersion.trim()) return args.mcVersion.trim()
+  try {
+    const versions = await window.api.getFabricVersions()
+    return versions.minecraft_version || '1.21.4'
+  } catch {
+    return '1.21.4'
+  }
+}
+
 async function runWithCommandStream(
   ctx: ToolContext,
   run: () => Promise<{ output: string; exitCode: number | null }>
@@ -131,10 +141,12 @@ export const createRecipeTool: Tool & Previewer = {
     if (!namespace || !name || ingredients.length === 0 || !result) {
       return 'Error creating recipe: namespace, name, ingredients and result are required'
     }
-    const path = recipePath(namespace, name)
+    const mcVersion = await resolveMcVersion(args)
+    const path = recipePath(namespace, name, mcVersion)
     const content = buildShapelessRecipeContent({
       ingredients,
-      result: { item: result, count: Number.isFinite(count) ? count : 1 }
+      result: { item: result, count: Number.isFinite(count) ? count : 1 },
+      mcVersion
     })
     try {
       const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content)
@@ -155,10 +167,11 @@ export const createRecipeTool: Tool & Previewer = {
     if (!namespace || !name || ingredients.length === 0 || !result) return null
     const content = buildShapelessRecipeContent({
       ingredients,
-      result: { item: result, count: Number(args.count ?? 1) || 1 }
+      result: { item: result, count: Number(args.count ?? 1) || 1 },
+      mcVersion: '1.21.4'
     })
     return {
-      path: recipePath(namespace, name),
+      path: recipePath(namespace, name, '1.21.4'),
       added: content.split('\n').length,
       removed: 0,
       content
@@ -169,7 +182,7 @@ export const createRecipeTool: Tool & Previewer = {
 // ── fabric_docs_search ──
 export const fabricDocsSearchTool: Tool = {
   name: 'fabric_docs_search',
-  description: 'Search built-in Fabric knowledge source index and return authoritative docs/MCP URLs. Read-only.',
+  description: 'Search built-in Fabric knowledge routes, fetch remote doc excerpts, and return actionable summaries. Read-only.',
   schema: {
     type: 'object',
     properties: {
@@ -320,6 +333,7 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
     const result = String(args.result || '')
     const type = String(args.type || 'shapeless') as RecipeKind
     if (!namespace || !name || !result) return 'Error creating recipe: namespace, name and result are required'
+    const mcVersion = await resolveMcVersion(args)
     const content = buildRecipeContent({
       type,
       ingredients: parseRecipeIngredients(args.ingredients),
@@ -328,9 +342,10 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
       ingredient: args.ingredient && typeof args.ingredient === 'object' ? args.ingredient as RecipeKey : undefined,
       result: { item: result, count: Number(args.count ?? 1) },
       experience: Number(args.experience ?? 0),
-      cookingTime: Number(args.cookingTime ?? 0) || undefined
+      cookingTime: Number(args.cookingTime ?? 0) || undefined,
+      mcVersion
     })
-    const path = recipePath(namespace, name)
+    const path = recipePath(namespace, name, mcVersion)
     const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content)
     if (!res.success) return `Error creating recipe: ${res.error}`
     logger.file(`Recipe written: ${path}`, `${content.length} bytes`)
@@ -347,9 +362,10 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
       pattern: Array.isArray(args.pattern) ? args.pattern.map(String) : undefined,
       keys: args.keys && typeof args.keys === 'object' ? args.keys as Record<string, RecipeKey> : undefined,
       ingredient: args.ingredient && typeof args.ingredient === 'object' ? args.ingredient as RecipeKey : undefined,
-      result: { item: result, count: Number(args.count ?? 1) }
+      result: { item: result, count: Number(args.count ?? 1) },
+      mcVersion: '1.21.4'
     })
-    return { path: recipePath(namespace, name), added: content.split('\n').length, removed: 0, content }
+    return { path: recipePath(namespace, name, '1.21.4'), added: content.split('\n').length, removed: 0, content }
   }
 }
 
@@ -618,11 +634,13 @@ export const fabricDataAssetsGenerateTool: Tool = {
     const name = String(args.name || '')
     const kind = args.kind === 'block' ? 'block' : 'item'
     if (!namespace || !name) return 'Error: namespace and name are required'
+    const mcVersion = await resolveMcVersion(args)
     const files = buildDataAssetFiles({
       namespace,
       name,
       kind,
-      displayName: args.displayName ? String(args.displayName) : undefined
+      displayName: args.displayName ? String(args.displayName) : undefined,
+      mcVersion
     })
     for (const file of files) {
       const res = await window.api.writeFile(`${ctx.projectPath}/${file.path}`, file.content)
@@ -752,24 +770,30 @@ export const completeStepTool: Tool = {
 import { Registry } from './tools'
 import { logger } from '../utils/logger'
 
-export function registerModCraftingTools(registry: Registry): void {
-  registry.add(readFileTool)
-  registry.add(writeFileTool)
-  registry.add(fabricDocsSearchTool)
-  registry.add(fabricJavadocLookupTool)
-  registry.add(vanillaMcWikiQueryTool)
-  registry.add(fabricMetaVersionCheckTool)
-  registry.add(fabricModJsonValidateTool)
-  registry.add(createRecipeTool)
-  registry.add(fabricRecipeGenerateTool)
-  registry.add(fabricContentRegisterTool)
-  registry.add(fabricDataAssetsGenerateTool)
-  registry.add(fabricMixinScaffoldTool)
-  registry.add(fabricLogDebuggerTool)
-  registry.add(listDirectoryTool)
-  registry.add(runCommandTool)
-  registry.add(readErrorLogTool)
-  registry.add(triggerBuildTool)
-  registry.add(completeStepTool)
+export function registerModCraftingTools(registry: Registry, options?: { disabledTools?: string[] }): void {
+  const disabled = new Set(options?.disabledTools || [])
+  const tools = [
+    readFileTool,
+    writeFileTool,
+    fabricDocsSearchTool,
+    fabricJavadocLookupTool,
+    vanillaMcWikiQueryTool,
+    fabricMetaVersionCheckTool,
+    fabricModJsonValidateTool,
+    createRecipeTool,
+    fabricRecipeGenerateTool,
+    fabricContentRegisterTool,
+    fabricDataAssetsGenerateTool,
+    fabricMixinScaffoldTool,
+    fabricLogDebuggerTool,
+    listDirectoryTool,
+    runCommandTool,
+    readErrorLogTool,
+    triggerBuildTool,
+    completeStepTool
+  ]
+  for (const tool of tools) {
+    if (!disabled.has(tool.name)) registry.add(tool)
+  }
   logger.agent('Tools registered', registry.names())
 }

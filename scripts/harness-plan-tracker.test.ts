@@ -116,20 +116,54 @@ test('tool evidence advances only matching step kinds and paths', () => {
 test('recipe utility creates a four dirt to diamond shapeless recipe', () => {
   const content = buildShapelessRecipeContent({
     ingredients: [{ item: 'minecraft:dirt', count: 4 }],
-    result: { item: 'minecraft:diamond', count: 1 }
+    result: { item: 'minecraft:diamond', count: 1 },
+    mcVersion: '1.21.4'
   })
   const parsed = JSON.parse(content)
 
-  assert.equal(recipePath('my-mod', 'dirt_to_diamond'), 'src/main/resources/data/my-mod/recipes/dirt_to_diamond.json')
+  assert.equal(recipePath('my-mod', 'dirt_to_diamond', '1.21.4'), 'src/main/resources/data/my-mod/recipe/dirt_to_diamond.json')
   assert.equal(parsed.type, 'minecraft:crafting_shapeless')
   assert.equal(parsed.ingredients.length, 4)
   assert.deepEqual(parsed.ingredients, [
-    { item: 'minecraft:dirt' },
-    { item: 'minecraft:dirt' },
-    { item: 'minecraft:dirt' },
-    { item: 'minecraft:dirt' }
+    'minecraft:dirt',
+    'minecraft:dirt',
+    'minecraft:dirt',
+    'minecraft:dirt'
   ])
+  assert.deepEqual(parsed.result, { id: 'minecraft:diamond', count: 1 })
+})
+
+test('recipe utility uses legacy plural folder before MC 1.21', () => {
+  assert.equal(recipePath('my-mod', 'dirt_to_diamond', '1.20.4'), 'src/main/resources/data/my-mod/recipes/dirt_to_diamond.json')
+  const content = buildShapelessRecipeContent({
+    ingredients: [{ item: 'minecraft:dirt', count: 1 }],
+    result: { item: 'minecraft:diamond', count: 1 },
+    mcVersion: '1.20.4'
+  })
+  const parsed = JSON.parse(content)
+  assert.deepEqual(parsed.ingredients, [{ item: 'minecraft:dirt' }])
   assert.deepEqual(parsed.result, { item: 'minecraft:diamond', count: 1 })
+})
+
+test('write step allows readonly knowledge tools', () => {
+  const [step] = normalizeWorkflowSteps([
+    { id: '2', description: '创建 src/main/java/MyMod.java 主类', status: 'running' }
+  ])
+  assert.equal(step.kind, 'write')
+  assert.equal(isToolAllowedForStep(step, { name: 'fabric_docs_search', args: { keyword: 'recipe' } }), true)
+  assert.equal(isToolAllowedForStep(step, { name: 'fabric_meta_version_check', args: { mcVersion: '1.21.4' } }), true)
+})
+
+test('dev plan prepends knowledge inspect step', () => {
+  const ensured = ensureDevTerminalSteps(parsePlanSteps(`1. 创建 data/<modid>/recipes/dirt_to_diamond.json 配方文件`))
+  assert.match(ensured[0].description, /知识库|fabric_docs_search/i)
+  const steps = normalizeWorkflowSteps(ensured.map((s, i) => ({
+    id: s.id,
+    description: s.description,
+    status: i === 0 ? 'running' as const : 'pending' as const
+  })))
+  assert.equal(steps[0].kind, 'inspect')
+  assert.ok(steps[0].allowedTools.includes('fabric_docs_search'))
 })
 
 test('step policy rejects create_recipe while current step is build', () => {
@@ -167,11 +201,11 @@ test('recipe step allows reading fabric.mod.json and recipe json but rejects unr
   assert.equal(step.kind, 'recipe')
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }), true)
   assert.equal(
-    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my_mod/recipes/dirt_to_diamond.json' } }),
+    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my_mod/recipe/dirt_to_diamond.json' } }),
     true
   )
   assert.equal(
-    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'data/my-mod/recipes/dirt_to_diamond.json' } }),
+    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my-mod/recipe/dirt_to_diamond.json' } }),
     true
   )
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/other.json' } }), false)
@@ -184,7 +218,7 @@ test('recipe troubleshooting step allows reading recipe json for path or format 
 
   assert.equal(step.kind, 'recipe')
   assert.equal(
-    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my_mod/recipes/dirt_to_diamond.json' } }),
+    isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/data/my_mod/recipe/dirt_to_diamond.json' } }),
     true
   )
   assert.equal(isToolAllowedForStep(step, { name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }), true)
@@ -296,9 +330,10 @@ test('ensureDevTerminalSteps appends build and run when missing from dev plan', 
 2. 创建 fabric.mod.json`)
   const ensured = ensureDevTerminalSteps(steps)
 
-  assert.equal(ensured.length, 4)
-  assert.match(ensured[2].description, /构建/)
-  assert.match(ensured[3].description, /启动游戏|runClient/i)
+  assert.equal(ensured.length, 5)
+  assert.match(ensured[0].description, /知识库|fabric_docs_search/i)
+  assert.match(ensured[3].description, /构建/)
+  assert.match(ensured[4].description, /启动游戏|runClient/i)
 })
 
 test('ensureDevTerminalSteps does not duplicate when build and run already exist', () => {
@@ -397,8 +432,8 @@ test('fabric knowledge sources include authoritative URLs for product runtime lo
   assert.ok(urls.includes('https://minecraft.wiki/api.php'))
 })
 
-test('fabric docs search summary returns source URLs and keyword matches without writing files', () => {
-  const summary = buildFabricDocsSearchSummary({ keyword: '方块实体', mcVersion: '1.21.4', limit: 3 })
+test('fabric docs search summary returns source URLs and keyword matches without writing files', async () => {
+  const summary = await buildFabricDocsSearchSummary({ keyword: '方块实体', mcVersion: '1.21.4', limit: 3 })
 
   assert.match(summary, /方块实体/)
   assert.match(summary, /https:\/\/docs\.fabricmc\.net\/zh_cn\/develop\//)
@@ -434,8 +469,9 @@ test('fabric recipe generator supports shaped crafting recipes', () => {
 
   assert.equal(parsed.type, 'minecraft:crafting_shaped')
   assert.deepEqual(parsed.pattern, ['##', ' S'])
-  assert.equal(parsed.key['#'].item, 'minecraft:cobblestone')
-  assert.deepEqual(parsed.result, { item: 'minecraft:stone_axe', count: 1 })
+  assert.equal(parsed.key['#'], 'minecraft:cobblestone')
+  assert.equal(parsed.key.S, 'minecraft:stick')
+  assert.deepEqual(parsed.result, { id: 'minecraft:stone_axe', count: 1 })
 })
 
 test('fabric.mod.json validator reports missing icon and invalid entrypoints', () => {

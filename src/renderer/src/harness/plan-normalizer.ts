@@ -42,7 +42,16 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_error_log'
       ]
     case 'recipe':
-      return ['fabric_recipe_generate', 'create_recipe', 'read_file', 'fabric_docs_search']
+      return [
+        'fabric_recipe_generate',
+        'create_recipe',
+        'read_file',
+        'fabric_docs_search',
+        'fabric_javadoc_lookup',
+        'vanilla_mc_wiki_query',
+        'fabric_meta_version_check',
+        'fabric_mod_json_validate'
+      ]
     case 'write':
       return [
         'write_file',
@@ -50,7 +59,12 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_data_assets_generate',
         'fabric_mixin_scaffold',
         'fabric_recipe_generate',
-        'create_recipe'
+        'create_recipe',
+        'fabric_docs_search',
+        'fabric_javadoc_lookup',
+        'vanilla_mc_wiki_query',
+        'fabric_meta_version_check',
+        'fabric_mod_json_validate'
       ]
     case 'build':
       return ['trigger_build', 'run_command', 'fabric_log_debugger']

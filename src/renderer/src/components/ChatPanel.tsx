@@ -23,6 +23,7 @@ import { groupMessagesIntoTurns } from '../utils/chat-turns'
 import type { ChatTurn } from '../utils/chat-turns'
 import type { DisplayMessage, ChronoEntry } from '../types/display-message'
 import MessageFooter from './MessageFooter'
+import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -43,6 +44,20 @@ interface ChatPanelProps {
 
 const toolRegistry = new Registry()
 registerModCraftingTools(toolRegistry)
+
+async function reloadAgentToolRegistry(controller: Controller | null): Promise<Registry> {
+  const registry = new Registry()
+  let disabled: string[] = []
+  try {
+    const cfg = await window.api.loadAgentConfig()
+    disabled = cfg.disabledTools || []
+  } catch {
+    // ignore
+  }
+  registerModCraftingTools(registry, { disabledTools: disabled })
+  controller?.setRegistry(registry)
+  return registry
+}
 
 interface ToolCallDisplay {
   id: string; name: string
@@ -261,7 +276,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       onStreamUpdate: () => {}
     })
     controllerRef.current = ctrl
-    return () => { ctrl.cancel() }
+    void reloadAgentToolRegistry(ctrl)
+    const onConfigSaved = (): void => { void reloadAgentToolRegistry(controllerRef.current) }
+    window.addEventListener('agent-config-saved', onConfigSaved)
+    return () => {
+      window.removeEventListener('agent-config-saved', onConfigSaved)
+      ctrl.cancel()
+    }
   }, [])
 
   useEffect(() => { controllerRef.current?.setProjectPath(projectPath) }, [projectPath])
@@ -435,6 +456,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
       case EventKind.ToolDispatch:
         if (event.tool && event.tool.name) {
+          recordToolDispatch(event.tool.name, event.tool.id, event.tool.args as Record<string, unknown> | undefined)
           markLastReasoningDone(t.msgId, t.entries)
           setCollapsedToolIds((prev) => {
             const next = new Set(prev)
@@ -469,6 +491,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
       case EventKind.ToolResult:
         if (event.tool) {
+          recordToolResult(
+            event.tool.name || 'unknown',
+            event.tool.id,
+            event.tool.output || event.tool.error || '',
+            { error: Boolean(event.tool.error), durationMs: event.tool.durationMs }
+          )
           setCollapsedToolIds((prev) => new Set(prev).add(event.tool!.id))
           // Find existing tool entry by id and update it
           for (const entry of t.entries) {

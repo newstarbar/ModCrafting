@@ -299,7 +299,39 @@ const api = {
   getApiKey: (): Promise<{ success: boolean; apiKey?: string; error?: string }> =>
     ipcRenderer.invoke('secrets:getApiKey'),
   clearApiKey: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('secrets:clearApiKey')
+    ipcRenderer.invoke('secrets:clearApiKey'),
+
+  // Agent config
+  loadAgentConfig: (): Promise<{
+    knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
+    disabledTools: string[]
+    mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+  }> => ipcRenderer.invoke('agentConfig:load'),
+
+  saveAgentConfig: (config: {
+    knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
+    disabledTools: string[]
+    mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+  }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('agentConfig:save', config),
+
+  // Knowledge base
+  listKnowledgeFiles: (): Promise<Array<{ path: string; bundled: boolean; overridden: boolean }>> =>
+    ipcRenderer.invoke('knowledge:listFiles'),
+
+  knowledgeReadLocal: (relPath: string): Promise<{ success: boolean; content?: string; source?: 'override' | 'bundled'; error?: string }> =>
+    ipcRenderer.invoke('knowledge:readLocal', relPath),
+
+  knowledgeSaveLocal: (relPath: string, content: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('knowledge:saveLocal', relPath, content),
+
+  knowledgeFetchUrl: (url: string, maxChars?: number): Promise<{
+    success: boolean
+    text?: string
+    url: string
+    truncated?: boolean
+    error?: string
+  }> => ipcRenderer.invoke('knowledge:fetchUrl', url, maxChars)
 }
 
 contextBridge.exposeInMainWorld('api', api)

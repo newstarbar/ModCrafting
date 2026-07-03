@@ -36,6 +36,13 @@ import {
   clearRecentProjects,
   getLastRecentProject
 } from './recent-projects'
+import { loadAgentConfig, saveAgentConfig, type AgentConfig } from './agent-config'
+import {
+  fetchUrlText,
+  listKnowledgeFiles,
+  readKnowledgeFile,
+  saveKnowledgeFile
+} from './knowledge-service'
 
 // Track active watchers
 const watchers = new Map<string, fs.FSWatcher>()
@@ -373,4 +380,26 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('secrets:getApiKey', async () => getApiKey())
 
   ipcMain.handle('secrets:clearApiKey', async () => clearApiKey())
+
+  // Agent config (knowledge sources, tool toggles, MCP placeholders)
+  ipcMain.handle('agentConfig:load', async () => loadAgentConfig())
+
+  ipcMain.handle('agentConfig:save', async (_event, config: AgentConfig) =>
+    saveAgentConfig(config)
+  )
+
+  // Knowledge base: local md + remote fetch
+  ipcMain.handle('knowledge:listFiles', async () => listKnowledgeFiles())
+
+  ipcMain.handle('knowledge:readLocal', async (_event, relPath: string) =>
+    readKnowledgeFile(relPath)
+  )
+
+  ipcMain.handle('knowledge:saveLocal', async (_event, relPath: string, content: string) =>
+    saveKnowledgeFile(relPath, content)
+  )
+
+  ipcMain.handle('knowledge:fetchUrl', async (_event, url: string, maxChars?: number) =>
+    fetchUrlText(url, maxChars)
+  )
 }

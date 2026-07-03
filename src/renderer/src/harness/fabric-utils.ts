@@ -1,3 +1,5 @@
+import { usesModernRecipeFolder } from './recipe-utils.ts'
+
 export interface FabricValidationResult {
   ok: boolean
   issues: string[]
@@ -141,9 +143,11 @@ export function buildDataAssetFiles(input: {
   name: string
   kind: 'item' | 'block'
   displayName?: string
+  mcVersion?: string
 }): GeneratedFile[] {
   const displayName = input.displayName || toTitle(input.name)
   const langKey = `${input.kind}.${input.namespace}.${input.name}`
+  const lootFolder = usesModernRecipeFolder(input.mcVersion) ? 'loot_table' : 'loot_tables'
   const files: GeneratedFile[] = [
     {
       path: `src/main/resources/assets/${input.namespace}/lang/zh_cn.json`,
@@ -183,7 +187,7 @@ export function buildDataAssetFiles(input: {
       }, null, 2) + '\n'
     },
     {
-      path: `src/main/resources/data/${input.namespace}/loot_tables/blocks/${input.name}.json`,
+      path: `src/main/resources/data/${input.namespace}/${lootFolder}/blocks/${input.name}.json`,
       content: JSON.stringify({
         type: 'minecraft:block',
         pools: [{

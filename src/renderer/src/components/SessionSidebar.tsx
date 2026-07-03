@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import FileTree from './FileTree'
 import FileViewer from './FileViewer'
+import ToolsPanel from './ToolsPanel'
 import { IconFile, IconMessage, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
 
 import type { ChatSession } from '../types/chat'
@@ -252,13 +253,8 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
         )}
 
         {activeTab === 'tools' && (
-          <div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 600 }}>
-              终端 / MC 运行
-            </div>
-            <div className="mc-dim" style={{ fontSize: '12px', lineHeight: 1.5 }}>
-              终端与构建日志已整合到右侧「高级」面板。
-            </div>
+          <div style={{ flex: 1, overflow: 'auto', padding: '8px' }}>
+            <ToolsPanel onConfigSaved={() => window.dispatchEvent(new CustomEvent('agent-config-saved'))} />
           </div>
         )}
 

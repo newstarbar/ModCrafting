@@ -121,6 +121,8 @@ function modeSpecificRules(mode: FabricAgentPromptMode): string[] {
   }
   return [
     '执行时优先调用产品内 Fabric 专用工具，只有工具覆盖不了时才用 write_file。',
+    '写配方、资源 JSON 或 Java 代码前，必须先调用 fabric_docs_search 或 fabric_meta_version_check 确认当前 MC 版本的 API 与 JSON 格式。',
+    '配方必须使用 create_recipe / fabric_recipe_generate，并确认输出路径为 data/<modid>/recipe/（1.21+ 单数目录）且 result 使用 id 字段。',
     '写入后必须通过 trigger_build、runDatagen、runClient 或日志读取形成验证闭环。'
   ]
 }

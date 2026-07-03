@@ -78,6 +78,10 @@ export class Agent {
     this.onToolResult = opts.onToolResult
   }
 
+  setRegistry(registry: Registry): void {
+    this.registry = registry
+  }
+
   resetRunState(): void {
     this.readonlyLocked = false
     this.writtenFiles.clear()
