@@ -23,6 +23,7 @@ import { groupMessagesIntoTurns } from '../utils/chat-turns'
 import type { ChatTurn } from '../utils/chat-turns'
 import type { DisplayMessage, ChronoEntry } from '../types/display-message'
 import MessageFooter from './MessageFooter'
+import MarkdownContent from './MarkdownContent'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 
 interface ChatPanelProps {
@@ -784,22 +785,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   }, [isLoading, apiConfig, ensureApiKey, displayMessages, flushPersist])
 
   // ======== RENDER ========
-  const renderContent = (content: string) => {
-    if (!content) return null
-    const parts = content.split(/(```[\s\S]*?```)/g)
-    return parts.map((part, i) => {
-      if (part.startsWith('```')) {
-        const m = part.match(/```(\w*)\n([\s\S]*?)```/)
-        if (m) return (
-          <div key={i} className="code-block-wrapper">
-            <div className="code-block-header"><span>{m[1] || '代码'}</span></div>
-            <pre className="code-block"><code>{m[2]}</code></pre>
-          </div>
-        )
-      }
-      return <span key={i} style={{ whiteSpace: 'pre-wrap' }}>{part}</span>
-    })
-  }
+  const renderContent = (content: string) => <MarkdownContent content={content} />
 
   const renderMessage = (msg: DisplayMessage, turn: ChatTurn) => {
     const isUser = msg.role === 'user'
