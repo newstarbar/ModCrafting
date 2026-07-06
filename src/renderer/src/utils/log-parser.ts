@@ -94,12 +94,82 @@ export function buildRepairPrompt(errors: ParsedError[], buildOutput: string): s
     prompt += `   详情: ${err.detail}\n\n`
   })
 
-  prompt += '--- 构建输出 ---\n```\n'
-  // Take last 200 lines of build output
-  const outputLines = buildOutput.split('\n')
-  prompt += outputLines.slice(-200).join('\n')
+  prompt += '--- 构建输出（尾部） ---\n```\n'
+  const trimmed = summarizeBuildOutput(buildOutput)
+  prompt += trimmed
   prompt += '\n```\n\n'
   prompt += '请分析以上错误并给出修复方案。对于每个需要修改的文件，请以注释形式指明文件路径，并给出完整的修正代码。'
 
   return prompt
+}
+
+/** Extract key lines from build output: errors, exceptions, and the last few lines. */
+export function summarizeBuildOutput(output: string, maxLines = 40): string {
+  const lines = output.split('\n')
+  const important: string[] = []
+  const errorPatterns = [
+    /error:\s/i, /exception/i, /FAILED/i, /FAILURE/i, /caused by/i,
+    /^\s*at\s+[\w.]+\(/, /堆栈跟踪/i, /stack trace/i
+  ]
+
+  for (const line of lines) {
+    if (errorPatterns.some((p) => p.test(line))) {
+      // Include context: 2 lines before each error
+      const idx = lines.indexOf(line)
+      if (idx > 0 && !important.includes(lines[idx - 1])) important.push(lines[idx - 1])
+      if (!important.includes(line)) important.push(line)
+      if (idx < lines.length - 1 && !important.includes(lines[idx + 1])) important.push(lines[idx + 1])
+    }
+  }
+
+  // Always include last 10 lines
+  const tail = lines.slice(-10)
+  for (const line of tail) {
+    if (!important.includes(line)) important.push(line)
+  }
+
+  return important.slice(-maxLines).join('\n')
+}
+
+/** Extract the actionable parts from a Minecraft crash report (skip system details, mod list, etc.). */
+export function summarizeCrashReport(content: string, maxChars = 3000): string {
+  const lines = content.split('\n')
+  const result: string[] = []
+  let inSystemDetails = false
+  let inModList = false
+
+  for (const line of lines) {
+    // Stop at verbose sections
+    if (line.startsWith('-- System Details --') || line.startsWith('-- System --')) {
+      inSystemDetails = true
+      result.push('-- 系统信息（已省略） --')
+      continue
+    }
+    if (line.startsWith('-- Mod List --') || line.includes('Mod List:')) {
+      inModList = true
+      result.push('-- 模组列表（已省略） --')
+      continue
+    }
+    // Resume after system/mod sections end
+    if (inSystemDetails && line.startsWith('-- ')) {
+      inSystemDetails = false
+    }
+    if (inModList && line.startsWith('-- ')) {
+      inModList = false
+    }
+
+    if (inSystemDetails || inModList) continue
+
+    // Skip verbose stack frame details that are just repeating info
+    if (line.trim().startsWith('at ') && result.filter((l) => l.includes('at ')).length > 15) {
+      if (!result.includes('... (更多堆栈帧已省略)'))
+        result.push('... (更多堆栈帧已省略)')
+      continue
+    }
+
+    result.push(line)
+  }
+
+  const summary = result.join('\n')
+  return summary.length > maxChars ? summary.slice(0, maxChars) + '\n... (已截断)' : summary
 }

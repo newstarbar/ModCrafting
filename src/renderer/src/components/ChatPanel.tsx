@@ -392,6 +392,20 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     }
   }, [flushPersist])
 
+  // Watch for external context injected via "发送给AI" buttons (crash reports, build errors, etc.)
+  const contextConsumedRef = useRef(0)
+  useEffect(() => {
+    if (contextFiles.length > contextConsumedRef.current) {
+      const newItems = contextFiles.slice(contextConsumedRef.current)
+      contextConsumedRef.current = contextFiles.length
+      const text = newItems.join('\n\n')
+      setInput((prev) => (prev ? `${prev}\n\n${text}` : text))
+      // Clear after consuming so the same content isn't re-appended
+      setContextFiles([])
+      contextConsumedRef.current = 0
+    }
+  }, [contextFiles, setContextFiles])
+
   // Refresh display from turnRef
   const refreshDisplay = useCallback(() => {
     const t = turnRef.current

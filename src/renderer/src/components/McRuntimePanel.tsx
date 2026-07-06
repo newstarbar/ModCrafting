@@ -3,6 +3,7 @@ import { IconGamepad } from './Icon'
 import { logger } from '../utils/logger'
 import { parseMcLogs, PHASE_LABELS, PHASE_ORDER, phaseStepIndex, splitLogChunks } from '../utils/mc-phase-parser'
 import { waitForMcPlaying } from '../utils/mc-wait-playing'
+import { summarizeCrashReport } from '../utils/log-parser'
 
 export type McExitReason = 'none' | 'normal' | 'crash' | 'manual' | 'start_failed'
 
@@ -240,8 +241,9 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
     const handleSendCrashToAi = useCallback(async () => {
       if (!crashMessage?.path) return
       const result = await window.api.mcGetCrashReport(crashMessage.path)
-      if (result.success) {
-        onAddCrashToChat(result.content || '')
+      if (result.success && result.content) {
+        const summary = summarizeCrashReport(result.content)
+        onAddCrashToChat(summary)
         setCrashMessage(null)
       }
     }, [crashMessage, onAddCrashToChat])

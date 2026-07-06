@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperat
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { parseAnyError, buildRepairPrompt, type ParsedError } from '../utils/log-parser'
+import { parseAnyError, buildRepairPrompt, summarizeBuildOutput, type ParsedError } from '../utils/log-parser'
 import { logger } from '../utils/logger'
 
 interface BottomPanelProps {
@@ -321,7 +321,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
                         type="button"
                         className="mc-btn"
                         style={{ fontSize: '11px', marginLeft: 'auto' }}
-                        onClick={() => onAddToChatContext(`--- 构建日志 ---\n${logs.slice(-50).join('\n')}`)}
+                        onClick={() => onAddToChatContext(`--- 构建日志 ---\n${summarizeBuildOutput(logs.join('\n'), 30)}`)}
                       >
                         发送给 AI
                       </button>
