@@ -46,6 +46,8 @@ export interface FileDiff {
   added: number
   removed: number
   content?: string
+  firstAdded?: string
+  firstRemoved?: string
 }
 
 // Approval payload
@@ -108,6 +110,8 @@ export interface Event {
   retryMax?: number
   phase?: string
   planSteps?: Array<{ id: string; description: string; status: string }>
+  turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
+  composerMode?: 'agent' | 'plan' | 'ask'
 }
 
 // Sink interface — same contract as Reasonix event.Sink

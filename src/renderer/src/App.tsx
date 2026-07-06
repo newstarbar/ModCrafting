@@ -510,6 +510,12 @@ const App: React.FC = () => {
 		)));
 	}, []);
 
+	const handleUpdateSessionMeta = useCallback((sessionId: string, meta: { composerMode?: 'agent' | 'plan' | 'ask'; sessionGoal?: string }) => {
+		setSessions((prev) => prev.map((s) => (
+			s.id === sessionId ? { ...s, ...meta, updatedAt: Date.now() } : s
+		)));
+	}, []);
+
 	const handleUsageChange = useCallback((nextUsage: UsageStats) => {
 		setUsage(nextUsage);
 		const sid = currentSessionIdRef.current;
@@ -613,6 +619,7 @@ const App: React.FC = () => {
 									currentSessionId={currentSessionId}
 									sessions={sessions}
 									onPersistSession={handlePersistSession}
+									onUpdateSessionMeta={handleUpdateSessionMeta}
 									onNewSession={handleNewSessionFromChat}
 									onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 								/>

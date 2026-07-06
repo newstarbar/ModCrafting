@@ -272,15 +272,15 @@ export class WorkflowEngine {
       selected,
       this.registry,
       ctx,
-      (name, id) => {
+      (name, id, args) => {
         const tool = this.registry.get(name)
-        this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: '', readOnly: tool?.readOnly() } })
+        this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: JSON.stringify(args), readOnly: tool?.readOnly() } })
         this.onToolDispatch?.(name, id)
       },
       (name, id, result) => {
         this.emit({
           kind: EventKind.ToolResult,
-          tool: { id, name, args: '', output: result.output, error: result.error, durationMs: result.durationMs }
+          tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff }
         })
         this.onToolResult?.(name, id, result.output)
       },

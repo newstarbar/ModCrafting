@@ -4,15 +4,32 @@ import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { setupMenu } from './menu'
 import { setupIpcHandlers } from './ipc-handlers'
-import { setupTerminalHandlers } from './terminal-handler'
-import { setupMcRuntimeHandlers } from './mc-runtime'
+import { setupTerminalHandlers, stopAllTerminalSessions } from './terminal-handler'
+import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
 import { initUpdater } from './updater'
+import { stopGradleDaemonsOnExit } from './build-env'
 
 if (is.dev) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
 }
 
 let mainWindow: BrowserWindow | null = null
+let shutdownStarted = false
+
+async function runShutdownCleanup(): Promise<void> {
+  stopAllTerminalSessions()
+  stopAllMcInstances()
+  await stopGradleDaemonsOnExit()
+}
+
+app.on('before-quit', (event) => {
+  if (shutdownStarted) return
+  shutdownStarted = true
+  event.preventDefault()
+  void runShutdownCleanup().finally(() => {
+    app.exit(0)
+  })
+})
 
 function resolveAppIcon(): string | undefined {
   const candidates = [

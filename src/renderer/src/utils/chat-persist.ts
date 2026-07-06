@@ -20,7 +20,7 @@ export interface SerializableDisplayMessage {
   content: string
   entries?: SerializableChronoEntry[]
   isStreaming?: boolean
-  turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled'
+  turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled' | 'answered' | 'planned'
   embeddedPlan?: PlanStep[]
   timestamp: number
 }

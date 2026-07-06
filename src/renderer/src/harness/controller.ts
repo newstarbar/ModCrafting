@@ -11,6 +11,11 @@ import { parsePlanSteps, planHasActionableSteps, selectPlanText, isActionablePla
 import { logger } from '../utils/logger'
 import { buildFabricAgentPolicyPrompt } from './fabric-agent-policy'
 import { isRetryableFetchError } from './fetch-retry'
+import {
+  type ComposerMode,
+  resolveTurnIntent,
+  buildSessionGoalBlock
+} from './turn-intent'
 
 export interface ControllerOptions {
   registry: Registry
@@ -37,6 +42,10 @@ export class Controller {
   private _phase: 'plan' | 'execute' = 'plan'
   private planTracker: PlanTracker | null = null
   private pendingApproval: { id: string; resolve: (allow: boolean) => void } | null = null
+  private composerMode: ComposerMode = 'agent'
+  private sessionGoal = ''
+  private planReadyAwaitingExecute = false
+  private lastTurnMode: 'chat' | 'develop' | 'plan_only' | 'resume' = 'chat'
 
   // Callbacks
   onEvent?: (event: Event) => void
@@ -73,6 +82,21 @@ export class Controller {
   get running(): boolean { return this._running }
   get projectPath(): string | null { return this._projectPath }
   get phase(): 'plan' | 'execute' { return this._phase }
+  get isPlanReady(): boolean { return this.planReadyAwaitingExecute }
+  get lastTurnModeSnapshot(): typeof this.lastTurnMode { return this.lastTurnMode }
+  get composerModeSnapshot(): ComposerMode { return this.composerMode }
+
+  setComposerMode(mode: ComposerMode): void {
+    this.composerMode = mode
+  }
+
+  setSessionGoal(goal: string): void {
+    this.sessionGoal = goal.trim()
+  }
+
+  getSessionGoal(): string {
+    return this.sessionGoal
+  }
 
   setProjectPath(p: string | null): void {
     this._projectPath = p
@@ -91,27 +115,13 @@ export class Controller {
     this.sink.emit(event)
   }
 
-  /** Heuristic: Q&A vs development task — checked on every user message */
-  private isDevelopmentTask(input: string): boolean {
-    const trimmed = input.trim()
-
-    const greetingPatterns = /^(你好|您好|嗨|hello|hi|hey|在吗|谢谢|感谢|好的|ok|okay|再见|拜拜)[\s!！。.?？~，,]*$/i
-    if (greetingPatterns.test(trimmed)) return false
-
-    const qaPatterns = /^(什么是|为什么|怎么|如何|能否|是否|解释|说明|什么意思|这段|请问)/i
-    if (qaPatterns.test(trimmed)) return false
-
-    const devPatterns = /创建|实现|开发|添加|修改|构建|写一个|制作|生成.{0,8}(模组|mod|类|文件|物品|功能)/i
-    if (devPatterns.test(trimmed)) return true
-
-    if ((trimmed.endsWith('?') || trimmed.endsWith('？')) && trimmed.length < 120) {
-      return false
+  private intentContext(): Parameters<typeof resolveTurnIntent>[1] {
+    return {
+      phase: this._phase,
+      planTracker: this.planTracker,
+      hasProject: Boolean(this._projectPath),
+      composerMode: this.composerMode
     }
-
-    // Short casual messages without dev keywords → chat mode
-    if (trimmed.length < 24 && !devPatterns.test(trimmed)) return false
-
-    return true
   }
 
   /** Skip execute when plan has no concrete steps */
@@ -212,6 +222,7 @@ export class Controller {
 
     const projectInfo = await this.buildProjectInfo()
     const fabricPolicy = buildFabricAgentPolicyPrompt(mode)
+    const goalBlock = buildSessionGoalBlock(this.sessionGoal)
 
     if (mode === 'chat') {
       return `# ModCrafting AI 助手
@@ -227,6 +238,8 @@ export class Controller {
 - 可以提供 Java/JSON 代码示例（markdown 代码块）。
 - 如果用户后续明确要求开发功能，再进入实施流程。
 
+${goalBlock}
+
 ${fabricPolicy}
 
 ${projectInfo}`
@@ -235,22 +248,20 @@ ${projectInfo}`
     const phaseHeader = mode === 'plan'
       ? `## 📋 第一阶段：制定计划
 
-你现在要做的是输出一个**详细的实施计划**。不要调用任何工具。只需列出所有需要创建/修改的文件及其用途。
+输出结构化实施计划。不要调用任何工具。
 
 计划格式要求：
-- **每行一个步骤**，使用数字编号：\`1. 步骤描述\`
-- 例如：
-  1. 创建 src/main/java/.../File.java - 主模组类
-  2. 修改 settings.gradle - 配置仓库
-  3. 构建项目
+- **每行一个步骤**：\`N. [kind] 简短标题 — 目标路径\`
+- **kind** 仅允许：\`write\` | \`recipe\` | \`inspect\`
+- 示例：
+  1. [write] src/main/java/.../Mixin.java — 二段跳逻辑
+  2. [recipe] data/<modid>/recipe/jump_boots.json — 跳跃靴配方
 
 计划必须精简：
-- **禁止重复步骤，禁止把同一个操作拆成多条**（例如不要既写"构建项目"又写"运行 gradlew build"）。
-- **每个操作只出现一次。** 一次构建就是一步，一次运行就是一步。
-- 构建/运行类任务通常只需 1-3 步。不要为"确保编译无错误""测试"等再追加重复的构建/运行步骤。
-- **若计划未包含构建或启动游戏，系统会自动在末尾追加这两步。**
-
-计划输出后系统会自动进入执行阶段。`
+- **禁止写构建/运行步骤**（主机会自动追加 gradlew build 与 runClient）。
+- **禁止空泛步骤**（确保无错、测试功能、输出总结）。
+- **每步只做一件事**；最多 6 步。
+- **禁止重复步骤。**`
       : `## 🔧 第二阶段：执行计划
 
 严格按照之前的计划执行。**不要重新规划**。步骤完成由主机根据工具结果自动判定。
@@ -258,7 +269,7 @@ ${projectInfo}`
 规则：
 - **每个文件只写一次。** 不要重复写入。
 - **配方/合成任务优先调用 create_recipe。** 不要手写重复 recipe JSON。
-- **写完全部文件后，通过 trigger_build 在右侧高级面板构建，再通过 trigger_build(runClient) 在右侧游戏面板启动真实测试。**
+- **写完全部文件后，通过 trigger_build 构建，再通过 trigger_build(runClient) 启动真实测试。**
 - **运行测试需等待游戏真正进入可玩状态后才算完成。**
 - **不要主动调用 complete_step。** 直接执行当前步骤需要的工具。
 - **全部步骤完成后输出总结。**`
@@ -286,9 +297,10 @@ ${mode === 'plan' ? '## 当前：输出计划阶段\n只输出计划文本，不
 - **最多 3 轮探索。** 之后探索工具将被锁定。
 - 使用 write_file 编写完整、可编译的 Java 代码。
 - 创建配方/合成表时优先使用 fabric_recipe_generate 或 create_recipe，不要手写 recipe JSON。
-- **写配方/资源/代码前必须先调用 fabric_docs_search 或 fabric_meta_version_check**，确认当前 MC 版本的 JSON 路径与字段格式（1.21+ 使用 data/<modid>/recipe/ 单数目录与 result.id）。
 - 使用 Yarn mappings。
 - 主类 → ModInitializer，客户端类 → ClientModInitializer。
+
+${goalBlock}
 
 ${fabricPolicy}
 
@@ -316,6 +328,62 @@ ${projectInfo}`
     }
   }
 
+  private async runChatTurn(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+    await this.updateSystemPrompt('chat')
+    const result = await this.agent.run(
+      this.apiConfig.endpoint,
+      this.apiConfig.apiKey,
+      this.apiConfig.model,
+      this.messages,
+      this._projectPath,
+      this.abortController!.signal,
+      streamCb,
+      { phase: 'plan', emitLifecycle: true, turnMode: 'chat', composerMode: this.composerMode }
+    )
+    return result
+  }
+
+  private async runExecutePhase(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+    await this.updateSystemPrompt('execute')
+    this._phase = 'execute'
+    this.planReadyAwaitingExecute = false
+    if (this.planTracker && this.planTracker.steps.length > 0) {
+      this.planTracker.markRunning()
+      this.emitPlanState(this.planTracker)
+    }
+    this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
+    this.onAgentStatus?.('执行中...')
+
+    return this.agent.run(
+      this.apiConfig.endpoint,
+      this.apiConfig.apiKey,
+      this.apiConfig.model,
+      this.messages,
+      this._projectPath,
+      this.abortController!.signal,
+      streamCb,
+      {
+        phase: 'execute',
+        emitLifecycle: true,
+        planTracker: this.planTracker,
+        opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
+      }
+    )
+  }
+
+  private async beginExecuteFromTracker(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+    if (!this.planTracker || this.planTracker.steps.length === 0) {
+      this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: '没有可执行的计划' } })
+      this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready' })
+      return ''
+    }
+    this.messages.push({
+      role: 'user',
+      content: this.buildExecuteConfirmMessage(this.planTracker)
+    })
+    return this.runExecutePhase(streamCb)
+  }
+
   private async runTurn(input: string, options: { pushUser: boolean }): Promise<string> {
     if (this._running) return ''
 
@@ -323,7 +391,9 @@ ${projectInfo}`
     this.abortController = new AbortController()
     this.agent.resetRunState()
 
-    const isDev = this.isDevelopmentTask(input)
+    const intent = resolveTurnIntent(input, this.intentContext())
+    this.lastTurnMode = intent === 'plan_only' ? 'plan_only' : intent
+
     if (options.pushUser) {
       this.messages.push({ role: 'user', content: input })
     }
@@ -338,23 +408,40 @@ ${projectInfo}`
     }
 
     try {
-      if (!isDev) {
-        await this.updateSystemPrompt('chat')
-        const result = await this.agent.run(
-          this.apiConfig.endpoint,
-          this.apiConfig.apiKey,
-          this.apiConfig.model,
-          this.messages,
-          this._projectPath,
-          this.abortController.signal,
-          streamCb,
-          { phase: 'plan', emitLifecycle: true }
-        )
+      if (intent === 'chat') {
+        const result = await this.runChatTurn(streamCb)
         this.onAgentStatus?.('')
         return result
       }
 
-      if (this._phase === 'plan') {
+      if (intent === 'resume') {
+        if (!this.planTracker) {
+          this.onAgentStatus?.('')
+          this.emitEvent({
+            kind: EventKind.Notice,
+            notice: { level: 'warn', text: '没有可恢复的计划，请先描述功能或生成计划。' }
+          })
+          this.emitEvent({ kind: EventKind.TurnDone, phase: 'resume_missing_plan' })
+          return ''
+        }
+        const result = await this.beginExecuteFromTracker(streamCb)
+        this.onAgentStatus?.('')
+        return result
+      }
+
+      if (intent === 'develop' && this._phase === 'execute' && this.planTracker && !this.planTracker.allDone()) {
+        const result = await this.runExecutePhase(streamCb)
+        this.onAgentStatus?.('')
+        return result
+      }
+
+      if (intent === 'develop' || intent === 'plan_only') {
+        if (intent === 'plan_only') {
+          this._phase = 'plan'
+          this.planTracker = null
+          this.planReadyAwaitingExecute = false
+        }
+
         await this.updateSystemPrompt('plan')
         this.emitEvent({ kind: EventKind.Phase, phase: 'plan_start' })
 
@@ -366,7 +453,7 @@ ${projectInfo}`
           this._projectPath,
           this.abortController.signal,
           streamCb,
-          { phase: 'plan', emitLifecycle: false }
+          { phase: 'plan', emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
         )
 
         const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
@@ -389,64 +476,30 @@ ${projectInfo}`
                 : '未能解析出编号实施步骤，未进入执行阶段'
             }
           })
-          this.emitEvent({ kind: EventKind.TurnDone })
+          if (intent !== 'plan_only') {
+            this.emitEvent({ kind: EventKind.TurnDone })
+          }
           return planResult
         }
 
-        this._phase = 'execute'
-        await this.updateSystemPrompt('execute')
         this.planTracker = PlanTracker.fromPlanText(fullPlanText)
-        if (this.planTracker.steps.length > 0) {
-          this.planTracker.markRunning()
-          this.emitPlanState(this.planTracker)
+        this.emitPlanState(this.planTracker)
+
+        if (intent === 'plan_only') {
+          this._phase = 'plan'
+          this.planReadyAwaitingExecute = true
+          this.onAgentStatus?.('')
+          this.emitEvent({ kind: EventKind.Phase, phase: 'plan_ready' })
+          this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready', composerMode: this.composerMode })
+          return planResult
         }
-        this.messages.push({
-          role: 'user',
-          content: this.planTracker.steps.length > 0
-            ? this.buildExecuteConfirmMessage(this.planTracker)
-            : '计划已确认。现在开始执行计划，调用工具实现上述方案。'
-        })
 
-        this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
-        this.onAgentStatus?.('执行中...')
-
-        const execResult = await this.agent.run(
-          this.apiConfig.endpoint,
-          this.apiConfig.apiKey,
-          this.apiConfig.model,
-          this.messages,
-          this._projectPath,
-          this.abortController.signal,
-          streamCb,
-          {
-            phase: 'execute',
-            emitLifecycle: true,
-            planTracker: this.planTracker,
-            opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
-          }
-        )
-
+        const execResult = await this.beginExecuteFromTracker(streamCb)
         this.onAgentStatus?.('')
         return execResult || planResult
       }
 
-      await this.updateSystemPrompt('execute')
-      const result = await this.agent.run(
-        this.apiConfig.endpoint,
-        this.apiConfig.apiKey,
-        this.apiConfig.model,
-        this.messages,
-        this._projectPath,
-        this.abortController.signal,
-        streamCb,
-        {
-          phase: 'execute',
-          emitLifecycle: true,
-          planTracker: this.planTracker,
-          opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
-        }
-      )
-
+      const result = await this.runExecutePhase(streamCb)
       this.onAgentStatus?.('')
       return result
     } catch (err: unknown) {
@@ -469,6 +522,36 @@ ${projectInfo}`
       } else {
         this.onAgentStatus?.(`错误: ${errMsg}`)
       }
+      this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
+      return `Error: ${errMsg}`
+    } finally {
+      this._running = false
+      this.abortController = null
+    }
+  }
+
+  async startExecuteFromPlan(): Promise<string> {
+    if (this._running) return ''
+    if (!this.planTracker || this.planTracker.steps.length === 0) {
+      this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: '没有可执行的计划' } })
+      return ''
+    }
+
+    this._running = true
+    this.abortController = new AbortController()
+    this.agent.resetRunState()
+    this.onAgentStatus?.('执行中...')
+
+    const streamCb = (text: string, reasoning?: string) => {
+      this.onStreamUpdate?.(text, reasoning)
+    }
+
+    try {
+      const result = await this.beginExecuteFromTracker(streamCb)
+      this.onAgentStatus?.('')
+      return result
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err)
       this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
       return `Error: ${errMsg}`
     } finally {
@@ -529,6 +612,7 @@ ${projectInfo}`
     this.messages = []
     this._phase = 'plan'
     this.planTracker = null
+    this.planReadyAwaitingExecute = false
     this.agent.resetRunState()
     logger.agent('Session cleared')
   }

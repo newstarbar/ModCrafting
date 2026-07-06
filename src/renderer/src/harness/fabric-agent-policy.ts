@@ -115,15 +115,16 @@ function modeSpecificRules(mode: FabricAgentPromptMode): string[] {
   }
   if (mode === 'plan') {
     return [
-      '计划第一步应识别任务类别，并说明需要查询哪些产品内只读知识工具。',
-      '计划中避免泛泛而谈，每一步应落到 Java、JSON、Gradle、DataGen、构建或运行验证。'
+      '每步格式：`N. [kind] 简短标题 — 目标路径`；kind 仅 write | recipe | inspect。',
+      '禁止写构建/运行步骤（主机自动追加）；禁止空泛步骤（测试、确保无错、输出总结）。',
+      '每步只做一件事；最多 6 步。'
     ]
   }
   return [
     '执行时优先调用产品内 Fabric 专用工具，只有工具覆盖不了时才用 write_file。',
-    '写配方、资源 JSON 或 Java 代码前，必须先调用 fabric_docs_search 或 fabric_meta_version_check 确认当前 MC 版本的 API 与 JSON 格式。',
-    '配方必须使用 create_recipe / fabric_recipe_generate，并确认输出路径为 data/<modid>/recipe/（1.21+ 单数目录）且 result 使用 id 字段。',
-    '写入后必须通过 trigger_build、runDatagen、runClient 或日志读取形成验证闭环。'
+    '当前 write/recipe 步若 API 不确定，可在该步内调用 fabric_docs_search 或 fabric_meta_version_check。',
+    '配方使用 create_recipe / fabric_recipe_generate，路径为 data/<modid>/recipe/（1.21+ 单数目录）。',
+    '只执行当前步骤，禁止重规划；写入后通过 trigger_build / runClient 验证。'
   ]
 }
 

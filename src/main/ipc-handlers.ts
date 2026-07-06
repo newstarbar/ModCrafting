@@ -200,7 +200,7 @@ export function setupIpcHandlers(): void {
     try {
       const { spawn } = require('child_process')
       return await new Promise((resolve) => {
-        const child = spawn(command, [], { cwd, shell: true })
+        const child = spawn(command, { cwd, shell: true })
         let stdout = ''
         let stderr = ''
         const timer = setTimeout(() => {
@@ -227,7 +227,7 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('app:runCommandStream', async (event, command: string, cwd: string) => {
     try {
       const { spawn } = require('child_process')
-      const child = spawn(command, [], { cwd, shell: true })
+      const child = spawn(command, { cwd, shell: true })
       let fullOutput = ''
       child.stdout.on('data', (data: Buffer) => {
         const text = data.toString()

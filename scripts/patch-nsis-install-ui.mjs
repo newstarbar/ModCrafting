@@ -52,14 +52,15 @@ const extractMacro = `!macro extractUsing7za FILE
 
   LoopExtract7za:
     IntOp $R1 $R1 + 1
+    DetailPrint "正在写入程序文件…"
     CopyFiles /SILENT "$PLUGINSDIR\\7z-out\\*" $OUTDIR
     IfErrors 0 DoneExtract7za
 
-    DetailPrint \`Can't modify "\${PRODUCT_NAME}"'s files.\`
-    \${if} $R1 < 5
+    DetailPrint "安装目录暂时无法写入，正在重试… ($R1)"
+    \${if} $R1 < 10
       Goto RetryExtract7za
     \${else}
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDRETRY IDCANCEL AbortExtract7za
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "无法写入安装目录。$\r$\n$\r$\n请确认：$\r$\n• ModCrafting 已完全关闭$\r$\n• 未打开安装目录中的文件$\r$\n• 杀毒软件未锁定文件$\r$\n$\r$\n点击「重试」继续，或「取消」退出。" /SD IDRETRY IDCANCEL AbortExtract7za
     \${endIf}
 
     RMDir /r "$PLUGINSDIR\\7z-out"
@@ -75,7 +76,7 @@ const extractMacro = `!macro extractUsing7za FILE
     Quit
 
   RetryExtract7za:
-    Sleep 1000
+    Sleep 2000
     Goto LoopExtract7za
 
   DoneExtract7za:
@@ -94,10 +95,10 @@ const macroStart = extractContent.indexOf('!macro extractUsing7za FILE')
 const macroEnd = extractContent.indexOf('!macroend', macroStart) + '!macroend'.length
 if (macroStart === -1 || macroEnd === -1) {
   console.warn('[nsis] extractUsing7za macro not found — skip extract patch')
-} else if (!extractContent.includes('MODCRAFTING_SETUP_PROGRESS')) {
+} else if (!extractContent.includes('无法写入安装目录')) {
   extractContent = extractContent.slice(0, macroStart) + extractMacro + '\n' + extractContent.slice(macroEnd)
   writeFileSync(extractPath, extractContent)
-  console.log('[nsis] extractAppPackage.nsh: conditional ExtractWithCallback enabled')
+  console.log('[nsis] extractAppPackage.nsh: extractUsing7za retry/message patch applied')
 } else {
   writeFileSync(extractPath, extractContent)
 }

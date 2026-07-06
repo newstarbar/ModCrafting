@@ -41,7 +41,7 @@ function killProcessTree(child) {
   if (!child?.pid) return
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/PID', String(child.pid), '/F', '/T'], { shell: true, stdio: 'ignore' })
+      spawn('taskkill', ['/PID', String(child.pid), '/F', '/T'], { stdio: 'ignore' })
     } else {
       child.kill('SIGTERM')
     }
@@ -107,8 +107,7 @@ function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
         JAVA_HOME: path.join(prefetchRuntime, 'jdk-21'),
         GRADLE_USER_HOME: gradleHome,
         PATH: `${path.join(prefetchRuntime, 'jdk-21', 'bin')};${process.env.PATH || ''}`
-      },
-      shell: true
+      }
     })
     let timer
     let timedOut = false

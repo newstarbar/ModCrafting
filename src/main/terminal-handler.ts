@@ -11,6 +11,17 @@ interface TerminalSession {
 const sessions = new Map<string, TerminalSession>()
 let sessionCounter = 0
 
+export function stopAllTerminalSessions(): void {
+  for (const [id, session] of sessions) {
+    try {
+      session.pty.kill()
+    } catch {
+      /* ignore */
+    }
+    sessions.delete(id)
+  }
+}
+
 export function setupTerminalHandlers(): void {
   // Create a new terminal session
   ipcMain.handle('terminal:create', async (_event, cwd?: string) => {

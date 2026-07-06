@@ -68,8 +68,7 @@ function runBuild() {
         JAVA_HOME: path.join(runtimeRoot, 'jdk-21'),
         GRADLE_USER_HOME: path.join(runtimeRoot, 'gradle-home'),
         PATH: `${path.join(runtimeRoot, 'jdk-21', 'bin')};${process.env.PATH || ''}`
-      },
-      shell: true
+      }
     })
     let out = ''
     child.stdout.on('data', (d) => { out += d; process.stdout.write(d) })

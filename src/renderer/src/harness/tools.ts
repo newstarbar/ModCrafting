@@ -93,6 +93,7 @@ export interface ToolResult {
   artifactPath?: string
   exitCode?: number | null
   errorKind?: string
+  fileDiff?: FileDiff
   meta?: {
     mcPhase?: McPhase
     runClientStarted?: boolean
@@ -183,6 +184,15 @@ export async function executeTool(
     const inferredError = inferToolError(tool.name, output, exitCode)
     const meta = tool.name === 'trigger_build' ? parseTriggerBuildMeta(output) : undefined
 
+    // Extract embedded FILE_DIFF metadata from write_file output
+    let fileDiff: FileDiff | undefined
+    let cleanedOutput = truncated
+    const diffMatch = cleanedOutput.match(/<!-- FILE_DIFF (.*?) -->/)
+    if (diffMatch) {
+      try { fileDiff = JSON.parse(diffMatch[1]) } catch { /* ignore malformed */ }
+      cleanedOutput = cleanedOutput.replace(/\s*<!-- FILE_DIFF .*? -->/, '').trim()
+    }
+
     logger.tool(`Result: ${tool.name}`, {
       duration: `${duration}ms`,
       truncated: truncated.length < output.length,
@@ -190,7 +200,7 @@ export async function executeTool(
     })
 
     return {
-      output: truncated,
+      output: cleanedOutput,
       error: inferredError ? truncateOutput(inferredError) : undefined,
       durationMs: duration,
       ok: !inferredError,
@@ -198,6 +208,7 @@ export async function executeTool(
       args,
       artifactPath: artifactPathFor(tool.name, args),
       exitCode,
+      fileDiff,
       meta
     }
   } catch (err) {
@@ -223,7 +234,7 @@ export async function executeBatch(
   calls: Array<{ name: string; args: Record<string, unknown>; id?: string }>,
   registry: Registry,
   ctx: ToolContext,
-  onDispatch?: (name: string, id: string) => void,
+  onDispatch?: (name: string, id: string, args: Record<string, unknown>) => void,
   onResult?: (name: string, id: string, result: ToolResult) => void,
   onProgress?: (id: string, chunk: string) => void
 ): Promise<Map<string, ToolResult>> {
@@ -247,7 +258,7 @@ export async function executeBatch(
   if (readOnlyCalls.length > 0) {
     await Promise.all(
       readOnlyCalls.map(async (call) => {
-        onDispatch?.(call.name, call.id)
+        onDispatch?.(call.name, call.id, call.args)
         const tool = registry.get(call.name)
         if (tool) {
           const callCtx: ToolContext = {
@@ -265,7 +276,7 @@ export async function executeBatch(
 
   // Execute writer calls serially
   for (const call of writerCalls) {
-    onDispatch?.(call.name, call.id)
+    onDispatch?.(call.name, call.id, call.args)
     const tool = registry.get(call.name)
     if (tool) {
       // Check preview
@@ -280,6 +291,10 @@ export async function executeBatch(
         onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
       }
       const result = await executeTool(tool, call.args, callCtx)
+      // Attach fileDiff from preview if execute() didn't provide one
+      if (!result.fileDiff && diff) {
+        result.fileDiff = diff
+      }
       results.set(call.id, result)
       onResult?.(call.name, call.id, result)
     }

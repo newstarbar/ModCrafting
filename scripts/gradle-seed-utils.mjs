@@ -439,8 +439,7 @@ export async function runOfflineBuildVerification({
         GRADLE_USER_HOME: gradleHome,
         ORG_GRADLE_PROJECT_org_gradle_offline: 'true',
         PATH: `${path.join(runtimeRoot, 'jdk-21', 'bin')};${process.env.PATH || ''}`
-      },
-      shell: true
+      }
     })
     let out = ''
     const onData = (d) => {

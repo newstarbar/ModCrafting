@@ -191,7 +191,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
   const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirArg}"`
 
   try {
-    const proc = spawn(fullCmd, [], {
+    const proc = spawn(fullCmd, {
       cwd: instance.projectPath,
       shell: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -305,7 +305,7 @@ function stopInstance(instance: McInstance): void {
     if (!instance.process) return
     if (process.platform === 'win32' && pid) {
       try {
-        spawn('taskkill', ['/PID', String(pid), '/F', '/T'], { shell: true })
+        spawn('taskkill', ['/PID', String(pid), '/F', '/T'])
       } catch { /* ignore */ }
     } else {
       instance.process.kill('SIGTERM')
@@ -315,6 +315,14 @@ function stopInstance(instance: McInstance): void {
     instance.startedAt = null
     notifyInstanceState(instance.id)
   }, 3000)
+}
+
+export function stopAllMcInstances(): void {
+  for (const instance of instances.values()) {
+    if (instance.status === 'running' || instance.status === 'starting' || instance.status === 'stopping') {
+      stopInstance(instance)
+    }
+  }
 }
 
 export function setupMcRuntimeHandlers(): void {
@@ -377,7 +385,7 @@ export function setupMcRuntimeHandlers(): void {
     if (instance?.process) {
       instance.exitReason = 'manual'
       if (process.platform === 'win32' && instance.process.pid) {
-        spawn('taskkill', ['/PID', String(instance.process.pid), '/F', '/T'], { shell: true })
+        spawn('taskkill', ['/PID', String(instance.process.pid), '/F', '/T'])
       } else {
         instance.process.kill()
       }

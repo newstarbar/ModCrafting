@@ -42,6 +42,8 @@ export interface RunOptions {
   emitLifecycle?: boolean
   planTracker?: PlanTracker | null
   opsOnlyPlan?: boolean
+  turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
+  composerMode?: 'agent' | 'plan' | 'ask'
 }
 
 const MAX_READONLY_ROUNDS = 3
@@ -81,6 +83,7 @@ export class Agent {
   private consecutiveBlockedRounds = 0
   // Rounds where the model only called complete_step without any real work
   private consecutiveStepDoneOnlyRounds = 0
+  private runLifecycleMeta: Pick<RunOptions, 'turnMode' | 'composerMode'> = {}
 
   constructor(opts: AgentOptions) {
     this.registry = opts.registry
@@ -136,9 +139,15 @@ export class Agent {
 
   private emit(e: Event): void { this.sink.emit(e) }
 
-  private finishRun(emitLifecycle: boolean, error?: string): void {
+  private finishRun(emitLifecycle: boolean, error?: string, phase?: string): void {
     if (emitLifecycle) {
-      this.emit({ kind: EventKind.TurnDone, error })
+      this.emit({
+        kind: EventKind.TurnDone,
+        error,
+        phase,
+        turnMode: this.runLifecycleMeta.turnMode,
+        composerMode: this.runLifecycleMeta.composerMode
+      })
     }
   }
 
@@ -270,6 +279,10 @@ export class Agent {
     const emitLifecycle = options.emitLifecycle ?? true
     const planTracker = options.planTracker ?? null
     const opsOnlyPlan = options.opsOnlyPlan ?? false
+    this.runLifecycleMeta = {
+      turnMode: options.turnMode,
+      composerMode: options.composerMode
+    }
 
     if (options.opsOnlyPlan) {
       this.readonlyLocked = true
@@ -488,7 +501,7 @@ export class Agent {
             })
             this.emit({
               kind: EventKind.ToolResult,
-              tool: { id: call.id, name: call.name, args: '', output: blockMsg, error: blockMsg, durationMs: 0 }
+              tool: { id: call.id, name: call.name, args: JSON.stringify(call.args), output: blockMsg, error: blockMsg, durationMs: 0 }
             })
             this.onToolResult?.(call.name, call.id, blockMsg)
             logger.agent('loop guard blocked', { tool: call.name, args: call.args })
@@ -512,9 +525,9 @@ export class Agent {
           const batchResults = await executeBatch(
             executableCalls,
             this.registry, ctx,
-            (name, id) => {
+            (name, id, args) => {
               const tool = this.registry.get(name)
-              this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: '', readOnly: tool?.readOnly() } })
+              this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: JSON.stringify(args), readOnly: tool?.readOnly() } })
               this.onToolDispatch?.(name, id)
             },
             (name, id, result) => {
@@ -522,7 +535,7 @@ export class Agent {
               if (call) this.recordRepeatSuccess(name, call.args, Boolean(result.error))
               this.emit({
                 kind: EventKind.ToolResult,
-                tool: { id, name, args: '', output: result.output, error: result.error, durationMs: result.durationMs }
+                tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff }
               })
               this.onToolResult?.(name, id, result.output)
             },

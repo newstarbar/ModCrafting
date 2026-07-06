@@ -42,7 +42,11 @@ function normalizeSession(raw: unknown): ChatSession | null {
     updatedAt: s.updatedAt ?? Date.now(),
     usage: s.usage && typeof s.usage === 'object'
       ? normalizeSessionUsage(s.usage as Partial<UsageStats>)
-      : undefined
+      : undefined,
+    composerMode: s.composerMode === 'agent' || s.composerMode === 'plan' || s.composerMode === 'ask'
+      ? s.composerMode
+      : undefined,
+    sessionGoal: typeof s.sessionGoal === 'string' ? s.sessionGoal : undefined
   }
 }
 

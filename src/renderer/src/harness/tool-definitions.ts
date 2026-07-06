@@ -59,6 +59,23 @@ export const readFileTool: Tool & Previewer = {
 }
 
 // ── write_file ──
+function computeLineDiff(oldContent: string, newContent: string): { added: number; removed: number; firstAdded?: string; firstRemoved?: string } {
+  const oldLines = oldContent.split('\n')
+  const newLines = newContent.split('\n')
+  const oldSet = new Set(oldLines)
+  const newSet = new Set(newLines)
+
+  const addedLines = newLines.filter((l) => !oldSet.has(l))
+  const removedLines = oldLines.filter((l) => !newSet.has(l))
+
+  return {
+    added: addedLines.length,
+    removed: removedLines.length,
+    firstAdded: addedLines.length > 0 ? addedLines[0].slice(0, 80) : undefined,
+    firstRemoved: removedLines.length > 0 ? removedLines[0].slice(0, 80) : undefined
+  }
+}
+
 export const writeFileTool: Tool & Previewer = {
   name: 'write_file',
   description: 'Write content to a file. Path is relative to project root. Creates directories automatically.',
@@ -75,12 +92,29 @@ export const writeFileTool: Tool & Previewer = {
     if (!ctx.projectPath) return 'No project open'
     const filePath = `${ctx.projectPath}/${args.path}`
     const content = String(args.content || '')
+
+    // Read old file content for diff computation
+    let oldContent = ''
+    try {
+      const old = await window.api.readFile(filePath)
+      if (old.success && old.content !== undefined) {
+        oldContent = old.content
+      }
+    } catch {
+      // File doesn't exist yet (new file) — that's fine
+    }
+
     try {
       const res = await window.api.writeFile(filePath, content)
       if (res.success) {
-        // Log file change
         logger.file(`Written: ${args.path}`, `${content.length} bytes`)
-        return `✅ Written: ${args.path} (${content.length} bytes)`
+
+        const diff = computeLineDiff(oldContent, content)
+        const diffPayload = JSON.stringify({
+          path: String(args.path || ''),
+          ...diff
+        })
+        return `✅ Written: ${args.path} (${content.length} bytes)\n<!-- FILE_DIFF ${diffPayload} -->`
       }
       return `Error: ${res.error}`
     } catch (err) {
@@ -90,9 +124,10 @@ export const writeFileTool: Tool & Previewer = {
   preview(args: Record<string, unknown>): FileDiff | null {
     const path = String(args.path || '')
     const content = String(args.content || '')
+    const lines = content.split('\n')
     return {
       path,
-      added: content.split('\n').length,
+      added: lines.length,
       removed: 0,
       content
     }

@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import appIcon from '../../../../build/appIcon.png'
 import installerIcon from '../../../../build/installerIcon.png'
-import { IconSend, IconSquare } from './Icon'
 import { Controller } from '../harness/controller'
 import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'
@@ -22,8 +21,10 @@ import {
 import { groupMessagesIntoTurns } from '../utils/chat-turns'
 import type { ChatTurn } from '../utils/chat-turns'
 import type { DisplayMessage, ChronoEntry } from '../types/display-message'
-import MessageFooter from './MessageFooter'
+import ChatComposer from './ChatComposer'
+import type { ComposerMode } from '../harness/turn-intent'
 import MarkdownContent from './MarkdownContent'
+import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 
 interface ChatPanelProps {
@@ -41,6 +42,7 @@ interface ChatPanelProps {
   onNewSession: (firstMessage?: string) => string
   onRenameSession: (id: string, name: string) => void
   toolchainReady?: boolean
+  onUpdateSessionMeta?: (sessionId: string, meta: { composerMode?: ComposerMode; sessionGoal?: string }) => void
 }
 
 const toolRegistry = new Registry()
@@ -94,7 +96,17 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   read_error_log: '读取错误日志',
   complete_step: '完成任务步骤'
 }
-function getToolDisplayName(name: string): string {
+
+function getToolDisplayName(name: string, args?: Record<string, unknown>): string {
+  if (name === 'trigger_build' && args) {
+    const task = String(args.task || '')
+    if (task === 'runClient') return '游戏测试'
+    if (task === 'build') return '构建编译'
+    if (task === 'runServer') return '启动服务端'
+    if (task === 'runDatagen') return '数据生成'
+    if (task === 'test') return '运行测试'
+    return '触发构建'
+  }
   return TOOL_DISPLAY_NAMES[name] || name
 }
 
@@ -132,14 +144,40 @@ function finalizeRunningTools(entries: ChronoEntry[], hasError: boolean): Chrono
 }
 
 function resolveTurnStatus(error?: string): DisplayMessage['turnStatus'] {
-  if (!error) return 'completed'
+  if (!error) return 'error'
   if (/cancel/i.test(error)) return 'cancelled'
   return 'error'
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true }) => {
+function resolveTurnDoneStatus(options: {
+  hasError: boolean
+  error?: string
+  finalSteps?: PlanStep[]
+  composerMode: ComposerMode
+  turnMode?: string
+  phase?: string
+}): DisplayMessage['turnStatus'] {
+  if (options.hasError) return resolveTurnStatus(options.error)
+  const finalPlanDone = options.finalSteps
+    ? options.finalSteps.every((s) => s.status === 'completed')
+    : false
+  if (finalPlanDone) return 'completed'
+  if (options.phase === 'plan_ready' || options.turnMode === 'plan_only') {
+    return 'planned'
+  }
+  if (options.finalSteps?.length) return 'partial'
+  if (options.turnMode === 'chat' || options.composerMode === 'ask') return 'answered'
+  return 'answered'
+}
+
+const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta }) => {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
+  const [composerMode, setComposerMode] = useState<ComposerMode>('agent')
+  const composerModeRef = useRef<ComposerMode>('agent')
+  composerModeRef.current = composerMode
+  const [sessionGoal, setSessionGoal] = useState('')
+  const [planReady, setPlanReady] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState('')
   // sessions and currentSessionId come from App (single source of truth)
@@ -167,6 +205,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
   const onPersistSessionRef = useRef(onPersistSession)
   onPersistSessionRef.current = onPersistSession
+  const onUpdateSessionMetaRef = useRef(onUpdateSessionMeta)
+  onUpdateSessionMetaRef.current = onUpdateSessionMeta
+
+  const persistComposerMeta = useCallback((meta: { composerMode?: ComposerMode; sessionGoal?: string }) => {
+    const sid = currentSessionIdRef.current
+    if (!sid) return
+    onUpdateSessionMetaRef.current?.(sid, meta)
+  }, [])
 
   const flushPersist = useCallback((
     messages: DisplayMessage[],
@@ -319,6 +365,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     setCollapsedReasoningKeys(reasoningKeys)
     setDisplayMessages(display)
     setActivePlan(restoredPlan)
+    setComposerMode(session.composerMode ?? 'agent')
+    setSessionGoal(session.sessionGoal ?? '')
+    setPlanReady(false)
+    controllerRef.current?.setComposerMode(session.composerMode ?? 'agent')
+    controllerRef.current?.setSessionGoal(session.sessionGoal ?? '')
     const restoredUsage = normalizeSessionUsage(session.usage, apiConfigRef.current.model)
     setUsageAccum(restoredUsage)
     onUsageChangeRef.current?.(restoredUsage)
@@ -385,6 +436,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           refreshDisplay()
         } else if (event.phase === 'execute_start') {
           setAgentStatus('执行中...')
+          setPlanReady(false)
+        } else if (event.phase === 'plan_ready') {
+          setPlanReady(true)
         }
         break
 
@@ -469,12 +523,23 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             next.delete(event.tool!.id)
             return next
           })
+          // Parse args for display
+          let parsedArgs: Record<string, unknown> | undefined
+          try {
+            if (event.tool.args) {
+              parsedArgs = typeof event.tool.args === 'string'
+                ? JSON.parse(event.tool.args)
+                : event.tool.args as unknown as Record<string, unknown>
+            }
+          } catch { /* ignore */ }
           t.entries.push({
             kind: 'tool',
             id: event.tool.id,
             name: event.tool.name,
             status: 'running',
-            startMs: Date.now()
+            startMs: Date.now(),
+            args: parsedArgs,
+            displayName: getToolDisplayName(event.tool.name, parsedArgs)
           })
           refreshDisplay()
         }
@@ -511,6 +576,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               entry.output = event.tool.output || event.tool.error || entry.liveOutput || ''
               entry.liveOutput = undefined
               entry.durationMs = event.tool.durationMs
+              if (event.tool.fileDiff) {
+                entry.fileDiff = event.tool.fileDiff
+              }
               break
             }
           }
@@ -593,12 +661,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                 : s.status
             }))
           : undefined
-        const finalPlanDone = finalSteps ? finalSteps.every((s) => s.status === 'completed') : true
-        const turnStatus: DisplayMessage['turnStatus'] = hasError
-          ? resolveTurnStatus(event.error)
-          : finalPlanDone
-            ? 'completed'
-            : 'partial'
+        const finalPlanDone = finalSteps ? finalSteps.every((s) => s.status === 'completed') : false
+        const turnStatus = resolveTurnDoneStatus({
+          hasError,
+          error: event.error,
+          finalSteps,
+          composerMode: composerModeRef.current,
+          turnMode: event.turnMode,
+          phase: event.phase
+        })
 
         setIsLoading(false)
         setAgentStatus('')
@@ -608,7 +679,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           setCompletionFlash('任务已完成')
           if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
           completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-        } else if (!hasError && !finalPlanDone) {
+        } else if (!hasError && turnStatus === 'planned') {
+          setCompletionFlash('计划已就绪')
+          setPlanReady(true)
+          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+        } else if (!hasError && turnStatus === 'answered') {
+          setCompletionFlash('')
+        } else if (!hasError && !finalPlanDone && finalSteps?.length) {
           setCompletionFlash('任务部分完成')
           if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
           completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
@@ -637,11 +715,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             }
             return m
           })
-          flushPersist(next, null)
+          flushPersist(next, turnStatus === 'planned' ? planSnapshot : null)
           return next
         })
 
-        setActivePlan(null)
+        setActivePlan(turnStatus === 'planned' ? planSnapshot : null)
         t.msgId = ''
         break
       }
@@ -687,6 +765,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       currentSessionIdRef.current = newId
       setDisplayMessages([{ id: uid(), role: 'user', content: userMsg, timestamp: Date.now() }])
       controllerRef.current?.clearSession()
+      controllerRef.current?.setComposerMode(composerMode)
+      controllerRef.current?.setSessionGoal(sessionGoal)
+      persistComposerMeta({ composerMode, sessionGoal })
     } else {
       setDisplayMessages((prev) => {
         const next = [...prev, { id: uid(), role: 'user' as const, content: userMsg, timestamp: Date.now() }]
@@ -697,13 +778,43 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
 
     const ctrl = controllerRef.current
     if (!ctrl) return
+    ctrl.setComposerMode(composerMode)
+    ctrl.setSessionGoal(sessionGoal)
     try { await ctrl.send(userMsg) }
     catch {
       setIsLoading(false)
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession])
+  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, composerMode, sessionGoal])
+
+  const handleExecutePlan = useCallback(async () => {
+    if (isLoading || !toolchainReady) return
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    setIsLoading(true)
+    setAgentStatus('执行中...')
+    setPlanReady(false)
+    try {
+      await ctrl.startExecuteFromPlan()
+    } catch {
+      setIsLoading(false)
+      setAgentStatus('')
+      onRunningChangeRef.current?.(false)
+    }
+  }, [isLoading, toolchainReady])
+
+  const handleComposerModeChange = useCallback((mode: ComposerMode) => {
+    setComposerMode(mode)
+    controllerRef.current?.setComposerMode(mode)
+    persistComposerMeta({ composerMode: mode })
+  }, [persistComposerMeta])
+
+  const handleSessionGoalChange = useCallback((goal: string) => {
+    setSessionGoal(goal)
+    controllerRef.current?.setSessionGoal(goal)
+    persistComposerMeta({ sessionGoal: goal })
+  }, [persistComposerMeta])
 
   const handleCancel = useCallback(() => {
     controllerRef.current?.cancel()
@@ -811,6 +922,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               <img src={installerIcon} alt="" />
               <span className="role">AI 助手</span>
               {msg.turnStatus === 'completed' && <span className="turn-badge turn-badge--done">已完成</span>}
+              {msg.turnStatus === 'planned' && <span className="turn-badge turn-badge--planned">计划就绪</span>}
+              {msg.turnStatus === 'answered' && <span className="turn-badge turn-badge--answered">已回复</span>}
               {msg.turnStatus === 'partial' && <span className="turn-badge turn-badge--partial">部分完成</span>}
               {msg.turnStatus === 'error' && <span className="turn-badge turn-badge--error">已中断</span>}
               {msg.turnStatus === 'cancelled' && <span className="turn-badge turn-badge--cancelled">已取消</span>}
@@ -874,13 +987,23 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                         : entry.status === 'running' ? <span className="run">⟳</span>
                           : entry.status === 'error' ? <span className="err">✗</span>
                             : <span className="mc-dim">·</span>
+                    const displayName = entry.displayName || getToolDisplayName(entry.name, entry.args)
+                    const diff = entry.fileDiff
+                    const showDiffStats = diff && (diff.added > 0 || diff.removed > 0)
+                    const showDiffPreview = diff && (diff.firstAdded || diff.firstRemoved) && !isCollapsed
                     return (
                       <div
                         key={`tool-${entry.id}`}
                         className={`tool-line${entry.status === 'running' ? ' running' : ''}`}
                       >
                         {statusMark}
-                        <span className="tool-line-name">{getToolDisplayName(entry.name)}</span>
+                        <span className="tool-line-name">{displayName}</span>
+                        {showDiffStats && (
+                          <span className="tool-line-diff">
+                            {diff.added > 0 && <span className="diff-added">+{diff.added}</span>}
+                            {diff.removed > 0 && <span className="diff-removed">-{diff.removed}</span>}
+                          </span>
+                        )}
                         {entry.durationMs != null && (
                           <span className="mc-dim" style={{ fontSize: '10px' }}>
                             ({entry.durationMs >= 1000
@@ -916,6 +1039,22 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                         )}
                         {entry.status === 'pending' && (
                           <span className="tool-line-toggle mc-dim">等待中…</span>
+                        )}
+                        {showDiffPreview && (
+                          <div className="tool-line-diff-preview">
+                            {diff.firstAdded && (
+                              <div className="diff-preview-line diff-preview-added">
+                                <span className="diff-preview-marker">+</span>
+                                <span>{diff.firstAdded}</span>
+                              </div>
+                            )}
+                            {diff.firstRemoved && (
+                              <div className="diff-preview-line diff-preview-removed">
+                                <span className="diff-preview-marker">-</span>
+                                <span>{diff.firstRemoved}</span>
+                              </div>
+                            )}
+                          </div>
                         )}
                         {displayOutput && !isCollapsed && (
                           <div
@@ -992,27 +1131,22 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             构建环境初始化中，AI 开发与构建功能暂时锁定，请等待进度条完成。
           </div>
         )}
-        <div className="chat-input-composite">
-          <textarea
-            className="chat-input-composite__field"
-            placeholder={!toolchainReady ? '等待构建环境就绪…' : projectPath ? '描述功能或问题...' : '请先打开项目'}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-            disabled={!projectPath || isLoading || !toolchainReady}
-          />
-          <div className="chat-input-composite__actions">
-            {isLoading ? (
-              <button type="button" className="mc-btn mc-btn--red chat-send-btn" onClick={handleCancel}>
-                <IconSquare size="sm" /> 停止
-              </button>
-            ) : (
-              <button type="button" className="mc-btn mc-btn--primary chat-send-btn" onClick={handleSend} disabled={!projectPath || !input.trim() || !toolchainReady}>
-                <IconSend size="sm" />
-              </button>
-            )}
-          </div>
-        </div>
+        <ChatComposer
+          input={input}
+          onInputChange={setInput}
+          onSend={handleSend}
+          onCancel={handleCancel}
+          isLoading={isLoading}
+          disabled={!projectPath || isLoading || !toolchainReady}
+          composerMode={composerMode}
+          onComposerModeChange={handleComposerModeChange}
+          sessionGoal={sessionGoal}
+          onSessionGoalChange={handleSessionGoalChange}
+          planReady={planReady}
+          onExecutePlan={handleExecutePlan}
+          toolchainReady={toolchainReady}
+          hasProject={Boolean(projectPath)}
+        />
       </div>
     </div>
   )

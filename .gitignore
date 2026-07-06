@@ -5,6 +5,8 @@ resources/_gradle_extract/
 resources/_jdk_extract/
 resources/_test_extract/
 resources/gradle-home-seed/
+resources/gradle-home-seed.zip
+resources/.gradle-home-seed.zip.stamp
 resources/_prefetch_runtime/
 resources/_prefetch_project/
 resources/_offline_verify_project/
@@ -31,6 +33,8 @@ resources/*.zip
 resources/*jdk*.tar.gz
 resources/_jdk-21-download.*
 resources/gradle-home-seed/
+resources/gradle-home-seed.zip
+resources/.gradle-home-seed.zip.stamp
 
 # IDE / 本地工具
 .reasonix/

@@ -23,6 +23,7 @@ export const GRADLE_HOME_DIR = `gradle-${GRADLE_VERSION}`
 export const GRADLE_RUNTIME_DIR = 'gradle-9.5'
 const GRADLE_LAUNCHER_JAR = `gradle-launcher-${GRADLE_VERSION}.jar`
 const SEED_MARKER = '.modcrafting-seed.json'
+const SEED_ARCHIVE_NAME = 'gradle-home-seed.zip'
 
 type FabricVersions = {
   minecraft_version: string
@@ -398,7 +399,7 @@ async function stopGradleDaemons(jdkPath?: string | null): Promise<void> {
     const gradleBat = path.join(gradleDir, 'bin', process.platform === 'win32' ? 'gradle.bat' : 'gradle')
     if (!fs.existsSync(gradleBat)) continue
     stopPromises.push(new Promise((resolve) => {
-      const child = spawn(`"${gradleBat}" --stop`, [], {
+      const child = spawn(`"${gradleBat}" --stop`, {
         env: {
           ...process.env,
           JAVA_HOME: jdk,
@@ -417,6 +418,14 @@ async function stopGradleDaemons(jdkPath?: string | null): Promise<void> {
 
   await Promise.all(stopPromises)
   await new Promise((r) => setTimeout(r, 300))
+}
+
+export async function stopGradleDaemonsOnExit(): Promise<void> {
+  try {
+    await stopGradleDaemons(resolveJdkPath())
+  } catch {
+    /* ignore shutdown errors */
+  }
 }
 
 function safeRmSync(target: string): void {
@@ -509,6 +518,77 @@ function bundledGradleHomeSeedPaths(): string[] {
     path.join(__dirname, '..', 'resources', 'gradle-home-seed'),
     path.join(__dirname, '..', '..', 'resources', 'gradle-home-seed')
   ]
+}
+
+function bundledGradleHomeSeedArchivePaths(): string[] {
+  return [
+    path.join(process.resourcesPath || '', SEED_ARCHIVE_NAME),
+    path.join(__dirname, '..', 'resources', SEED_ARCHIVE_NAME),
+    path.join(__dirname, '..', '..', 'resources', SEED_ARCHIVE_NAME)
+  ]
+}
+
+function resolveBundledGradleHomeSeedArchivePath(): string | null {
+  return bundledGradleHomeSeedArchivePaths().find((p) => fs.existsSync(p)) ?? null
+}
+
+function gradleHomeDirLooksValid(home: string): boolean {
+  const expected = loadFabricVersions()
+  const marker = readSeedMarker(path.join(home, SEED_MARKER))
+  return Boolean(
+    marker &&
+      seedMarkerIsValid(marker, expected) &&
+      gradleHomeHasFabricCache(home) &&
+      gradleHomeHasLoomCache(home)
+  )
+}
+
+async function extractGradleHomeSeedArchive(
+  archivePath: string,
+  destDir: string,
+  onProgress: ProgressSender
+): Promise<{ ok: boolean; error?: string }> {
+  const staging = `${destDir}.staging`
+  await safeRmAsync(staging)
+  fs.mkdirSync(staging, { recursive: true })
+
+  onProgress({
+    phase: 'deps',
+    message: '正在解压离线依赖包（约 1GB，请稍候）…',
+    percent: 38
+  })
+
+  try {
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const child = spawn(
+        'tar',
+        ['-xf', archivePath, '-C', staging, '--strip-components=1'],
+        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+      )
+      child.on('close', (code) => resolve(code ?? 1))
+      child.on('error', reject)
+    })
+    if (exitCode !== 0) {
+      await safeRmAsync(staging)
+      return { ok: false, error: `离线依赖包解压失败 (tar exit ${exitCode})` }
+    }
+
+    if (!gradleHomeDirLooksValid(staging)) {
+      await safeRmAsync(staging)
+      return { ok: false, error: '离线依赖包解压后校验失败，请重新安装完整版 ModCrafting' }
+    }
+
+    if (fs.existsSync(destDir)) {
+      await stopGradleDaemons(resolveJdkPath())
+      await safeRmAsync(destDir)
+    }
+    fs.renameSync(staging, destDir)
+    onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
+    return { ok: true }
+  } catch (err) {
+    await safeRmAsync(staging)
+    return { ok: false, error: `解压离线依赖失败: ${String(err)}` }
+  }
 }
 
 function bundledBaseModsSearchPaths(): string[] {
@@ -772,18 +852,25 @@ async function ensureGradleHomeFromSeedImpl(
   }
 
   const seedSrc = resolveBundledGradleHomeSeedPath()
-  if (!seedSrc) {
-    if (app.isPackaged) {
-      return { ok: false, error: '离线依赖包缺失或损坏，请重新安装完整版 ModCrafting' }
-    }
-    return { ok: false, error: '离线依赖种子未生成，开发模式请运行 npm run prefetch:deps' }
-  }
 
   // Dev: point GRADLE_USER_HOME at resources/gradle-home-seed (no copy)
   if (!app.isPackaged) {
+    if (!seedSrc) {
+      return { ok: false, error: '离线依赖种子未生成，开发模式请运行 npm run prefetch:deps' }
+    }
     purgeGradleEphemeralCaches(seedSrc)
     onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
     return { ok: true }
+  }
+
+  // Packaged: NSIS 7z 无法可靠展开上万级 Gradle 缓存文件，改用单文件 zip 首次解压
+  const archive = resolveBundledGradleHomeSeedArchivePath()
+  if (archive) {
+    return extractGradleHomeSeedArchive(archive, dest, onProgress)
+  }
+
+  if (!seedSrc) {
+    return { ok: false, error: '离线依赖包缺失或损坏，请重新安装完整版 ModCrafting' }
   }
 
   onProgress({
@@ -1054,7 +1141,7 @@ export async function ensureGradleWrapper(
     const url = `https://raw.githubusercontent.com/gradle/gradle/v${GRADLE_VERSION}/gradle/wrapper/gradle-wrapper.jar`
     const cmd = `powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${url}' -OutFile '${wrapperJar}'}"`
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(cmd, [], { shell: true })
+      const child = spawn(cmd, { shell: true })
       child.on('close', (code) => {
         if (code === 0 && fs.existsSync(wrapperJar)) {
           const cachePath = path.join(getRuntimeRoot(), 'gradle-wrapper.jar')
@@ -1164,7 +1251,7 @@ export async function prefetchGradleDistribution(
         fs.mkdirSync(hashDir, { recursive: true })
         await new Promise<void>((resolve, reject) => {
           const cmd = `powershell -Command "& {Expand-Archive -Path '${zipPath}' -DestinationPath '${hashDir}' -Force}"`
-          const child = spawn(cmd, [], { shell: true })
+          const child = spawn(cmd, { shell: true })
           child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Extract failed: ${code}`)))
           child.on('error', reject)
         })
@@ -1199,7 +1286,7 @@ export async function downloadJdk(onProgress: ProgressSender = defaultProgress):
     fs.mkdirSync(getRuntimeRoot(), { recursive: true })
     const downloadCmd = `powershell -Command "& {Invoke-WebRequest -Uri '${jdkUrl}' -OutFile '${zipPath}'}"`
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(downloadCmd, [], { shell: true })
+      const child = spawn(downloadCmd, { shell: true })
       child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Download failed: ${code}`)))
       child.on('error', reject)
     })
@@ -1212,7 +1299,6 @@ export async function downloadJdk(onProgress: ProgressSender = defaultProgress):
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
         `powershell -Command "& {Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force}"`,
-        [],
         { shell: true }
       )
       child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Extract failed: ${code}`)))
@@ -1536,7 +1622,7 @@ async function execShellCommand(
   onOutput?: (text: string) => void
 ): Promise<{ output: string; exitCode: number }> {
   return new Promise((resolve) => {
-    const child = spawn(command, [], { cwd, shell: true, env })
+    const child = spawn(command, { cwd, shell: true, env })
     let fullOutput = ''
     const onData = (data: Buffer) => {
       const text = data.toString()

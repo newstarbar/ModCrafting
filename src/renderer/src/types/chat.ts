@@ -16,7 +16,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   entries?: PersistedChronoEntry[]
-  turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled'
+  turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled' | 'answered' | 'planned'
   embeddedPlan?: PlanStep[]
   timestamp?: number
   displayId?: string
@@ -29,4 +29,6 @@ export interface ChatSession {
   createdAt: number
   updatedAt: number
   usage?: UsageStats
+  composerMode?: 'agent' | 'plan' | 'ask'
+  sessionGoal?: string
 }

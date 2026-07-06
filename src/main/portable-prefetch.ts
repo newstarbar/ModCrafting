@@ -170,8 +170,7 @@ function runGradle(
         JAVA_HOME: path.join(runtimeRoot, 'jdk-21'),
         GRADLE_USER_HOME: path.join(runtimeRoot, 'gradle-home'),
         PATH: `${path.join(runtimeRoot, 'jdk-21', 'bin')};${process.env.PATH || ''}`
-      },
-      shell: true
+      }
     })
     let timer: NodeJS.Timeout | undefined
     if (timeoutMs > 0) {
