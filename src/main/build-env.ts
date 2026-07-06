@@ -781,6 +781,7 @@ async function ensureGradleHomeFromSeedImpl(
 
   // Dev: point GRADLE_USER_HOME at resources/gradle-home-seed (no copy)
   if (!app.isPackaged) {
+    purgeGradleEphemeralCaches(seedSrc)
     onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
     return { ok: true }
   }

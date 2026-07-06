@@ -254,6 +254,9 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
       }
 
       notifyInstanceState(id)
+      if (typeof sharedGradleHome === 'string') {
+        purgeGradleEphemeralCaches(sharedGradleHome)
+      }
     })
 
     proc.on('error', (err) => {
@@ -261,6 +264,9 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
       instance.status = 'crashed'
       instance.exitReason = 'start_failed'
       instance.crashedAt = new Date()
+      if (typeof sharedGradleHome === 'string') {
+        purgeGradleEphemeralCaches(sharedGradleHome)
+      }
       notifyInstanceState(id)
       BrowserWindow.getAllWindows().forEach((win) => {
         win.webContents.send('mc:crashed', id, -1, null)
