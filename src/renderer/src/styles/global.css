@@ -799,6 +799,20 @@ body,
 	color: var(--text-secondary);
 }
 
+.tool-line-path {
+	font-size: 10px;
+	font-family: var(--font-mono);
+	color: var(--accent);
+	background: rgba(100, 149, 237, 0.15);
+	padding: 0 5px;
+	border-radius: 3px;
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
 .tool-line-toggle {
 	font-size: 10px;
 	color: var(--accent);
