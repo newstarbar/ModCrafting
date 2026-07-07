@@ -327,3 +327,87 @@ LootTableLoadingCallback.EVENT.register((key, supplier, setter) -> {
 ```
 
 注册事件必须在 ModInitializer 或 ClientModInitializer 的入口方法中完成。
+
+---
+
+## Mixin 常见反模式（写代码前必须检查）
+
+以下错误导致构建失败、游戏崩溃、或功能不生效。每写完一个 Mixin，逐条自查。
+
+### 1. ci.cancel() 后不要再调用被注入的方法
+
+```java
+// ❌ 错误：cancel 后调用 jump()，此时状态已变，jump() 内部逻辑可能跳过
+@Inject(method = "jump", at = @At("HEAD"), cancellable = true)
+private void onJump(CallbackInfo ci) {
+    ci.cancel();
+    player.jump();  // ← 递归风险，且语义矛盾
+}
+
+// ✅ 正确：cancel 后直接设置速度，不要回头调原方法
+@Inject(method = "jump", at = @At("HEAD"), cancellable = true)
+private void onJump(CallbackInfo ci) {
+    if (shouldHandle) {
+        ci.cancel();
+        self.setVelocity(self.getVelocity().x, 0.42, self.getVelocity().z);
+        self.velocityDirty = true;  // 标记速度已修改，触发网络同步
+    }
+}
+```
+
+### 2. @Shadow 字段必须在 Mixin 目标类或其父类中存在
+
+```java
+// ❌ 错误：target 是 PlayerEntity，但 jumping 在父类 LivingEntity 中
+@Mixin(PlayerEntity.class)
+public abstract class MyMixin {
+    @Shadow protected boolean jumping;  // ← 找不到字段
+}
+
+// ✅ 正确：Mixin 目标改为 LivingEntity
+@Mixin(LivingEntity.class)
+public abstract class MyMixin {
+    @Shadow protected boolean jumping;  // ← LivingEntity 有此字段
+}
+```
+
+### 3. 写新 Mixin 前先检查是否已有同类 Mixin
+
+在执行任何写 Mixin 的操作前，先：
+1. 读 `src/main/resources/<modid>.mixins.json` 看已有哪些 mixin
+2. 读每个已有 Mixin 的源码，确认功能不重复
+3. 如果已有 Mixin 可以扩展，在现有文件中加注入方法，不要新建文件
+
+### 4. 新建 Mixin 类后必须同步注册到 mixins JSON
+
+写完 Mixin Java 文件后，**必须**同时更新 `src/main/resources/<modid>.mixins.json`：
+- 在 `"mixins"` 数组中追加类名（不带包名，不带 .java）
+- 如果 Mixin 仅在客户端使用，放入 `"client"` 数组
+- 不注册 = Mixin 永远不会被加载 = 白写
+
+### 5. 修改 velocity 后必须标记 velocityDirty
+
+```java
+// ❌ 错误：修改速度但未标记 dirty，客户端不会同步
+self.setVelocity(new Vec3d(vel.x, 0.42, vel.z));
+
+// ✅ 正确
+self.setVelocity(new Vec3d(vel.x, 0.42, vel.z));
+self.velocityDirty = true;
+```
+
+### 6. 不要用 @Unique 字段做跨 Tick 状态机
+
+`@Unique` 字段在 Mixin 注入的类中，但没有持久化机制。如果目标类被重新创建（玩家重生/切换维度），`@Unique` 字段会重置为默认值。对于简单的布尔标记（如 `hasDoubleJumped`）可以接受，但对于需要持久化的状态（如冷却计时器），优先使用 Component（DataComponentType）或 NBT。
+
+### 7. 检查清单
+
+写完 Mixin 后，按顺序检查：
+
+- [ ] `@Mixin` 目标类是否正确（字段/方法是否在目标类中实际存在）
+- [ ] 如有 `@Shadow`，确认字段/方法在目标类或其父类中
+- [ ] 如用了 `ci.cancel()`，确认没有在 cancel 后调用被注入的方法
+- [ ] 如修改了 velocity，确认设置了 `velocityDirty = true`
+- [ ] 已确认项目中没有功能重复的 Mixin
+- [ ] 已更新 `mixins.json` 注册新 Mixin
+- [ ] 如果是客户端 Mixin（引用 ClientPlayerEntity 等），已放入 `"client"` 数组

@@ -10,6 +10,7 @@ resources/.gradle-home-seed.zip.stamp
 resources/_prefetch_runtime/
 resources/_prefetch_project/
 resources/_offline_verify_project/
+resources/gradle-home-seed/.temp
 
 # 依赖与构建
 node_modules/
