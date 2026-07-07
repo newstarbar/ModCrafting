@@ -117,6 +117,21 @@ function isRepairDiagnosticResult(step: WorkflowStep, result: ToolResult, repair
   return REPAIR_DIAGNOSTIC_TOOLS.has(result.toolName || '')
 }
 
+/** Knowledge queries that should not consume attempt budget for non-terminal steps. */
+const KNOWLEDGE_TOOLS = new Set([
+  'fabric_docs_search',
+  'fabric_javadoc_lookup',
+  'vanilla_mc_wiki_query',
+  'fabric_meta_version_check',
+  'fabric_mod_json_validate'
+])
+
+function isKnowledgeRound(step: WorkflowStep, result: ToolResult | undefined): boolean {
+  if (!result || !result.ok || result.error) return false
+  if (step.kind === 'build' || step.kind === 'run') return false
+  return KNOWLEDGE_TOOLS.has(result.toolName || '')
+}
+
 function statusForPlan(step: WorkflowStep): string {
   if (step.status === 'failed') return 'error'
   return step.status
@@ -398,7 +413,7 @@ export class WorkflowEngine {
           }
           if (!firstAllowed || call.id !== firstAllowed.id) {
             resultsById.set(call.id, {
-              output: 'skipped: 本轮仅执行第一个允许的工具调用。',
+              output: `skipped: 本轮仅执行第一个工具（${firstAllowed?.name ?? '?'}），"${call.name}" 可在下一轮单独调用。`,
               durationMs: 0,
               ok: false,
               toolName: call.name,
@@ -480,7 +495,10 @@ export class WorkflowEngine {
         }
 
         this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
-        if (!(repairMode && primaryResult && isRepairDiagnosticResult(step, primaryResult, repairMode))) {
+        if (
+          !(repairMode && primaryResult && isRepairDiagnosticResult(step, primaryResult, repairMode)) &&
+          !isKnowledgeRound(step, primaryResult)
+        ) {
           attempt++
         }
       }
