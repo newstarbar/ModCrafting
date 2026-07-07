@@ -1,0 +1,25 @@
+# Fabric 开发文档索引
+
+- [items-first-item](./items-first-item.md): https://docs.fabricmc.net/zh_cn/develop/items/first-item
+- [blocks-first-block](./blocks-first-block.md): https://docs.fabricmc.net/zh_cn/develop/blocks/first-block
+- [fluids-first-fluid](./fluids-first-fluid.md): https://docs.fabricmc.net/zh_cn/develop/fluids/first-fluid
+- [entities-first-entity](./entities-first-entity.md): https://docs.fabricmc.net/zh_cn/develop/entities/first-entity
+- [sounds-using-sounds](./sounds-using-sounds.md): https://docs.fabricmc.net/zh_cn/develop/sounds/using-sounds
+- [commands-basics](./commands-basics.md): https://docs.fabricmc.net/zh_cn/develop/commands/basics
+- [rendering-basic-concepts](./rendering-basic-concepts.md): https://docs.fabricmc.net/zh_cn/develop/rendering/basic-concepts
+- [data-generation-setup](./data-generation-setup.md): https://docs.fabricmc.net/zh_cn/develop/data-generation/setup
+- [serialization-codecs](./serialization-codecs.md): https://docs.fabricmc.net/zh_cn/develop/serialization/codecs
+- [loom](./loom.md): https://docs.fabricmc.net/zh_cn/develop/loom/
+- [loader](./loader.md): https://docs.fabricmc.net/zh_cn/develop/loader/
+- [mixins-bytecode](./mixins-bytecode.md): https://docs.fabricmc.net/zh_cn/develop/mixins/bytecode
+- [class-tweakers](./class-tweakers.md): https://docs.fabricmc.net/zh_cn/develop/class-tweakers/
+- [automatic-testing](./automatic-testing.md): https://docs.fabricmc.net/zh_cn/develop/automatic-testing
+- [custom-recipe-types](./custom-recipe-types.md): https://docs.fabricmc.net/zh_cn/develop/custom-recipe-types
+- [debugging](./debugging.md): https://docs.fabricmc.net/zh_cn/develop/debugging
+- [events](./events.md): https://docs.fabricmc.net/zh_cn/develop/events
+- [game-rules](./game-rules.md): https://docs.fabricmc.net/zh_cn/develop/game-rules
+- [key-mappings](./key-mappings.md): https://docs.fabricmc.net/zh_cn/develop/key-mappings
+- [networking](./networking.md): https://docs.fabricmc.net/zh_cn/develop/networking
+- [resource-conditions](./resource-conditions.md): https://docs.fabricmc.net/zh_cn/develop/resource-conditions
+- [statistics](./statistics.md): https://docs.fabricmc.net/zh_cn/develop/statistics
+- [text-and-translations](./text-and-translations.md): https://docs.fabricmc.net/zh_cn/develop/text-and-translations
