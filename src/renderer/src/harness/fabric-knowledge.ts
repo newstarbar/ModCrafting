@@ -104,16 +104,18 @@ async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
       }
       if (matchedBlocks.length > 0) {
         const fileName = file.replace('fabric/', '')
-        for (const block of matchedBlocks.slice(0, 3)) {
+        // Limit to top 2 context blocks, each max 8 lines
+        const blocks = matchedBlocks.slice(0, 2).map((block) => {
           const snippet = lines.slice(block.start, block.end).join('\n').trim()
-          if (snippet) results.push(`[${fileName}]\n${snippet}`)
-        }
+          return snippet
+        })
+        results.push(`[${fileName} — ${matchedBlocks.length} 处匹配]\n${blocks.join('\n...\n')}`)
       }
     } catch {
       // ignore missing files in dev
     }
   }
-  return results.join('\n\n---\n\n')
+  return results.join('\n\n')
 }
 
 export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput): Promise<string> {
@@ -154,57 +156,55 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     .slice(0, limit)
 
   const lines: string[] = [
-    `Fabric 知识检索（只读，含本地源码与联网摘要）`,
-    `关键词：${keyword}`,
-    `MC 版本：${mcVersion}`,
+    `查询：${keyword}`,
+    `版本：${mcVersion}`,
     ''
   ]
 
+  let summaryParts: string[] = []
+
   if (localSourceResult) {
-    lines.push('=== 本地源码命中（Fabric API + Yarn 映射，最高优先级） ===')
+    const yarnMatch = localSourceResult.match(/\[yarn-mappings\]/g)
+    const srcMatch = localSourceResult.match(/\[fabric-/g)
+    const parts: string[] = []
+    if (yarnMatch) parts.push(`Yarn 映射 ${yarnMatch.length} 处命中`)
+    if (srcMatch) parts.push(`Fabric 源码 ${srcMatch.length} 个文件`)
+    summaryParts.push(...parts)
     lines.push(localSourceResult)
     lines.push('')
   }
 
   if (localResult) {
-    lines.push('=== 本地参考文件命中 ===')
+    summaryParts.push('本地参考命中')
     lines.push(localResult)
     lines.push('')
   }
 
   if (ranked.length > 0) {
-    lines.push('=== 联网知识源 ===')
-    lines.push('')
-  }
-
-  for (const [index, { source }] of ranked.entries()) {
-    lines.push(`${index + 1}. ${source.title}（${source.trust}）`)
-    lines.push(`   URL: ${source.url}`)
-    lines.push(`   用途: ${source.useFor}`)
-    try {
-      if (typeof window !== 'undefined' && window.api?.knowledgeFetchUrl) {
-        const fetched = await window.api.knowledgeFetchUrl(source.url, 2500)
-        if (fetched.success && fetched.text) {
-          lines.push(`   摘要: ${fetched.text.slice(0, 500)}${fetched.truncated ? '…' : ''}`)
-        } else if (fetched.error) {
-          lines.push(`   联网摘要失败: ${fetched.error}`)
-        }
+    summaryParts.push(`联网源 ${ranked.length} 个`)
+    lines.push('=== 联网补充 ===')
+    for (const [index, { source }] of ranked.entries()) {
+      const fetchResult = await (async () => {
+        try {
+          if (typeof window !== 'undefined' && window.api?.knowledgeFetchUrl) {
+            const fetched = await window.api.knowledgeFetchUrl(source.url, 2500)
+            if (fetched.success && fetched.text) {
+              return fetched.text.slice(0, 300)
+            }
+          }
+        } catch { /* ignore */ }
+        return null
+      })()
+      if (fetchResult) {
+        lines.push(`${source.title}: ${fetchResult}${fetchResult.length >= 300 ? '…' : ''}`)
+      } else {
+        lines.push(`${source.title}: （未获取到内容）`)
       }
-    } catch (err) {
-      lines.push(`   联网摘要失败: ${err}`)
     }
     lines.push('')
   }
 
-  if (localUrls.length > 0) {
-    lines.push('本地知识库路由命中：')
-    for (const url of localUrls.slice(0, 3)) {
-      lines.push(`- ${url}`)
-    }
-    lines.push('')
-  }
-
-  lines.push('提示：写配方/资源/代码前，请根据以上摘要确认当前 MC 版本的 JSON 路径与字段格式。')
+  lines.push(`结果：${summaryParts.length > 0 ? summaryParts.join('，') : '无命中'}`)
   return lines.join('\n')
 }
 

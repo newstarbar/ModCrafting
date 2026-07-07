@@ -103,7 +103,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_error_log'
       ]
     case 'answer':
-      return []
+      return ['complete_step']
   }
 }
 

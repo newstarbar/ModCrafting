@@ -2136,7 +2136,30 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
         }
       }
       if (matchedBlocks.length > 0) {
-        results.push(`[yarn-mappings] 映射命中：\n${matchedBlocks.slice(0, maxResults).join('\n---\n')}`)
+        // Parse Tiny v2 format into readable labels
+        const readable = matchedBlocks.slice(0, maxResults).map((block) => {
+          const lines = block.split('\n')
+          const parsed: string[] = []
+          let currentClass = ''
+          for (const line of lines) {
+            const parts = line.split('\t')
+            if (parts[0] === 'c') {
+              currentClass = parts[parts.length - 1]  // Yarn class name
+              const simpleName = currentClass.split('/').pop() || currentClass
+              parsed.push(`📦 ${simpleName} (${currentClass})`)
+            } else if (parts[0] === 'f') {
+              const yarnName = parts[parts.length - 1]
+              const type = parts[1] || ''
+              parsed.push(`  字段: ${yarnName} : ${type}`)
+            } else if (parts[0] === 'm') {
+              const yarnName = parts[parts.length - 1]
+              const sig = parts[1] || ''
+              parsed.push(`  方法: ${yarnName}${sig}`)
+            }
+          }
+          return parsed.join('\n')
+        })
+        results.push(`[Yarn 映射 ${matchedBlocks.length} 条]\n${readable.join('\n---\n')}`)
       }
     } catch { /* ignore */ }
   }
@@ -2176,7 +2199,9 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
       }
       walk(srcDir)
       for (const fr of fileResults.slice(0, maxResults)) {
-        results.push(`[${fr.file}]\n${fr.lines.join('\n---\n')}`)
+        // Show Java class name, not the JAR file name
+        const shortName = fr.file.replace(/\.java$/, '').replace(/^fabric-[^-]+-[^-]+-/, '')
+        results.push(`[${shortName}]\n${fr.lines.join('\n---\n')}`)
       }
     } catch { /* ignore */ }
   }

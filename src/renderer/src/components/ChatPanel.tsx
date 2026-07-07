@@ -1291,6 +1291,14 @@ function extractPreview(toolName: string, output: string, args?: Record<string, 
     return exitCode ? `exit ${exitCode}` : last.slice(0, 56) || '(完成)'
   }
 
+  // Knowledge search tools — show keyword + result summary
+  if (toolName === 'fabric_docs_search' || toolName === 'fabric_javadoc_lookup' || toolName === 'vanilla_mc_wiki_query') {
+    const kw = String(args?.keyword || '')
+    const summaryMatch = output.match(/结果：(.+)$/m)
+    const summary = summaryMatch ? summaryMatch[1] : ''
+    return kw ? `"${kw.slice(0, 30)}${kw.length > 30 ? '…' : ''}"${summary ? ` → ${summary}` : ''}` : cap(output, 60)
+  }
+
   // Recipe tools
   if (toolName === 'create_recipe' || toolName === 'fabric_recipe_generate') {
     const recipeName = String(args?.name || '')

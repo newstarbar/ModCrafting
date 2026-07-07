@@ -383,6 +383,15 @@ export class WorkflowEngine {
 
         const calls = normalizeModelToolCalls(modelResult.toolCalls)
         if (calls.length === 0) {
+          // Answer steps auto-complete on text output; no tool calls needed.
+          if (step.kind === 'answer') {
+            step.status = 'completed'
+            this.planTracker.advanceCurrent('answer text')
+            finalContent = modelResult.text || streamText || finalContent
+            this.emitPlanState()
+            completed = true
+            break
+          }
           baseMessages.push({
             role: 'user',
             content: `【系统】当前步骤尚未完成：#${step.id} ${step.title}。请调用允许工具完成该步骤。`
