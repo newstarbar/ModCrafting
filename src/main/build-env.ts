@@ -2114,52 +2114,60 @@ export function isFabricKnowledgeBaseReady(): boolean {
 export function searchLocalFabricSources(keyword: string, maxResults = 5): string {
   const tokens = keyword.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
   if (tokens.length === 0) return ''
+  // Require at least half the tokens to match (minimum 1).
+  // This lets users include descriptive words like "Yarn" or "mapping"
+  // without killing results for Minecraft-specific terms.
+  const minMatches = Math.max(1, Math.ceil(tokens.length / 2))
 
   const results: string[] = []
 
-  // 1. Search Yarn mappings first
+  // 1. Search Yarn mappings — use OR matching (each line has only one concept),
+  //   then group by class and score by unique tokens matched within the class.
   const yarnPath = yarnMappingsPath()
   if (fs.existsSync(yarnPath)) {
     try {
       const yarnLines = fs.readFileSync(yarnPath, 'utf-8').split('\n')
-      const matchedBlocks: string[] = []
+      // Phase 1: find all lines matching ANY token, record which class they belong to
+      interface YarnClassBlock { className: string; lines: string[]; tokensMatched: Set<string> }
+      const classMap = new Map<string, YarnClassBlock>()
+      let currentClass = ''
       for (let i = 0; i < yarnLines.length; i++) {
-        const lower = yarnLines[i].toLowerCase()
-        if (tokens.every((t) => lower.includes(t))) {
-          // Include surrounding context lines (class header)
-          let block = yarnLines[i]
-          for (let j = i - 1; j >= 0 && yarnLines[j].startsWith('c\t'); j--) {
-            block = yarnLines[j] + '\n' + block
+        const line = yarnLines[i]
+        const parts = line.split('\t')
+        if (parts[0] === 'c') {
+          currentClass = parts[parts.length - 1] || '' // Yarn name
+          continue
+        }
+        const lower = line.toLowerCase()
+        const matched = tokens.filter((t) => lower.includes(t))
+        if (matched.length > 0 && currentClass) {
+          let block = classMap.get(currentClass)
+          if (!block) {
+            block = { className: currentClass, lines: [], tokensMatched: new Set() }
+            classMap.set(currentClass, block)
           }
-          if (!matchedBlocks.includes(block)) matchedBlocks.push(block)
-          if (matchedBlocks.length >= maxResults * 2) break
+          block.lines.push(line)
+          for (const t of matched) block.tokensMatched.add(t)
         }
       }
-      if (matchedBlocks.length > 0) {
-        // Parse Tiny v2 format into readable labels
-        const readable = matchedBlocks.slice(0, maxResults).map((block) => {
-          const lines = block.split('\n')
-          const parsed: string[] = []
-          let currentClass = ''
-          for (const line of lines) {
-            const parts = line.split('\t')
-            if (parts[0] === 'c') {
-              currentClass = parts[parts.length - 1]  // Yarn class name
-              const simpleName = currentClass.split('/').pop() || currentClass
-              parsed.push(`📦 ${simpleName} (${currentClass})`)
-            } else if (parts[0] === 'f') {
-              const yarnName = parts[parts.length - 1]
-              const type = parts[1] || ''
-              parsed.push(`  字段: ${yarnName} : ${type}`)
-            } else if (parts[0] === 'm') {
-              const yarnName = parts[parts.length - 1]
-              const sig = parts[1] || ''
-              parsed.push(`  方法: ${yarnName}${sig}`)
-            }
+      // Phase 2: score classes by token coverage, take top results
+      const ranked = Array.from(classMap.values())
+        .map((b) => ({ ...b, score: b.tokensMatched.size }))
+        .sort((a, b) => b.score - a.score)
+        .filter((b) => b.score >= minMatches)
+      if (ranked.length > 0) {
+        const readable = ranked.slice(0, maxResults).map((b) => {
+          const simpleName = b.className.split('/').pop() || b.className
+          const parts = [`📦 ${simpleName} (${b.className}) — 匹配 ${b.score}/${tokens.length} 个词`]
+          for (const line of b.lines.slice(0, 10)) {
+            const p = line.split('\t')
+            if (p[0] === 'f') parts.push(`  字段: ${p[p.length - 1]} : ${p[1] || ''}`)
+            else if (p[0] === 'm') parts.push(`  方法: ${p[p.length - 1]}${p[1] || ''}`)
           }
-          return parsed.join('\n')
+          if (b.lines.length > 10) parts.push(`  ... 还有 ${b.lines.length - 10} 个匹配项`)
+          return parts.join('\n')
         })
-        results.push(`[Yarn 映射 ${matchedBlocks.length} 条]\n${readable.join('\n---\n')}`)
+        results.push(`[Yarn 映射 ${classMap.size} 个类命中，显示前 ${Math.min(maxResults, ranked.length)} 个]\n${readable.join('\n---\n')}`)
       }
     } catch { /* ignore */ }
   }
@@ -2168,7 +2176,7 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
   const srcDir = fabricSourcesDir()
   if (fs.existsSync(srcDir)) {
     try {
-      const fileResults: Array<{ file: string; lines: string[] }> = []
+      const fileResults: Array<{ file: string; lines: string[]; score: number }> = []
       const walk = (dir: string) => {
         for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
           const full = path.join(dir, e.name)
@@ -2177,7 +2185,8 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           try {
             const content = fs.readFileSync(full, 'utf-8')
             const contentLower = content.toLowerCase()
-            if (tokens.every((t) => contentLower.includes(t))) {
+            const matchCount = tokens.filter((t) => contentLower.includes(t)).length
+            if (matchCount >= minMatches) {
               const lines = content.split('\n')
               const snippets: string[] = []
               for (let i = 0; i < lines.length; i++) {
@@ -2190,13 +2199,14 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
                 }
               }
               if (snippets.length > 0) {
-                fileResults.push({ file: e.name, lines: snippets })
+                fileResults.push({ file: e.name, lines: snippets, score: matchCount })
               }
             }
           } catch { /* skip unreadable */ }
           if (fileResults.length >= maxResults) break
         }
       }
+      fileResults.sort((a, b) => b.score - a.score)
       walk(srcDir)
       for (const fr of fileResults.slice(0, maxResults)) {
         // Show Java class name, not the JAR file name

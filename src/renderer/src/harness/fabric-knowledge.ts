@@ -78,6 +78,7 @@ async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
   if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return ''
   const tokens = keyword.toLowerCase().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return ''
+  const minMatches = Math.max(1, Math.ceil(tokens.length / 2))
 
   const results: string[] = []
   for (const file of LOCAL_SEARCH_FILES) {
@@ -85,11 +86,11 @@ async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
       const res = await window.api.knowledgeReadLocal(file)
       if (!res.success || !res.content) continue
       const lines = res.content.split('\n')
-      // Find lines matching any keyword token and extract surrounding context
       const matchedBlocks: Array<{ start: number; end: number }> = []
       for (let i = 0; i < lines.length; i++) {
         const lineLower = lines[i].toLowerCase()
-        if (tokens.some((t) => lineLower.includes(t))) {
+        const matchCount = tokens.filter((t) => lineLower.includes(t)).length
+        if (matchCount >= minMatches) {
           // Take 2 lines before and 5 lines after as context
           const start = Math.max(0, i - 2)
           const end = Math.min(lines.length, i + 6)
