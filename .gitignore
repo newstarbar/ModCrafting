@@ -43,6 +43,7 @@ resources/.gradle-home-seed.zip.stamp
 *.log
 .env
 .env.*
+.superpowers/
 
 # 系统
 Thumbs.db

@@ -653,6 +653,7 @@ body,
 
 .bubble-ft {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 6px;
 	margin-top: 4px;
@@ -716,6 +717,95 @@ body,
 .bubble-ft__dot {
 	opacity: 0.4;
 	user-select: none;
+}
+
+/* 消息完成后 — 任务状态常亮块 */
+.bubble-ft__task-status {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin-bottom: 6px;
+	padding: 8px 10px;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	flex-basis: 100%;
+	box-sizing: border-box;
+	min-width: 0;
+}
+
+.bubble-ft__task-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 4px;
+}
+
+.bubble-ft__task-title {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.bubble-ft__task-count {
+	font-size: 10px;
+	color: var(--text-muted);
+}
+
+.bubble-ft__step {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	line-height: 1.7;
+}
+
+.bubble-ft__step-id {
+	color: var(--text-muted);
+	min-width: 16px;
+	font-size: 10px;
+}
+
+.bubble-ft__step-icon {
+	font-size: 10px;
+	flex-shrink: 0;
+}
+
+.bubble-ft__step-desc {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.bubble-ft__step-status {
+	font-size: 10px;
+	flex-shrink: 0;
+}
+
+.bubble-ft__step--completed .bubble-ft__step-icon,
+.bubble-ft__step--completed .bubble-ft__step-status { color: var(--mc-green); }
+.bubble-ft__step--completed .bubble-ft__step-desc { color: var(--text-secondary); text-decoration: line-through; opacity: 0.65; }
+
+.bubble-ft__step--running .bubble-ft__step-icon,
+.bubble-ft__step--running .bubble-ft__step-status { color: var(--mc-yellow); }
+.bubble-ft__step--running .bubble-ft__step-desc { color: var(--text-primary); }
+
+.bubble-ft__step--error .bubble-ft__step-icon,
+.bubble-ft__step--error .bubble-ft__step-status,
+.bubble-ft__step--error .bubble-ft__step-desc { color: var(--error); }
+
+.bubble-ft__step--pending .bubble-ft__step-icon,
+.bubble-ft__step--pending .bubble-ft__step-desc,
+.bubble-ft__step--pending .bubble-ft__step-status { color: var(--text-muted); }
+
+/* 任务区域与时间戳之间的半透明分隔线 */
+.bubble-ft__separator {
+	flex-basis: 100%;
+	height: 0;
+	border-top: 1px solid rgba(148, 163, 184, 0.12);
+	margin-bottom: 6px;
 }
 
 /* 聊天气泡 — 对齐预览 ws-msgs / bubble */

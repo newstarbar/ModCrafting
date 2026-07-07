@@ -1164,7 +1164,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         </div>
       </div>
       <div className="chat-messages" ref={chatMessagesRef} onScroll={handleScroll}>
-        {activePlan?.pinned && (
+        {activePlan?.pinned && !displayMessages.some(m => m.role === 'assistant' && m.turnStatus) && (
           <div className="chat-plan-sticky">
             <TaskPlan steps={activePlan.steps} variant="pinned" />
           </div>
