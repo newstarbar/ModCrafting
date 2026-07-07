@@ -99,7 +99,7 @@ const LOCAL_SEARCH_FILES = [
 
 async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
   if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return ''
-  const tokens = keyword.toLowerCase().split(/\s+/).filter(Boolean)
+  const tokens = keyword.toLowerCase().split(/[\s.,()#]+/).filter(Boolean)
   if (tokens.length === 0) return ''
   const minMatches = Math.max(1, Math.ceil(tokens.length / 2))
 

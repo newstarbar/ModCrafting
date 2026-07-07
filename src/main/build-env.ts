@@ -2112,7 +2112,11 @@ export function isFabricKnowledgeBaseReady(): boolean {
 /** Search local Fabric API sources and Yarn mappings for a keyword.
  *  Returns matching snippets with file locations. */
 export function searchLocalFabricSources(keyword: string, maxResults = 5): string {
-  const tokens = keyword.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
+  // Split on whitespace AND common code separators (dots, parens, hashes)
+  // so "ServerTickEvents.START_WORLD_TICK" → [servertickevents, start, world, tick]
+  const tokens = keyword.toLowerCase()
+    .split(/[\s.,()#]+/)
+    .filter((t) => t.length > 1)
   if (tokens.length === 0) return ''
   // Require at least half the tokens to match (minimum 1).
   // This lets users include descriptive words like "Yarn" or "mapping"
@@ -2172,11 +2176,12 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
     } catch { /* ignore */ }
   }
 
-  // 2. Search Fabric API sources
+  // 2. Search Fabric API sources — extract API surface (class + public methods)
   const srcDir = fabricSourcesDir()
   if (fs.existsSync(srcDir)) {
     try {
-      const fileResults: Array<{ file: string; lines: string[]; score: number }> = []
+      interface ApiHit { className: string; pkg: string; classDoc: string; methods: string[]; score: number }
+      const hits: ApiHit[] = []
       const walk = (dir: string) => {
         for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
           const full = path.join(dir, e.name)
@@ -2186,32 +2191,76 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
             const content = fs.readFileSync(full, 'utf-8')
             const contentLower = content.toLowerCase()
             const matchCount = tokens.filter((t) => contentLower.includes(t)).length
-            if (matchCount >= minMatches) {
-              const lines = content.split('\n')
-              const snippets: string[] = []
-              for (let i = 0; i < lines.length; i++) {
-                const lineLower = lines[i].toLowerCase()
-                if (tokens.some((t) => lineLower.includes(t))) {
-                  const start = Math.max(0, i - 3)
-                  const end = Math.min(lines.length, i + 5)
-                  snippets.push(lines.slice(start, end).join('\n'))
-                  if (snippets.length >= 3) break
+            if (matchCount < minMatches) return
+            const lines = content.split('\n')
+
+            // Extract class declaration and Javadoc
+            let classDoc = ''
+            let className = e.name.replace(/\.java$/, '')
+            let pkg = ''
+            let inJavadoc = false
+            let javadocLines: string[] = []
+            const methods: string[] = []
+
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim()
+              // Package
+              if (line.startsWith('package ') && !pkg) {
+                pkg = line.replace('package ', '').replace(';', '')
+              }
+              // Class-level Javadoc (before class/interface/enum declaration)
+              if (line.startsWith('/**') && !inJavadoc) {
+                inJavadoc = true
+                javadocLines = []
+                continue
+              }
+              if (inJavadoc) {
+                if (line.startsWith('*/') || line === '*/') {
+                  inJavadoc = false
+                  classDoc = javadocLines.join(' ').replace(/^\s*\*\s?/gm, '').trim()
+                  continue
+                }
+                javadocLines.push(line.replace(/^\s*\*\s?/, ''))
+                continue
+              }
+              // Class declaration
+              if (line.match(/^public (class|interface|enum) /)) {
+                className = line.replace(/\{.*$/, '').trim()
+                // continue scanning for methods after class declaration
+              }
+              // Public method signature (simplified extraction)
+              if (line.match(/^\s*public\s+\w+\s+\w+\s*\(/)) {
+                const sig = line.replace(/\s*\{.*$/, '').trim()
+                if (!sig.includes(' class ') && sig.length < 200) {
+                  methods.push(sig)
+                  if (methods.length >= 12) break // max 12 methods per class
                 }
               }
-              if (snippets.length > 0) {
-                fileResults.push({ file: e.name, lines: snippets, score: matchCount })
-              }
+            }
+
+            if (classDoc || methods.length > 0) {
+              hits.push({ className, pkg, classDoc, methods: methods.slice(0, 12), score: matchCount })
             }
           } catch { /* skip unreadable */ }
-          if (fileResults.length >= maxResults) break
+          if (hits.length >= maxResults * 3) return
         }
       }
-      fileResults.sort((a, b) => b.score - a.score)
       walk(srcDir)
-      for (const fr of fileResults.slice(0, maxResults)) {
-        // Show Java class name, not the JAR file name
-        const shortName = fr.file.replace(/\.java$/, '').replace(/^fabric-[^-]+-[^-]+-/, '')
-        results.push(`[${shortName}]\n${fr.lines.join('\n---\n')}`)
+      hits.sort((a, b) => b.score - a.score)
+
+      if (hits.length > 0) {
+        const formatted = hits.slice(0, maxResults).map((h) => {
+          const parts: string[] = []
+          const fqcn = h.pkg ? `${h.pkg}.${h.className}` : h.className
+          parts.push(`📦 ${fqcn} — 匹配 ${h.score}/${tokens.length} 词`)
+          if (h.classDoc) parts.push(`   ${h.classDoc.slice(0, 200)}`)
+          if (h.methods.length > 0) {
+            parts.push(`   ${h.methods.slice(0, 8).join('\n   ')}`)
+            if (h.methods.length > 8) parts.push(`   ... 还有 ${h.methods.length - 8} 个公开方法`)
+          }
+          return parts.join('\n')
+        })
+        results.push(`[Fabric API 源码 ${hits.length} 个类命中，显示前 ${Math.min(maxResults, formatted.length)} 个]\n${formatted.join('\n---\n')}`)
       }
     } catch { /* ignore */ }
   }

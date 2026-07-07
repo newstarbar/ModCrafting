@@ -358,7 +358,7 @@ ${toolDescs}
 ${mode === 'plan' ? '## 当前：输出计划阶段\n只输出计划文本，不要调用工具。' : '## 当前：执行阶段\n直接调用工具执行计划。多用 write_file 批量写入。最后 trigger_build 构建并启动游戏测试。'}
 
 ## 重要规则
-- **写代码前用 fabric_docs_search 查 Yarn 类名/方法名，不要凭记忆猜。**
+- **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**
 - 使用 Yarn mappings。主类→ModInitializer，客户端→ClientModInitializer。${extraRules}
 
 ${goalBlock}
