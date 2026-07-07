@@ -201,7 +201,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
 
   const sharedGradleHome = buildPrep.env?.GRADLE_USER_HOME
   if (typeof sharedGradleHome === 'string') {
-    purgeGradleEphemeralCaches(sharedGradleHome)
+    try { purgeGradleEphemeralCaches(sharedGradleHome) } catch { /* locked files are harmless */ }
     const staleInstanceHome = path.join(sharedGradleHome, 'mc-instances', id)
     if (fs.existsSync(staleInstanceHome)) {
       try {
@@ -281,7 +281,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
 
       notifyInstanceState(id)
       if (typeof sharedGradleHome === 'string') {
-        purgeGradleEphemeralCaches(sharedGradleHome)
+        try { purgeGradleEphemeralCaches(sharedGradleHome) } catch { /* locked files are harmless */ }
       }
     })
 
@@ -291,7 +291,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
       instance.exitReason = 'start_failed'
       instance.crashedAt = new Date()
       if (typeof sharedGradleHome === 'string') {
-        purgeGradleEphemeralCaches(sharedGradleHome)
+        try { purgeGradleEphemeralCaches(sharedGradleHome) } catch { /* locked files are harmless */ }
       }
       notifyInstanceState(id)
       BrowserWindow.getAllWindows().forEach((win) => {

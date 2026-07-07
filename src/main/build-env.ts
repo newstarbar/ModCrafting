@@ -434,6 +434,31 @@ function safeRmSync(target: string): void {
 }
 
 /**
+ * rmdirSync with retry for transient Windows file locks (EBUSY/EPERM).
+ * Gradle daemon / Java processes may not release all file handles
+ * immediately after exit.  Retries up to 3× with 100 ms back-off.
+ */
+function retryRmdirSync(p: string): void {
+  let last: unknown
+  for (let i = 0; i < 3; i++) {
+    try { fs.rmdirSync(p); return }
+    catch (e: any) {
+      last = e
+      if (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'ENOTEMPTY') {
+        if (i < 2) {
+          const ms = 100 * (i + 1)
+          const start = Date.now()
+          while (Date.now() - start < ms) { /* busy-wait for sync API */ }
+          continue
+        }
+      }
+      throw e
+    }
+  }
+  throw last
+}
+
+/**
  * Recursively delete a directory tree WITHOUT following junctions or symlinks.
  *
  * On Windows, fs.rmSync(path, {recursive:true}) follows directory junctions
@@ -453,11 +478,11 @@ function safeRmSyncNoJunctionFollow(target: string): void {
   let isLink = false
   try { fs.readlinkSync(target); isLink = true } catch { /* not a link */ }
   if (isLink) {
-    if (stat.isDirectory()) { fs.rmdirSync(target) }
+    if (stat.isDirectory()) { retryRmdirSync(target) }
     else {
       try { fs.rmSync(target, { force: true }) }
       catch (e: any) {
-        if (e.code === 'ERR_FS_EISDIR') fs.rmdirSync(target)
+        if (e.code === 'ERR_FS_EISDIR') retryRmdirSync(target)
         else throw e
       }
     }
@@ -474,12 +499,12 @@ function safeRmSyncNoJunctionFollow(target: string): void {
 
     if (childIsLink) {
       const childStat = fs.lstatSync(childPath)
-      if (childStat.isDirectory()) { fs.rmdirSync(childPath) }
+      if (childStat.isDirectory()) { retryRmdirSync(childPath) }
       else {
         try { fs.rmSync(childPath, { force: true }) }
         catch (e: any) {
           // lstatSync may misreport dangling junctions as non-directories on Windows
-          if (e.code === 'ERR_FS_EISDIR') fs.rmdirSync(childPath)
+          if (e.code === 'ERR_FS_EISDIR') retryRmdirSync(childPath)
           else throw e
         }
       }
@@ -499,7 +524,7 @@ function safeRmSyncNoJunctionFollow(target: string): void {
       }
     }
   }
-  fs.rmdirSync(target)
+  retryRmdirSync(target)
 }
 
 async function safeRmAsync(target: string): Promise<void> {
