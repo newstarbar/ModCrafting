@@ -24,6 +24,9 @@ export interface WorkflowRunResult {
   allDone: boolean
   partial: boolean
   steps: WorkflowStep[]
+  needsClarification?: boolean
+  clarificationQuestion?: string
+  clarificationOptions?: string[]
 }
 
 export function workflowStepToPlanStep(step: WorkflowStep): PlanStepState {

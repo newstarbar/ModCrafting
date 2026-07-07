@@ -104,7 +104,8 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   fabric_content_register: '注册内容',
   fabric_data_assets_generate: '生成资源',
   fabric_mixin_scaffold: '生成 Mixin',
-  fabric_log_debugger: '分析日志'
+  fabric_log_debugger: '分析日志',
+  ask_clarification: '向用户提问'
 }
 
 function getToolDisplayName(name: string, args?: Record<string, unknown>): string {
@@ -211,6 +212,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   activePlanRef.current = activePlan
   const [completionFlash, setCompletionFlash] = useState('')
   const completionFlashTimerRef = useRef<number | null>(null)
+  const [clarificationPending, setClarificationPending] = useState(false)
+  const [clarificationQuestion, setClarificationQuestion] = useState('')
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -484,6 +487,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         }
         break
 
+      case EventKind.ClarificationNeeded:
+        if (event.clarification) {
+          setClarificationPending(true)
+          setClarificationQuestion(event.clarification.question)
+          setIsLoading(false)
+          setAgentStatus('')
+        }
+        break
+
       case EventKind.TurnStarted:
         turnUsageRef.current = { promptTokens: 0, completionTokens: 0 }
         onRunningChangeRef.current?.(true)
@@ -674,6 +686,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         break
 
       case EventKind.TurnDone: {
+        setClarificationPending(false)
+        setClarificationQuestion('')
         t.streamDone = true
         if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
         const hasError = Boolean(event.error)
@@ -769,6 +783,25 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading || !toolchainReady) return
 
+    if (clarificationPending) {
+      const answer = input.trim()
+      setInput('')
+      setClarificationPending(false)
+      setClarificationQuestion('')
+      setIsLoading(true)
+      setAgentStatus('思考中...')
+      const ctrl = controllerRef.current
+      if (ctrl) {
+        try { await ctrl.answerClarification(answer) }
+        catch {
+          setIsLoading(false)
+          setAgentStatus('')
+          onRunningChangeRef.current?.(false)
+        }
+      }
+      return
+    }
+
     const resolvedKey = ensureApiKey
       ? await ensureApiKey()
       : apiConfig.apiKey.trim()
@@ -813,7 +846,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, composerMode, sessionGoal])
+  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, composerMode, sessionGoal, clarificationPending])
 
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
@@ -1185,6 +1218,16 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         {!toolchainReady && (
           <div className="chat-toolchain-lock-banner">
             构建环境初始化中，AI 开发与构建功能暂时锁定，请等待进度条完成。
+          </div>
+        )}
+        {clarificationPending && (
+          <div className="clarification-banner">
+            <div className="clarification-banner-hd">
+              <span className="clarification-banner-icon">?</span>
+              <span>AI 需要你的确认</span>
+            </div>
+            <div className="clarification-banner-question">{clarificationQuestion}</div>
+            <div className="clarification-banner-hint">请在下方输入你的回答，然后发送</div>
           </div>
         )}
         <ChatComposer

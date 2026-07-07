@@ -100,7 +100,7 @@ const BEHAVIOR_GUARDRAILS = [
   '禁止解释基础概念。用户是熟练的 MC 模组开发者，不需要解释"什么是 Mixin""什么是事件系统"。',
   '禁止反复犹豫。定下方案就不再回头讨论替代方案，除非构建/运行失败需要修复。',
   '计划阶段：每个步骤一行，不超过 6 步。最多 2 句背景说明，然后直接列出步骤。',
-  '执行阶段：每轮回复的非工具文字不超过 3 句。不要输出分析段落，直接调用工具。',
+  '执行阶段：每轮回复的非工具文字不超过 3 句。遇到不确定时使用 ask_clarification 向用户提问，不要猜测。直接调用工具执行。',
   '永远不要输出如下反例格式 —— 这是绝对禁止的："我们来分析一下...首先考虑...但...不过...实际上...更好的方式是...更简单的方案是..."',
   '正确的输出风格示例：一句话说明技术选择 → 直接调用 write_file / trigger_build 等工具。旁白只告知"当前在做什么"，不告知"为什么选这个方案"。'
 ]
@@ -134,7 +134,8 @@ function modeSpecificRules(mode: FabricAgentPromptMode): string[] {
     '执行时优先调用产品内 Fabric 专用工具，只有工具覆盖不了时才用 write_file。',
     '当前 write/recipe 步若 API 不确定，可在该步内调用 fabric_docs_search 或 fabric_meta_version_check。',
     '配方使用 create_recipe / fabric_recipe_generate，路径为 data/<modid>/recipe/（1.21+ 单数目录）。',
-    '只执行当前步骤，禁止重规划；写入后通过 trigger_build / runClient 验证。'
+    '只执行当前步骤，禁止重规划；写入后通过 trigger_build / runClient 验证。',
+    '遇到不确定的文件路径、包名、类名或配置选项时，使用 ask_clarification 向用户提问，不要盲目猜测。'
   ]
 }
 

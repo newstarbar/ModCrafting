@@ -37,6 +37,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'read_file',
         'list_directory',
+        'ask_clarification',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
         'vanilla_mc_wiki_query',

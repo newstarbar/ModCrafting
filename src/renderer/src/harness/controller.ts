@@ -211,7 +211,8 @@ export class Controller {
       fabric_mixin_scaffold: '生成 Mixin 脚手架',
       fabric_log_debugger: '分析 Fabric 日志',
       read_error_log: '读取错误日志',
-      complete_step: '完成任务步骤'
+      complete_step: '完成任务步骤',
+      ask_clarification: '向用户提问'
     }
     const toolDescs = this.registry.names().filter((name) => name !== 'complete_step').map((name) => {
       const t = this.registry.get(name)
@@ -274,7 +275,7 @@ ${projectInfo}`
 - 每轮回复的非工具文字不超过 3 句。超出视为违规。
 - 不要写分析段落、方案论证或概念解释。
 - 旁白只告知"当前在做什么"（如"正在写入 Mixin..."），不告知"为什么"。
-- 直接调用工具执行，禁止只输出文字不行动。
+- 直接调用工具执行。遇到任何不确定的细节（文件路径、包名、类名等），必须用 ask_clarification 向用户确认，禁止凭记忆猜测。
 
 严格按照之前的计划执行。**不要重新规划**。步骤完成由主机根据工具结果自动判定。
 
@@ -287,7 +288,7 @@ ${projectInfo}`
 - **全部步骤完成后输出总结。**`
 
     const extraRules = mode === 'execute'
-      ? '\n- **禁止输出计划！** 直接调用工具执行已有计划。\n- **每轮至少调用一个工具。** 不允许只输出文字。\n- **每轮的非工具旁白文字不超过 3 句。** 不要写分析段落。'
+      ? '\n- **禁止输出计划！** 直接调用工具执行已有计划。\n- **每轮至少调用一个工具。** 遇到不确定时使用 ask_clarification 提问，不要猜测。\n- **每轮的非工具旁白文字不超过 3 句。** 不要写分析段落。'
       : '\n- **不要调用工具，只输出计划文本。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。'
 
     return `# ModCrafting AI 助手
@@ -484,6 +485,10 @@ ${projectInfo}`
           { phase: 'plan', emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
         )
 
+        if (this.agent.clarificationPending) {
+          return planResult
+        }
+
         const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
         logger.agent('Plan merged', {
           steps: parsePlanSteps(fullPlanText).length,
@@ -621,10 +626,110 @@ ${projectInfo}`
     return this.runTurn(lastUser.content, { pushUser: false })
   }
 
+  /** Resume execution after a clarification question was answered. */
+  async answerClarification(answer: string): Promise<string> {
+    if (!this.agent.clarificationPending) return ''
+    if (this._running) return ''
+
+    this.agent.clarificationPending = false
+
+    this.messages.push({ role: 'user', content: answer })
+
+    this._running = true
+    this.abortController = new AbortController()
+    this.agent.resetRunState()
+
+    this.onAgentStatus?.('思考中...')
+
+    let planStreamText = ''
+    let planStreamReasoning = ''
+    const streamCb = (text: string, reasoning?: string) => {
+      if (text) planStreamText = text
+      if (reasoning) planStreamReasoning = reasoning
+      this.onStreamUpdate?.(text, reasoning)
+    }
+
+    try {
+      if (this._phase === 'plan' || !this.planTracker) {
+        // Resume plan phase — regenerate plan with clarified requirements
+        await this.updateSystemPrompt('plan')
+        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_start' })
+
+        const planResult = await this.agent.run(
+          this.apiConfig.endpoint,
+          this.apiConfig.apiKey,
+          this.apiConfig.model,
+          this.messages,
+          this._projectPath,
+          this.abortController!.signal,
+          streamCb,
+          { phase: 'plan', emitLifecycle: false, turnMode: 'develop', composerMode: this.composerMode }
+        )
+
+        if (this.agent.clarificationPending) return planResult
+
+        const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
+        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: fullPlanText })
+        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+
+        if (!this.isActionablePlan(fullPlanText)) {
+          this.onAgentStatus?.('')
+          this.emitEvent({
+            kind: EventKind.Notice,
+            notice: {
+              level: 'warn',
+              text: planHasActionableSteps(fullPlanText)
+                ? '计划已生成但缺少可执行步骤描述，未进入执行阶段'
+                : '未能解析出编号实施步骤，未进入执行阶段'
+            }
+          })
+          this.emitEvent({ kind: EventKind.TurnDone })
+          return planResult
+        }
+
+        this.planTracker = PlanTracker.fromPlanText(fullPlanText)
+        this.emitPlanState(this.planTracker)
+
+        const execResult = await this.beginExecuteFromTracker(streamCb)
+        this.onAgentStatus?.('')
+        return execResult || planResult
+      }
+
+      // Resume execute phase
+      const result = await this.agent.run(
+        this.apiConfig.endpoint,
+        this.apiConfig.apiKey,
+        this.apiConfig.model,
+        this.messages,
+        this._projectPath,
+        this.abortController!.signal,
+        streamCb,
+        {
+          phase: 'execute',
+          emitLifecycle: false,
+          planTracker: this.planTracker,
+          opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
+        }
+      )
+      this.onAgentStatus?.('')
+      return result
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      logger.error('Clarification resume error', errMsg)
+      this.onAgentStatus?.(`错误: ${errMsg}`)
+      this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
+      return `Error: ${errMsg}`
+    } finally {
+      this._running = false
+      this.abortController = null
+    }
+  }
+
   cancel(): void {
     if (this.abortController) {
       this.abortController.abort()
       this._running = false
+      this.agent.clarificationPending = false
       logger.agent('Turn cancelled')
     }
   }
@@ -642,6 +747,7 @@ ${projectInfo}`
     this.planTracker = null
     this.planReadyAwaitingExecute = false
     this.agent.resetRunState()
+    this.agent.clarificationPending = false
     logger.agent('Session cleared')
   }
 

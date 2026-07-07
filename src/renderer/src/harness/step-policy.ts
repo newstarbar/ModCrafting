@@ -93,6 +93,7 @@ export function isToolAllowedForStep(
     return true
   }
   if (call.name === 'list_directory') return true
+  if (call.name === 'ask_clarification') return true
   if (call.name === 'read_file' && step.kind !== 'recipe') return true
 
   if (!step.allowedTools.includes(call.name)) return false

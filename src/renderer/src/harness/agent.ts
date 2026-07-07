@@ -79,6 +79,7 @@ export class Agent {
   private repeatSuccessCounts = new Map<string, number>()
   private finalReadinessBlocks = 0
   private graceRound = false
+  clarificationPending = false
   // Rounds where every tool call was rejected by the loop guard (no progress)
   private consecutiveBlockedRounds = 0
   // Rounds where the model only called complete_step without any real work
@@ -106,6 +107,7 @@ export class Agent {
     this.graceRound = false
     this.consecutiveBlockedRounds = 0
     this.consecutiveStepDoneOnlyRounds = 0
+    this.clarificationPending = false
   }
 
   private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
@@ -220,6 +222,19 @@ export class Agent {
     })
     try {
       const result = await engine.run(messages)
+
+      if (result.needsClarification) {
+        this.clarificationPending = true
+        this.emit({
+          kind: EventKind.ClarificationNeeded,
+          clarification: {
+            question: result.clarificationQuestion || result.finalContent || '',
+            options: result.clarificationOptions
+          }
+        })
+        return result.finalContent
+      }
+
       if (result.finalContent.trim()) {
         messages.push({ role: 'assistant', content: result.finalContent })
       }
@@ -349,8 +364,11 @@ export class Agent {
         ? [{ ...messages[systemIdx] }, ...messages.slice(systemIdx + 1)]
         : messages
 
-      // Plan phase: no tools; execute phase: full registry with exploration limits
-      let availableTools = phase === 'plan' ? [] : this.filterControlTools(this.registry.schemas())
+      // Plan phase: only ask_clarification; execute phase: full registry with exploration limits
+      let availableTools =
+        phase === 'plan'
+          ? this.registry.schemas().filter((t) => t.name === 'ask_clarification')
+          : this.filterControlTools(this.registry.schemas())
       if (this.graceRound) {
         availableTools = []
       } else if (phase === 'execute') {
@@ -547,6 +565,24 @@ export class Agent {
             }
           )
           for (const [id, r] of batchResults) results.set(id, r)
+        }
+
+        // Check if model is asking a clarification question (plan or chat phase)
+        for (const r of results.values()) {
+          if (r.toolName === 'ask_clarification' && r.ok) {
+            const question = String(r.args?.question || '')
+            const options = Array.isArray(r.args?.options)
+              ? (r.args.options as string[]).map(String)
+              : undefined
+            const text = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
+            appendToolRoundHistory(messages, text, callsWithIds, results)
+            this.clarificationPending = true
+            this.emit({
+              kind: EventKind.ClarificationNeeded,
+              clarification: { question, options }
+            })
+            return text || question
+          }
         }
 
         const executedCalls = [...callsWithIds]

@@ -18,6 +18,7 @@ export const EventKind = {
   PlanState: 'PlanState',
   ApprovalRequest: 'ApprovalRequest',
   AskRequest: 'AskRequest',
+  ClarificationNeeded: 'ClarificationNeeded',
   TurnDone: 'TurnDone',
   CompactionStarted: 'CompactionStarted',
   CompactionDone: 'CompactionDone',
@@ -110,6 +111,7 @@ export interface Event {
   retryMax?: number
   phase?: string
   planSteps?: Array<{ id: string; description: string; status: string }>
+  clarification?: { question: string; options?: string[] }
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
 }
@@ -153,7 +155,7 @@ export class LoggerSink implements Sink {
   }
 
   emit(event: Event): void {
-    const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text]
+    const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text, EventKind.ClarificationNeeded]
     if (!skipKinds.includes(event.kind)) {
       const detail =
         event.text?.slice(0, 120) ||

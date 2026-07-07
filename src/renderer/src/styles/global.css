@@ -2564,6 +2564,51 @@ body,
 	border-radius: 6px;
 }
 
+.clarification-banner {
+	width: 100%;
+	margin-bottom: 8px;
+	padding: 12px 16px;
+	background: var(--bg-raised);
+	border: 1px solid var(--accent);
+	border-radius: 8px;
+}
+
+.clarification-banner-hd {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	font-size: 13px;
+	color: var(--accent);
+	margin-bottom: 6px;
+}
+
+.clarification-banner-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 50%;
+	background: var(--accent);
+	color: #fff;
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.clarification-banner-question {
+	font-size: 13px;
+	color: var(--text-primary);
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+
+.clarification-banner-hint {
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-top: 6px;
+}
+
 /* ── MC Runtime (game panel) ── */
 .mc-runtime-panel {
 	height: 100%;

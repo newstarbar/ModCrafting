@@ -832,6 +832,39 @@ export const completeStepTool: Tool = {
   }
 }
 
+// ── ask_clarification ──
+export const askClarificationTool: Tool = {
+  name: 'ask_clarification',
+  description:
+    '向用户提问以澄清需求。当你遇到以下情况时必须使用，禁止猜测：\n' +
+    '1. 不确定文件路径（如不知道 mixin 配置文件是 example.mixins.json 还是 my-mod.mixins.json）\n' +
+    '2. 不确定包名、类名、mod id、版本号等标识符\n' +
+    '3. 需要从多个可行方案中选择（如用 @Inject 还是 @ModifyVariable）\n' +
+    '4. 用户需求有歧义，允许多种实现方式\n' +
+    '调用后自动暂停执行，等待用户回答后继续。不会导致步骤失败。',
+  schema: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: '要问用户的问题，用中文，说明为什么需要确认' },
+      options: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '可选的答案选项，供用户快速选择（最多 4 个）'
+      }
+    },
+    required: ['question']
+  },
+  readOnly: () => true,
+  async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+    const question = String(args.question || '')
+    const options = Array.isArray(args.options) ? (args.options as string[]) : []
+    const optionsText = options.length > 0
+      ? '\n\n选项：\n' + options.map((o, i) => `${i + 1}. ${o}`).join('\n')
+      : ''
+    return `[CLARIFICATION_NEEDED]\n问题：${question}${optionsText}`
+  }
+}
+
 // Register all built-in tools
 import { Registry } from './tools'
 import { logger } from '../utils/logger'
@@ -856,6 +889,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
     runCommandTool,
     readErrorLogTool,
     triggerBuildTool,
+    askClarificationTool,
     completeStepTool
   ]
   for (const tool of tools) {

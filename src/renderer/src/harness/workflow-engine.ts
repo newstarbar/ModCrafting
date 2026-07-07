@@ -246,10 +246,13 @@ export class WorkflowEngine {
       repairMode && repairWriteRequired
         ? '必须先 write_file 修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
         : ''
+    const clarifyHint = tools.includes('ask_clarification')
+      ? '如果对文件路径、类名、配置项等细节不确定，先用 ask_clarification 向用户确认，不要猜。\n'
+      : ''
     return {
       role: 'user',
       content:
-        `${prefix}${repairGate}只执行当前步骤，不要重复已完成操作。\n` +
+        `${prefix}${repairGate}${clarifyHint}只执行当前步骤，不要重复已完成操作。\n` +
         `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n允许工具: ${tools.join(', ') || '无'}\n` +
         `如果需要工具，只能调用允许工具列表中的工具。工具成功后主机会自动推进。`
     }
@@ -442,6 +445,24 @@ export class WorkflowEngine {
         }
 
         const primaryResult = resultsById.get(gate.allowed[0].id)
+
+        if (primaryResult?.toolName === 'ask_clarification' && primaryResult.ok) {
+          const question = String(primaryResult.args?.question || '')
+          const options = Array.isArray(primaryResult.args?.options)
+            ? (primaryResult.args.options as string[]).map(String)
+            : undefined
+          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
+          return {
+            finalContent: primaryResult.output,
+            allDone: false,
+            partial: false,
+            needsClarification: true,
+            clarificationQuestion: question,
+            clarificationOptions: options,
+            steps: this.steps
+          }
+        }
+
         const success = primaryResult ? resultCompletesStep(step, primaryResult) : undefined
         let roundInstruction: string | undefined
 
