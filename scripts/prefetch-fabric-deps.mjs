@@ -99,7 +99,7 @@ function setupRuntime() {
 
 function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
   return new Promise((resolve, reject) => {
-    const child = spawn('cmd', ['/c', 'gradlew.bat', ...args], {
+    const child = spawn('cmd', ['/c', '.\\gradlew.bat', ...args], {
       cwd,
       env: {
         ...process.env,

@@ -162,7 +162,7 @@ function runGradle(
   timeoutMs: number
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('cmd', ['/c', 'gradlew.bat', ...args], {
+    const child = spawn('cmd', ['/c', '.\\gradlew.bat', ...args], {
       cwd,
       env: {
         ...process.env,

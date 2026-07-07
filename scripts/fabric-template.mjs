@@ -201,7 +201,7 @@ exit /b !ERRORLEVEL!
 }
 
 export async function setupPrefetchProject(projectDir, runtimeRoot, gradleSrc) {
-  const { mkdirSync, writeFileSync, cpSync, existsSync, rmSync } = await import('fs')
+  const { mkdirSync, writeFileSync, cpSync, existsSync, rmSync, readdirSync } = await import('fs')
   const pathMod = await import('path')
   const { fileURLToPath } = await import('url')
 
@@ -212,7 +212,22 @@ export async function setupPrefetchProject(projectDir, runtimeRoot, gradleSrc) {
   const javaPath = `src/main/java/${groupId.replace(/\./g, '/')}/${pkg}`
   const clientJavaPath = `src/client/java/${groupId.replace(/\./g, '/')}/${pkg}`
 
-  if (existsSync(projectDir)) rmSync(projectDir, { recursive: true, force: true })
+  if (existsSync(projectDir)) {
+    // On Windows a stale handle (WSL, antivirus) can make the directory
+    // undeletable even when empty.  If contents are already gone, skip the rm.
+    try {
+      const entries = readdirSync(projectDir)
+      if (entries.length > 0) {
+        rmSync(projectDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
+      }
+    } catch (e) {
+      if (e.code === 'EBUSY') {
+        console.warn('_prefetch_project directory locked, reusing existing empty directory')
+      } else {
+        throw e
+      }
+    }
+  }
 
   mkdirSync(pathMod.join(projectDir, javaPath), { recursive: true })
   mkdirSync(pathMod.join(projectDir, clientJavaPath), { recursive: true })

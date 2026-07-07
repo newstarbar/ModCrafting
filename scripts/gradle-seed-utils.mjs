@@ -430,7 +430,7 @@ export async function runOfflineBuildVerification({
   log('Running offline build verification...')
 
   const result = await new Promise((resolve) => {
-    const child = spawn('cmd', ['/c', 'gradlew.bat', '--offline', 'build', '--no-daemon'], {
+    const child = spawn('cmd', ['/c', '.\\gradlew.bat', '--offline', 'build', '--no-daemon'], {
       cwd: projectPath,
       env: {
         ...process.env,

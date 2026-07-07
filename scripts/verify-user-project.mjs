@@ -60,7 +60,7 @@ exit /b !ERRORLEVEL!
 
 function runBuild() {
   return new Promise((resolve) => {
-    const child = spawn('cmd', ['/c', 'gradlew.bat', 'build', '--no-daemon'], {
+    const child = spawn('cmd', ['/c', '.\\gradlew.bat', 'build', '--no-daemon'], {
       cwd: projectPath,
       env: {
         ...process.env,

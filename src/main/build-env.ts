@@ -855,12 +855,23 @@ async function ensureGradleHomeFromSeedImpl(
 
   // Dev: point GRADLE_USER_HOME at resources/gradle-home-seed (no copy)
   if (!app.isPackaged) {
-    if (!seedSrc) {
-      return { ok: false, error: '离线依赖种子未生成，开发模式请运行 npm run prefetch:deps' }
+    if (seedSrc) {
+      purgeGradleEphemeralCaches(seedSrc)
+      onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
+      return { ok: true }
     }
-    purgeGradleEphemeralCaches(seedSrc)
-    onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
-    return { ok: true }
+    // resolveBundledGradleHomeSeedPath may fail because transient dirs
+    // (transforms, mc-instances) left by an unclean runClient exit make
+    // validateSeedContent reject the seed. Purge them and re-validate.
+    for (const p of bundledGradleHomeSeedPaths()) {
+      if (fs.existsSync(p)) purgeGradleEphemeralCaches(p)
+    }
+    const recovered = resolveBundledGradleHomeSeedPath()
+    if (recovered) {
+      onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
+      return { ok: true }
+    }
+    return { ok: false, error: '离线依赖种子未生成，开发模式请运行 npm run prefetch:deps' }
   }
 
   // Packaged: NSIS 7z 无法可靠展开上万级 Gradle 缓存文件，改用单文件 zip 首次解压
@@ -1525,15 +1536,40 @@ export function isRecoverableGradleCacheError(output: string): boolean {
 const EPHEMERAL_GRADLE_HOME_DIRS = ['daemon', 'notifications', 'mc-instances'] as const
 const EPHEMERAL_CACHE_DIRS = ['transforms', 'executionHistory', 'generated-gradle-jars', 'jars-9', 'journal-1'] as const
 
+/**
+ * Remove junctions/symlinks inside mc-instances subdirectories before a
+ * recursive delete.  On Windows {@link fs.rmSync} with recursive:true follows
+ * directory junctions and deletes their *target* content — which would wipe
+ * caches/, wrapper/, and notifications/ inside the shared Gradle home (the
+ * seed in dev mode).  Breaking the links individually first avoids that.
+ */
+function breakJunctionsInInstanceDirs(instancesDir: string): void {
+  try {
+    for (const inst of fs.readdirSync(instancesDir, { withFileTypes: true })) {
+      if (!inst.isDirectory()) continue
+      const instPath = path.join(instancesDir, inst.name)
+      for (const entry of fs.readdirSync(instPath, { withFileTypes: true })) {
+        try {
+          if (fs.lstatSync(path.join(instPath, entry.name)).isSymbolicLink()) {
+            fs.rmSync(path.join(instPath, entry.name), { force: true })
+          }
+        } catch { /* entry already gone or permission race */ }
+      }
+    }
+  } catch { /* directory already removed or inaccessible */ }
+}
+
 /** Remove rebuildable Gradle caches that commonly cause immutable-workspace failures. */
 export function purgeGradleEphemeralCaches(gradleHome: string): number {
   let removed = 0
   for (const name of EPHEMERAL_GRADLE_HOME_DIRS) {
     const target = path.join(gradleHome, name)
-    if (fs.existsSync(target)) {
-      safeRmSync(target)
-      removed++
+    if (!fs.existsSync(target)) continue
+    if (name === 'mc-instances') {
+      breakJunctionsInInstanceDirs(target)
     }
+    safeRmSync(target)
+    removed++
   }
 
   const cachesRoot = path.join(gradleHome, 'caches')
