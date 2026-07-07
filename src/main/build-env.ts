@@ -448,15 +448,56 @@ function safeRmSync(target: string): void {
 function safeRmSyncNoJunctionFollow(target: string): void {
   if (!fs.existsSync(target)) return
   const stat = fs.lstatSync(target)
+
   // Symlink or junction at top level — just unlink, don't recurse
-  try { fs.readlinkSync(target); fs.rmSync(target, { force: true }); return } catch { /* not a link */ }
+  let isLink = false
+  try { fs.readlinkSync(target); isLink = true } catch { /* not a link */ }
+  if (isLink) {
+    if (stat.isDirectory()) { fs.rmdirSync(target) }
+    else {
+      try { fs.rmSync(target, { force: true }) }
+      catch (e: any) {
+        if (e.code === 'ERR_FS_EISDIR') fs.rmdirSync(target)
+        else throw e
+      }
+    }
+    return
+  }
+
   if (!stat.isDirectory()) { fs.rmSync(target, { force: true }); return }
 
   for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
     const childPath = path.join(target, entry.name)
-    try { fs.readlinkSync(childPath); fs.rmSync(childPath, { force: true }); continue } catch { /* not a link */ }
-    if (entry.isDirectory()) safeRmSyncNoJunctionFollow(childPath)
-    else fs.rmSync(childPath, { force: true })
+
+    let childIsLink = false
+    try { fs.readlinkSync(childPath); childIsLink = true } catch { /* not a link */ }
+
+    if (childIsLink) {
+      const childStat = fs.lstatSync(childPath)
+      if (childStat.isDirectory()) { fs.rmdirSync(childPath) }
+      else {
+        try { fs.rmSync(childPath, { force: true }) }
+        catch (e: any) {
+          // lstatSync may misreport dangling junctions as non-directories on Windows
+          if (e.code === 'ERR_FS_EISDIR') fs.rmdirSync(childPath)
+          else throw e
+        }
+      }
+      continue
+    }
+
+    // Not a link — use lstatSync (not Dirent.isDirectory()) as source of truth
+    const childStat = fs.lstatSync(childPath)
+    if (childStat.isDirectory()) {
+      safeRmSyncNoJunctionFollow(childPath)
+    } else {
+      try { fs.rmSync(childPath, { force: true }) }
+      catch (e: any) {
+        // lstatSync may misreport some Windows reparse points as non-directories
+        if (e.code === 'ERR_FS_EISDIR') safeRmSyncNoJunctionFollow(childPath)
+        else throw e
+      }
+    }
   }
   fs.rmdirSync(target)
 }
@@ -1584,7 +1625,9 @@ function breakJunctionsInInstanceDirs(instancesDir: string): void {
         const entryPath = path.join(instPath, entry.name)
         try {
           fs.readlinkSync(entryPath) // throws if not a link (symlink or junction)
-          fs.rmSync(entryPath, { force: true })
+          const st = fs.lstatSync(entryPath)
+          if (st.isDirectory()) fs.rmdirSync(entryPath)
+          else fs.rmSync(entryPath, { force: true })
         } catch { /* not a link, or already gone */ }
       }
     }
