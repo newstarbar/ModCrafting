@@ -458,7 +458,10 @@ export class WorkflowEngine {
           repairRounds = 0
           this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
           step.status = 'completed'
-          this.planTracker.advanceCurrent(primaryResult!.toolName || 'workflow evidence')
+          // complete_step already advanced planTracker inside its execute(); don't double-advance
+          if (primaryResult!.toolName !== 'complete_step') {
+            this.planTracker.advanceCurrent(primaryResult!.toolName || 'workflow evidence')
+          }
           completed = true
           this.emitPlanState()
           break

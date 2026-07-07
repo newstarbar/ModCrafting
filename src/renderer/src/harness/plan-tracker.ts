@@ -87,7 +87,7 @@ export class PlanTracker {
     if (cur.id !== normalized) {
       return {
         ok: false,
-        message: `当前步骤是 #${cur.id}（${cur.description}），不能用 #${normalized || '空'} 完成。`
+        message: `步骤 #${normalized || '空'} 已经完成了。当前步骤是 #${cur.id}：${cur.description}。请直接执行当前步骤，不要再重试 complete_step。`
       }
     }
     return this.completeCurrent()

@@ -26,7 +26,8 @@ import {
   isGlobalToolchainReady,
   resetToolchainInitState,
   createWindowProgressSender,
-  getAppEdition
+  getAppEdition,
+  searchLocalFabricSources
 } from './build-env'
 import { checkForUpdates, openReleasePages } from './updater'
 import {
@@ -401,6 +402,10 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('knowledge:fetchUrl', async (_event, url: string, maxChars?: number) =>
     fetchUrlText(url, maxChars)
+  )
+
+  ipcMain.handle('knowledge:searchLocalSources', async (_event, keyword: string, maxResults?: number) =>
+    searchLocalFabricSources(keyword, maxResults ?? 5)
   )
 
   // Session export — write chat history to a timestamped JSON file

@@ -333,6 +333,10 @@ const api = {
     error?: string
   }> => ipcRenderer.invoke('knowledge:fetchUrl', url, maxChars),
 
+  // Local Fabric source search (Yarn mappings + Fabric API sources)
+  searchLocalSources: (keyword: string, maxResults?: number): Promise<string> =>
+    ipcRenderer.invoke('knowledge:searchLocalSources', keyword, maxResults),
+
   // Session export
   sessionExport: (payload: string, suggestedName?: string): Promise<{ success: boolean; path: string; name: string }> =>
     ipcRenderer.invoke('session:export', payload, suggestedName)

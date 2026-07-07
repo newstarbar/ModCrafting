@@ -680,7 +680,7 @@ export class Agent {
           const stepDoneOnly = hasStepDone && !hasWrite && !hasBuild && executableCalls.length > 0
           if (stepDoneOnly) this.consecutiveStepDoneOnlyRounds++
           else this.consecutiveStepDoneOnlyRounds = 0
-          if (this.consecutiveStepDoneOnlyRounds >= 4) {
+          if (this.consecutiveStepDoneOnlyRounds >= 2) {
             const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
             pushRoundHistory('检测到反复标记步骤但无实质进展。')
             finalContent = finalContent.trim() || `检测到反复标记步骤但无实质进展，已自动结束本轮。${remaining}`

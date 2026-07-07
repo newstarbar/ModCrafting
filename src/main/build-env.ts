@@ -238,6 +238,12 @@ async function initPortableToolchainImpl(
     return { ok: false, error: err }
   }
 
+  onProgress({ phase: 'deps', message: '构建 Fabric API 本地知识库…', percent: 80 })
+  const kb = ensureFabricKnowledgeBase(jdk.path)
+  if (kb.extracted > 0) {
+    onProgress({ phase: 'deps', message: `Fabric API 知识库已就绪（${kb.extracted} 个源码文件）`, percent: 90 })
+  }
+
   onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })
   return { ok: true }
 }
@@ -363,6 +369,12 @@ async function initFullToolchainImpl(
     const err = seed.error || '离线依赖准备失败'
     onProgress({ phase: 'error', message: err, percent: 40, error: err })
     return { ok: false, error: err }
+  }
+
+  onProgress({ phase: 'deps', message: '构建 Fabric API 本地知识库…', percent: 80 })
+  const kb = ensureFabricKnowledgeBase(jdk.path)
+  if (kb.extracted > 0) {
+    onProgress({ phase: 'deps', message: `Fabric API 知识库已就绪（${kb.extracted} 个源码文件）`, percent: 90 })
   }
 
   onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })
@@ -1953,4 +1965,221 @@ export function getToolchainStatus(): {
     isPackaged: app.isPackaged,
     edition: getAppEdition()
   }
+}
+
+// ── Fabric API + Yarn local knowledge base ──
+
+const FABRIC_SOURCES_DIR = 'fabric-api-sources'
+const YARN_MAPPINGS_FILE = 'yarn-mappings.tiny'
+const SOURCES_VERSION_FILE = '.modcrafting-sources-version'
+
+function fabricSourcesDir(): string {
+  return path.join(getRuntimeRoot(), FABRIC_SOURCES_DIR)
+}
+
+function yarnMappingsPath(): string {
+  return path.join(getRuntimeRoot(), YARN_MAPPINGS_FILE)
+}
+
+function findFabricApiSourceJars(): string[] {
+  const seedPaths = bundledGradleHomeSeedPaths()
+  const results: string[] = []
+  for (const seed of seedPaths) {
+    const fabricApiDir = path.join(seed, 'caches', 'modules-2', 'files-2.1', 'net.fabricmc.fabric-api')
+    if (!fs.existsSync(fabricApiDir)) continue
+    for (const mod of fs.readdirSync(fabricApiDir, { withFileTypes: true })) {
+      if (!mod.isDirectory()) continue
+      const modPath = path.join(fabricApiDir, mod.name)
+      for (const ver of fs.readdirSync(modPath, { withFileTypes: true })) {
+        if (!ver.isDirectory()) continue
+        const verPath = path.join(modPath, ver.name)
+        for (const hash of fs.readdirSync(verPath, { withFileTypes: true })) {
+          if (!hash.isDirectory()) continue
+          const hashPath = path.join(verPath, hash.name)
+          for (const jar of fs.readdirSync(hashPath, { withFileTypes: true })) {
+            if (jar.name.endsWith('-sources.jar')) {
+              results.push(path.join(hashPath, jar.name))
+            }
+          }
+        }
+      }
+    }
+    if (results.length > 0) break
+  }
+  return results
+}
+
+function findYarnMappingsTinyInSeed(): string | null {
+  const seedPaths = bundledGradleHomeSeedPaths()
+  for (const seed of seedPaths) {
+    const loomCache = path.join(seed, 'caches', 'fabric-loom')
+    if (!fs.existsSync(loomCache)) continue
+    for (const mcVer of fs.readdirSync(loomCache, { withFileTypes: true })) {
+      if (!mcVer.isDirectory()) continue
+      const mcPath = path.join(loomCache, mcVer.name)
+      for (const entry of fs.readdirSync(mcPath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const tinyPath = path.join(mcPath, entry.name, 'mappings.tiny')
+        if (fs.existsSync(tinyPath)) return tinyPath
+      }
+    }
+  }
+  return null
+}
+
+/** Extract Fabric API source JARs and copy Yarn mappings to the runtime directory.
+ *  Called during toolchain init so the Agent can grep local sources for API lookups. */
+export function ensureFabricKnowledgeBase(jdkPath?: string): { ok: boolean; extracted: number; error?: string } {
+  const expected = loadFabricVersions()
+  const srcDir = fabricSourcesDir()
+  const versionFile = path.join(srcDir, SOURCES_VERSION_FILE)
+
+  // Check if already extracted for current version
+  const existingVersion = (() => {
+    try { return fs.readFileSync(versionFile, 'utf-8').trim() } catch { return '' }
+  })()
+  const yarnReady = fs.existsSync(yarnMappingsPath())
+
+  if (existingVersion === expected.fabric_version && yarnReady) {
+    return { ok: true, extracted: 0 }
+  }
+
+  try {
+    // Copy Yarn mappings
+    const tinySrc = findYarnMappingsTinyInSeed()
+    if (tinySrc) {
+      fs.mkdirSync(path.dirname(yarnMappingsPath()), { recursive: true })
+      fs.copyFileSync(tinySrc, yarnMappingsPath())
+    }
+
+    // Extract Fabric API source JARs
+    const jars = findFabricApiSourceJars()
+    if (jars.length === 0) {
+      return { ok: yarnReady, extracted: 0, error: yarnReady ? undefined : 'No Fabric API source JARs found in seed' }
+    }
+
+    // Remove old extraction
+    if (fs.existsSync(srcDir)) safeRmSyncNoJunctionFollow(srcDir)
+    fs.mkdirSync(srcDir, { recursive: true })
+
+    let extracted = 0
+    for (const jarPath of jars) {
+      try {
+        const modName = path.basename(jarPath).replace(/-sources\.jar$/, '')
+        const cleanName = modName.replace(/-[0-9a-f]{8,}$/, '')
+        const destDir = path.join(srcDir, cleanName)
+        fs.mkdirSync(destDir, { recursive: true })
+
+        // Use JDK jar tool if available, otherwise PowerShell Expand-Archive
+        if (jdkPath && fs.existsSync(path.join(jdkPath, 'bin', 'jar.exe'))) {
+          const jarTool = path.join(jdkPath, 'bin', 'jar')
+          const { execSync } = require('child_process')
+          execSync(`"${jarTool}" xf "${jarPath}"`, { cwd: destDir, stdio: 'pipe', timeout: 30000 })
+        } else if (process.platform === 'win32') {
+          const { execSync } = require('child_process')
+          execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${jarPath}' -DestinationPath '${destDir}' -Force"`, { stdio: 'pipe', timeout: 30000 })
+        }
+        extracted++
+      } catch {
+        // Skip problematic JARs
+      }
+    }
+
+    // Write version marker
+    fs.writeFileSync(versionFile, expected.fabric_version, 'utf-8')
+
+    // Count total files
+    let totalFiles = 0
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(path.join(dir, e.name))
+        else totalFiles++
+      }
+    }
+    try { walk(srcDir) } catch { /* ignore */ }
+
+    return { ok: true, extracted: totalFiles }
+  } catch (err) {
+    return { ok: false, extracted: 0, error: String(err) }
+  }
+}
+
+/** Check whether the local Fabric API + Yarn source index is ready. */
+export function isFabricKnowledgeBaseReady(): boolean {
+  return fs.existsSync(fabricSourcesDir()) || fs.existsSync(yarnMappingsPath())
+}
+
+/** Search local Fabric API sources and Yarn mappings for a keyword.
+ *  Returns matching snippets with file locations. */
+export function searchLocalFabricSources(keyword: string, maxResults = 5): string {
+  const tokens = keyword.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
+  if (tokens.length === 0) return ''
+
+  const results: string[] = []
+
+  // 1. Search Yarn mappings first
+  const yarnPath = yarnMappingsPath()
+  if (fs.existsSync(yarnPath)) {
+    try {
+      const yarnLines = fs.readFileSync(yarnPath, 'utf-8').split('\n')
+      const matchedBlocks: string[] = []
+      for (let i = 0; i < yarnLines.length; i++) {
+        const lower = yarnLines[i].toLowerCase()
+        if (tokens.every((t) => lower.includes(t))) {
+          // Include surrounding context lines (class header)
+          let block = yarnLines[i]
+          for (let j = i - 1; j >= 0 && yarnLines[j].startsWith('c\t'); j--) {
+            block = yarnLines[j] + '\n' + block
+          }
+          if (!matchedBlocks.includes(block)) matchedBlocks.push(block)
+          if (matchedBlocks.length >= maxResults * 2) break
+        }
+      }
+      if (matchedBlocks.length > 0) {
+        results.push(`[yarn-mappings] 映射命中：\n${matchedBlocks.slice(0, maxResults).join('\n---\n')}`)
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 2. Search Fabric API sources
+  const srcDir = fabricSourcesDir()
+  if (fs.existsSync(srcDir)) {
+    try {
+      const fileResults: Array<{ file: string; lines: string[] }> = []
+      const walk = (dir: string) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, e.name)
+          if (e.isDirectory()) { walk(full); continue }
+          if (!e.name.endsWith('.java')) continue
+          try {
+            const content = fs.readFileSync(full, 'utf-8')
+            const contentLower = content.toLowerCase()
+            if (tokens.every((t) => contentLower.includes(t))) {
+              const lines = content.split('\n')
+              const snippets: string[] = []
+              for (let i = 0; i < lines.length; i++) {
+                const lineLower = lines[i].toLowerCase()
+                if (tokens.some((t) => lineLower.includes(t))) {
+                  const start = Math.max(0, i - 3)
+                  const end = Math.min(lines.length, i + 5)
+                  snippets.push(lines.slice(start, end).join('\n'))
+                  if (snippets.length >= 3) break
+                }
+              }
+              if (snippets.length > 0) {
+                fileResults.push({ file: e.name, lines: snippets })
+              }
+            }
+          } catch { /* skip unreadable */ }
+          if (fileResults.length >= maxResults) break
+        }
+      }
+      walk(srcDir)
+      for (const fr of fileResults.slice(0, maxResults)) {
+        results.push(`[${fr.file}]\n${fr.lines.join('\n---\n')}`)
+      }
+    } catch { /* ignore */ }
+  }
+
+  return results.join('\n\n')
 }

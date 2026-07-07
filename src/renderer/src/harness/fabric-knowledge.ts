@@ -137,6 +137,14 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
   // Search local knowledge files first (yarn-reference.md etc.)
   const localResult = await searchLocalKnowledgeFiles(keyword)
 
+  // Search local Fabric API sources + Yarn mappings (extracted from seed)
+  let localSourceResult = ''
+  try {
+    if (typeof window !== 'undefined' && window.api?.searchLocalSources) {
+      localSourceResult = await window.api.searchLocalSources(keyword, 4)
+    }
+  } catch { /* ignore IPC errors */ }
+
   const ranked = sources
     .map((source) => ({
       source,
@@ -146,15 +154,25 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     .slice(0, limit)
 
   const lines: string[] = [
-    `Fabric 知识检索（只读，含本地参考与联网摘要）`,
+    `Fabric 知识检索（只读，含本地源码与联网摘要）`,
     `关键词：${keyword}`,
     `MC 版本：${mcVersion}`,
     ''
   ]
 
+  if (localSourceResult) {
+    lines.push('=== 本地源码命中（Fabric API + Yarn 映射，最高优先级） ===')
+    lines.push(localSourceResult)
+    lines.push('')
+  }
+
   if (localResult) {
-    lines.push('=== 本地参考文件命中（优先参考） ===')
+    lines.push('=== 本地参考文件命中 ===')
     lines.push(localResult)
+    lines.push('')
+  }
+
+  if (ranked.length > 0) {
     lines.push('=== 联网知识源 ===')
     lines.push('')
   }
