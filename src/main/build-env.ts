@@ -433,6 +433,34 @@ function safeRmSync(target: string): void {
   fs.rmSync(target, RM_OPTS)
 }
 
+/**
+ * Recursively delete a directory tree WITHOUT following junctions or symlinks.
+ *
+ * On Windows, fs.rmSync(path, {recursive:true}) follows directory junctions
+ * and deletes the TARGET content — which would wipe the shared Gradle home
+ * (seed) when deleting mc-instances/ whose subdirectories are junctions
+ * pointing back to seed/caches/, seed/wrapper/, etc.
+ *
+ * This function walks the tree manually: when an entry is a link (symlink or
+ * junction, detected via readlinkSync), it only unlinks the link itself and
+ * never recurses into the target.
+ */
+function safeRmSyncNoJunctionFollow(target: string): void {
+  if (!fs.existsSync(target)) return
+  const stat = fs.lstatSync(target)
+  // Symlink or junction at top level — just unlink, don't recurse
+  try { fs.readlinkSync(target); fs.rmSync(target, { force: true }); return } catch { /* not a link */ }
+  if (!stat.isDirectory()) { fs.rmSync(target, { force: true }); return }
+
+  for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+    const childPath = path.join(target, entry.name)
+    try { fs.readlinkSync(childPath); fs.rmSync(childPath, { force: true }); continue } catch { /* not a link */ }
+    if (entry.isDirectory()) safeRmSyncNoJunctionFollow(childPath)
+    else fs.rmSync(childPath, { force: true })
+  }
+  fs.rmdirSync(target)
+}
+
 async function safeRmAsync(target: string): Promise<void> {
   if (!fs.existsSync(target)) return
   await rmAsync(target, RM_OPTS)
@@ -1571,8 +1599,10 @@ export function purgeGradleEphemeralCaches(gradleHome: string): number {
     if (!fs.existsSync(target)) continue
     if (name === 'mc-instances') {
       breakJunctionsInInstanceDirs(target)
+      safeRmSyncNoJunctionFollow(target)
+    } else {
+      safeRmSync(target)
     }
-    safeRmSync(target)
     removed++
   }
 

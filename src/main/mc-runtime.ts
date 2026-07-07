@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+﻿import { ipcMain, BrowserWindow } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -20,6 +20,19 @@ function breakLinksInDir(dir: string): void {
       } catch { /* not a link or already gone */ }
     }
   } catch { /* dir missing */ }
+}
+
+/** Recursively delete a directory without following junctions or symlinks. */
+function safeRmDirNoFollow(dir: string): void {
+  if (!fs.existsSync(dir)) return
+  try { fs.readlinkSync(dir); fs.rmSync(dir, { force: true }); return } catch { /* not a link */ }
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const child = path.join(dir, entry.name)
+    try { fs.readlinkSync(child); fs.rmSync(child, { force: true }); continue } catch { /* not a link */ }
+    if (entry.isDirectory()) safeRmDirNoFollow(child)
+    else fs.rmSync(child, { force: true })
+  }
+  fs.rmdirSync(dir)
 }
 
 function decodeBuffer(buf: Buffer): string {
@@ -192,7 +205,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
     const staleInstanceHome = path.join(sharedGradleHome, 'mc-instances', id)
     if (fs.existsSync(staleInstanceHome)) {
       try {
-        breakLinksInDir(staleInstanceHome); fs.rmSync(staleInstanceHome, { recursive: true, force: true })
+        safeRmDirNoFollow(staleInstanceHome)
       } catch {
         // continue with junction setup even if stale instance dir could not be removed
       }
