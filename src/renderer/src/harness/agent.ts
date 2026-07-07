@@ -199,7 +199,8 @@ export class Agent {
             }
             onChunk(chunk, reasoning)
             onStream?.(text, reasoningText)
-          }
+          },
+          4096
         )
         this.emit({ kind: EventKind.Message, text, reasoning: reasoningText })
         if (result.usage && (result.usage.promptTokens || result.usage.totalTokens || result.usage.completionTokens)) {
@@ -401,7 +402,8 @@ export class Agent {
             if (text) { streamContent += text; this.emit({ kind: EventKind.Text, text }) }
             if (reasoning) { streamReasoning += reasoning; this.emit({ kind: EventKind.Reasoning, text: reasoning }) }
             onStream?.(streamContent, streamReasoning)
-          }
+          },
+          phase === 'plan' ? 8192 : 4096
         )
 
         this.emit({ kind: EventKind.Message, text: streamContent, reasoning: streamReasoning })
@@ -791,7 +793,8 @@ export class Agent {
     messages: ChatMessage[],
     tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
     abortSignal?: AbortSignal,
-    onChunk?: (text: string, reasoning?: string) => void
+    onChunk?: (text: string, reasoning?: string) => void,
+    maxTokens = 8192
   ): Promise<{
     finishReason?: string
     toolCalls: ModelToolCall[]
@@ -801,7 +804,7 @@ export class Agent {
     for (let attempt = 0; attempt < MAX_FETCH_RETRIES; attempt++) {
       try {
         return await this.streamFromAPIOnce(
-          endpoint, apiKey, model, messages, tools, abortSignal, onChunk
+          endpoint, apiKey, model, messages, tools, abortSignal, onChunk, maxTokens
         )
       } catch (err) {
         lastError = err
@@ -826,14 +829,15 @@ export class Agent {
     messages: ChatMessage[],
     tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
     abortSignal?: AbortSignal,
-    onChunk?: (text: string, reasoning?: string) => void
+    onChunk?: (text: string, reasoning?: string) => void,
+    maxTokens = 8192
   ): Promise<{
     finishReason?: string
     toolCalls: ModelToolCall[]
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number }
   }> {
     const body: Record<string, unknown> = {
-      model, messages, stream: true, max_tokens: 4096,
+      model, messages, stream: true, max_tokens: maxTokens,
       stream_options: { include_usage: true }
     }
     if (tools.length > 0) {

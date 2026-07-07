@@ -545,6 +545,66 @@ ${projectInfo}`
         this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
 
         if (!this.isActionablePlan(fullPlanText)) {
+          // Retry once: inject corrective feedback and ask model to try again
+          if (!this.messages.some((m) => m.role === 'user' && (m.content || '').includes('请严格按照以下格式输出实施计划'))) {
+            this.messages.push({
+              role: 'user',
+              content:
+                '你刚才的回复不符合计划格式要求。请严格按照以下格式输出实施计划：\n\n' +
+                'N. [kind] 简短标题 — 目标路径\n\n' +
+                '其中 kind 必须是 write、recipe 或 inspect。每行一个步骤，最多 6 步。\n' +
+                '不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。'
+            })
+            this.onAgentStatus?.('重新生成计划...')
+            planStreamReasoning = ''
+            planStreamText = ''
+            const retryResult = await this.agent.run(
+              this.apiConfig.endpoint,
+              this.apiConfig.apiKey,
+              this.apiConfig.model,
+              this.messages,
+              this._projectPath,
+              this.abortController.signal,
+              streamCb,
+              { phase: 'plan', emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
+            )
+            if (this.agent.clarificationPending) return retryResult
+            const retryPlanText = selectPlanText(planStreamReasoning, planStreamText, retryResult)
+            this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: retryPlanText })
+            this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+            if (!this.isActionablePlan(retryPlanText)) {
+              this.onAgentStatus?.('')
+              this.emitEvent({
+                kind: EventKind.Notice,
+                notice: {
+                  level: 'warn',
+                  text: planHasActionableSteps(retryPlanText)
+                    ? '计划已生成但缺少可执行步骤描述，未进入执行阶段'
+                    : '两次尝试均未能解析出编号实施步骤，请手动描述计划步骤。'
+                }
+              })
+              if (intent !== 'plan_only') {
+                this.emitEvent({ kind: EventKind.TurnDone })
+              }
+              return retryResult
+            }
+            // Retry succeeded — continue with retry plan
+            this.planTracker = PlanTracker.fromPlanText(retryPlanText)
+            this.emitPlanState(this.planTracker)
+            if (intent === 'plan_only') {
+              this._phase = 'plan'
+              this.planReadyAwaitingExecute = true
+              this.onAgentStatus?.('')
+              this.emitEvent({ kind: EventKind.Phase, phase: 'plan_ready' })
+              this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready', composerMode: this.composerMode })
+              return retryResult
+            }
+            const execResult = await this.beginExecuteFromTracker(streamCb)
+            this.onAgentStatus?.('')
+            return execResult || retryResult
+          }
+
+          // Already retried, give up
           this.onAgentStatus?.('')
           this.emitEvent({
             kind: EventKind.Notice,
