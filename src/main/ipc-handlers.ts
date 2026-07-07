@@ -402,4 +402,16 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('knowledge:fetchUrl', async (_event, url: string, maxChars?: number) =>
     fetchUrlText(url, maxChars)
   )
+
+  // Session export — write chat history to a timestamped JSON file
+  ipcMain.handle('session:export', async (_event, payload: string, suggestedName?: string) => {
+    const now = new Date()
+    const ts = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+    const base = (suggestedName || 'session').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    const fileName = `${base}-${ts}.json`
+    const desktopDir = app.getPath('desktop')
+    const filePath = path.join(desktopDir, fileName)
+    fs.writeFileSync(filePath, payload, 'utf-8')
+    return { success: true, path: filePath, name: fileName }
+  })
 }

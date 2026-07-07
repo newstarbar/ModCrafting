@@ -631,6 +631,58 @@ ${projectInfo}`
     logger.agent('Session cleared')
   }
 
+  /** Export current session messages to a JSON file on desktop. */
+  async exportSession(): Promise<string> {
+    const toolContentLimit = 2500
+    const assistantContentLimit = 1000
+    const systemContentLimit = 500
+
+    const trimmed = this.messages.map((m) => {
+      if (m.role === 'tool' && m.content && m.content.length > toolContentLimit) {
+        return {
+          ...m,
+          content: m.content.slice(0, toolContentLimit) +
+            `\n\n... [截断：原始 ${m.content.length} 字符]`
+        }
+      }
+      if (m.role === 'assistant' && m.content && m.content.length > assistantContentLimit) {
+        return {
+          ...m,
+          content: m.content.slice(0, assistantContentLimit) +
+            `\n\n... [截断：原始 ${m.content.length} 字符]`
+        }
+      }
+      if (m.role === 'system' && m.content && m.content.length > systemContentLimit) {
+        return {
+          ...m,
+          content: m.content.slice(0, systemContentLimit) +
+            `\n\n... [完整提示词已在工程源码中，此处省略]`
+        }
+      }
+      return m
+    })
+
+    const exportObj = {
+      exportedAt: new Date().toISOString(),
+      sessionGoal: this.sessionGoal || '(未设定)',
+      phase: this._phase,
+      model: this.apiConfig.model,
+      endpoint: this.apiConfig.endpoint.replace(/\/\/.*@/, '//***@'), // strip credentials
+      messageCount: this.messages.length,
+      messages: trimmed
+    }
+
+    const result = await window.api.sessionExport(
+      JSON.stringify(exportObj, null, 2),
+      'mc-session'
+    )
+    if (result.success) {
+      logger.agent('Session exported', result.path)
+      return result.path
+    }
+    throw new Error('导出失败')
+  }
+
   getSnapshot(): ChatMessage[] {
     return [...this.messages]
   }

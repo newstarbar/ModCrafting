@@ -1139,11 +1139,29 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
           <img src={appIcon} alt="" className="chat-brand-icon" />
           <span className="chat-header-brand">AI 智能体</span>
         </div>
-        {completionFlash ? (
-          <span className="chat-header-status chat-header-status--done">{completionFlash}</span>
-        ) : agentStatus ? (
-          <span className="chat-header-status">{agentStatus}</span>
-        ) : null}
+        <div className="chat-header-right">
+          <button
+            className="chat-header-export-btn"
+            title="导出完整会话历史（含系统提示词、工具参数与结果）到桌面 JSON 文件"
+            onClick={async () => {
+              try {
+                const p = await controllerRef.current?.exportSession()
+                if (p) {
+                  setCompletionFlash(`已导出: ${p.split(/[\\/]/).pop()}`)
+                  setTimeout(() => setCompletionFlash(null), 3000)
+                }
+              } catch {
+                setCompletionFlash('导出失败')
+                setTimeout(() => setCompletionFlash(null), 3000)
+              }
+            }}
+          >导出</button>
+          {completionFlash ? (
+            <span className="chat-header-status chat-header-status--done">{completionFlash}</span>
+          ) : agentStatus ? (
+            <span className="chat-header-status">{agentStatus}</span>
+          ) : null}
+        </div>
       </div>
       <div className="chat-messages" ref={chatMessagesRef} onScroll={handleScroll}>
         {activePlan?.pinned && (

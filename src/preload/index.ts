@@ -331,7 +331,11 @@ const api = {
     url: string
     truncated?: boolean
     error?: string
-  }> => ipcRenderer.invoke('knowledge:fetchUrl', url, maxChars)
+  }> => ipcRenderer.invoke('knowledge:fetchUrl', url, maxChars),
+
+  // Session export
+  sessionExport: (payload: string, suggestedName?: string): Promise<{ success: boolean; path: string; name: string }> =>
+    ipcRenderer.invoke('session:export', payload, suggestedName)
 }
 
 contextBridge.exposeInMainWorld('api', api)
