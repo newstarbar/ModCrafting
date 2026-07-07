@@ -1,4 +1,4 @@
-// ======== Controller ========
+﻿// ======== Controller ========
 // Ported from Reasonix internal/control/controller.go
 // Session management, plan/execute phases, approval gates
 
@@ -154,40 +154,103 @@ export class Controller {
 
   private async buildProjectInfo(): Promise<string> {
     let projectInfo = ''
-    if (this._projectPath) {
-      projectInfo = `## 项目信息\n项目路径：${this._projectPath}\n`
-      try {
-        const mainJava = `${this._projectPath}/src/main/java`
-        const entries = await window.api.listDirectory(mainJava)
-        if (entries.length > 0) {
-          const packages: string[] = []
-          const walkDir = async (dir: string, prefix: string) => {
-            const sub = await window.api.listDirectory(dir)
-            for (const e of sub) {
-              if (e.isDirectory) {
-                const pkg = prefix ? `${prefix}.${e.name}` : e.name
-                packages.push(pkg)
-                await walkDir(e.path, pkg)
-              }
+    if (!this._projectPath) return projectInfo
+
+    projectInfo = `## 项目信息\n项目路径：${this._projectPath}\n`
+
+    // 1. Scan Java packages
+    try {
+      const mainJava = `${this._projectPath}/src/main/java`
+      const entries = await window.api.listDirectory(mainJava)
+      if (entries.length > 0) {
+        const packages: string[] = []
+        const walkDir = async (dir: string, prefix: string) => {
+          const sub = await window.api.listDirectory(dir)
+          for (const e of sub) {
+            if (e.isDirectory) {
+              const pkg = prefix ? `${prefix}.${e.name}` : e.name
+              packages.push(pkg)
+              await walkDir(e.path, pkg)
             }
           }
-          for (const e of entries) {
-            if (e.isDirectory) await walkDir(e.path, e.name)
-          }
-          if (packages.length > 0) {
-            projectInfo += `源码包路径：${packages.join(', ')}\n`
-            projectInfo += `包名用点号分隔，例如：com.example.modname\n`
-          }
         }
-        const clientJava = `${this._projectPath}/src/client/java`
-        const clientEntries = await window.api.listDirectory(clientJava).catch(() => [])
-        if (clientEntries.length > 0) {
-          projectInfo += `客户端源码目录：src/client/java\n`
+        for (const e of entries) {
+          if (e.isDirectory) await walkDir(e.path, e.name)
         }
-      } catch {
-        // ignore scan errors
+        if (packages.length > 0) {
+          projectInfo += `源码包路径：${packages.join(', ')}\n`
+        }
       }
-    }
+    } catch { /* ignore scan errors */ }
+
+    // 2. Read fabric.mod.json (mod id, entrypoints, mixin ref)
+    try {
+      const modJsonPath = `${this._projectPath}/src/main/resources/fabric.mod.json`
+      const content = await window.api.readFile(modJsonPath)
+      const parsed = JSON.parse(content)
+      const modId = parsed.id || ''
+      if (modId) {
+        projectInfo += `Mod ID：${modId}\n`
+        if (parsed.entrypoints?.main?.length) {
+          projectInfo += `入口点：${parsed.entrypoints.main.join(', ')}\n`
+        }
+        if (parsed.mixins?.length) {
+          projectInfo += `Mixin 配置：${parsed.mixins.join(', ')}\n`
+        }
+      }
+    } catch { /* file may not exist */ }
+
+    // 3. List resources directory (assets, data, actual mixin config filename)
+    try {
+      const resourcesDir = `${this._projectPath}/src/main/resources`
+      const resEntries = await window.api.listDirectory(resourcesDir)
+      const topItems = resEntries.map((e) => e.name).join(', ')
+      if (topItems) {
+        projectInfo += `资源目录：${topItems}\n`
+      }
+    } catch { /* ignore */ }
+
+    // 4. Read mixin configs for existing entries
+    try {
+      const resourcesDir = `${this._projectPath}/src/main/resources`
+      const resEntries = await window.api.listDirectory(resourcesDir)
+      for (const e of resEntries) {
+        if (e.name.endsWith('.mixins.json')) {
+          try {
+            const mixinPath = `${this._projectPath}/src/main/resources/${e.name}`
+            const content = await window.api.readFile(mixinPath)
+            const parsed = JSON.parse(content)
+            const pkg = parsed.package || ''
+            const mixins = parsed.mixins || []
+            const client = parsed.client || []
+            const allMixins = [...new Set([...mixins, ...client])]
+            if (allMixins.length > 0) {
+              projectInfo +=
+                `已注册 Mixin（${e.name}，包 ${pkg || '无'}）：${allMixins.join(', ')}\n`
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+    } catch { /* ignore */ }
+
+    // 5. List resource subdirectories
+    try {
+      const assetsDir = `${this._projectPath}/src/main/resources/assets`
+      const assets = await window.api.listDirectory(assetsDir)
+      if (assets.length > 0) {
+        projectInfo += `资源命名空间：${assets.map((e) => e.name).join(', ')}\n`
+      }
+    } catch { /* ignore */ }
+
+    // 6. Client source directory
+    try {
+      const clientJava = `${this._projectPath}/src/client/java`
+      const clientEntries = await window.api.listDirectory(clientJava)
+      if (clientEntries.length > 0) {
+        projectInfo += `客户端源码目录：src/client/java\n`
+      }
+    } catch { /* ignore */ }
+
     return projectInfo
   }
 
@@ -209,6 +272,7 @@ export class Controller {
       fabric_content_register: '生成内容注册',
       fabric_data_assets_generate: '生成资源数据',
       fabric_mixin_scaffold: '生成 Mixin 脚手架',
+      fabric_mixin_register: '注册 Mixin 条目',
       fabric_log_debugger: '分析 Fabric 日志',
       read_error_log: '读取错误日志',
       complete_step: '完成任务步骤',
@@ -282,6 +346,7 @@ ${projectInfo}`
 规则：
 - **每个文件只写一次。** 不要重复写入。
 - **配方/合成任务优先调用 create_recipe。** 不要手写重复 recipe JSON。
+	- **注册 Mixin 时使用 fabric_mixin_register**，不要手动编辑 mixins.json 以免误删已有条目。
 - **写完全部文件后，通过 trigger_build 构建，再通过 trigger_build(runClient) 启动真实测试。**
 - **运行测试需等待游戏真正进入可玩状态后才算完成。**
 - **不要主动调用 complete_step。** 直接执行当前步骤需要的工具。

@@ -65,6 +65,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_content_register',
         'fabric_data_assets_generate',
         'fabric_mixin_scaffold',
+        'fabric_mixin_register',
         'fabric_recipe_generate',
         'create_recipe',
         'read_file',

@@ -95,10 +95,12 @@ export const writeFileTool: Tool & Previewer = {
 
     // Read old file content for diff computation
     let oldContent = ''
+    let fileExisted = false
     try {
       const old = await window.api.readFile(filePath)
       if (old.success && old.content !== undefined) {
         oldContent = old.content
+        fileExisted = true
       }
     } catch {
       // File doesn't exist yet (new file) — that's fine
@@ -114,7 +116,19 @@ export const writeFileTool: Tool & Previewer = {
           path: String(args.path || ''),
           ...diff
         })
-        return `✅ Written: ${args.path} (${content.length} bytes)\n<!-- FILE_DIFF ${diffPayload} -->`
+
+        let overwriteNote = ''
+        if (fileExisted && oldContent.trim()) {
+          const MAX_SHOW = 2000
+          const shown = oldContent.length > MAX_SHOW
+            ? oldContent.slice(0, MAX_SHOW) + `\n...(截断，原文件共 ${oldContent.length} 字节)`
+            : oldContent
+          overwriteNote =
+            `\n⚠️ 覆盖已有文件（${oldContent.length} 字节）。被覆盖的旧内容：\n\`\`\`\n${shown}\n\`\`\`\n` +
+            `新增 ${diff.added} 行，删除 ${diff.removed} 行。检查是否误删了所需条目。\n`
+        }
+
+        return `✅ Written: ${args.path} (${content.length} bytes)${overwriteNote}\n<!-- FILE_DIFF ${diffPayload} -->`
       }
       return `Error: ${res.error}`
     } catch (err) {
@@ -832,6 +846,84 @@ export const completeStepTool: Tool = {
   }
 }
 
+// ── fabric_mixin_register ──
+async function findMixinConfig(projectPath: string): Promise<{ name: string; content: string } | null> {
+  try {
+    const resDir = `${projectPath}/src/main/resources`
+    const entries = await window.api.listDirectory(resDir)
+    for (const e of entries) {
+      if (e.name.endsWith('.mixins.json')) {
+        const result = await window.api.readFile(e.path)
+        if (result.success && result.content) {
+          return { name: e.name, content: result.content }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+export const fabricMixinRegisterTool: Tool = {
+  name: 'fabric_mixin_register',
+  description:
+    '向已有的 Mixin 配置文件中安全地追加 Mixin 类条目。自动查找 mixins.json、读取、追加指定 Mixin 条目、写回。避免手动编辑 JSON 时误删已有条目。',
+  schema: {
+    type: 'object',
+    properties: {
+      mixinClass: {
+        type: 'string',
+        description: 'Mixin 类名（简单名，非全限定名），如 "PlayerEntityMixin"'
+      },
+      target: {
+        type: 'string',
+        enum: ['common', 'client', 'server'],
+        description: '注册到哪个数组：common→mixins, client→client, server→server。默认 common'
+      }
+    },
+    required: ['mixinClass']
+  },
+  readOnly: () => false,
+  async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+    if (!ctx.projectPath) return 'No project open'
+    const mixinClass = String(args.mixinClass || '').trim()
+    const target = (String(args.target || 'common')) as 'common' | 'client' | 'server'
+    if (!mixinClass) return 'Error: mixinClass is required'
+
+    const existing = await findMixinConfig(ctx.projectPath)
+    if (!existing) {
+      return 'Error: 未找到 *.mixins.json 配置文件。请先创建 Mixin 配置，或使用 fabric_mixin_scaffold 生成。'
+    }
+
+    let config: Record<string, unknown>
+    try {
+      config = JSON.parse(existing.content)
+    } catch {
+      return `Error: 无法解析 ${existing.name}，请检查 JSON 格式`
+    }
+
+    const key = target === 'client' ? 'client' : target === 'server' ? 'server' : 'mixins'
+    const arr: string[] = Array.isArray(config[key]) ? (config[key] as string[]) : []
+    if (arr.includes(mixinClass)) {
+      return `✅ ${mixinClass} 已存在于 ${existing.name} 的 ${key} 数组中，无需重复注册。`
+    }
+
+    arr.push(mixinClass)
+    config[key] = arr
+
+    const newContent = JSON.stringify(config, null, 2) + '\n'
+    const configPath = `src/main/resources/${existing.name}`
+    const res = await window.api.writeFile(`${ctx.projectPath}/${configPath}`, newContent)
+    if (!res.success) return `Error: ${res.error}`
+
+    const existingList = arr.length > 1
+      ? `，现有条目：${arr.join(', ')}`
+      : ''
+    return (
+      `✅ 已在 ${existing.name} 的 ${key} 数组中注册 ${mixinClass}${existingList}`
+    )
+  }
+}
+
 // ── ask_clarification ──
 export const askClarificationTool: Tool = {
   name: 'ask_clarification',
@@ -885,6 +977,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
     fabricDataAssetsGenerateTool,
     fabricMixinScaffoldTool,
     fabricLogDebuggerTool,
+    fabricMixinRegisterTool,
     listDirectoryTool,
     runCommandTool,
     readErrorLogTool,
