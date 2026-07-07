@@ -203,6 +203,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const [collapsedReasoningKeys, setCollapsedReasoningKeys] = useState<Set<string>>(new Set())
   const [runTick, setRunTick] = useState(0)
   const toolOutputRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const reasoningScrollRef = useRef<HTMLDivElement | null>(null)
   const [usageAccum, setUsageAccum] = useState<UsageStats>(EMPTY_USAGE)
   const turnUsageRef = useRef({ promptTokens: 0, completionTokens: 0 })
   const [activePlan, setActivePlan] = useState<ActivePlan | null>(null)
@@ -992,7 +993,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                           )}
                         </button>
                         {showExpanded && (
-                          <div className="reasoning-block-bd reasoning-line">{entry.content}</div>
+                          <div
+                            className={`reasoning-block-bd reasoning-line${isActiveStream ? ' active-stream' : ''}`}
+                            ref={isActiveStream ? (el) => {
+                              if (el) { el.scrollTop = el.scrollHeight }
+                            } : undefined}
+                          >{entry.content}</div>
                         )}
                       </div>
                     )

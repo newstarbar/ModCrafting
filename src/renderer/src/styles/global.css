@@ -971,6 +971,12 @@ body,
 	margin-bottom: 0;
 }
 
+.reasoning-block-bd.active-stream {
+	max-height: 10em;
+	overflow-y: auto;
+	scroll-behavior: smooth;
+}
+
 .tool-line.running {
 	border-color: rgba(255, 200, 80, 0.35);
 	animation: tool-line-pulse 2s ease-in-out infinite;

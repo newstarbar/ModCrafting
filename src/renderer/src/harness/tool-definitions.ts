@@ -217,7 +217,7 @@ export const createRecipeTool: Tool & Previewer = {
 // ── fabric_docs_search ──
 export const fabricDocsSearchTool: Tool = {
   name: 'fabric_docs_search',
-  description: 'Search built-in Fabric knowledge routes, fetch remote doc excerpts, and return actionable summaries. Read-only.',
+  description: '搜索 Fabric 知识库：优先查本地 Yarn 参考表（类名/方法签名/Mixin 模式），再联网抓取文档摘要。只读。写代码前用此工具确认类名和字段名是否正确。',
   schema: {
     type: 'object',
     properties: {

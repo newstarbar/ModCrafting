@@ -68,6 +68,54 @@ async function readLocalKnowledgeRoutes(): Promise<string[]> {
   return urls
 }
 
+const LOCAL_SEARCH_FILES = [
+  'fabric/yarn-reference.md',
+  'fabric/workflows.md',
+  'fabric/templates.md'
+]
+
+async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
+  if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return ''
+  const tokens = keyword.toLowerCase().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return ''
+
+  const results: string[] = []
+  for (const file of LOCAL_SEARCH_FILES) {
+    try {
+      const res = await window.api.knowledgeReadLocal(file)
+      if (!res.success || !res.content) continue
+      const lines = res.content.split('\n')
+      // Find lines matching any keyword token and extract surrounding context
+      const matchedBlocks: Array<{ start: number; end: number }> = []
+      for (let i = 0; i < lines.length; i++) {
+        const lineLower = lines[i].toLowerCase()
+        if (tokens.some((t) => lineLower.includes(t))) {
+          // Take 2 lines before and 5 lines after as context
+          const start = Math.max(0, i - 2)
+          const end = Math.min(lines.length, i + 6)
+          // Merge overlapping blocks
+          const last = matchedBlocks[matchedBlocks.length - 1]
+          if (last && last.end >= start - 2) {
+            last.end = Math.max(last.end, end)
+          } else {
+            matchedBlocks.push({ start, end })
+          }
+        }
+      }
+      if (matchedBlocks.length > 0) {
+        const fileName = file.replace('fabric/', '')
+        for (const block of matchedBlocks.slice(0, 3)) {
+          const snippet = lines.slice(block.start, block.end).join('\n').trim()
+          if (snippet) results.push(`[${fileName}]\n${snippet}`)
+        }
+      }
+    } catch {
+      // ignore missing files in dev
+    }
+  }
+  return results.join('\n\n---\n\n')
+}
+
 export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput): Promise<string> {
   const keyword = normalizeKeyword(input.keyword)
   const limit = Math.max(1, Math.min(4, Math.floor(input.limit ?? 3)))
@@ -86,6 +134,9 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
   const sources = mergeKnowledgeSources(configOverrides).filter((s) => s.enabled)
   const localUrls = await readLocalKnowledgeRoutes()
 
+  // Search local knowledge files first (yarn-reference.md etc.)
+  const localResult = await searchLocalKnowledgeFiles(keyword)
+
   const ranked = sources
     .map((source) => ({
       source,
@@ -95,11 +146,18 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     .slice(0, limit)
 
   const lines: string[] = [
-    `Fabric 知识检索（只读，含本地路由与联网摘要）`,
+    `Fabric 知识检索（只读，含本地参考与联网摘要）`,
     `关键词：${keyword}`,
     `MC 版本：${mcVersion}`,
     ''
   ]
+
+  if (localResult) {
+    lines.push('=== 本地参考文件命中（优先参考） ===')
+    lines.push(localResult)
+    lines.push('=== 联网知识源 ===')
+    lines.push('')
+  }
 
   for (const [index, { source }] of ranked.entries()) {
     lines.push(`${index + 1}. ${source.title}（${source.trust}）`)
