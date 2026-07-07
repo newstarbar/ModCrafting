@@ -9,6 +9,19 @@ const LOG_BUFFER_MAX_LINES = 500
 
 const platformEncoding = process.platform === 'win32' ? 'gbk' : 'utf-8'
 
+/** Break all symlinks and directory junctions inside a directory
+ *  so fs.rmSync with recursive:true won't follow them to the target. */
+function breakLinksInDir(dir: string): void {
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      try {
+        fs.readlinkSync(path.join(dir, entry.name))
+        fs.rmSync(path.join(dir, entry.name), { force: true })
+      } catch { /* not a link or already gone */ }
+    }
+  } catch { /* dir missing */ }
+}
+
 function decodeBuffer(buf: Buffer): string {
   return iconv.decode(buf, platformEncoding)
 }
@@ -179,7 +192,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
     const staleInstanceHome = path.join(sharedGradleHome, 'mc-instances', id)
     if (fs.existsSync(staleInstanceHome)) {
       try {
-        fs.rmSync(staleInstanceHome, { recursive: true, force: true })
+        breakLinksInDir(staleInstanceHome); fs.rmSync(staleInstanceHome, { recursive: true, force: true })
       } catch {
         // continue with junction setup even if stale instance dir could not be removed
       }

@@ -1542,6 +1542,10 @@ const EPHEMERAL_CACHE_DIRS = ['transforms', 'executionHistory', 'generated-gradl
  * directory junctions and deletes their *target* content — which would wipe
  * caches/, wrapper/, and notifications/ inside the shared Gradle home (the
  * seed in dev mode).  Breaking the links individually first avoids that.
+ *
+ * Uses readlinkSync() rather than lstatSync().isSymbolicLink() because the
+ * latter does NOT detect directory junctions on Windows (they are a different
+ * reparse-point type).  readlinkSync() throws on non-links on all platforms.
  */
 function breakJunctionsInInstanceDirs(instancesDir: string): void {
   try {
@@ -1549,11 +1553,11 @@ function breakJunctionsInInstanceDirs(instancesDir: string): void {
       if (!inst.isDirectory()) continue
       const instPath = path.join(instancesDir, inst.name)
       for (const entry of fs.readdirSync(instPath, { withFileTypes: true })) {
+        const entryPath = path.join(instPath, entry.name)
         try {
-          if (fs.lstatSync(path.join(instPath, entry.name)).isSymbolicLink()) {
-            fs.rmSync(path.join(instPath, entry.name), { force: true })
-          }
-        } catch { /* entry already gone or permission race */ }
+          fs.readlinkSync(entryPath) // throws if not a link (symlink or junction)
+          fs.rmSync(entryPath, { force: true })
+        } catch { /* not a link, or already gone */ }
       }
     }
   } catch { /* directory already removed or inaccessible */ }
