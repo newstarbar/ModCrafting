@@ -477,6 +477,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               ? { steps: nextSteps, anchorMsgId: t.msgId, pinned: true }
               : null
           if (nextPlan) {
+            activePlanRef.current = nextPlan
             setActivePlan(nextPlan)
             flushPersist(displayMessagesRef.current, nextPlan)
           }
