@@ -275,7 +275,9 @@ export class WorkflowEngine {
   }
 
   private async executeAllowedCalls(step: WorkflowStep, calls: ToolCallWithId[]): Promise<Map<string, ToolResult>> {
-    const selected = calls.slice(0, 1)
+    if (calls.length === 0) return new Map()
+    const MAX_PARALLEL = 8
+    const selected = calls.slice(0, MAX_PARALLEL)
     const ctx: ToolContext = {
       projectPath: this.projectPath,
       callId: `workflow_${step.id}`,
@@ -401,7 +403,6 @@ export class WorkflowEngine {
         }
 
         const gate = filterToolCallsForStep(step, calls, policyOptions)
-        const firstAllowed = gate.allowed[0] ?? null
         const resultsById = new Map<string, ToolResult>()
 
         for (const call of calls) {
@@ -409,22 +410,10 @@ export class WorkflowEngine {
             const rejected = createRejectedToolResult(step, call, policyOptions)
             this.emitRejected(call.id, rejected)
             resultsById.set(call.id, rejected)
-            continue
-          }
-          if (!firstAllowed || call.id !== firstAllowed.id) {
-            resultsById.set(call.id, {
-              output: `skipped: 本轮仅执行第一个工具（${firstAllowed?.name ?? '?'}），"${call.name}" 可在下一轮单独调用。`,
-              durationMs: 0,
-              ok: false,
-              toolName: call.name,
-              args: call.args,
-              exitCode: null,
-              errorKind: 'skipped'
-            })
           }
         }
 
-        if (!firstAllowed) {
+        if (gate.allowed.length === 0) {
           const repairWriteBlockedOnly =
             repairMode &&
             repairWriteRequired &&
@@ -447,12 +436,12 @@ export class WorkflowEngine {
           continue
         }
 
-        const executed = await this.executeAllowedCalls(step, [firstAllowed])
+        const executed = await this.executeAllowedCalls(step, gate.allowed)
         for (const [id, result] of executed) {
           resultsById.set(id, result)
         }
 
-        const primaryResult = resultsById.get(firstAllowed.id)
+        const primaryResult = resultsById.get(gate.allowed[0].id)
         const success = primaryResult ? resultCompletesStep(step, primaryResult) : undefined
         let roundInstruction: string | undefined
 

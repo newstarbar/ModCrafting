@@ -623,7 +623,7 @@ test('workflow engine completes recipe step after first create_recipe and does n
   const result = await engine.run([])
 
   assert.equal(result.allDone, true)
-  assert.equal(executed.length, 1)
+  assert.equal(executed.length, 2)
   assert.equal(tracker.allDone(), true)
 })
 
