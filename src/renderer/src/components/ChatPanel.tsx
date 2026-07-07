@@ -228,13 +228,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const flushPersist = useCallback((
     messages: DisplayMessage[],
     plan: ActivePlan | null,
-    options?: { appendSystem?: PersistedMessage[] }
+    options?: { appendSystem?: PersistedMessage[]; resetSystem?: boolean }
   ) => {
     const sid = currentSessionIdRef.current
     if (!sid) return
     const serialized = serializeDisplayMessages(messages, plan)
-    const session = sessionsRef.current.find((s) => s.id === sid)
-    let systemMsgs = session?.messages.filter((m) => m.role === 'system') ?? []
+    let systemMsgs = options?.resetSystem
+      ? []
+      : (sessionsRef.current.find((s) => s.id === sid)?.messages.filter((m) => m.role === 'system') ?? [])
     if (options?.appendSystem?.length) {
       systemMsgs = [...systemMsgs, ...options.appendSystem]
     }
@@ -905,14 +906,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     turnRef.current = { msgId: '', entries: [], streamDone: false }
 
     setDisplayMessages(truncated)
-    flushPersist(truncated, null)
+    flushPersist(truncated, null, { resetSystem: true })
 
-    const sid = currentSessionIdRef.current
-    const session = sid ? sessionsRef.current.find((s) => s.id === sid) : undefined
-    const systemMsgs = session?.messages.filter((m) => m.role === 'system') ?? []
     const serialized = serializeDisplayMessages(truncated, null)
     controllerRef.current?.restoreSnapshot(
-      toControllerMessages([...serialized, ...systemMsgs])
+      toControllerMessages(serialized)
     )
 
     const ctrl = controllerRef.current

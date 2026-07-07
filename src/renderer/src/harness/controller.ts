@@ -340,6 +340,20 @@ ${projectInfo}`
       }
       break
     }
+    // Also remove stale injected system messages (instructions, error notices)
+    // that were added by appendToolRoundHistory or error handlers.
+    // Keep only the base system prompt at position 0.
+    this.messages = this.messages.filter((m, i) => {
+      if (m.role !== 'system') return true
+      if (i === 0) return true // base prompt
+      const content = m.content || ''
+      // Injected system messages use these markers
+      if (/^\[SYSTEM:/.test(content)) return false
+      if (/^【系统/.test(content)) return false
+      if (/^【注意】/.test(content)) return false
+      if (/^【系统警告】/.test(content)) return false
+      return true
+    })
   }
 
   private async runChatTurn(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
