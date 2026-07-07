@@ -37,6 +37,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'read_file',
         'list_directory',
+        'complete_step',
         'ask_clarification',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
@@ -50,6 +51,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'fabric_recipe_generate',
         'create_recipe',
+        'complete_step',
         'read_file',
         'list_directory',
         'run_command',
@@ -62,6 +64,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
     case 'write':
       return [
         'write_file',
+        'complete_step',
         'fabric_content_register',
         'fabric_data_assets_generate',
         'fabric_mixin_scaffold',
@@ -81,21 +84,23 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'trigger_build',
         'run_command',
+        'write_file',
+        'read_file',
+        'list_directory',
         'fabric_log_debugger',
         'fabric_docs_search',
-        'read_error_log',
-        'list_directory',
-        'read_file'
+        'read_error_log'
       ]
     case 'run':
       return [
         'trigger_build',
         'run_command',
+        'write_file',
+        'read_file',
+        'list_directory',
         'fabric_log_debugger',
         'fabric_docs_search',
-        'read_error_log',
-        'list_directory',
-        'read_file'
+        'read_error_log'
       ]
     case 'answer':
       return []

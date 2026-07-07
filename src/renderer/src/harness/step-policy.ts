@@ -92,9 +92,13 @@ export function isToolAllowedForStep(
   if (options?.repairMode && call.name === 'write_file' && (step.kind === 'build' || step.kind === 'run')) {
     return true
   }
+  // Always-available tools: exploration, writing fixes, and clarification
   if (call.name === 'list_directory') return true
+  if (call.name === 'read_file') return true
+  if (call.name === 'write_file') return true
   if (call.name === 'ask_clarification') return true
-  if (call.name === 'read_file' && step.kind !== 'recipe') return true
+  // complete_step only in non-terminal steps (build/run auto-detected by host)
+  if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run') return true
 
   if (!step.allowedTools.includes(call.name)) return false
   return commandAllowedForStep(step, call, options)

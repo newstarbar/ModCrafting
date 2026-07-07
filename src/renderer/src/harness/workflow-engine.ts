@@ -150,30 +150,16 @@ function normalizeModelToolCalls(
 
 function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
   if (!result.ok || result.error) return false
+  if (result.toolName === 'complete_step') {
+    return step.kind !== 'build' && step.kind !== 'run'
+  }
   switch (step.kind) {
     case 'inspect':
-      return Boolean(result.toolName) && [
-        'read_file',
-        'list_directory',
-        'fabric_docs_search',
-        'fabric_javadoc_lookup',
-        'vanilla_mc_wiki_query',
-        'fabric_meta_version_check',
-        'fabric_mod_json_validate',
-        'fabric_log_debugger',
-        'read_error_log'
-      ].includes(result.toolName)
     case 'recipe':
-      return result.toolName === 'create_recipe' || result.toolName === 'fabric_recipe_generate'
     case 'write':
-      return Boolean(result.toolName) && [
-        'write_file',
-        'create_recipe',
-        'fabric_recipe_generate',
-        'fabric_content_register',
-        'fabric_data_assets_generate',
-        'fabric_mixin_scaffold'
-      ].includes(result.toolName)
+      // Only complete_step advances these; host does NOT auto-detect completion.
+      // This prevents premature advancement when a step requires multiple files.
+      return false
     case 'build':
       return (
         (result.toolName === 'trigger_build' &&

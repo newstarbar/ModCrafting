@@ -6,7 +6,6 @@ import type { Sink, Event } from './events'
 import { EventKind } from './events'
 import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from './tools'
 import type { PlanTracker } from './plan-tracker'
-import { findAdvanceEvidence } from './step-evidence'
 import { normalizeWorkflowSteps } from './plan-normalizer'
 import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
@@ -84,6 +83,10 @@ export class Agent {
   private consecutiveBlockedRounds = 0
   // Rounds where the model only called complete_step without any real work
   private consecutiveStepDoneOnlyRounds = 0
+  // Rounds where model outputs mostly reasoning (>80%) with no tool calls
+  private consecutiveReasoningOnlyRounds = 0
+  // Rounds with no file writes and no build/run progress
+  private consecutiveIdleRounds = 0
   private runLifecycleMeta: Pick<RunOptions, 'turnMode' | 'composerMode'> = {}
 
   constructor(opts: AgentOptions) {
@@ -107,6 +110,8 @@ export class Agent {
     this.graceRound = false
     this.consecutiveBlockedRounds = 0
     this.consecutiveStepDoneOnlyRounds = 0
+    this.consecutiveReasoningOnlyRounds = 0
+    this.consecutiveIdleRounds = 0
     this.clarificationPending = false
   }
 
@@ -486,6 +491,21 @@ export class Agent {
         if (allExploration) readonlyRounds++
         else readonlyRounds = 0
 
+        // Detect model stuck in reasoning: >80% reasoning tokens, no tool calls
+        if (toolCalls.length === 0 && streamReasoning.length > streamContent.length * 4) {
+          this.consecutiveReasoningOnlyRounds++
+        } else {
+          this.consecutiveReasoningOnlyRounds = 0
+        }
+        if (this.consecutiveReasoningOnlyRounds >= 2) {
+          messages.push({
+            role: 'user',
+            content: '你已经思考足够久，请直接调用工具执行，不要继续推理分析。'
+          })
+          this.consecutiveReasoningOnlyRounds = 0
+          logger.agent('KICK: reasoning-only rounds cap reached')
+        }
+
         // 2. Execute tools (with repeat-success loop guard)
         logger.agent(`Executing ${toolCalls.length} tool(s)`, toolCalls.map((t) => t.name))
 
@@ -627,24 +647,10 @@ export class Agent {
             this.consecutiveWriteOnlyRounds = 0
           }
 
-          // ---- Step advancement: host-owned, evidence-driven ----
-          // Every call this round was rejected by the loop guard → no progress made.
+          // ---- Step advancement: manual via complete_step tool (workflow handles build/run auto-detect) ----
           const roundFullyBlocked = executableCalls.length === 0 && blockedResults.size > 0
           const curStep = planTracker?.currentStep ?? null
-          const advanceDecision = findAdvanceEvidence(curStep, results.values())
-          let autoAdvanceMsg = ''
-          if (planTracker && curStep && !hasStepDone && advanceDecision.ok) {
-            const res = planTracker.advanceCurrent(advanceDecision.reason)
-            if (res.ok) {
-              autoAdvanceMsg = res.message
-              this.consecutiveBlockedRounds = 0
-              this.emit({ kind: EventKind.PlanState, planSteps: planTracker.snapshot() })
-              logger.agent('Auto-advance step', {
-                stepId: curStep.id,
-                reason: advanceDecision.reason
-              })
-            }
-          }
+          const autoAdvanceMsg = ''
 
           if (hasSuccessfulWrite && planTracker?.currentStep && !hasStepDone && !autoAdvanceMsg) {
             // Once a write step has produced a file, stop offering exploration
@@ -655,16 +661,6 @@ export class Agent {
 
           const pushRoundHistory = (instruction: string): void => {
             appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction)
-          }
-
-          // All steps finished via auto-advance → end the run instead of looping.
-          if (autoAdvanceMsg && planTracker?.allDone()) {
-            pushRoundHistory(`[SYSTEM: ${autoAdvanceMsg}]`)
-            finalContent = finalContent.trim() || '全部计划步骤已完成。'
-            this.emit({ kind: EventKind.Notice, notice: { level: 'info', text: '全部步骤已完成，自动结束本轮' } })
-            logger.agent('Auto-advance: all steps done, ending run', { step, phase })
-            this.finishRun(emitLifecycle)
-            return finalContent
           }
 
           // complete_step marked the last step done → end immediately so the
@@ -696,7 +692,7 @@ export class Agent {
           }
 
           // Safety net: model keeps spamming a blocked tool with no way forward.
-          if (roundFullyBlocked && !autoAdvanceMsg) {
+          if (roundFullyBlocked) {
             this.consecutiveBlockedRounds++
           } else if (!roundFullyBlocked) {
             this.consecutiveBlockedRounds = 0
@@ -714,10 +710,28 @@ export class Agent {
             return finalContent
           }
 
+          // Idle detection: no file writes and no build/run progress for 3 rounds → force stop
+          const hadProgress = hasSuccessfulWrite || hasBuild
+          if (hadProgress) {
+            this.consecutiveIdleRounds = 0
+          } else {
+            this.consecutiveIdleRounds++
+          }
+          if (this.consecutiveIdleRounds >= 3) {
+            const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
+            pushRoundHistory('检测到连续多轮无实质进展（无文件写入、无构建）。')
+            finalContent = finalContent.trim() || `执行停滞：连续 ${this.consecutiveIdleRounds} 轮无文件写入或构建进展，已自动结束。${remaining}`
+            this.emit({
+              kind: EventKind.Notice,
+              notice: { level: 'warn', text: `连续 ${this.consecutiveIdleRounds} 轮无进展，已自动结束本轮` }
+            })
+            logger.agent('Loop escape: idle rounds cap reached', { step, phase, idleRounds: this.consecutiveIdleRounds })
+            this.finishRun(emitLifecycle)
+            return finalContent
+          }
+
           let instruction = ''
-          if (autoAdvanceMsg) {
-            instruction = `[SYSTEM: ${autoAdvanceMsg} 请直接执行下一步，不要重复上一步已完成的操作。]`
-          } else if (this.consecutiveWriteOnlyRounds >= 3) {
+          if (this.consecutiveWriteOnlyRounds >= 3) {
             instruction = '【系统警告】你已经连续多次只写入文件而没有构建！立即调用 trigger_build 来构建项目，不要继续写文件！'
             this.consecutiveWriteOnlyRounds = 0
           } else if (dupWarning) {
@@ -819,7 +833,7 @@ export class Agent {
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number }
   }> {
     const body: Record<string, unknown> = {
-      model, messages, stream: true, max_tokens: 8192,
+      model, messages, stream: true, max_tokens: 4096,
       stream_options: { include_usage: true }
     }
     if (tools.length > 0) {
@@ -829,12 +843,27 @@ export class Agent {
       }))
     }
 
-    const response = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+    // Create a timeout signal that aborts after 120s of no response
+    const API_TIMEOUT_MS = 120_000
+    const timeoutController = new AbortController()
+    const timeoutId = setTimeout(() => timeoutController.abort(new Error('API timeout')), API_TIMEOUT_MS)
+
+    // Combine user abort + timeout: if either fires, abort the fetch
+    const onUserAbort = () => timeoutController.abort()
+    abortSignal?.addEventListener('abort', onUserAbort, { once: true })
+
+    let response: Response
+    try {
+      response = await fetch(`${endpoint}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
       body: JSON.stringify(body),
-      signal: abortSignal
+      signal: timeoutController.signal
     })
+    } finally {
+      clearTimeout(timeoutId)
+      abortSignal?.removeEventListener('abort', onUserAbort)
+    }
     if (!response.ok) {
       const text = await response.text()
       throw new Error(`API error ${response.status}: ${text}`)

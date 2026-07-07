@@ -56,8 +56,8 @@ React 19 UI + AI harness 系统。
 | `controller.ts` | 顶层编排器：会话生命周期、意图解析、plan→execute 阶段切换、系统提示词构建 |
 | `agent.ts` | LLM 交互循环：SSE 流式输出，工具调用解析（原生 function-calling + `<tool_call>` XML 回退），循环守卫，指数退避重试 |
 | `tools.ts` | `Registry`、`Tool` 接口、`ToolContext`。`executeBatch()` 并行执行只读工具，串行执行写入工具 |
-| `tool-definitions.ts` | 通过 `registerModCraftingTools()` 注册的 18 个内置工具：文件操作、Fabric 文档、配方生成、构建/运行触发 |
-| `workflow-engine.ts` | 执行阶段的串行逐步执行。每步工具门控，修复模式（构建/运行失败时最多 3 轮修复） |
+| `tool-definitions.ts` | 通过 `registerModCraftingTools()` 注册的 20 个内置工具：文件操作、Fabric 文档、配方生成、Mixin 脚手架/注册、构建/运行触发、澄清提问 |
+| `workflow-engine.ts` | 执行阶段的串行逐步执行：每轮执行**全部**允许的工具（只读并行，写入串行）。知识查询工具不消耗 attempt 配额。修复模式（构建/运行失败时最多 3 轮修复）。支持 `ask_clarification` 暂停。 |
 | `plan-tracker.ts` | `PlanTracker` 类：步骤状态追踪、自动推进、上下文块格式化 |
 | `plan-compiler.ts` | 计划编译管道：解析 → 剥离主机终端步骤 → 删除模糊步骤 → 按路径去重 → 追加构建+运行步骤 |
 | `step-policy.ts` | 按工作流步骤类型（inspect/write/recipe/build/run/answer）的工具门控 |
@@ -78,3 +78,11 @@ React 19 UI + AI harness 系统。
 - `resources/fabric-versions.json` — 锁定版本：MC 1.21.4、Fabric Loader 0.16.10、Fabric API 0.116.0+1.21.4、Loom 1.17.12、Gradle 9.5.0、Java 21
 - `resources/agent-knowledge/` — 四个 markdown 文件（sources、policies、workflows、templates），作为 Agent 的本地知识库
 - `resources/_base_mods/` — 捆绑的辅助模组（如 Mod Menu），新建项目时复制进去
+
+### Agent 关键特性
+
+- **项目勘探**：计划阶段前自动读取 `fabric.mod.json`、`*.mixins.json`、资源目录结构，注入系统提示词
+- **澄清提问**：`ask_clarification` 工具，计划/执行两阶段均可暂停向用户提问。执行阶段通过 `ClarificationNeeded` 事件 + ChatPanel 横幅 UI 交互
+- **覆盖保护**：`write_file` 覆盖已有文件时输出被替换的旧内容（≤2KB），标注增删行数
+- **结构化修改**：`fabric_mixin_register` 自动查找 mixins.json → 解析 → 追加条目 → 写回，避免手动编辑 JSON 误删条目
+- **EBUSY 重试**：`build-env.ts` 中 `retryRmdirSync()` 对 Windows 文件锁（EBUSY/EPERM/ENOTEMPTY）最多 3 次重试，100ms 递增退避
