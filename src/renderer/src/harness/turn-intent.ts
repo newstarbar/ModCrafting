@@ -70,9 +70,11 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
   }
 
   if (ctx.composerMode === 'agent') {
-    if (hasIncompletePlan && (ctx.phase === 'execute' || isResumeInput(trimmed))) {
+    // Only resume if user explicitly says "continue" or similar
+    if (hasIncompletePlan && isResumeInput(trimmed)) {
       return 'resume'
     }
+    // In execute phase: develop continues (fix, adjust), but new-feature detection is in runTurn
     return 'develop'
   }
 

@@ -506,9 +506,20 @@ ${projectInfo}`
       }
 
       if (intent === 'develop' && this._phase === 'execute' && this.planTracker && !this.planTracker.allDone()) {
-        const result = await this.runExecutePhase(streamCb)
-        this.onAgentStatus?.('')
-        return result
+        // Detect if user is asking for something NEW (not continuing/fixing current plan)
+        const isNewRequest = /^\s*(不[对行要]|我不要|换个|改成|改为|我想做|我想要|新建|另外|重新做|放弃|算了|别|不要这个|stop|new\b)/i.test(input) ||
+          (input.length > 15 && !/[继续接往下执行试试试修复改重]$/.test(input) && !/build|编译|错误|error|fail|crash|崩溃|bug|问题|修/.test(input.toLowerCase()))
+        if (isNewRequest) {
+          this.planTracker = null
+          this._phase = 'plan'
+          this.planReadyAwaitingExecute = false
+          this.emitEvent({ kind: EventKind.Notice, notice: { level: 'info', text: '检测到新需求，已清除旧计划。正在重新规划...' } })
+          // Fall through to develop path below
+        } else {
+          const result = await this.runExecutePhase(streamCb)
+          this.onAgentStatus?.('')
+          return result
+        }
       }
 
       if (intent === 'develop' || intent === 'plan_only') {
