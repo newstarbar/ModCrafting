@@ -140,11 +140,11 @@ export const writeFileTool: Tool & Previewer = {
             ? oldContent.slice(0, MAX_SHOW) + `\n...(截断，原文件共 ${oldContent.length} 字节)`
             : oldContent
           overwriteNote =
-            `\n⚠️ 覆盖已有文件（${oldContent.length} 字节）。被覆盖的旧内容：\n\`\`\`\n${shown}\n\`\`\`\n` +
+            `\n注意: 覆盖已有文件（${oldContent.length} 字节）。被覆盖的旧内容：\n\`\`\`\n${shown}\n\`\`\`\n` +
             `新增 ${diff.added} 行，删除 ${diff.removed} 行。检查是否误删了所需条目。\n`
         }
 
-        return `✅ Written: ${args.path} (${content.length} bytes)${overwriteNote}\n<!-- FILE_DIFF ${diffPayload} -->`
+        return `已写入: ${args.path} (${content.length} bytes)${overwriteNote}\n<!-- FILE_DIFF ${diffPayload} -->`
       }
       return `Error: ${res.error}`
     } catch (err) {
@@ -248,7 +248,7 @@ export const editFileTool: Tool & Previewer = {
       const lineNum = before.split('\n').length
       const preview = newStr.length > 100 ? newStr.slice(0, 100) + '...' : newStr
 
-      let msg = `✅ ${args.path}: 第 ${lineNum} 行已替换`
+      let msg = `已${args.path}: 第 ${lineNum} 行已替换`
       if (added > 0 && removed > 0) msg += `（修改 ${removed + added} 行）`
       else if (added > 0) msg += `（+${added} 行）`
       else if (removed > 0) msg += `（-${removed} 行）`
@@ -318,7 +318,7 @@ export const createRecipeTool: Tool & Previewer = {
       const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content)
       if (res.success) {
         logger.file(`Recipe written: ${path}`, `${content.length} bytes`)
-        return `✅ Recipe written: ${path} (${content.length} bytes)`
+        return `已生成配方: ${path} (${content.length} bytes)`
       }
       return `Error creating recipe: ${res.error}`
     } catch (err) {
@@ -515,7 +515,7 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
     const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content)
     if (!res.success) return `Error creating recipe: ${res.error}`
     logger.file(`Recipe written: ${path}`, `${content.length} bytes`)
-    return `✅ Recipe written: ${path} (${content.length} bytes)`
+    return `已生成配方 written: ${path} (${content.length} bytes)`
   },
   preview(args: Record<string, unknown>): FileDiff | null {
     const namespace = String(args.namespace || '')
@@ -806,7 +806,7 @@ export const fabricContentRegisterTool: Tool = {
     const res = await window.api.writeFile(`${ctx.projectPath}/${rel}`, content)
     if (!res.success) return `Error writing ${rel}: ${res.error}`
     logger.file(`Fabric content helper written: ${rel}`, `${content.length} bytes`)
-    return `✅ Fabric content registration helper written: ${rel}`
+    return `已生成: 内容注册辅助类 → ${rel}`
   }
 }
 
@@ -843,7 +843,7 @@ export const fabricDataAssetsGenerateTool: Tool = {
       const res = await window.api.writeFile(`${ctx.projectPath}/${file.path}`, file.content)
       if (!res.success) return `Error writing ${file.path}: ${res.error}`
     }
-    return `✅ Fabric assets/data generated:\n${files.map((file) => `- ${file.path}`).join('\n')}`
+    return `已生成: 资源文件${files.map((file) => `\n- ${file.path}`).join('')}`
   }
 }
 
@@ -897,7 +897,7 @@ public class ${simpleName} {
       const res = await window.api.writeFile(`${ctx.projectPath}/${file.path}`, file.content)
       if (!res.success) return `Error writing ${file.path}: ${res.error}`
     }
-    return `✅ Mixin scaffold generated with conflict-risk warning:\n- ${configPath}\n- ${classPath}`
+    return `已生成: Mixin 脚手架\n- ${configPath}\n- ${classPath}\n注意: 此为模板代码，需手动填写注入逻辑。`
   }
 }
 
@@ -1021,7 +1021,7 @@ export const fabricMixinRegisterTool: Tool = {
     const key = target === 'client' ? 'client' : target === 'server' ? 'server' : 'mixins'
     const arr: string[] = Array.isArray(config[key]) ? (config[key] as string[]) : []
     if (arr.includes(mixinClass)) {
-      return `✅ ${mixinClass} 已存在于 ${existing.name} 的 ${key} 数组中，无需重复注册。`
+      return `${mixinClass} 已存在于 ${existing.name} 的 ${key} 数组中，无需重复注册。`
     }
 
     arr.push(mixinClass)
@@ -1036,7 +1036,7 @@ export const fabricMixinRegisterTool: Tool = {
       ? `，现有条目：${arr.join(', ')}`
       : ''
     return (
-      `✅ 已在 ${existing.name} 的 ${key} 数组中注册 ${mixinClass}${existingList}`
+      `已在 ${existing.name} 的 ${key} 数组中注册 ${mixinClass}${existingList}`
     )
   }
 }

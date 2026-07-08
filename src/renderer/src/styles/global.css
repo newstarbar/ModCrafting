@@ -891,19 +891,23 @@ body,
 	overflow: hidden;
 }
 
-.tool-line .ok {
-	color: var(--mc-green);
-	font-weight: 700;
+/* Tool status indicator dots — no emoji */
+.tool-status-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	margin-right: 2px;
 }
+.tool-status-dot.done  { background: var(--mc-green); }
+.tool-status-dot.running { background: var(--mc-yellow); animation: status-pulse 1s ease-in-out infinite; }
+.tool-status-dot.error { background: var(--error); }
+.tool-status-dot.pending { background: var(--border-color); }
 
-.tool-line .run {
-	color: var(--mc-yellow);
-	font-weight: 700;
-}
-
-.tool-line .err {
-	color: var(--error);
-	font-weight: 700;
+@keyframes status-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.4; }
 }
 
 .tool-line-name {
@@ -947,29 +951,6 @@ body,
 	width: 100%;
 	min-width: 0;
 	margin-top: 4px;
-	max-height: 200px;
-	overflow-x: auto;
-	overflow-y: auto;
-}
-
-.tool-line-output pre {
-	margin: 0;
-	padding: 6px 8px;
-	font-size: 11px;
-	font-family: var(--font-mono);
-	background: var(--bg-tertiary);
-	border-radius: 2px;
-	max-height: 200px;
-	overflow: auto;
-	white-space: pre-wrap;
-	word-break: break-word;
-	overflow-wrap: anywhere;
-	line-height: 1.5;
-}
-
-.tool-line-output pre.is-error {
-	background: rgba(255, 85, 85, 0.1);
-	color: var(--error);
 }
 
 /* Diff stats beside tool name */
@@ -1033,6 +1014,31 @@ body,
 	white-space: pre-wrap;
 	word-break: break-word;
 }
+
+.tool-line-output pre {
+	margin: 0;
+	padding: 6px 8px;
+	background: var(--bg-control);
+	border-radius: 3px;
+	font-size: 11px;
+	font-family: var(--font-mono);
+	line-height: 1.5;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.tool-line-output pre.is-error {
+	border-left: 3px solid var(--error);
+}
+
+/* File diff view in tool output */
+.diff-view { font-family: var(--font-mono); font-size: 11px; line-height: 1.6; }
+.diff-view .diff-added   { color: var(--mc-green); }
+.diff-view .diff-removed { color: var(--error); }
+.diff-view .diff-header  { color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
 
 .reasoning-block {
 	margin-bottom: 8px;

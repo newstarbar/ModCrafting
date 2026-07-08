@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react'
 import appIcon from '../../../../build/appIcon.png'
 import installerIcon from '../../../../build/installerIcon.png'
 import { Controller } from '../harness/controller'
@@ -1052,10 +1052,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                       ? Math.max(1, Math.floor((Date.now() - entry.startMs) / 1000))
                       : null
                     const statusMark =
-                      entry.status === 'done' ? <span className="ok">✓</span>
-                        : entry.status === 'running' ? <span className="run">⟳</span>
-                          : entry.status === 'error' ? <span className="err">✗</span>
-                            : <span className="mc-dim">·</span>
+                      entry.status === 'done' ? <span className="tool-status-dot done" />
+                        : entry.status === 'running' ? <span className="tool-status-dot running" />
+                          : entry.status === 'error' ? <span className="tool-status-dot error" />
+                            : <span className="tool-status-dot pending" />
                     const displayName = entry.displayName || getToolDisplayName(entry.name, entry.args)
                     const diff = entry.fileDiff
                     const showDiffStats = diff && (diff.added > 0 || diff.removed > 0)
@@ -1274,170 +1274,131 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   )
 }
 
-// Extract a preview summary from tool output (for collapsed view)
+// Extract a clean preview summary from tool output (for collapsed view).
+// Returns user-facing info only — no AI diagnostic text, no emoji.
 function extractPreview(toolName: string, output: string, args?: Record<string, unknown>): string {
-  const cap = (text: string, max = 52): string =>
-    text.length > max ? `${text.slice(0, max)}…` : text
+  if (!output) return ""
 
-  // File tools — show path + size
-  if (toolName === 'read_file' || toolName === 'write_file') {
-    const path = String(args?.path || '')
-    const fileName = path.split('/').pop() || path
+  // File tools
+  if (toolName === "read_file") {
+    const path = String(args?.path || "")
+    const fileName = path.split("/").pop() || path
+    const match = output.match(/共 (\d+) 行，显示 (\d+)-(\d+) 行/)
+    if (match) return `${fileName}  ${match[2]}-${match[3]} / ${match[1]} 行`
     const sizeMatch = output.match(/(\d+)\s*bytes/)
-    const size = sizeMatch ? `${sizeMatch[1]} bytes` : ''
-    if (toolName === 'read_file') return cap(`${fileName}${size ? ` (${size})` : ''}`)
-    return cap(`${fileName}${size ? ` (${size})` : ''}`)
+    return sizeMatch ? `${fileName} (${sizeMatch[1]} bytes)` : fileName
+  }
+  if (toolName === "write_file") {
+    const path = String(args?.path || "")
+    const fileName = path.split("/").pop() || path
+    const diffMatch = output.match(/新增 (\d+) 行.*删除 (\d+) 行/)
+    const sizeMatch = output.match(/(\d+)\s*bytes/)
+    if (diffMatch) return `${fileName}  +${diffMatch[1]} -${diffMatch[2]}`
+    if (sizeMatch) return `${fileName}  + 行 (${sizeMatch[1]} bytes)`
+    return fileName
+  }
+  if (toolName === "edit_file") {
+    const path = String(args?.path || "")
+    const fileName = path.split("/").pop() || path
+    const lineMatch = output.match(/第 (\d+) 行/)
+    const diffMatch = output.match(/\+(\d+) 行|修改 (\d+) 行/)
+    const lineInfo = lineMatch ? `第 ${lineMatch[1]} 行` : ""
+    const diffInfo = diffMatch ? ` +${diffMatch[1] || diffMatch[2]}` : ""
+    return `${fileName}${lineInfo ? " " + lineInfo : ""}${diffInfo}`
   }
 
-  if (toolName === 'list_directory') {
-    const lines = output.split('\n').filter((l) => l.trim())
-    if (lines.length === 0) return '(空)'
-    const dirPath = String(args?.path || '')
-    const dirName = dirPath.split('/').pop() || dirPath || '/'
-    return `${dirName} (${lines.length} 项)`
+  // Directory
+  if (toolName === "list_directory") {
+    const path = String(args?.path || "")
+    const dirName = path.split("/").pop() || "/"
+    const items = output.split("\n").filter(l => l.trim() && !l.startsWith("total"))
+    return `${dirName} (${items.length} 项)`
   }
 
-  // Build / run tools
-  if (toolName === 'run_command' || toolName === 'trigger_build') {
-    if (output.includes('BUILD SUCCESSFUL')) return 'BUILD SUCCESSFUL'
-    if (output.includes('BUILD FAILED')) return 'BUILD FAILED'
-    if (output.includes('MC_PHASE:playing') || output.includes('已启动游戏') || output.includes('游戏面板'))
-      return '游戏已启动'
-    if (output.includes('已在右侧游戏面板')) return '游戏已启动'
+  // Build/Run
+  if (toolName === "trigger_build" || toolName === "run_command") {
+    if (output.includes("BUILD SUCCESSFUL")) {
+      const timeMatch = output.match(/(\d+)s/)
+      return timeMatch ? `BUILD SUCCESSFUL (${timeMatch[1]}s)` : "BUILD SUCCESSFUL"
+    }
+    if (output.includes("BUILD FAILED")) return "BUILD FAILED"
+    if (output.includes("MC_PHASE:playing") || output.includes("已启动游戏")) return "游戏运行中"
     const exitMatch = output.match(/\[exit code: (\d+)\]|\[退出码: (\d+)\]/)
     const exitCode = exitMatch?.[1] ?? exitMatch?.[2]
-    const lines = output.split('\n').filter((l) => l.trim())
-    const last = lines[lines.length - 1]?.trim() || ''
-    if (last && last.length <= 56) {
-      return exitCode && exitCode !== '0' ? `${last} (exit ${exitCode})` : last
-    }
-    return exitCode ? `exit ${exitCode}` : last.slice(0, 56) || '(完成)'
+    if (exitCode && exitCode !== "0") return `退出码 ${exitCode}`
+    return "已完成"
   }
 
-  // Knowledge search tools — show keyword + result summary
-  if (toolName === 'fabric_docs_search' || toolName === 'fabric_javadoc_lookup' || toolName === 'vanilla_mc_wiki_query') {
-    const kw = String(args?.keyword || '')
-    const summaryMatch = output.match(/结果：(.+)$/m)
-    const summary = summaryMatch ? summaryMatch[1] : ''
-    return kw ? `"${kw.slice(0, 30)}${kw.length > 30 ? '…' : ''}"${summary ? ` → ${summary}` : ''}` : cap(output, 60)
+  // Knowledge search
+  if (toolName === "fabric_docs_search" || toolName === "fabric_javadoc_lookup" || toolName === "vanilla_mc_wiki_query") {
+    const kw = String(args?.keyword || "")
+    const summary = output.match(/结果：(.+)$/m)?.[1] || ""
+    return summary ? `${kw.slice(0,28)} → ${summary}` : kw.slice(0,36)
+  }
+  if (toolName === "fabric_meta_version_check") {
+    const mc = output.match(/"minecraft_version":\s*"([^"]+)"/)?.[1] || ""
+    return mc ? `MC ${mc}` : "版本查询"
   }
 
-  // Recipe tools
-  if (toolName === 'create_recipe' || toolName === 'fabric_recipe_generate') {
-    const recipeName = String(args?.name || '')
-    if (recipeName) return `${recipeName}.json`
-    const pathMatch = output.match(/Written:\s*(\S+)/)
-    if (pathMatch) {
-      const p = pathMatch[1].split('/').pop() || pathMatch[1]
-      return p
-    }
-    return '配方已创建'
+  // Recipe
+  if (toolName === "create_recipe" || toolName === "fabric_recipe_generate") {
+    const name = String(args?.name || "")
+    if (name) return `${name}.json`
+    const pm = output.match(/已生成配方:\s*(\S+)/)
+    if (pm) { const p = pm[1]; return p.split("/").pop() || p }
+    return "配方"
   }
 
-  // Content registration tools
-  if (toolName === 'fabric_content_register') {
-    const pkgPath = String(args?.packagePath || '')
-    const name = pkgPath.split('.').pop() || ''
-    const pathMatch = output.match(/Written:\s*(\S+)/)
-    if (pathMatch) return pathMatch[1].split('/').pop() || pathMatch[1]
-    return name ? `${name}/ModItems.java` : '注册完成'
+  // Content/data
+  if (toolName === "fabric_content_register") {
+    const p = String(args?.path || args?.className || "")
+    return p ? p.replace(/^.*\//, "") : "内容注册"
+  }
+  if (toolName === "fabric_data_assets_generate") {
+    const files = output.match(/- (\S+)/g)
+    return files ? `${files.length} 个资源文件` : "资源生成"
   }
 
-  // Asset generation
-  if (toolName === 'fabric_data_assets_generate') {
-    const countMatch = output.match(/✅[^(]*/g)
-    const fileMatches = output.match(/^-\s*(\S+)$/gm)
-    const count = fileMatches ? fileMatches.length : 0
-    const itemName = String(args?.name || '')
-    if (count > 0) return itemName ? `${itemName} (+${count} 个文件)` : `${count} 个文件已生成`
-    return itemName || '资源已生成'
+  // Mixin
+  if (toolName === "fabric_mixin_scaffold") {
+    const cls = args?.mixinClass ? String(args.mixinClass).split(".").pop() : null
+    return cls || "Mixin"
+  }
+  if (toolName === "fabric_mixin_register") {
+    const cls = String(args?.mixinClass || "").split(".").pop() || ""
+    return cls ? `${cls} 已注册` : "已注册"
   }
 
-  // Mixin scaffold
-  if (toolName === 'fabric_mixin_scaffold') {
-    const className = String(args?.mixinClass || '')
-    const shortName = className.split('.').pop() || className
-    if (shortName) return `${shortName}.java`
-    return 'Mixin 已生成'
+  // Debug/log
+  if (toolName === "fabric_log_debugger") {
+    const k = output.match(/"kind":\s*"([^"]+)"/)?.[1] || ""
+    return k || "日志分析"
+  }
+  if (toolName === "read_error_log") {
+    if (output.includes("BUILD FAILED")) return "BUILD FAILED"
+    if (output.includes("BUILD SUCCESSFUL")) return "BUILD SUCCESSFUL"
+    return "日志"
   }
 
-  // Knowledge tools
-  if (toolName === 'fabric_docs_search') {
-    const query = String(args?.query || args?.keyword || '')
-    if (query) {
-      // Count result entries (lines starting with source URLs or numbered)
-      const lines = output.split('\n').filter((l) => /^(https?:\/\/|\[\d+\]|\d+\.)/.test(l.trim()))
-      return lines.length > 0 ? `"${cap(query, 20)}" → ${lines.length} 条` : `"${cap(query, 20)}"`
-    }
-    return '文档搜索'
+  // Validation
+  if (toolName === "fabric_mod_json_validate") {
+    if (output.includes('"ok": true')) return "校验通过"
+    const issues = (output.match(/issue|warning/gi) || []).length
+    return issues > 0 ? `${issues} 个问题` : "校验完成"
   }
 
-  if (toolName === 'fabric_javadoc_lookup') {
-    const cls = String(args?.class || args?.className || args?.query || '')
-    if (cls) return cap(cls, 40)
-    return 'JavaDoc 查询'
+  // Meta
+  if (toolName === "complete_step") {
+    const m = output.match(/步骤 #(\d+)/)
+    return m ? `步骤 ${m[1]} 已完成` : "步骤完成"
+  }
+  if (toolName === "ask_clarification") {
+    const q = String(args?.question || "")
+    return q.length > 40 ? q.slice(0, 40) + "…" : q || "需要确认"
   }
 
-  if (toolName === 'vanilla_mc_wiki_query') {
-    const query = String(args?.query || args?.keyword || args?.topic || '')
-    if (query) return `${cap(query, 30)} → Wiki`
-    return 'Wiki 查询'
-  }
-
-  // Validation tools
-  if (toolName === 'fabric_meta_version_check') {
-    try {
-      const json = JSON.parse(output)
-      if (json.loader && json.loader[0]) {
-        return `MC ${json.loader[0].loader?.version || '?'}`
-      }
-    } catch { /* raw text */ }
-    const mcMatch = output.match(/"version":\s*"([^"]+)"/)
-    return mcMatch ? `MC ${mcMatch[1]}` : '版本检查'
-  }
-
-  if (toolName === 'fabric_mod_json_validate') {
-    if (output.includes('"valid": true') || output.includes('✅') || output.includes('通过'))
-      return '✓ 验证通过'
-    try {
-      const json = JSON.parse(output)
-      if (json.valid) return '✓ 验证通过'
-      const issueCount = json.issues?.length || json.errors?.length || 0
-      return issueCount > 0 ? `${issueCount} 个问题` : '有问题'
-    } catch { /* raw text */ }
-    return '验证完成'
-  }
-
-  // Log tools
-  if (toolName === 'fabric_log_debugger') {
-    try {
-      const json = JSON.parse(output)
-      const category = json.category || json.errorType || ''
-      if (category) return cap(category, 40)
-    } catch { /* raw text */ }
-    return '日志分析'
-  }
-
-  if (toolName === 'read_error_log') {
-    const logType = String(args?.logType || args?.type || '')
-    if (output.includes('No log file found') || output.includes('未找到')) return '无日志文件'
-    if (logType) {
-      const lines = output.split('\n').filter((l) => l.trim())
-      return `${logType} (${lines.length} 行)`
-    }
-    return '错误日志'
-  }
-
-  // Step completion
-  if (toolName === 'complete_step') {
-    const stepMatch = output.match(/\[STEP_DONE:(\d+)\]/)
-    if (stepMatch) return `步骤 ${stepMatch[1]} 已完成`
-    return '步骤完成'
-  }
-
-  // Default: show first meaningful line
-  const firstLine = output.split('\n')[0]?.trim() || ''
-  return cap(firstLine)
+  const fl = output.split("\n")[0]?.trim() || ""
+  return fl.length > 52 ? fl.slice(0, 52) + "…" : fl
 }
 
 export default ChatPanel
