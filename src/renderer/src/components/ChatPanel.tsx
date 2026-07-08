@@ -388,7 +388,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     const restoredUsage = normalizeSessionUsage(session.usage, apiConfigRef.current.model)
     setUsageAccum(restoredUsage)
     onUsageChangeRef.current?.(restoredUsage)
-    controllerRef.current?.restoreSnapshot(toControllerMessages(session.messages))
+    // Only restore controller snapshot if it does NOT already have more messages
+    // than the persisted session. This prevents the persistence cycle from
+    // overwriting in-memory messages accumulated during an active turn.
+    const currentCtrlMsgs = controllerRef.current?.getSnapshot() ?? []
+    const persistedMsgs = toControllerMessages(session.messages)
+    if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
+      controllerRef.current?.restoreSnapshot(persistedMsgs)
+    }
   }, [currentSessionId, sessions])
 
   useEffect(() => {
