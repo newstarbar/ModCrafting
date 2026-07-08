@@ -3,6 +3,7 @@ import ChatPanel from "./components/ChatPanel";
 import BottomPanel, { type BottomPanelHandle } from "./components/BottomPanel";
 import McRuntimePanel, { type McRuntimePanelHandle } from "./components/McRuntimePanel";
 import DevLogPanel from "./components/DevLogPanel";
+import PreviewPanel from "./components/PreviewPanel";
 import SessionSidebar from "./components/SessionSidebar";
 import StatusBar from "./components/StatusBar";
 import ProjectHub from "./components/ProjectHub";
@@ -12,7 +13,7 @@ import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import UpdateBanner from "./components/UpdateBanner";
-import { IconCode, IconGamepad } from "./components/Icon";
+import { IconCode, IconGamepad, IconSquare } from "./components/Icon";
 import { EMPTY_USAGE, normalizeSessionUsage, type UsageStats } from "./utils/usage";
 import { loadProjectVersions, type ProjectVersions } from "./utils/project-versions";
 import {
@@ -39,7 +40,7 @@ const DEFAULT_API_CONFIG = {
 
 interface UsageData extends UsageStats {}
 
-type RightPanelTab = "game" | "advanced";
+type RightPanelTab = "game" | "preview" | "advanced";
 type ProjectDialog = "none" | "new" | "open";
 
 interface RecentProject {
@@ -556,6 +557,44 @@ const App: React.FC = () => {
 	}, []);
 	const addToChatContext = useCallback((text: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, text] })), []);
 	const handleCrashToChat = useCallback((c: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 崩溃报告 ---\n${c}`], rightPanelTab: "game" })), []);
+	const handleTemplateClick = useCallback((templateId: string, name: string) => {
+		setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 模板选择 ---\n已选择: ${name} (${templateId})\n在下方输入框发送消息以生成代码`] }));
+	}, []);
+	const handleContentClick = useCallback(async (type: string, name: string, className?: string) => {
+		if (!state.projectPath || !className) {
+			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`] }));
+			return;
+		}
+		try {
+			const javaDir = `${state.projectPath}/src/main/java`;
+			const entries = await window.api.listDirectory(javaDir);
+			const findFile = async (dir: string, pkgParts: string[]): Promise<string | null> => {
+				const dirEntries = await window.api.listDirectory(dir);
+				for (const entry of dirEntries) {
+					if (entry.isDirectory) {
+						const result = await findFile(entry.path, [...pkgParts, entry.name]);
+						if (result) return result;
+					} else if (entry.name === `${className}.java`) {
+						const res = await window.api.readFile(entry.path);
+						return res.success && res.content ? res.content : null;
+					}
+				}
+				return null;
+			};
+			for (const entry of entries) {
+				if (entry.isDirectory) {
+					const code = await findFile(entry.path, [entry.name]);
+					if (code) {
+						setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n\`\`\`java\n${code}\n\`\`\``] }));
+						return;
+					}
+				}
+			}
+			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n未找到源代码文件`] }));
+		} catch {
+			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n读取源代码失败`] }));
+		}
+	}, [state.projectPath]);
 
 	const lastProjectPath = recentProjects[0]?.path ?? null;
 
@@ -642,6 +681,13 @@ const App: React.FC = () => {
 								</button>
 								<button
 									type="button"
+									className={`mc-tab ${state.rightPanelTab === "preview" ? "active" : ""}`}
+									onClick={() => setState((p) => ({ ...p, rightPanelTab: "preview" }))}
+								>
+									<IconSquare size="sm" /> 预览
+								</button>
+								<button
+									type="button"
 									className={`mc-tab ${state.rightPanelTab === "advanced" ? "active" : ""}`}
 									onClick={() => setState((p) => ({ ...p, rightPanelTab: "advanced" }))}
 								>
@@ -657,6 +703,9 @@ const App: React.FC = () => {
 										toolchainReady={toolchainReady}
 										onRuntimeStatusChange={handleRuntimeStatusChange}
 									/>
+								</div>
+								<div className="right-panel-body" style={{ display: state.rightPanelTab === "preview" ? "block" : "none", overflow: "auto" }}>
+									<PreviewPanel projectPath={state.projectPath} onTemplateClick={handleTemplateClick} onContentClick={handleContentClick} />
 								</div>
 								<div className="right-panel-body" style={{ display: state.rightPanelTab === "advanced" ? "flex" : "none", flexDirection: "column", height: "100%", overflow: "hidden" }}>
 									<BottomPanel

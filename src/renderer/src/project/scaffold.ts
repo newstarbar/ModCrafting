@@ -1,48 +1,53 @@
 export interface FabricVersions {
-  minecraft_version: string
-  loader_version: string
-  fabric_version: string
-  yarn_mappings: string
-  loom_version: string
-  gradle_version: string
+	minecraft_version: string;
+	loader_version: string;
+	fabric_version: string;
+	yarn_mappings: string;
+	loom_version: string;
+	gradle_version: string;
 }
 
 export interface ProjectCreateConfig {
-  projectDir: string
-  folderName: string
-  displayName: string
-  modId: string
-  groupId: string
-  javaPackage: string
-  authors: string
-  description: string
-  modVersion: string
-  versions: FabricVersions
+	projectDir: string;
+	folderName: string;
+	displayName: string;
+	modId: string;
+	groupId: string;
+	javaPackage: string;
+	authors: string;
+	description: string;
+	modVersion: string;
+	versions: FabricVersions;
 }
 
 function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1)
+	return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export function sanitizeModId(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'my-mod'
+	return (
+		name
+			.toLowerCase()
+			.replace(/[^a-z0-9_-]/g, "-")
+			.replace(/^-+|-+$/g, "") || "my-mod"
+	);
 }
 
 export function sanitizeJavaPackage(modId: string): string {
-  return modId.replace(/-/g, '_').replace(/[^a-z0-9_]/g, '_') || 'mymod'
+	return modId.replace(/-/g, "_").replace(/[^a-z0-9_]/g, "_") || "mymod";
 }
 
 export function mainClassName(javaPackage: string): string {
-  return capitalize(javaPackage)
+	return capitalize(javaPackage);
 }
 
 export function getMainClassFqn(config: ProjectCreateConfig): string {
-  return `${config.groupId}.${config.javaPackage}.${mainClassName(config.javaPackage)}`
+	return `${config.groupId}.${config.javaPackage}.${mainClassName(config.javaPackage)}`;
 }
 
 export function generateBuildGradle(config: ProjectCreateConfig): string {
-  const { folderName, groupId, modId, versions } = config
-  return `plugins { id 'fabric-loom' version '${versions.loom_version}'; id 'maven-publish' }
+	const { folderName, groupId, modId, versions } = config;
+	return `plugins { id 'fabric-loom' version '${versions.loom_version}'; id 'maven-publish' }
 version = project.mod_version; group = "${groupId}"
 base { archivesName = "${folderName}" }
 repositories { mavenCentral() }
@@ -85,11 +90,11 @@ tasks.named("runClient").configure {
       opts.text = "lang:zh_cn\\nonboardAccessibility:false\\nnarrator:0\\n"
     }
   }
-}`
+}`;
 }
 
 export function generateSettingsGradle(folderName: string): string {
-  return `pluginManagement {
+	return `pluginManagement {
     repositories {
         maven {
             name = 'Fabric'
@@ -100,38 +105,45 @@ export function generateSettingsGradle(folderName: string): string {
     }
 }
 rootProject.name = "${folderName}"
-`
+`;
 }
 
 export function generateFabricModJson(config: ProjectCreateConfig): string {
-  const { modId, displayName, groupId, javaPackage, authors, description, versions } = config
-  const mainCn = mainClassName(javaPackage)
-  const mainEntry = `${groupId}.${javaPackage}.${mainCn}`
-  const clientEntry = `${groupId}.${javaPackage}.${mainCn}Client`
-  return JSON.stringify({
-    schemaVersion: 1,
-    id: modId,
-    version: '${version}',
-    name: displayName,
-    description: description || 'Minecraft mod created with ModCrafting',
-    authors: authors.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
-    contact: {},
-    license: 'MIT',
-    environment: '*',
-    entrypoints: { main: [mainEntry], client: [clientEntry] },
-    mixins: [],
-    depends: {
-      fabricloader: `>=${versions.loader_version}`,
-      minecraft: `~${versions.minecraft_version}`,
-      java: '>=21'
-    }
-  }, null, 2)
+	const { modId, displayName, groupId, javaPackage, authors, description, versions } = config;
+	const mainCn = mainClassName(javaPackage);
+	const mainEntry = `${groupId}.${javaPackage}.${mainCn}`;
+	const clientEntry = `${groupId}.${javaPackage}.${mainCn}Client`;
+	return JSON.stringify(
+		{
+			schemaVersion: 1,
+			id: modId,
+			version: "${version}",
+			name: displayName,
+			description: description || "Minecraft mod created with ModCrafting",
+			authors: authors
+				.split(/[,，]/)
+				.map((s) => s.trim())
+				.filter(Boolean),
+			contact: {},
+			license: "MIT",
+			environment: "*",
+			entrypoints: { main: [mainEntry], client: [clientEntry] },
+			mixins: [],
+			depends: {
+				fabricloader: `>=${versions.loader_version}`,
+				minecraft: `~${versions.minecraft_version}`,
+				java: ">=21"
+			}
+		},
+		null,
+		2
+	);
 }
 
 export function generateMainModClass(config: ProjectCreateConfig): string {
-  const { modId, groupId, javaPackage } = config
-  const cn = mainClassName(javaPackage)
-  return `package ${groupId}.${javaPackage};
+	const { modId, groupId, javaPackage } = config;
+	const cn = mainClassName(javaPackage);
+	return `package ${groupId}.${javaPackage};
 
 import net.fabricmc.api.ModInitializer;
 import org.slf4j.Logger;
@@ -147,12 +159,12 @@ public class ${cn} implements ModInitializer {
         LOGGER.info("{} 模组已加载！", MOD_ID);
     }
 }
-`
+`;
 }
 
 export function generateModItemsClass(config: ProjectCreateConfig): string {
-  const { modId, groupId, javaPackage } = config
-  return `package ${groupId}.${javaPackage};
+	const { modId, groupId, javaPackage } = config;
+	return `package ${groupId}.${javaPackage};
 
 import net.minecraft.item.Item;
 import net.minecraft.registry.Registries;
@@ -174,22 +186,22 @@ public class ModItems {
         ${mainClassName(javaPackage)}.LOGGER.info("Registering items for ${modId}");
     }
 }
-`
+`;
 }
 
 export function generateClientModClass(config: ProjectCreateConfig): string {
-  const { groupId, javaPackage } = config
-  const cn = mainClassName(javaPackage)
-  return `package ${groupId}.${javaPackage};
+	const { groupId, javaPackage } = config;
+	const cn = mainClassName(javaPackage);
+	return `package ${groupId}.${javaPackage};
 import net.fabricmc.api.ClientModInitializer;
 public class ${cn}Client implements ClientModInitializer {
   @Override public void onInitializeClient() {}
-}`
+}`;
 }
 
 export function generateGradleProperties(config: ProjectCreateConfig): string {
-  const v = config.versions
-  return `# Fabric Properties
+	const v = config.versions;
+	return `# Fabric Properties
 minecraft_version=${v.minecraft_version}
 loader_version=${v.loader_version}
 fabric_version=${v.fabric_version}
@@ -205,22 +217,22 @@ java_version=21
 
 # Offline build (ModCrafting bundled cache)
 org.gradle.offline=true
-`
+`;
 }
 
 export function generateGradleWrapperProperties(versions: FabricVersions): string {
-  return `distributionBase=GRADLE_USER_HOME
+	return `distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
 distributionUrl=https\\://services.gradle.org/distributions/gradle-${versions.gradle_version}-bin.zip
 networkTimeout=120000
 validateDistributionUrl=false
 zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
-`
+`;
 }
 
 export function generateGitignore(): string {
-  return `.gradle/
+	return `.gradle/
 build/
 .idea/
 *.iml
@@ -229,57 +241,368 @@ build/
 Thumbs.db
 run/
 *.log
-`
+`;
 }
 
 export function generateLangFile(modId: string): string {
-  return JSON.stringify({
-    ['item.' + modId + '.test_item']: '测试物品'
-  }, null, 2) + '\n'
+	return (
+		JSON.stringify(
+			{
+				["item." + modId + ".test_item"]: "测试物品"
+			},
+			null,
+			2
+		) + "\n"
+	);
 }
 
 export function generateItemModel(): string {
-  return JSON.stringify({
-    parent: 'item/generated',
-    textures: { layer0: 'minecraft:item/barrier' }
-  }, null, 2) + '\n'
+	return (
+		JSON.stringify(
+			{
+				parent: "item/generated",
+				textures: { layer0: "minecraft:item/barrier" }
+			},
+			null,
+			2
+		) + "\n"
+	);
+}
+
+export interface TemplateKind {
+	id: string;
+	name: string;
+	description: string;
+	category: "block" | "item" | "entity" | "recipe" | "structure";
+}
+
+export const MOD_TEMPLATES: TemplateKind[] = [
+	{ id: "custom-block", name: "自定义方块", description: "创建可放置的自定义方块，支持自定义材质和行为", category: "block" },
+	{ id: "custom-item", name: "自定义物品", description: "创建可手持的自定义物品，支持自定义效果", category: "item" },
+	{ id: "custom-food", name: "自定义食物", description: "创建可食用的食物，支持自定义饱食度和效果", category: "item" },
+	{ id: "custom-entity", name: "自定义实体", description: "创建自定义生物/实体，支持自定义AI和行为", category: "entity" },
+	{ id: "custom-tool", name: "自定义工具", description: "创建自定义工具（剑、镐、斧等），支持自定义属性", category: "item" },
+	{ id: "custom-armor", name: "自定义护甲", description: "创建自定义护甲套装，支持自定义防御属性", category: "item" },
+	{ id: "custom-recipe", name: "自定义配方", description: "创建合成配方，支持多种合成类型", category: "recipe" }
+];
+
+export function generateCustomBlockClass(config: ProjectCreateConfig, blockName: string): string {
+	const { modId, groupId, javaPackage } = config;
+	const className = capitalize(blockName.replace(/-/g, "_"));
+	const simpleName = blockName.replace(/-/g, "_");
+	return `package ${groupId}.${javaPackage};
+
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Material;
+import net.minecraft.item.ItemConvertible;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.WorldView;
+
+public class ${className}Block extends Block {
+    public static final ${className}Block INSTANCE = new ${className}Block(Settings.of(Material.STONE).strength(2.0f));
+
+    public ${className}Block(Settings settings) {
+        super(settings);
+    }
+
+    public static void register() {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, "${simpleName}");
+        RegistryKey<Block> key = RegistryKey.of(RegistryKeys.BLOCK, id);
+        Registry.register(Registries.BLOCK, key, INSTANCE);
+        ${className}Item.register();
+        ${mainClassName(javaPackage)}.LOGGER.info("Registered block: ${simpleName}");
+    }
+
+    public ItemConvertible asItem() {
+        return ${className}Item.INSTANCE;
+    }
+}
+`;
+}
+
+export function generateCustomBlockItemClass(config: ProjectCreateConfig, blockName: string): string {
+	const { modId, groupId, javaPackage } = config;
+	const className = capitalize(blockName.replace(/-/g, "_"));
+	const simpleName = blockName.replace(/-/g, "_");
+	return `package ${groupId}.${javaPackage};
+
+import net.minecraft.block.Block;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.Item;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ${className}Item extends BlockItem {
+    public static final ${className}Item INSTANCE = new ${className}Item(${className}Block.INSTANCE, new Item.Settings());
+
+    public ${className}Item(Block block, Item.Settings settings) {
+        super(block, settings);
+    }
+
+    public static void register() {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, "${simpleName}");
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        Registry.register(Registries.ITEM, key, INSTANCE);
+    }
+}
+`;
+}
+
+export function generateCustomItemClass(config: ProjectCreateConfig, itemName: string): string {
+	const { modId, groupId, javaPackage } = config;
+	const className = capitalize(itemName.replace(/-/g, "_"));
+	const simpleName = itemName.replace(/-/g, "_");
+	return `package ${groupId}.${javaPackage};
+
+import net.minecraft.item.Item;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ${className}Item extends Item {
+    public static final ${className}Item INSTANCE = new ${className}Item(new Settings());
+
+    public ${className}Item(Settings settings) {
+        super(settings);
+    }
+
+    public static void register() {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, "${simpleName}");
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        Registry.register(Registries.ITEM, key, INSTANCE);
+        ${mainClassName(javaPackage)}.LOGGER.info("Registered item: ${simpleName}");
+    }
+}
+`;
+}
+
+export function generateCustomFoodItemClass(config: ProjectCreateConfig, itemName: string): string {
+	const { modId, groupId, javaPackage } = config;
+	const className = capitalize(itemName.replace(/-/g, "_"));
+	const simpleName = itemName.replace(/-/g, "_");
+	return `package ${groupId}.${javaPackage};
+
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.item.FoodComponent;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemGroup;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ${className}Item extends Item {
+    public static final FoodComponent FOOD_COMPONENT = new FoodComponent.Builder()
+        .hunger(6)
+        .saturationModifier(0.6f)
+        .statusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, 200, 0), 0.5f)
+        .build();
+
+    public static final ${className}Item INSTANCE = new ${className}Item(new Settings().food(FOOD_COMPONENT).group(ItemGroup.FOOD));
+
+    public ${className}Item(Settings settings) {
+        super(settings);
+    }
+
+    public static void register() {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, "${simpleName}");
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        Registry.register(Registries.ITEM, key, INSTANCE);
+        ${mainClassName(javaPackage)}.LOGGER.info("Registered food item: ${simpleName}");
+    }
+}
+`;
+}
+
+export function generateCustomToolClass(config: ProjectCreateConfig, toolName: string, toolType: string): string {
+	const { modId, groupId, javaPackage } = config;
+	const className = capitalize(toolName.replace(/-/g, "_"));
+	const simpleName = toolName.replace(/-/g, "_");
+	const tier = "net.minecraft.item.ToolMaterials.IRON";
+	return `package ${groupId}.${javaPackage};
+
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemGroup;
+import net.minecraft.item.${toolType};
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ${className}${toolType} extends ${toolType} {
+    public static final ${className}${toolType} INSTANCE = new ${className}${toolType}(${tier}, new Item.Settings().group(ItemGroup.TOOLS));
+
+    public ${className}${toolType}(net.minecraft.item.ToolMaterial material, Item.Settings settings) {
+        super(material, settings);
+    }
+
+    public static void register() {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, "${simpleName}");
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        Registry.register(Registries.ITEM, key, INSTANCE);
+        ${mainClassName(javaPackage)}.LOGGER.info("Registered tool: ${simpleName}");
+    }
+}
+`;
+}
+
+export function generateCustomArmorClass(config: ProjectCreateConfig, armorName: string, armorType: string): string {
+	const { modId, groupId, javaPackage } = config;
+	const className = capitalize(armorName.replace(/-/g, "_"));
+	const simpleName = armorName.replace(/-/g, "_");
+	const material = "net.minecraft.item.ArmorMaterials.IRON";
+	return `package ${groupId}.${javaPackage};
+
+import net.minecraft.item.ArmorItem;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemGroup;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+
+public class ${className}${armorType} extends ArmorItem {
+    public static final ${className}${armorType} INSTANCE = new ${className}${armorType}(
+        ${material},
+        net.minecraft.entity.EquipmentSlot.Type.${armorType.toUpperCase().replace("ARMOR", "")},
+        new Item.Settings().group(ItemGroup.COMBAT)
+    );
+
+    public ${className}${armorType}(net.minecraft.item.ArmorMaterial material, net.minecraft.entity.EquipmentSlot.Type slot, Item.Settings settings) {
+        super(material, slot, settings);
+    }
+
+    public static void register() {
+        Identifier id = Identifier.of(${mainClassName(javaPackage)}.MOD_ID, "${simpleName}");
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
+        Registry.register(Registries.ITEM, key, INSTANCE);
+        ${mainClassName(javaPackage)}.LOGGER.info("Registered armor: ${simpleName}");
+    }
+}
+`;
+}
+
+export function generateBlockStatesJson(modId: string, blockName: string): string {
+	const simpleName = blockName.replace(/-/g, "_");
+	return (
+		JSON.stringify(
+			{
+				variants: {
+					"": { model: `${modId}:block/${simpleName}` }
+				}
+			},
+			null,
+			2
+		) + "\n"
+	);
+}
+
+export function generateBlockModelJson(modId: string, blockName: string): string {
+	const simpleName = blockName.replace(/-/g, "_");
+	return (
+		JSON.stringify(
+			{
+				parent: "block/cube_all",
+				textures: {
+					all: `${modId}:block/${simpleName}`
+				}
+			},
+			null,
+			2
+		) + "\n"
+	);
+}
+
+export function generateItemModelJson(modId: string, itemName: string, parent?: string): string {
+	const simpleName = itemName.replace(/-/g, "_");
+	return (
+		JSON.stringify(
+			{
+				parent: parent || `item/generated`,
+				textures: {
+					layer0: `${modId}:item/${simpleName}`
+				}
+			},
+			null,
+			2
+		) + "\n"
+	);
+}
+
+export function generateLootTableJson(modId: string, blockName: string): string {
+	const simpleName = blockName.replace(/-/g, "_");
+	return (
+		JSON.stringify(
+			{
+				type: "minecraft:block",
+				pools: [
+					{
+						rolls: 1,
+						entries: [
+							{
+								type: "minecraft:item",
+								name: `${modId}:${simpleName}`
+							}
+						]
+					}
+				]
+			},
+			null,
+			2
+		) + "\n"
+	);
 }
 
 export async function scaffoldProject(config: ProjectCreateConfig): Promise<void> {
-  const pd = config.projectDir
-  const { groupId, modId, javaPackage } = config
-  const javaPath = `src/main/java/${groupId.replace(/\./g, '/')}/${javaPackage}`
-  const clientJavaPath = `src/client/java/${groupId.replace(/\./g, '/')}/${javaPackage}`
-  const mainCn = mainClassName(javaPackage)
+	const pd = config.projectDir;
+	const { groupId, modId, javaPackage } = config;
+	const javaPath = `src/main/java/${groupId.replace(/\./g, "/")}/${javaPackage}`;
+	const clientJavaPath = `src/client/java/${groupId.replace(/\./g, "/")}/${javaPackage}`;
+	const mainCn = mainClassName(javaPackage);
 
-  const dirs = [
-    `${pd}/${javaPath}`,
-    `${pd}/${clientJavaPath}`,
-    `${pd}/src/main/resources`,
-    `${pd}/src/main/generated`,
-    `${pd}/src/client/resources`,
-    `${pd}/src/main/resources/assets/${modId}/lang`,
-    `${pd}/src/main/resources/assets/${modId}/models/item`,
-    `${pd}/src/main/resources/assets/${modId}/models/block`,
-    `${pd}/src/main/resources/assets/${modId}/blockstates`,
-    `${pd}/src/main/resources/data/${modId}/loot_tables/blocks`,
-    `${pd}/src/main/resources/data/${modId}/tags/blocks`,
-    `${pd}/src/main/resources/data/${modId}/tags/items`,
-    `${pd}/gradle/wrapper`
-  ]
-  for (const d of dirs) {
-    await window.api.createDirectory(d)
-  }
+	const dirs = [
+		`${pd}/${javaPath}`,
+		`${pd}/${clientJavaPath}`,
+		`${pd}/src/main/resources`,
+		`${pd}/src/main/generated`,
+		`${pd}/src/client/resources`,
+		`${pd}/src/main/resources/assets/${modId}/lang`,
+		`${pd}/src/main/resources/assets/${modId}/models/item`,
+		`${pd}/src/main/resources/assets/${modId}/models/block`,
+		`${pd}/src/main/resources/assets/${modId}/blockstates`,
+		`${pd}/src/main/resources/data/${modId}/loot_tables/blocks`,
+		`${pd}/src/main/resources/data/${modId}/tags/blocks`,
+		`${pd}/src/main/resources/data/${modId}/tags/items`,
+		`${pd}/gradle/wrapper`
+	];
+	for (const d of dirs) {
+		await window.api.createDirectory(d);
+	}
 
-  await window.api.writeFile(`${pd}/build.gradle`, generateBuildGradle(config))
-  await window.api.writeFile(`${pd}/settings.gradle`, generateSettingsGradle(config.folderName))
-  await window.api.writeFile(`${pd}/gradle.properties`, generateGradleProperties(config))
-  await window.api.writeFile(`${pd}/src/main/resources/fabric.mod.json`, generateFabricModJson(config))
-  await window.api.writeFile(`${pd}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId))
-  await window.api.writeFile(`${pd}/src/main/resources/assets/${modId}/models/item/test_item.json`, generateItemModel())
-  await window.api.writeFile(`${pd}/${javaPath}/${mainCn}.java`, generateMainModClass(config))
-  await window.api.writeFile(`${pd}/${javaPath}/ModItems.java`, generateModItemsClass(config))
-  await window.api.writeFile(`${pd}/${clientJavaPath}/${mainCn}Client.java`, generateClientModClass(config))
-  await window.api.writeFile(`${pd}/gradle/wrapper/gradle-wrapper.properties`, generateGradleWrapperProperties(config.versions))
-  await window.api.writeFile(`${pd}/.gitignore`, generateGitignore())
+	await window.api.writeFile(`${pd}/build.gradle`, generateBuildGradle(config));
+	await window.api.writeFile(`${pd}/settings.gradle`, generateSettingsGradle(config.folderName));
+	await window.api.writeFile(`${pd}/gradle.properties`, generateGradleProperties(config));
+	await window.api.writeFile(`${pd}/src/main/resources/fabric.mod.json`, generateFabricModJson(config));
+	await window.api.writeFile(`${pd}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId));
+	await window.api.writeFile(`${pd}/src/main/resources/assets/${modId}/models/item/test_item.json`, generateItemModel());
+	await window.api.writeFile(`${pd}/${javaPath}/${mainCn}.java`, generateMainModClass(config));
+	await window.api.writeFile(`${pd}/${javaPath}/ModItems.java`, generateModItemsClass(config));
+	await window.api.writeFile(`${pd}/${clientJavaPath}/${mainCn}Client.java`, generateClientModClass(config));
+	await window.api.writeFile(`${pd}/gradle/wrapper/gradle-wrapper.properties`, generateGradleWrapperProperties(config.versions));
+	await window.api.writeFile(`${pd}/.gitignore`, generateGitignore());
 }

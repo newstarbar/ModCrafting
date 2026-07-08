@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import appIcon from '../../../../build/appIcon.png'
 import installerIcon from '../../../../build/installerIcon.png'
 import { Controller } from '../harness/controller'
@@ -106,6 +106,9 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   fabric_data_assets_generate: '生成资源',
   fabric_mixin_scaffold: '生成 Mixin',
   fabric_log_debugger: '分析日志',
+  explain_code: '代码解释',
+  list_templates: '列出模板',
+  fabric_template_generate: '生成模板',
   ask_clarification: '向用户提问'
 }
 

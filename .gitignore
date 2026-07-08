@@ -38,6 +38,7 @@ resources/gradle-home-seed.zip
 resources/.gradle-home-seed.zip.stamp
 
 # IDE / 本地工具
+.trae/
 .reasonix/
 .cursor/
 *.log
