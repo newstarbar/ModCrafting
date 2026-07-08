@@ -2615,6 +2615,29 @@ body,
 	margin-top: 6px;
 }
 
+.clarification-banner-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.clarification-option-btn {
+	font-size: 12px;
+	padding: 4px 12px;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background: var(--bg-control);
+	color: var(--text);
+	cursor: pointer;
+	transition: border-color 0.15s, background 0.15s;
+}
+
+.clarification-option-btn:hover {
+	border-color: var(--accent);
+	background: var(--bg-surface);
+}
+
 /* ── MC Runtime (game panel) ── */
 .mc-runtime-panel {
 	height: 100%;

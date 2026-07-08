@@ -214,6 +214,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
   const completionFlashTimerRef = useRef<number | null>(null)
   const [clarificationPending, setClarificationPending] = useState(false)
   const [clarificationQuestion, setClarificationQuestion] = useState('')
+  const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -396,6 +397,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
       controllerRef.current?.restoreSnapshot(persistedMsgs)
     }
+    // Restore plan tracker so workflow engine can resume execution
+    if (restoredPlan?.steps && restoredPlan.steps.length > 0) {
+      controllerRef.current?.restorePlanTracker(restoredPlan.steps)
+    }
   }, [currentSessionId, sessions])
 
   useEffect(() => {
@@ -498,6 +503,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         if (event.clarification) {
           setClarificationPending(true)
           setClarificationQuestion(event.clarification.question)
+          setClarificationOptions(event.clarification.options || [])
           setIsLoading(false)
           setAgentStatus('')
         }
@@ -795,6 +801,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       setInput('')
       setClarificationPending(false)
       setClarificationQuestion('')
+      setClarificationOptions([])
       setIsLoading(true)
       setAgentStatus('思考中...')
       const ctrl = controllerRef.current
@@ -1250,7 +1257,24 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
               <span>AI 需要你的确认</span>
             </div>
             <div className="clarification-banner-question">{clarificationQuestion}</div>
-            <div className="clarification-banner-hint">请在下方输入你的回答，然后发送</div>
+            {clarificationOptions.length > 0 ? (
+              <div className="clarification-banner-options">
+                {clarificationOptions.map((opt, i) => (
+                  <button
+                    key={i}
+                    className="clarification-option-btn"
+                    onClick={() => {
+                      setInput(opt)
+                      setClarificationOptions([])
+                    }}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="clarification-banner-hint">请在下方输入你的回答，然后发送</div>
+            )}
           </div>
         )}
         <ChatComposer

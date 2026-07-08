@@ -919,4 +919,34 @@ ${projectInfo}`
     this._phase = messages.some((m) => m.role === 'user' || m.role === 'assistant') ? 'execute' : 'plan'
     this.agent.resetRunState()
   }
+
+  /** Rebuild the plan tracker from persisted plan steps, so the workflow
+   *  engine can resume execution after a session reload. */
+  restorePlanTracker(steps: Array<{ id: string; description: string; status: string }>): void {
+    if (!steps || steps.length === 0) {
+      this.planTracker = null
+      return
+    }
+    // Build plan text from steps for PlanTracker.fromPlanText
+    const planText = steps
+      .map((s) => `${s.id}. ${s.description}`)
+      .join('\n')
+    this.planTracker = PlanTracker.fromPlanText(planText)
+    if (this.planTracker) {
+      // Restore step statuses
+      for (const step of steps) {
+        const trackerStep = this.planTracker.steps.find((ts) => ts.id === step.id)
+        if (trackerStep) {
+          if (step.status === 'completed') {
+            trackerStep.status = 'completed'
+          } else if (step.status === 'running' && trackerStep.status === 'pending') {
+            trackerStep.status = 'running'
+          } else if (step.status === 'error') {
+            trackerStep.status = 'error'
+          }
+        }
+      }
+      this._phase = 'execute'
+    }
+  }
 }
