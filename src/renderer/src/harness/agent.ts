@@ -117,6 +117,7 @@ export class Agent {
     this.consecutiveReasoningOnlyRounds = 0
     this.consecutiveIdleRounds = 0
     this.clarificationPending = false
+    this.clarificationCount = 0
     this.assistantTurnCount = 0
     this.compactionTranscripts = []
   }
@@ -397,7 +398,7 @@ export class Agent {
       // Build available tools
       let availableTools =
         phase === 'plan'
-          ? this.registry.schemas().filter((t) => t.name === 'ask_clarification')
+          ? this.filterControlTools(this.registry.schemas())
           : this.filterControlTools(this.registry.schemas())
       if (this.graceRound) {
         availableTools = []
@@ -501,15 +502,17 @@ export class Agent {
         }
 
         // Plan phase allows ask_clarification tool for gathering requirements
+        // After clarification is done, AI outputs the final plan text without tool calls
         if (phase === 'plan') {
           const clarificationCalls = toolCalls.filter((tc) => tc.name === 'ask_clarification')
           if (clarificationCalls.length > 0) {
             toolCalls.splice(0, toolCalls.length, ...clarificationCalls)
+          } else if (finalContent.trim()) {
+            messages.push({ role: 'assistant', content: finalContent })
+            this.finishRun(emitLifecycle)
+            return finalContent
           } else {
-            logger.agent('Unexpected tool calls in plan phase, ignoring')
-            if (finalContent.trim()) {
-              messages.push({ role: 'assistant', content: finalContent })
-            }
+            logger.agent('No content or tool calls in plan phase, finishing')
             this.finishRun(emitLifecycle)
             return finalContent
           }
@@ -628,6 +631,7 @@ export class Agent {
             const text = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
             appendToolRoundHistory(messages, text, callsWithIds, results)
             this.clarificationPending = true
+            this.clarificationCount++
             this.emit({
               kind: EventKind.ClarificationNeeded,
               clarification: { question, options }

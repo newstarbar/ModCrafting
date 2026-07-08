@@ -27,6 +27,7 @@ import type { ComposerMode } from '../harness/turn-intent'
 import MarkdownContent from './MarkdownContent'
 import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
+import TemplateFormPanel from './TemplateFormPanel'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -197,6 +198,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationPending, setClarificationPending] = useState(false)
   const [clarificationQuestion, setClarificationQuestion] = useState('')
   const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
+  const [clarificationOtherInput, setClarificationOtherInput] = useState('')
+  const [clarificationSelectedIndex, setClarificationSelectedIndex] = useState<number | null>(null)
+  const [showTemplateForm, setShowTemplateForm] = useState(false)
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -484,6 +489,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           setClarificationPending(true)
           setClarificationQuestion(event.clarification.question)
           setClarificationOptions(event.clarification.options || [])
+          setClarificationOtherInput('')
+          setClarificationSelectedIndex(null)
           setIsLoading(false)
           setAgentStatus('')
         }
@@ -782,11 +789,16 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!input.trim() || isLoading || !toolchainReady) return
 
     if (clarificationPending) {
-      const answer = input.trim()
+      let answer = input.trim()
+      if (!answer && clarificationOtherInput.trim()) {
+        answer = clarificationOtherInput.trim()
+      }
       setInput('')
       setClarificationPending(false)
       setClarificationQuestion('')
       setClarificationOptions([])
+      setClarificationOtherInput('')
+      setClarificationSelectedIndex(null)
       setIsLoading(true)
       setAgentStatus('思考中...')
       const ctrl = controllerRef.current
@@ -884,97 +896,47 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         return
       }
 
-      const templatePrompts: Record<string, string> = {
-        'custom-block': `我需要创建一个自定义方块模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 方块的英文ID（用于代码和资源文件命名）和中文名称（用于游戏内显示）
-2. 方块的材质风格（如石头、木头、金属、水晶等）
-3. 方块的硬度值（0-10，默认为1.5）和爆炸抗性（默认为6.0）
-4. 方块是否需要特殊功能（如发光、可充能、可种植、可燃烧等）
-5. 是否需要自定义渲染或特殊行为
-
-收集完所有信息后，输出结构化实施计划。`,
-        'custom-item': `我需要创建一个自定义物品模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 物品的英文ID和中文名称
-2. 物品的类型（普通物品、工具、武器、材料等）
-3. 物品的使用效果（如右键使用、食用等）
-4. 是否需要自定义材质或纹理
-5. 是否需要特殊属性（如耐久度、附魔等）
-
-收集完所有信息后，输出结构化实施计划。`,
-        'custom-food': `我需要创建一个自定义食物模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 食物的英文ID和中文名称
-2. 食物的饱食度恢复值（1-20）
-3. 是否提供额外效果（如速度、力量等）
-4. 是否需要自定义材质
-5. 是否为肉类（影响食腐动物）
-
-收集完所有信息后，输出结构化实施计划。`,
-        'custom-entity': `我需要创建一个自定义实体模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 实体的英文ID和中文名称
-2. 实体类型（生物、物品、投射物等）
-3. 实体的外观和大小
-4. 实体的行为和AI（如敌对、友好、被动等）
-5. 是否需要特殊能力（如飞行、攻击等）
-
-收集完所有信息后，输出结构化实施计划。`,
-        'custom-tool': `我需要创建一个自定义工具模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 工具的英文ID和中文名称
-2. 工具类型（剑、镐、斧、铲、锄）
-3. 工具的材质等级（木、石、铁、金、钻石、下界合金）
-4. 是否需要自定义属性（如攻击力、挖掘速度等）
-5. 是否需要特殊能力（如自动耕种、范围破坏等）
-
-收集完所有信息后，输出结构化实施计划。`,
-        'custom-armor': `我需要创建一个自定义护甲模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 护甲的英文ID和中文名称
-2. 护甲类型（头盔、胸甲、护腿、靴子）
-3. 护甲的材质等级
-4. 是否需要自定义防御值
-5. 是否需要特殊效果（如火抗、水下呼吸等）
-
-收集完所有信息后，输出结构化实施计划。`,
-        'custom-recipe': `我需要创建一个自定义配方模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
-1. 配方名称和中文描述
-2. 配方类型（有序合成、无序合成、熔炉配方等）
-3. 配方输入材料
-4. 配方输出物品和数量
-5. 是否需要自定义合成形状
-
-收集完所有信息后，输出结构化实施计划。`
-      }
-
-      const prompt = templatePrompts[templateId] || `我需要创建一个${name}模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问必要的信息，然后输出结构化实施计划。`
-
-      setContextFiles([])
-
-      if (!currentSessionId) {
-        const newId = onNewSession(prompt)
-        currentSessionIdRef.current = newId
-        setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now() }])
-        controllerRef.current?.clearSession()
-        controllerRef.current?.setComposerMode(composerMode)
-        controllerRef.current?.setSessionGoal(sessionGoal)
-      } else {
-        setDisplayMessages((prev) => {
-          const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now() }]
-          flushPersist(next, null)
-          return next
-        })
-      }
-
-      const ctrl = controllerRef.current
-      if (!ctrl) return
-      ctrl.setComposerMode(composerMode)
-      ctrl.setSessionGoal(sessionGoal)
-      setIsLoading(true)
-      setAgentStatus('思考中...')
-      ctrl.send(prompt).catch(() => {
-        setIsLoading(false)
-        setAgentStatus('')
-        onRunningChangeRef.current?.(false)
-      })
+      setSelectedTemplateId(templateId)
+      setShowTemplateForm(true)
     })
-  }, [isLoading, clarificationPending, toolchainReady, projectPath, apiConfig, ensureApiKey, currentSessionId, onNewSession, flushPersist, composerMode, sessionGoal, setContextFiles])
+  }, [isLoading, clarificationPending, toolchainReady, projectPath, apiConfig, ensureApiKey])
+
+  const handleTemplateFormConfirm = useCallback((prompt: string) => {
+    setShowTemplateForm(false)
+    setContextFiles([])
+
+    if (!currentSessionId) {
+      const newId = onNewSession(prompt)
+      currentSessionIdRef.current = newId
+      setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now() }])
+      controllerRef.current?.clearSession()
+      controllerRef.current?.setComposerMode(composerMode)
+      controllerRef.current?.setSessionGoal(sessionGoal)
+    } else {
+      setDisplayMessages((prev) => {
+        const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now() }]
+        flushPersist(next, null)
+        return next
+      })
+    }
+
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    ctrl.setComposerMode(composerMode)
+    ctrl.setSessionGoal(sessionGoal)
+    setIsLoading(true)
+    setAgentStatus('思考中...')
+    ctrl.send(prompt).catch(() => {
+      setIsLoading(false)
+      setAgentStatus('')
+      onRunningChangeRef.current?.(false)
+    })
+  }, [currentSessionId, onNewSession, flushPersist, composerMode, sessionGoal, setContextFiles])
+
+  const handleTemplateFormCancel = useCallback(() => {
+    setShowTemplateForm(false)
+    setSelectedTemplateId('')
+  }, [])
 
   useImperativeHandle(ref, () => ({
     handleTemplateSelect
@@ -1361,17 +1323,44 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             <div className="clarification-banner-question">{clarificationQuestion}</div>
             {clarificationOptions.length > 0 ? (
               <div className="clarification-banner-options">
-                {clarificationOptions.map((opt, i) => (
-                  <button
-                    key={i}
-                    className={`clarification-option-btn ${input === opt ? 'selected' : ''}`}
-                    onClick={() => {
-                      setInput(opt)
-                    }}
-                  >
-                    {opt}
-                  </button>
-                ))}
+                {clarificationOptions.map((opt, i) => {
+                  const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+                  const letter = letters[i] || String(i + 1)
+                  return (
+                    <button
+                      key={i}
+                      className={`clarification-option-btn ${clarificationSelectedIndex === i ? 'selected' : ''}`}
+                      onClick={() => {
+                        setClarificationSelectedIndex(i)
+                        setInput(opt)
+                        setClarificationOtherInput('')
+                      }}
+                    >
+                      <span className="clarification-option-letter">{letter}</span>
+                      <span className="clarification-option-text">{opt}</span>
+                    </button>
+                  )
+                })}
+                <button
+                  className={`clarification-option-btn ${clarificationSelectedIndex === -1 ? 'selected' : ''}`}
+                  onClick={() => {
+                    setClarificationSelectedIndex(-1)
+                  }}
+                >
+                  <span className="clarification-option-letter">其他</span>
+                  <span className="clarification-option-text">
+                    <input
+                      type="text"
+                      className="clarification-other-input"
+                      placeholder="请输入其他选项..."
+                      value={clarificationOtherInput}
+                      onChange={(e) => {
+                        setClarificationOtherInput(e.target.value)
+                        setInput(e.target.value)
+                      }}
+                    />
+                  </span>
+                </button>
               </div>
             ) : (
               <div className="clarification-banner-hint">请在下方输入你的回答，然后发送</div>
@@ -1395,6 +1384,14 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           hasProject={Boolean(projectPath)}
         />
       </div>
+
+      {showTemplateForm && (
+        <TemplateFormPanel
+          templateId={selectedTemplateId}
+          onConfirm={handleTemplateFormConfirm}
+          onCancel={handleTemplateFormCancel}
+        />
+      )}
     </div>
   )
 })

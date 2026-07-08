@@ -2644,6 +2644,230 @@ body,
 	color: var(--text-primary);
 }
 
+.clarification-option-btn {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.clarification-option-letter {
+	font-weight: bold;
+	font-size: 11px;
+	min-width: 16px;
+	text-align: center;
+	color: var(--accent);
+}
+
+.clarification-option-btn.selected .clarification-option-letter {
+	color: var(--text-primary);
+}
+
+.clarification-option-text {
+	flex: 1;
+}
+
+.clarification-other-input {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-color);
+	border-radius: 3px;
+	padding: 2px 6px;
+	font-size: 12px;
+	color: var(--text);
+	width: 150px;
+	outline: none;
+}
+
+.clarification-other-input:focus {
+	border-color: var(--accent);
+}
+
+/* ── Template Form Panel ── */
+.template-form-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.6);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 1000;
+	backdrop-filter: blur(4px);
+}
+
+.template-form-panel {
+	background: var(--bg-primary);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	width: 90%;
+	max-width: 560px;
+	max-height: 85vh;
+	display: flex;
+	flex-direction: column;
+	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.template-form-header {
+	padding: 18px 20px 14px;
+	border-bottom: 1px solid var(--border-subtle);
+	position: relative;
+}
+
+.template-form-title {
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--text-primary);
+	margin: 0 0 4px;
+}
+
+.template-form-desc {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.template-form-close {
+	position: absolute;
+	top: 14px;
+	right: 16px;
+	width: 24px;
+	height: 24px;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: 18px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 4px;
+}
+
+.template-form-close:hover {
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+}
+
+.template-form-body {
+	padding: 16px 20px;
+	flex: 1;
+	overflow-y: auto;
+	display: grid;
+	gap: 14px;
+}
+
+.template-form-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.template-form-label {
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-secondary);
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.template-form-required {
+	color: var(--error);
+	font-size: 12px;
+}
+
+.template-form-control {
+	width: 100%;
+}
+
+.template-form-input,
+.template-form-select {
+	width: 100%;
+	padding: 8px 12px;
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	font-size: 13px;
+	color: var(--text);
+	outline: none;
+	box-sizing: border-box;
+}
+
+.template-form-input:focus,
+.template-form-select:focus {
+	border-color: var(--accent);
+}
+
+.template-form-textarea {
+	width: 100%;
+	padding: 8px 12px;
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	font-size: 13px;
+	color: var(--text);
+	outline: none;
+	box-sizing: border-box;
+	font-family: inherit;
+	resize: vertical;
+	min-height: 80px;
+}
+
+.template-form-textarea:focus {
+	border-color: var(--accent);
+}
+
+.template-form-select {
+	cursor: pointer;
+}
+
+.template-form-select-wrapper {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.template-form-custom-input {
+	margin-top: 4px;
+}
+
+.template-form-footer {
+	padding: 14px 20px;
+	border-top: 1px solid var(--border-subtle);
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+}
+
+.template-form-btn {
+	padding: 8px 20px;
+	border-radius: var(--radius-sm);
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	border: none;
+	transition: all 0.2s;
+}
+
+.template-form-btn-cancel {
+	background: var(--bg-secondary);
+	color: var(--text-secondary);
+}
+
+.template-form-btn-cancel:hover {
+	background: var(--border-subtle);
+}
+
+.template-form-btn-confirm {
+	background: var(--accent);
+	color: white;
+}
+
+.template-form-btn-confirm:hover {
+	background: var(--accent-hover);
+}
+
 /* ── MC Runtime (game panel) ── */
 .mc-runtime-panel {
 	height: 100%;
