@@ -128,6 +128,69 @@ const KNOWLEDGE_TOOLS = new Set([
 ])
 
 const MAX_FREE_KNOWLEDGE_ROUNDS = 3
+const MAX_DOC_SEARCH_PER_WRITE_STEP = 2
+
+export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
+  return step.kind === 'write' || step.kind === 'recipe'
+}
+
+export function buildDocSearchBlockedResult(step: WorkflowStep, call: ToolCallWithId): ToolResult {
+  return {
+    output:
+      `blocked: [doc_search_limit] 当前步骤 #${step.id} 已进行 ${MAX_DOC_SEARCH_PER_WRITE_STEP} 次 fabric_docs_search。` +
+      `请直接 write_file 写入目标文件，或 complete_step 标记完成，不要再搜索文档。`,
+    error: 'doc_search_limit: fabric_docs_search',
+    durationMs: 0,
+    ok: false,
+    toolName: call.name,
+    args: call.args,
+    exitCode: null,
+    errorKind: 'doc_search_limit'
+  }
+}
+
+export function detectExistingHandlerHint(step: WorkflowStep, result: ToolResult): string | undefined {
+  if (result.toolName !== 'read_file' || !result.ok || result.error) return undefined
+  const path = String(result.args?.path || '').replace(/\\/g, '/')
+  const output = String(result.output || '')
+  const target = (step.targetPath || '').replace(/\\/g, '/')
+  if (!/\.java$/i.test(path)) return undefined
+  if (target && (path.endsWith(target) || path.includes(target))) return undefined
+  if (!/UseBlockCallback|UseEntityCallback|UseItemCallback|\.register\s*\(|Handler|ModInitializer/i.test(output)) {
+    return undefined
+  }
+  return (
+    `【已有实现】读取到 ${path} 似乎已包含相关交互/注册逻辑。` +
+    `若已满足当前需求请 complete_step()；若要重构方案请先 ask_clarification 向用户确认。`
+  )
+}
+
+export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
+  const targetHint = step.targetPath
+    ? `write_file("${step.targetPath}", ...)`
+    : 'write_file(<目标路径>, ...)'
+  return (
+    `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
+    `请立即调用 ${targetHint} 或 complete_step()，不要只输出旁白。`
+  )
+}
+
+export function buildStepFailureMessage(
+  step: WorkflowStep,
+  attempt: number,
+  maxIterations: number,
+  lastToolName: string,
+  repairNote: string,
+  remaining: string
+): string {
+  return (
+    `步骤 #${step.id}「${step.title}」未能自动完成（已用 ${attempt}/${maxIterations} 轮）。` +
+    `最后工具：${lastToolName || '无'}。\n\n` +
+    repairNote +
+    `建议：发送「继续」恢复执行，或根据日志用 write_file 修复后重试。\n\n` +
+    `未完成步骤：\n${remaining}`
+  )
+}
 
 function isKnowledgeRound(step: WorkflowStep, result: ToolResult | undefined, knowledgeCount: number): boolean {
   if (!result || !result.ok || result.error) return false
@@ -337,6 +400,8 @@ export class WorkflowEngine {
       let loopIterations = 0
       let modelNetworkRetries = 0
       let knowledgeQueries = 0
+      let fabricDocsSearchCount = 0
+      let lastToolName = ''
       const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS
       const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS * 8
 
@@ -400,7 +465,7 @@ export class WorkflowEngine {
           }
           baseMessages.push({
             role: 'user',
-            content: `【系统】当前步骤尚未完成：#${step.id} ${step.title}。请调用允许工具完成该步骤。`
+            content: buildEmptyToolCallInstruction(step)
           })
           attempt++
           continue
@@ -410,6 +475,16 @@ export class WorkflowEngine {
         const resultsById = new Map<string, ToolResult>()
 
         for (const call of calls) {
+          if (
+            isDocSearchLimitedStep(step) &&
+            call.name === 'fabric_docs_search' &&
+            fabricDocsSearchCount >= MAX_DOC_SEARCH_PER_WRITE_STEP
+          ) {
+            const rejected = buildDocSearchBlockedResult(step, call)
+            this.emitRejected(call.id, rejected)
+            resultsById.set(call.id, rejected)
+            continue
+          }
           if (!isToolAllowedForStep(step, call, policyOptions)) {
             const rejected = createRejectedToolResult(step, call, policyOptions)
             this.emitRejected(call.id, rejected)
@@ -446,6 +521,15 @@ export class WorkflowEngine {
         }
 
         const primaryResult = resultsById.get(gate.allowed[0].id)
+        if (primaryResult?.toolName) lastToolName = primaryResult.toolName
+
+        if (
+          primaryResult?.toolName === 'fabric_docs_search' &&
+          primaryResult.ok &&
+          !primaryResult.error
+        ) {
+          fabricDocsSearchCount++
+        }
 
         if (primaryResult?.toolName === 'ask_clarification' && primaryResult.ok) {
           const question = String(primaryResult.args?.question || '')
@@ -508,15 +592,23 @@ export class WorkflowEngine {
           continue
         }
 
-        this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
+        const existingHandlerHint = primaryResult ? detectExistingHandlerHint(step, primaryResult) : undefined
+        if (existingHandlerHint) {
+          roundInstruction = existingHandlerHint
+        }
 
         // Track knowledge queries and limit per step
         if (primaryResult && KNOWLEDGE_TOOLS.has(primaryResult.toolName || '')) {
           knowledgeQueries++
           if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
-            roundInstruction = `【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 write_file 或 complete_step 完成当前步骤，不要再搜索文档。`
+            roundInstruction = [
+              roundInstruction,
+              `【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 write_file 或 complete_step 完成当前步骤，不要再搜索文档。`
+            ].filter(Boolean).join('\n\n')
           }
         }
+
+        this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
 
         if (
           !(repairMode && primaryResult && isRepairDiagnosticResult(step, primaryResult, repairMode)) &&
@@ -540,10 +632,7 @@ export class WorkflowEngine {
         return {
           finalContent:
             finalContent.trim() ||
-            `步骤 #${step.id}「${step.title}」未能自动完成，已暂停执行。\n\n` +
-            repairNote +
-            `建议：请根据错误日志使用 write_file 修复后，可手动点击面板「发送给 AI 修复」继续。\n\n` +
-            `未完成步骤：\n${remaining}`,
+            buildStepFailureMessage(step, attempt, maxIterations, lastToolName, repairNote, remaining),
           allDone: false,
           partial: true,
           steps: this.steps

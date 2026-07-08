@@ -2109,15 +2109,43 @@ export function isFabricKnowledgeBaseReady(): boolean {
   return fs.existsSync(fabricSourcesDir()) || fs.existsSync(yarnMappingsPath())
 }
 
+const SEARCH_STOPWORDS = new Set([
+  'fabric', 'api', 'minecraft', 'packet', 'packets', 'yarn', 'mapping', 'mappings',
+  'mc', 'mod', 'java', 'the', 'and', 'for', 'with', 'from', 'example', 'docs'
+])
+
+function tokenizeSearchKeyword(keyword: string): string[] {
+  return keyword.toLowerCase().split(/[\s.,()#]+/).filter((t) => t.length > 1)
+}
+
+function isVersionToken(token: string): boolean {
+  return /^\d+\.\d+(\.\d+)?([+][\w.+-]+)?$/.test(token)
+}
+
+function isHighValueSearchToken(token: string): boolean {
+  return token.length >= 4 && !SEARCH_STOPWORDS.has(token) && !isVersionToken(token)
+}
+
+function scoreSearchTokenMatch(token: string, matched: Set<string>): number {
+  if (isHighValueSearchToken(token)) {
+    matched.add(token)
+    return 1
+  }
+  if (!SEARCH_STOPWORDS.has(token) && !isVersionToken(token)) {
+    matched.add(token)
+    return 0.2
+  }
+  return 0
+}
+
 /** Search local Fabric API sources and Yarn mappings for a keyword.
  *  Returns matching snippets with file locations. */
 export function searchLocalFabricSources(keyword: string, maxResults = 5): string {
   // Split on whitespace AND common code separators (dots, parens, hashes)
   // so "ServerTickEvents.START_WORLD_TICK" → [servertickevents, start, world, tick]
-  const tokens = keyword.toLowerCase()
-    .split(/[\s.,()#]+/)
-    .filter((t) => t.length > 1)
+  const tokens = tokenizeSearchKeyword(keyword)
   if (tokens.length === 0) return ''
+  const highValueTokens = tokens.filter(isHighValueSearchToken)
   // Require at least half the tokens to match (minimum 1).
   // This lets users include descriptive words like "Yarn" or "mapping"
   // without killing results for Minecraft-specific terms.
@@ -2169,7 +2197,7 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
     try {
       const yarnLines = fs.readFileSync(yarnPath, 'utf-8').split('\n')
       // Phase 1: find all lines matching ANY token, record which class they belong to
-      interface YarnClassBlock { className: string; lines: string[]; tokensMatched: Set<string> }
+      interface YarnClassBlock { className: string; lines: string[]; tokensMatched: Set<string>; highValueMatched: Set<string> }
       const classMap = new Map<string, YarnClassBlock>()
       let currentClass = ''
       for (let i = 0; i < yarnLines.length; i++) {
@@ -2180,26 +2208,34 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           continue
         }
         const lower = line.toLowerCase()
-        const matched = tokens.filter((t) => lower.includes(t))
-        if (matched.length > 0 && currentClass) {
+        const matchedHighValue = highValueTokens.filter((t) => lower.includes(t))
+        const matchedAny = tokens.filter((t) => lower.includes(t))
+        if (matchedAny.length > 0 && currentClass) {
           let block = classMap.get(currentClass)
           if (!block) {
-            block = { className: currentClass, lines: [], tokensMatched: new Set() }
+            block = { className: currentClass, lines: [], tokensMatched: new Set<string>(), highValueMatched: new Set<string>() }
             classMap.set(currentClass, block)
           }
           block.lines.push(line)
-          for (const t of matched) block.tokensMatched.add(t)
+          for (const t of matchedAny) block.tokensMatched.add(t)
+          for (const t of matchedHighValue) block.highValueMatched.add(t)
         }
       }
-      // Phase 2: score classes by token coverage, take top results
+      // Phase 2: score classes by high-value token coverage, take top results
       const ranked = Array.from(classMap.values())
-        .map((b) => ({ ...b, score: b.tokensMatched.size }))
+        .map((b) => ({
+          ...b,
+          score: b.highValueMatched.size > 0 ? b.highValueMatched.size : b.tokensMatched.size * 0.2
+        }))
         .sort((a, b) => b.score - a.score)
-        .filter((b) => b.score >= minMatches)
+        .filter((b) => b.highValueMatched.size > 0 && b.score >= Math.min(minMatches, 1))
       if (ranked.length > 0) {
         const readable = ranked.slice(0, maxResults).map((b) => {
           const simpleName = b.className.split('/').pop() || b.className
-          const parts = [`📦 ${simpleName} (${b.className}) — 匹配 ${b.score}/${tokens.length} 个词`]
+          const matchLabel = b.highValueMatched.size > 0
+            ? `${b.highValueMatched.size}/${highValueTokens.length || tokens.length} 个高相关词`
+            : `${b.tokensMatched.size}/${tokens.length} 个词`
+          const parts = [`📦 ${simpleName} (${b.className}) — 匹配 ${matchLabel}`]
           for (const line of b.lines.slice(0, 10)) {
             const p = line.split('\t')
             if (p[0] === 'f') parts.push(`  字段: ${p[p.length - 1]} : ${p[1] || ''}`)
@@ -2208,7 +2244,9 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           if (b.lines.length > 10) parts.push(`  ... 还有 ${b.lines.length - 10} 个匹配项`)
           return parts.join('\n')
         })
-        results.push(`[Yarn 映射 ${classMap.size} 个类命中，显示前 ${Math.min(maxResults, ranked.length)} 个]\n${readable.join('\n---\n')}`)
+        results.push(`[Yarn 映射 ${ranked.length} 个高相关类，显示前 ${Math.min(maxResults, ranked.length)} 个]\n${readable.join('\n---\n')}`)
+      } else if (highValueTokens.length > 0) {
+        results.push('[Yarn 映射] 未找到高相关 Yarn 类，已改用文档检索')
       }
     } catch { /* ignore */ }
   }
@@ -2227,8 +2265,9 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           try {
             const content = fs.readFileSync(full, 'utf-8')
             const contentLower = content.toLowerCase()
+            const highValueMatched = highValueTokens.filter((t) => contentLower.includes(t))
             const matchCount = tokens.filter((t) => contentLower.includes(t)).length
-            if (matchCount < minMatches) return
+            if (highValueMatched.length === 0 || matchCount < minMatches) return
             const lines = content.split('\n')
 
             // Extract class declaration and Javadoc
@@ -2276,7 +2315,7 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
             }
 
             if (classDoc || methods.length > 0) {
-              hits.push({ className, pkg, classDoc, methods: methods.slice(0, 12), score: matchCount })
+              hits.push({ className, pkg, classDoc, methods: methods.slice(0, 12), score: highValueMatched.length })
             }
           } catch { /* skip unreadable */ }
           if (hits.length >= maxResults * 3) return

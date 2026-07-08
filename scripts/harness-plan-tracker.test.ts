@@ -1,19 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
 import { canToolResultAdvanceStep, inferStepKind } from '../src/renderer/src/harness/step-evidence.ts'
 import { buildShapelessRecipeContent, recipePath } from '../src/renderer/src/harness/recipe-utils.ts'
 import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
 import { filterToolCallsForStep, isRecipeCleanupCommand, isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import { WorkflowEngine, isTerminalFailure } from '../src/renderer/src/harness/workflow-engine.ts'
+import { WorkflowEngine, isTerminalFailure, buildDocSearchBlockedResult, buildEmptyToolCallInstruction, detectExistingHandlerHint } from '../src/renderer/src/harness/workflow-engine.ts'
 import { Registry } from '../src/renderer/src/harness/tools.ts'
 import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
 import { buildFabricAgentPolicyPrompt, FABRIC_KNOWLEDGE_SOURCES } from '../src/renderer/src/harness/fabric-agent-policy.ts'
-import { buildFabricDocsSearchSummary } from '../src/renderer/src/harness/fabric-knowledge.ts'
+import { buildFabricDocsSearchSummary, hasHighConfidenceLocalHit, isNoisyYarnResult, resolveTopicRouteFiles } from '../src/renderer/src/harness/fabric-knowledge.ts'
 import { buildRecipeContent } from '../src/renderer/src/harness/recipe-utils.ts'
 import { classifyFabricLog, validateFabricModJsonContent } from '../src/renderer/src/harness/fabric-utils.ts'
 import { generateBuildGradle, generateFabricModJson } from '../src/renderer/src/project/scaffold.ts'
 import { ensureDevTerminalSteps, parsePlanSteps } from '../src/renderer/src/utils/plan-steps.ts'
+import { needsKnowledgeInspect } from '../src/renderer/src/harness/plan-compiler.ts'
 import { finalizeTerminalSteps } from '../src/renderer/src/harness/finalize-terminal.ts'
 import { registerPanelBridge } from '../src/renderer/src/utils/panel-bridge.ts'
 import { EventKind } from '../src/renderer/src/harness/events.ts'
@@ -794,8 +797,89 @@ test('fabric docs search summary returns source URLs and keyword matches without
   const summary = await buildFabricDocsSearchSummary({ keyword: '方块实体', mcVersion: '1.21.4', limit: 3 })
 
   assert.match(summary, /方块实体/)
-  assert.match(summary, /https:\/\/docs\.fabricmc\.net\/zh_cn\/develop\//)
-  assert.match(summary, /只读/)
+  assert.match(summary, /版本：1\.21\.4/)
+})
+
+test('topic routing maps CustomPayload queries to networking knowledge files', () => {
+  const files = resolveTopicRouteFiles('CustomPayload ServerPlayNetworking C2S 1.21.4')
+  assert.ok(files.includes('fabric/docs/networking.md'))
+  assert.ok(files.includes('fabric/networking-snippets.md'))
+})
+
+test('topic routing maps player interact queries to events knowledge files', () => {
+  const files = resolveTopicRouteFiles('UseBlockCallback 空手 右键')
+  assert.ok(files.includes('fabric/docs/events.md'))
+  assert.ok(files.includes('fabric/api-aliases.md'))
+})
+
+test('networking-snippets stays generic without session-specific player interact tuning', () => {
+  const snippetsPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/networking-snippets.md')
+  const aliasesPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/api-aliases.md')
+  const workflowsPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/workflows.md')
+  const snippets = fs.readFileSync(snippetsPath, 'utf-8')
+  const aliases = fs.readFileSync(aliasesPath, 'utf-8')
+  const workflows = fs.readFileSync(workflowsPath, 'utf-8')
+
+  assert.doesNotMatch(snippets, /空手右键/)
+  assert.doesNotMatch(snippets, /EggThrow/)
+  assert.match(snippets, /ExampleC2SPayload/)
+  assert.doesNotMatch(aliases, /玩家交互事件速查/)
+  assert.doesNotMatch(workflows, /## 玩家交互/)
+})
+
+test('hasHighConfidenceLocalHit prefers routed snippets over noisy yarn counts', () => {
+  const noisyYarn = '[Yarn 映射 1613 个类命中，显示前 4 个]\n📦 ItemStack'
+  const routed = '[主题路由 · networking-snippets.md]\n```java\nServerPlayNetworking.registerGlobalReceiver\n```'
+  assert.equal(isNoisyYarnResult(noisyYarn), true)
+  assert.equal(hasHighConfidenceLocalHit(routed, '', noisyYarn), true)
+  assert.equal(hasHighConfidenceLocalHit('', '', noisyYarn), false)
+})
+
+test('write workflow step allows more attempts after search-heavy flows', () => {
+  const steps = normalizeWorkflowSteps([
+    { id: '1', description: 'src/main/java/com/example/Foo.java — 写入处理类', status: 'running' }
+  ])
+  assert.equal(steps[0].maxAttempts, 4)
+})
+
+test('doc search block message appears after write-step search limit', () => {
+  const step = normalizeWorkflowSteps([
+    { id: '1', description: 'src/main/java/com/example/Foo.java — 写入处理类', status: 'running' }
+  ])[0]
+  const blocked = buildDocSearchBlockedResult(step, { name: 'fabric_docs_search', args: { keyword: 'CustomPayload' } })
+  assert.match(blocked.output, /doc_search_limit/)
+  assert.match(blocked.output, /write_file/)
+})
+
+test('empty tool call instruction names write_file target path', () => {
+  const step = normalizeWorkflowSteps([
+    { id: '1', description: 'src/main/java/com/example/network/Payload.java — 定义载荷', status: 'running' }
+  ])[0]
+  const instruction = buildEmptyToolCallInstruction(step)
+  assert.match(instruction, /write_file\("src\/main\/java\/com\/example\/network\/Payload\.java"/)
+  assert.match(instruction, /complete_step/)
+})
+
+test('detectExistingHandlerHint triggers when reading unrelated handler source', () => {
+  const step = normalizeWorkflowSteps([
+    { id: '1', description: 'src/main/java/com/example/network/Payload.java — 定义载荷', status: 'running' }
+  ])[0]
+  const hint = detectExistingHandlerHint(step, {
+    toolName: 'read_file',
+    ok: true,
+    output: 'UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> ActionResult.SUCCESS);',
+    args: { path: 'src/main/java/com/example/my_mod/EggThrowHandler.java' },
+    durationMs: 1
+  })
+  assert.match(hint || '', /已有实现/)
+  assert.match(hint || '', /complete_step/)
+})
+
+test('needsKnowledgeInspect includes player interaction keywords', () => {
+  assert.equal(
+    needsKnowledgeInspect([{ id: '1', description: 'src/client/java/com/example/ClientHandler.java — 检测右键', status: 'pending' }]),
+    true
+  )
 })
 
 test('workflow normalizer allows product Fabric specialist tools for matching steps', () => {

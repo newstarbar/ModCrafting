@@ -112,7 +112,7 @@ function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'recipe') return 4
   if (kind === 'build') return 6
   if (kind === 'run') return 4
-  if (kind === 'write') return 2
+  if (kind === 'write') return 4
   if (kind === 'inspect') return 2
   return 2
 }

@@ -18,7 +18,7 @@ export interface CompiledPlanStep extends ParsedPlanStep {
 const STRUCTURED_KIND_RE = /^\[(write|recipe|inspect)\]\s*/i
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;—\-]+)(?:`)?/i
 const VAGUE_STEP_RE = /确保|测试功能|检查|验证|确认无错|输出总结/
-const KNOWLEDGE_INSPECT_RE = /mixin|网络|payload|datagen|新\s*api|access\s*widener/i
+const KNOWLEDGE_INSPECT_RE = /mixin|网络|payload|datagen|新\s*api|access\s*widener|右键|交互|interact/i
 
 const HOST_BUILD_DESC = '构建项目（gradlew build）'
 const HOST_RUN_DESC = '启动游戏进行真实测试（runClient）'

@@ -13,8 +13,55 @@ export interface ResolvedKnowledgeSource extends FabricKnowledgeSource {
 
 const URL_RE = /https?:\/\/[^\s`)>]+/g
 
+const SEARCH_STOPWORDS = new Set([
+  'fabric', 'api', 'minecraft', 'packet', 'packets', 'yarn', 'mapping', 'mappings',
+  'mc', 'mod', 'java', 'the', 'and', 'for', 'with', 'from', 'example', 'docs'
+])
+
+const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[]; docsPath?: string }> = [
+  {
+    pattern: /custompayload|custompacketpayload|serverplaynetworking|clientplaynetworking|c2s|s2c|payload|networking/i,
+    files: ['fabric/docs/networking.md', 'fabric/networking-snippets.md', 'fabric/api-aliases.md'],
+    docsPath: 'networking'
+  },
+  {
+    pattern: /useblockcallback|useentitycallback|useitemcallback|player.*interact|右键|空手|interact/i,
+    files: ['fabric/docs/events.md', 'fabric/api-aliases.md'],
+    docsPath: 'events'
+  }
+]
+
 function normalizeKeyword(keyword: string): string {
   return keyword.trim() || 'Fabric 模组开发'
+}
+
+function tokenizeKeyword(keyword: string): string[] {
+  return keyword.toLowerCase().split(/[\s.,()#]+/).filter(Boolean)
+}
+
+function isHighValueToken(token: string): boolean {
+  return token.length >= 4
+    && !SEARCH_STOPWORDS.has(token)
+    && !/^\d+\.\d+(\.\d+)?([+][\w.+-]+)?$/.test(token)
+}
+
+export function resolveTopicRouteFiles(keyword: string): string[] {
+  const routed = new Set<string>()
+  for (const route of TOPIC_ROUTES) {
+    if (route.pattern.test(keyword)) {
+      for (const file of route.files) routed.add(file)
+    }
+  }
+  return [...routed]
+}
+
+export function resolveTopicDocsUrl(keyword: string, lang: 'zh_cn' | 'en_us' = 'zh_cn'): string | null {
+  for (const route of TOPIC_ROUTES) {
+    if (route.docsPath && route.pattern.test(keyword)) {
+      return `https://docs.fabricmc.net/${lang}/develop/${route.docsPath}`
+    }
+  }
+  return null
 }
 
 function sourceScore(keyword: string, text: string): number {
@@ -69,6 +116,7 @@ async function readLocalKnowledgeRoutes(): Promise<string[]> {
 }
 
 const LOCAL_SEARCH_FILES = [
+  'fabric/networking-snippets.md',
   'fabric/api-aliases.md',
   'fabric/yarn-reference.md',
   'fabric/docs/items-first-item.md',
@@ -98,27 +146,113 @@ const LOCAL_SEARCH_FILES = [
   'fabric/templates.md'
 ]
 
-async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
-  if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return ''
-  const tokens = keyword.toLowerCase().split(/[\s.,()#]+/).filter(Boolean)
-  if (tokens.length === 0) return ''
-  const minMatches = Math.max(1, Math.ceil(tokens.length / 2))
+function extractRelevantCodeBlocks(content: string, tokens: string[], maxBlocks = 1): string[] {
+  const highValue = tokens.filter(isHighValueToken)
+  const matchTokens = highValue.length > 0 ? highValue : tokens
+  const lines = content.split('\n')
+  const blocks: Array<{ score: number; text: string }> = []
+  const fenceRe = /```(\w*)/
 
+  for (let i = 0; i < lines.length; i++) {
+    const fenceMatch = lines[i].match(fenceRe)
+    if (!fenceMatch || !fenceMatch[1]) continue
+    const lang = fenceMatch[1]
+    const blockLines: string[] = [lines[i]]
+    let j = i + 1
+    while (j < lines.length && !lines[j].startsWith('```')) {
+      blockLines.push(lines[j])
+      j++
+    }
+    if (j < lines.length) blockLines.push(lines[j])
+    const blockText = blockLines.join('\n')
+    const blockLower = blockText.toLowerCase()
+    const score = matchTokens.filter((t) => blockLower.includes(t)).length
+    if (score === 0) continue
+    const contextStart = Math.max(0, i - 2)
+    const context = lines.slice(contextStart, i).join('\n').trim()
+    blocks.push({
+      score,
+      text: `${context ? `${context}\n\n` : ''}\`\`\`${lang}\n${blockLines.slice(1, -1).join('\n')}\n\`\`\``.trim()
+    })
+    i = j
+  }
+
+  return blocks
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxBlocks)
+    .map((b) => b.text)
+}
+
+async function searchRoutedKnowledgeFiles(keyword: string): Promise<string> {
+  if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return ''
+  const routedFiles = resolveTopicRouteFiles(keyword)
+  if (routedFiles.length === 0) return ''
+
+  const tokens = tokenizeKeyword(keyword)
   const results: string[] = []
-  for (const file of LOCAL_SEARCH_FILES) {
+
+  for (const file of routedFiles) {
     try {
       const res = await window.api.knowledgeReadLocal(file)
       if (!res.success || !res.content) continue
+      const blocks = extractRelevantCodeBlocks(res.content, tokens, 1)
+      if (blocks.length > 0) {
+        const fileName = file.replace('fabric/', '')
+        results.push(`[主题路由 · ${fileName}]\n${blocks[0]}`)
+        continue
+      }
+      const lines = res.content.split('\n')
+      const highValue = tokens.filter(isHighValueToken)
+      const matchTokens = highValue.length > 0 ? highValue : tokens
+      const minMatches = Math.max(1, Math.ceil(matchTokens.length / 2))
+      for (let i = 0; i < lines.length; i++) {
+        const lineLower = lines[i].toLowerCase()
+        const matchCount = matchTokens.filter((t) => lineLower.includes(t)).length
+        if (matchCount >= minMatches) {
+          const start = Math.max(0, i - 2)
+          const end = Math.min(lines.length, i + 8)
+          const fileName = file.replace('fabric/', '')
+          results.push(`[主题路由 · ${fileName}]\n${lines.slice(start, end).join('\n').trim()}`)
+          break
+        }
+      }
+    } catch {
+      // ignore missing files in dev
+    }
+  }
+
+  return results.join('\n\n')
+}
+
+async function searchLocalKnowledgeFiles(keyword: string, excludeFiles: Set<string> = new Set()): Promise<string> {
+  if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return ''
+  const tokens = tokenizeKeyword(keyword)
+  if (tokens.length === 0) return ''
+  const highValue = tokens.filter(isHighValueToken)
+  const matchTokens = highValue.length > 0 ? highValue : tokens
+  const minMatches = Math.max(1, Math.ceil(matchTokens.length / 2))
+
+  const results: string[] = []
+  for (const file of LOCAL_SEARCH_FILES) {
+    if (excludeFiles.has(file)) continue
+    try {
+      const res = await window.api.knowledgeReadLocal(file)
+      if (!res.success || !res.content) continue
+      const blocks = extractRelevantCodeBlocks(res.content, tokens, 1)
+      if (blocks.length > 0) {
+        const fileName = file.replace('fabric/', '')
+        results.push(`[${fileName} — 代码示例]\n${blocks[0]}`)
+        if (results.length >= 2) break
+        continue
+      }
       const lines = res.content.split('\n')
       const matchedBlocks: Array<{ start: number; end: number }> = []
       for (let i = 0; i < lines.length; i++) {
         const lineLower = lines[i].toLowerCase()
-        const matchCount = tokens.filter((t) => lineLower.includes(t)).length
+        const matchCount = matchTokens.filter((t) => lineLower.includes(t)).length
         if (matchCount >= minMatches) {
-          // Take 2 lines before and 5 lines after as context
           const start = Math.max(0, i - 2)
           const end = Math.min(lines.length, i + 6)
-          // Merge overlapping blocks
           const last = matchedBlocks[matchedBlocks.length - 1]
           if (last && last.end >= start - 2) {
             last.end = Math.max(last.end, end)
@@ -129,12 +263,11 @@ async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
       }
       if (matchedBlocks.length > 0) {
         const fileName = file.replace('fabric/', '')
-        // Limit to top 2 context blocks, each max 8 lines
-        const blocks = matchedBlocks.slice(0, 2).map((block) => {
-          const snippet = lines.slice(block.start, block.end).join('\n').trim()
-          return snippet
+        const blocks = matchedBlocks.slice(0, 1).map((block) => {
+          return lines.slice(block.start, block.end).join('\n').trim()
         })
         results.push(`[${fileName} — ${matchedBlocks.length} 处匹配]\n${blocks.join('\n...\n')}`)
+        if (results.length >= 2) break
       }
     } catch {
       // ignore missing files in dev
@@ -143,10 +276,40 @@ async function searchLocalKnowledgeFiles(keyword: string): Promise<string> {
   return results.join('\n\n')
 }
 
+export function isNoisyYarnResult(localSourceResult: string): boolean {
+  return /(\d{3,})\s*个类命中/.test(localSourceResult)
+}
+
+export function hasHighConfidenceLocalHit(
+  routedResult: string,
+  localResult: string,
+  localSourceResult: string
+): boolean {
+  if (routedResult.includes('[主题路由')) return true
+  if (localResult.includes('代码示例') || localResult.includes('networking-snippets')) return true
+  if (localSourceResult.includes('[Yarn 精确匹配]') && !localSourceResult.includes('无额外字段/方法记录')) return true
+  if (localSourceResult.includes('高相关类')) return true
+  if (localSourceResult.includes('Fabric API 源码')) return true
+  if (localSourceResult.includes('未找到高相关 Yarn 类') && (routedResult || localResult)) return true
+  if (isNoisyYarnResult(localSourceResult)) return Boolean(routedResult || localResult)
+  return false
+}
+
+function isDeepDocsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname === 'docs.fabricmc.net'
+      && parsed.pathname.replace(/\/+$/, '').split('/').length >= 4
+  } catch {
+    return false
+  }
+}
+
 export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput): Promise<string> {
   const keyword = normalizeKeyword(input.keyword)
   const limit = Math.max(1, Math.min(4, Math.floor(input.limit ?? 3)))
   const mcVersion = input.mcVersion || '当前项目版本'
+  const lang = input.lang || 'zh_cn'
 
   let configOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }> = []
   try {
@@ -159,12 +322,12 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
   }
 
   const sources = mergeKnowledgeSources(configOverrides).filter((s) => s.enabled)
-  const localUrls = await readLocalKnowledgeRoutes()
+  await readLocalKnowledgeRoutes()
 
-  // Search local knowledge files first (yarn-reference.md etc.)
-  const localResult = await searchLocalKnowledgeFiles(keyword)
+  const routedResult = await searchRoutedKnowledgeFiles(keyword)
+  const routedFiles = new Set(resolveTopicRouteFiles(keyword))
+  const localResult = await searchLocalKnowledgeFiles(keyword, routedFiles)
 
-  // Search local Fabric API sources + Yarn mappings (extracted from seed)
   let localSourceResult = ''
   try {
     if (typeof window !== 'undefined' && window.api?.searchLocalSources) {
@@ -172,13 +335,14 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     }
   } catch { /* ignore IPC errors */ }
 
-  const ranked = sources
-    .map((source) => ({
-      source,
-      score: sourceScore(keyword, `${source.title} ${source.useFor} ${source.kind}`)
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
+  if (isNoisyYarnResult(localSourceResult) && (routedResult || localResult)) {
+    localSourceResult = localSourceResult.replace(
+      /\[Yarn 映射[^\]]*\][^\n]*\n(?:[\s\S]*?(?=\n\n\[|$))?/,
+      '[Yarn 映射] 泛词命中过多，已优先展示本地文档检索结果\n'
+    ).trim()
+  }
+
+  const highConfidence = hasHighConfidenceLocalHit(routedResult, localResult, localSourceResult)
 
   const lines: string[] = [
     `查询：${keyword}`,
@@ -186,15 +350,21 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     ''
   ]
 
-  let summaryParts: string[] = []
+  const summaryParts: string[] = []
 
-  if (localSourceResult) {
-    const yarnMatch = localSourceResult.match(/\[yarn-mappings\]/g)
-    const srcMatch = localSourceResult.match(/\[fabric-/g)
-    const parts: string[] = []
-    if (yarnMatch) parts.push(`Yarn 映射 ${yarnMatch.length} 处命中`)
-    if (srcMatch) parts.push(`Fabric 源码 ${srcMatch.length} 个文件`)
-    summaryParts.push(...parts)
+  if (routedResult) {
+    summaryParts.push('主题路由命中')
+    lines.push(routedResult)
+    lines.push('')
+  }
+
+  if (localSourceResult && !isNoisyYarnResult(localSourceResult)) {
+    lines.push(localSourceResult)
+    lines.push('')
+    if (localSourceResult.includes('Yarn') || localSourceResult.includes('Fabric API')) {
+      summaryParts.push('本地源码/Yarn 命中')
+    }
+  } else if (localSourceResult && !routedResult && !localResult) {
     lines.push(localSourceResult)
     lines.push('')
   }
@@ -205,28 +375,41 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     lines.push('')
   }
 
-  if (ranked.length > 0) {
-    summaryParts.push(`联网源 ${ranked.length} 个`)
-    lines.push('=== 联网补充 ===')
-    for (const [index, { source }] of ranked.entries()) {
-      const fetchResult = await (async () => {
-        try {
-          if (typeof window !== 'undefined' && window.api?.knowledgeFetchUrl) {
-            const fetched = await window.api.knowledgeFetchUrl(source.url, 2500)
-            if (fetched.success && fetched.text) {
-              return fetched.text.slice(0, 300)
+  if (!highConfidence) {
+    const topicDocsUrl = resolveTopicDocsUrl(keyword, lang)
+    const webSources = sources
+      .map((source) => ({
+        source,
+        score: sourceScore(keyword, `${source.title} ${source.useFor} ${source.kind}`),
+        url: topicDocsUrl && source.id === 'fabric-docs-zh' ? topicDocsUrl : source.url
+      }))
+      .filter(({ url }) => isDeepDocsUrl(url))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+
+    if (webSources.length > 0) {
+      summaryParts.push(`联网源 ${webSources.length} 个`)
+      lines.push('=== 联网补充 ===')
+      for (const { source, url } of webSources) {
+        const fetchResult = await (async () => {
+          try {
+            if (typeof window !== 'undefined' && window.api?.knowledgeFetchUrl) {
+              const fetched = await window.api.knowledgeFetchUrl(url, 2500)
+              if (fetched.success && fetched.text) {
+                return fetched.text.slice(0, 300)
+              }
             }
-          }
-        } catch { /* ignore */ }
-        return null
-      })()
-      if (fetchResult) {
-        lines.push(`${source.title}: ${fetchResult}${fetchResult.length >= 300 ? '…' : ''}`)
-      } else {
-        lines.push(`${source.title}: （未获取到内容）`)
+          } catch { /* ignore */ }
+          return null
+        })()
+        if (fetchResult) {
+          lines.push(`${source.title}: ${fetchResult}${fetchResult.length >= 300 ? '…' : ''}`)
+        } else {
+          lines.push(`${source.title}: ${url}`)
+        }
       }
+      lines.push('')
     }
-    lines.push('')
   }
 
   lines.push(`结果：${summaryParts.length > 0 ? summaryParts.join('，') : '无命中'}`)
