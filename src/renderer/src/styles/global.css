@@ -2638,6 +2638,12 @@ body,
 	background: var(--bg-surface);
 }
 
+.clarification-option-btn.selected {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--text-primary);
+}
+
 /* ── MC Runtime (game panel) ── */
 .mc-runtime-panel {
 	height: 100%;

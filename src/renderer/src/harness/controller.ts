@@ -1,4 +1,4 @@
-﻿// ======== Controller ========
+// ======== Controller ========
 // Ported from Reasonix internal/control/controller.go
 // Session management, plan/execute phases, approval gates
 
@@ -353,10 +353,11 @@ ${projectInfo}`
 
 输出风格硬约束：
 - 禁止方案对比推演。选定技术路线后不再回头讨论替代方案。
-- 最多 3 句背景说明（共不超过 80 字），然后直接列出步骤。
 - 不要解释概念或写分析段落。
 
-输出结构化实施计划。不要调用任何工具。
+**重要：在制定计划前，如果信息不足，必须使用 ask_clarification 工具向用户询问必要的信息。**
+工具调用格式：\`<tool_call>{"name": "ask_clarification", "args": {"question": "你的问题"}}<\/tool_call>\`
+收集完所有信息后，再输出结构化实施计划。
 
 计划格式要求：
 - **每行一个步骤**：\`N. [kind] 简短标题 — 目标路径\`
@@ -382,7 +383,7 @@ ${projectInfo}`
 
     const extraRules = mode === 'execute'
       ? ''
-      : '\n- **不要调用工具，只输出计划文本。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。'
+      : '\n- **信息不足时可以使用 ask_clarification 工具提问，收集完信息后再输出计划。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。'
 
     return `# ModCrafting AI 助手
 ${phaseHeader}
@@ -392,7 +393,7 @@ ${phaseHeader}
 ## 可用工具
 ${toolDescs}
 
-${mode === 'plan' ? '## 当前：输出计划阶段\n只输出计划文本，不要调用工具。' : '## 当前：执行阶段\n直接调用工具执行计划。多用 write_file 批量写入。最后 trigger_build 构建并启动游戏测试。'}
+${mode === 'plan' ? '## 当前：输出计划阶段\n信息不足时可以使用 ask_clarification 工具提问，收集完信息后输出计划文本。' : '## 当前：执行阶段\n直接调用工具执行计划。多用 write_file 批量写入。最后 trigger_build 构建并启动游戏测试。'}
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**

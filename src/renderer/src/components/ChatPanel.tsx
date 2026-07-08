@@ -885,65 +885,65 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       }
 
       const templatePrompts: Record<string, string> = {
-        'custom-block': `我需要创建一个自定义方块模组。请使用 ask_clarification 工具向我询问以下信息：
+        'custom-block': `我需要创建一个自定义方块模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 方块的英文ID（用于代码和资源文件命名）和中文名称（用于游戏内显示）
 2. 方块的材质风格（如石头、木头、金属、水晶等）
 3. 方块的硬度值（0-10，默认为1.5）和爆炸抗性（默认为6.0）
 4. 方块是否需要特殊功能（如发光、可充能、可种植、可燃烧等）
 5. 是否需要自定义渲染或特殊行为
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-block。`,
-        'custom-item': `我需要创建一个自定义物品模组。请使用 ask_clarification 工具向我询问以下信息：
+收集完所有信息后，输出结构化实施计划。`,
+        'custom-item': `我需要创建一个自定义物品模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 物品的英文ID和中文名称
 2. 物品的类型（普通物品、工具、武器、材料等）
 3. 物品的使用效果（如右键使用、食用等）
 4. 是否需要自定义材质或纹理
 5. 是否需要特殊属性（如耐久度、附魔等）
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-item。`,
-        'custom-food': `我需要创建一个自定义食物模组。请使用 ask_clarification 工具向我询问以下信息：
+收集完所有信息后，输出结构化实施计划。`,
+        'custom-food': `我需要创建一个自定义食物模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 食物的英文ID和中文名称
 2. 食物的饱食度恢复值（1-20）
 3. 是否提供额外效果（如速度、力量等）
 4. 是否需要自定义材质
 5. 是否为肉类（影响食腐动物）
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-food。`,
-        'custom-entity': `我需要创建一个自定义实体模组。请使用 ask_clarification 工具向我询问以下信息：
+收集完所有信息后，输出结构化实施计划。`,
+        'custom-entity': `我需要创建一个自定义实体模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 实体的英文ID和中文名称
 2. 实体类型（生物、物品、投射物等）
 3. 实体的外观和大小
 4. 实体的行为和AI（如敌对、友好、被动等）
 5. 是否需要特殊能力（如飞行、攻击等）
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-entity。`,
-        'custom-tool': `我需要创建一个自定义工具模组。请使用 ask_clarification 工具向我询问以下信息：
+收集完所有信息后，输出结构化实施计划。`,
+        'custom-tool': `我需要创建一个自定义工具模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 工具的英文ID和中文名称
 2. 工具类型（剑、镐、斧、铲、锄）
 3. 工具的材质等级（木、石、铁、金、钻石、下界合金）
 4. 是否需要自定义属性（如攻击力、挖掘速度等）
 5. 是否需要特殊能力（如自动耕种、范围破坏等）
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-tool。`,
-        'custom-armor': `我需要创建一个自定义护甲模组。请使用 ask_clarification 工具向我询问以下信息：
+收集完所有信息后，输出结构化实施计划。`,
+        'custom-armor': `我需要创建一个自定义护甲模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 护甲的英文ID和中文名称
 2. 护甲类型（头盔、胸甲、护腿、靴子）
 3. 护甲的材质等级
 4. 是否需要自定义防御值
 5. 是否需要特殊效果（如火抗、水下呼吸等）
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-armor。`,
-        'custom-recipe': `我需要创建一个自定义配方模组。请使用 ask_clarification 工具向我询问以下信息：
+收集完所有信息后，输出结构化实施计划。`,
+        'custom-recipe': `我需要创建一个自定义配方模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问以下信息：
 1. 配方名称和中文描述
 2. 配方类型（有序合成、无序合成、熔炉配方等）
 3. 配方输入材料
 4. 配方输出物品和数量
 5. 是否需要自定义合成形状
 
-收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-recipe。`
+收集完所有信息后，输出结构化实施计划。`
       }
 
-      const prompt = templatePrompts[templateId] || `我需要创建一个${name}模组。请使用 ask_clarification 工具向我询问必要的信息，然后使用 create_template 工具创建模组。`
+      const prompt = templatePrompts[templateId] || `我需要创建一个${name}模组。当前处于计划阶段，请使用 ask_clarification 工具向我询问必要的信息，然后输出结构化实施计划。`
 
       setContextFiles([])
 
@@ -1364,10 +1364,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                 {clarificationOptions.map((opt, i) => (
                   <button
                     key={i}
-                    className="clarification-option-btn"
+                    className={`clarification-option-btn ${input === opt ? 'selected' : ''}`}
                     onClick={() => {
                       setInput(opt)
-                      setClarificationOptions([])
                     }}
                   >
                     {opt}

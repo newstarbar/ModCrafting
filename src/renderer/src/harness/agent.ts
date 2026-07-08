@@ -500,14 +500,19 @@ export class Agent {
           return finalContent
         }
 
-        // Plan phase should not receive tool calls (tools disabled)
+        // Plan phase allows ask_clarification tool for gathering requirements
         if (phase === 'plan') {
-          logger.agent('Unexpected tool calls in plan phase, ignoring')
-          if (finalContent.trim()) {
-            messages.push({ role: 'assistant', content: finalContent })
+          const clarificationCalls = toolCalls.filter((tc) => tc.name === 'ask_clarification')
+          if (clarificationCalls.length > 0) {
+            toolCalls.splice(0, toolCalls.length, ...clarificationCalls)
+          } else {
+            logger.agent('Unexpected tool calls in plan phase, ignoring')
+            if (finalContent.trim()) {
+              messages.push({ role: 'assistant', content: finalContent })
+            }
+            this.finishRun(emitLifecycle)
+            return finalContent
           }
-          this.finishRun(emitLifecycle)
-          return finalContent
         }
 
         // Track exploration rounds (readonly + diagnostic run_command)
