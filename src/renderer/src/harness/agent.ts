@@ -11,6 +11,7 @@ import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
 import { isRepeatGuardedToolCall } from './repeat-guard.ts'
+import { microCompact, estimatePromptTokens, type CompactionResult } from './context-compact'
 import {
   appendToolRoundHistory,
   type ChatMessage,
@@ -88,6 +89,9 @@ export class Agent {
   // Rounds with no file writes and no build/run progress
   private consecutiveIdleRounds = 0
   private runLifecycleMeta: Pick<RunOptions, 'turnMode' | 'composerMode'> = {}
+  // Context compaction
+  private assistantTurnCount = 0
+  compactionTranscripts: CompactionResult[] = []
 
   constructor(opts: AgentOptions) {
     this.registry = opts.registry
@@ -113,6 +117,8 @@ export class Agent {
     this.consecutiveReasoningOnlyRounds = 0
     this.consecutiveIdleRounds = 0
     this.clarificationPending = false
+    this.assistantTurnCount = 0
+    this.compactionTranscripts = []
   }
 
   private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
@@ -179,13 +185,16 @@ export class Agent {
       onToolDispatch: this.onToolDispatch,
       onToolResult: this.onToolResult,
       modelCall: async (workflowMessages, tools, onChunk) => {
+        // Micro-compact old tool results before sending to API
+        const compactedMessages = microCompact(workflowMessages, this.assistantTurnCount)
+        this.assistantTurnCount++
         let text = ''
         let reasoningText = ''
         const result = await this.streamFromAPI(
           apiEndpoint,
           apiKey,
           apiModel,
-          workflowMessages,
+          compactedMessages,
           tools,
           abortSignal,
           (chunk, reasoning) => {
@@ -364,13 +373,28 @@ export class Agent {
         return finalContent
       }
 
-      // Build clean API messages: first system + everything else
+      // Build API messages with micro-compaction applied to old tool results
       const systemIdx = messages.findIndex((m) => m.role === 'system')
-      const apiMessages: ChatMessage[] = systemIdx >= 0
+      const rawApiMessages: ChatMessage[] = systemIdx >= 0
         ? [{ ...messages[systemIdx] }, ...messages.slice(systemIdx + 1)]
-        : messages
+        : [...messages]
 
-      // Plan phase: only ask_clarification; execute phase: full registry with exploration limits
+      // Micro-compact: replace tool results older than 3 turns with placeholders
+      const apiMessages = microCompact(rawApiMessages, this.assistantTurnCount)
+
+      // Token budget warning
+      const estimatedTokens = estimatePromptTokens(apiMessages)
+      if (estimatedTokens > 90_000) {
+        this.emit({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: `上下文已累积约 ${Math.round(estimatedTokens / 1000)}K tokens，接近上限。建议开启新会话或等待自动压缩。`
+          }
+        })
+      }
+
+      // Build available tools
       let availableTools =
         phase === 'plan'
           ? this.registry.schemas().filter((t) => t.name === 'ask_clarification')
@@ -663,6 +687,7 @@ export class Agent {
 
           const pushRoundHistory = (instruction: string): void => {
             appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction)
+            this.assistantTurnCount++
           }
 
           // complete_step marked the last step done → end immediately so the
