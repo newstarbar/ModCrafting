@@ -28,7 +28,52 @@ const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[]; docsPath?: string 
     pattern: /useblockcallback|useentitycallback|useitemcallback|player.*interact|右键|空手|interact/i,
     files: ['fabric/docs/events.md', 'fabric/api-aliases.md'],
     docsPath: 'events'
-  }
+  },
+  {
+    pattern: /first.?item|register.*item|moditems|item\.settings|物品/i,
+    files: ['fabric/docs/items-first-item.md', 'fabric/api-aliases.md'],
+    docsPath: 'items/first-item'
+  },
+  {
+    pattern: /first.?block|register.*block|modblocks|方块/i,
+    files: ['fabric/docs/blocks-first-block.md'],
+    docsPath: 'blocks/first-block'
+  },
+  {
+    pattern: /mixin|@inject|@accessor|spongepowered|注入/i,
+    files: ['fabric/docs/mixins-bytecode.md', 'fabric/yarn-gotchas.md'],
+    docsPath: 'mixins/bytecode'
+  },
+  {
+    pattern: /datagen|data.?gen|provider|数据生成/i,
+    files: ['fabric/docs/data-generation-setup.md'],
+    docsPath: 'data-generation/setup'
+  },
+  {
+    pattern: /debug|crash|构建失败|build.?fail/i,
+    files: ['fabric/docs/debugging.md'],
+    docsPath: 'debugging'
+  },
+  {
+    pattern: /loom|gradle|gradlew/i,
+    files: ['fabric/docs/loom.md'],
+    docsPath: 'loom'
+  },
+  { pattern: /fluid|流体/i, files: [], docsPath: 'fluids/first-fluid' },
+  { pattern: /custom.?entity|spawn.*entity|实体注册/i, files: [], docsPath: 'entities/first-entity' },
+  { pattern: /sound|音效/i, files: [], docsPath: 'sounds/using-sounds' },
+  { pattern: /command|命令| brigadier/i, files: [], docsPath: 'commands/basics' },
+  { pattern: /render|渲染|hud|model/i, files: [], docsPath: 'rendering/basic-concepts' },
+  { pattern: /codec|serialization|序列化/i, files: [], docsPath: 'serialization/codecs' },
+  { pattern: /fabricloader|loader|入口点|entrypoint/i, files: [], docsPath: 'loader/' },
+  { pattern: /class.?tweak|tweak/i, files: [], docsPath: 'class-tweakers/' },
+  { pattern: /automatic.?test|gametest/i, files: [], docsPath: 'automatic-testing' },
+  { pattern: /custom.?recipe|recipe.?type/i, files: [], docsPath: 'custom-recipe-types' },
+  { pattern: /game.?rule|gamerule/i, files: [], docsPath: 'game-rules' },
+  { pattern: /key.?bind|keymapping|按键/i, files: [], docsPath: 'key-mappings' },
+  { pattern: /resource.?condition|load.?condition/i, files: [], docsPath: 'resource-conditions' },
+  { pattern: /statistic|统计/i, files: [], docsPath: 'statistics' },
+  { pattern: /lang|translation|翻译|i18n/i, files: [], docsPath: 'text-and-translations' }
 ]
 
 function normalizeKeyword(keyword: string): string {
@@ -102,48 +147,27 @@ function extractUrlsFromMarkdown(content: string): string[] {
 
 async function readLocalKnowledgeRoutes(): Promise<string[]> {
   if (typeof window === 'undefined' || !window.api?.knowledgeReadLocal) return []
-  const files = ['fabric/sources.md', 'fabric/workflows.md', 'fabric/templates.md', 'fabric/policies.md']
-  const urls: string[] = []
-  for (const file of files) {
-    try {
-      const res = await window.api.knowledgeReadLocal(file)
-      if (res.success && res.content) urls.push(...extractUrlsFromMarkdown(res.content))
-    } catch {
-      // ignore missing files in dev
-    }
+  try {
+    const res = await window.api.knowledgeReadLocal('fabric/docs/index.md')
+    if (res.success && res.content) return extractUrlsFromMarkdown(res.content)
+  } catch {
+    // ignore missing files in dev
   }
-  return urls
+  return []
 }
 
 const LOCAL_SEARCH_FILES = [
   'fabric/networking-snippets.md',
   'fabric/api-aliases.md',
-  'fabric/yarn-reference.md',
+  'fabric/yarn-gotchas.md',
   'fabric/docs/items-first-item.md',
   'fabric/docs/blocks-first-block.md',
-  'fabric/docs/fluids-first-fluid.md',
-  'fabric/docs/entities-first-entity.md',
-  'fabric/docs/sounds-using-sounds.md',
-  'fabric/docs/commands-basics.md',
-  'fabric/docs/rendering-basic-concepts.md',
   'fabric/docs/data-generation-setup.md',
-  'fabric/docs/serialization-codecs.md',
-  'fabric/docs/loom.md',
-  'fabric/docs/loader.md',
   'fabric/docs/mixins-bytecode.md',
-  'fabric/docs/class-tweakers.md',
-  'fabric/docs/automatic-testing.md',
-  'fabric/docs/custom-recipe-types.md',
   'fabric/docs/debugging.md',
   'fabric/docs/events.md',
-  'fabric/docs/game-rules.md',
-  'fabric/docs/key-mappings.md',
   'fabric/docs/networking.md',
-  'fabric/docs/resource-conditions.md',
-  'fabric/docs/statistics.md',
-  'fabric/docs/text-and-translations.md',
-  'fabric/workflows.md',
-  'fabric/templates.md'
+  'fabric/docs/loom.md'
 ]
 
 function extractRelevantCodeBlocks(content: string, tokens: string[], maxBlocks = 1): string[] {
@@ -286,7 +310,7 @@ export function hasHighConfidenceLocalHit(
   localSourceResult: string
 ): boolean {
   if (routedResult.includes('[主题路由')) return true
-  if (localResult.includes('代码示例') || localResult.includes('networking-snippets')) return true
+  if (localResult.includes('代码示例') || localResult.includes('networking-snippets') || localResult.includes('yarn-gotchas')) return true
   if (localSourceResult.includes('[Yarn 精确匹配]') && !localSourceResult.includes('无额外字段/方法记录')) return true
   if (localSourceResult.includes('高相关类')) return true
   if (localSourceResult.includes('Fabric API 源码')) return true

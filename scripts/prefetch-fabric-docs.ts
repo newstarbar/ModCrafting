@@ -6,30 +6,34 @@ import * as path from 'path'
 
 const DOCS_DIR = path.join(import.meta.dirname || __dirname, '..', 'resources', 'agent-knowledge', 'fabric', 'docs')
 
+/** Core bundled docs only; other topics are indexed for online fetch. */
 const PAGES: Array<{ url: string; name: string }> = [
   { url: 'https://docs.fabricmc.net/zh_cn/develop/items/first-item', name: 'items-first-item' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/blocks/first-block', name: 'blocks-first-block' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/data-generation/setup', name: 'data-generation-setup' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/mixins/bytecode', name: 'mixins-bytecode' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/debugging', name: 'debugging' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/events', name: 'events' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/networking', name: 'networking' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/loom/', name: 'loom' }
+]
+
+const ONLINE_ONLY_PAGES: Array<{ url: string; name: string }> = [
   { url: 'https://docs.fabricmc.net/zh_cn/develop/fluids/first-fluid', name: 'fluids-first-fluid' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/entities/first-entity', name: 'entities-first-entity' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/sounds/using-sounds', name: 'sounds-using-sounds' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/commands/basics', name: 'commands-basics' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/rendering/basic-concepts', name: 'rendering-basic-concepts' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/data-generation/setup', name: 'data-generation-setup' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/serialization/codecs', name: 'serialization-codecs' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/loom/', name: 'loom' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/loader/', name: 'loader' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/mixins/bytecode', name: 'mixins-bytecode' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/class-tweakers/', name: 'class-tweakers' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/automatic-testing', name: 'automatic-testing' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/custom-recipe-types', name: 'custom-recipe-types' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/debugging', name: 'debugging' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/events', name: 'events' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/game-rules', name: 'game-rules' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/key-mappings', name: 'key-mappings' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/networking', name: 'networking' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/resource-conditions', name: 'resource-conditions' },
   { url: 'https://docs.fabricmc.net/zh_cn/develop/statistics', name: 'statistics' },
-  { url: 'https://docs.fabricmc.net/zh_cn/develop/text-and-translations', name: 'text-and-translations' },
+  { url: 'https://docs.fabricmc.net/zh_cn/develop/text-and-translations', name: 'text-and-translations' }
 ]
 
 /**
@@ -211,11 +215,24 @@ async function main(): Promise<void> {
     }
   }
 
-  // Write index
-  const indexContent = PAGES
+  // Write index (bundled + online-only URL list)
+  const bundledSection = PAGES
     .map((p) => `- [${p.name}](./${p.name}.md): ${p.url}`)
     .join('\n')
-  fs.writeFileSync(path.join(DOCS_DIR, 'index.md'), `# Fabric 开发文档索引\n\n${indexContent}\n`, 'utf-8')
+  const onlineSection = ONLINE_ONLY_PAGES
+    .map((p) => `- ${p.name}: ${p.url}`)
+    .join('\n')
+  const indexContent = `# Fabric 开发文档索引
+
+## 本地 bundled（可离线搜索）
+
+${bundledSection}
+
+## 联网-only（未 bundled，搜索时可 fetch）
+
+${onlineSection}
+`
+  fs.writeFileSync(path.join(DOCS_DIR, 'index.md'), `${indexContent}\n`, 'utf-8')
 
   console.log(`\nDone: ${success} downloaded, ${fail} failed.`)
   console.log(`Docs saved to: ${DOCS_DIR}`)

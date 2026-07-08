@@ -8,7 +8,8 @@ import { EventKind } from '../harness/events'
 import type { Event } from '../harness/events'
 import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
-import { parsePlanSteps } from '../utils/plan-steps'
+import { parsePlanSteps, isActionablePlanText } from '../utils/plan-steps'
+import { resolveTurnDoneStatus } from '../utils/turn-status'
 import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, normalizeSessionUsage, type UsageStats } from '../utils/usage'
 import type { ChatSession, PersistedMessage } from '../types/chat'
 import {
@@ -152,33 +153,6 @@ function finalizeRunningTools(entries: ChronoEntry[], hasError: boolean): Chrono
     }
     return e
   })
-}
-
-function resolveTurnStatus(error?: string): DisplayMessage['turnStatus'] {
-  if (!error) return 'error'
-  if (/cancel/i.test(error)) return 'cancelled'
-  return 'error'
-}
-
-function resolveTurnDoneStatus(options: {
-  hasError: boolean
-  error?: string
-  finalSteps?: PlanStep[]
-  composerMode: ComposerMode
-  turnMode?: string
-  phase?: string
-}): DisplayMessage['turnStatus'] {
-  if (options.hasError) return resolveTurnStatus(options.error)
-  const finalPlanDone = options.finalSteps
-    ? options.finalSteps.every((s) => s.status === 'completed')
-    : false
-  if (finalPlanDone) return 'completed'
-  if (options.phase === 'plan_ready' || options.turnMode === 'plan_only') {
-    return 'planned'
-  }
-  if (options.finalSteps?.length) return 'partial'
-  if (options.turnMode === 'chat' || options.composerMode === 'ask') return 'answered'
-  return 'answered'
 }
 
 const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta }) => {
@@ -452,25 +426,23 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
             entries: [], isStreaming: true, timestamp: Date.now()
           }])
         } else if (event.phase === 'plan_done') {
-          const planText = event.text || t.entries
-            .filter((e): e is { kind: 'reasoning' | 'text'; content: string } & ChronoEntry =>
-              e.kind === 'reasoning' || e.kind === 'text'
-            )
-            .map((e) => e.content)
-            .join('\n')
-          const steps = parsePlanSteps(planText)
-          if (steps.length > 0 && t.msgId) {
-            const planStepList = toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' })))
-            const nextPlan = { steps: planStepList, anchorMsgId: t.msgId, pinned: true }
-            t.entries = replacePlanEntriesWithSummary(t.entries, steps.length)
-            setActivePlan(nextPlan)
-            setDisplayMessages((prev) => {
-              const next = prev.map((m) => (
-                m.id === t.msgId ? { ...m, entries: [...t.entries] } : m
-              ))
-              flushPersist(next, nextPlan)
-              return next
-            })
+          const planText = (event.text || '').trim()
+          const actionable = event.planActionable ?? isActionablePlanText(planText)
+          if (actionable && planText) {
+            const steps = parsePlanSteps(planText)
+            if (steps.length > 0 && t.msgId) {
+              const planStepList = toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' })))
+              const nextPlan = { steps: planStepList, anchorMsgId: t.msgId, pinned: true }
+              t.entries = replacePlanEntriesWithSummary(t.entries, steps.length)
+              setActivePlan(nextPlan)
+              setDisplayMessages((prev) => {
+                const next = prev.map((m) => (
+                  m.id === t.msgId ? { ...m, entries: [...t.entries] } : m
+                ))
+                flushPersist(next, nextPlan)
+                return next
+              })
+            }
           }
         } else if (event.phase === 'plan_stream_end') {
           if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
@@ -705,7 +677,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
         const hasError = Boolean(event.error)
         t.entries = finalizeRunningTools(t.entries, hasError)
-        const planSnapshot = activePlanRef.current
+        if (event.phase === 'plan_failed') {
+          activePlanRef.current = null
+        }
+        const planSnapshot = event.phase === 'plan_failed' ? null : activePlanRef.current
 
         const finalSteps = planSnapshot
           ? planSnapshot.steps.map((s) => ({
@@ -763,7 +738,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
                 isStreaming: false,
                 ...(isAnchor ? {
                   turnStatus,
-                  embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
+                  embeddedPlan: event.phase === 'plan_failed'
+                    ? undefined
+                    : (finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan)
                 } : {})
               }
             }

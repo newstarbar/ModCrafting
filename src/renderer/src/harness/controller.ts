@@ -7,7 +7,7 @@ import { Agent } from './agent'
 import type { ChatMessage } from './chat-message'
 import { Registry } from './tools'
 import { PlanTracker } from './plan-tracker'
-import { parsePlanSteps, planHasActionableSteps, selectPlanText, isActionablePlanText } from '../utils/plan-steps'
+import { parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from '../utils/plan-steps'
 import { logger } from '../utils/logger'
 import { buildFabricAgentPolicyPrompt } from './fabric-agent-policy'
 import { isRetryableFetchError } from './fetch-retry'
@@ -150,6 +150,42 @@ export class Controller {
       kind: EventKind.PlanState,
       planSteps: tracker.snapshot()
     })
+  }
+
+  private emitPlanDonePhase(
+    planStreamReasoning: string,
+    planStreamText: string,
+    planResult: string
+  ): string {
+    const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
+    const visiblePlanText = selectVisiblePlanText(planStreamText, planResult)
+    const actionable = this.isActionablePlan(fullPlanText)
+    logger.agent('Plan merged', {
+      steps: parsePlanSteps(fullPlanText).length,
+      visibleSteps: parsePlanSteps(visiblePlanText).length,
+      actionable
+    })
+    this.emitEvent({
+      kind: EventKind.Phase,
+      phase: 'plan_done',
+      text: visiblePlanText,
+      planActionable: actionable
+    })
+    this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+    return fullPlanText
+  }
+
+  private planFailureNotice(fullPlanText: string, retried = false): string {
+    const prefix = retried ? '两次尝试均未能生成可执行计划。' : '未能生成可执行计划。'
+    const detail = planHasActionableSteps(fullPlanText)
+      ? '计划含编号步骤但缺少目标路径（如 src/main/java/...）。'
+      : '未能解析出符合格式的编号步骤。'
+    return (
+      `${prefix}${detail}请直接发送计划，例如：\n` +
+      '1. [inspect] 确认 API — fabric_docs_search\n' +
+      '2. [write] src/main/java/com/example/my_mod/Handler.java — 功能实现\n' +
+      '3. [write] src/main/java/com/example/my_mod/MyMod.java — 注册入口'
+    )
   }
 
   private async buildProjectInfo(): Promise<string> {
@@ -547,14 +583,7 @@ ${projectInfo}`
           return planResult
         }
 
-        const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
-        logger.agent('Plan merged', {
-          steps: parsePlanSteps(fullPlanText).length,
-          actionable: this.isActionablePlan(fullPlanText)
-        })
-
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: fullPlanText })
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+        const fullPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, planResult)
 
         if (!this.isActionablePlan(fullPlanText)) {
           // Retry once: inject corrective feedback and ask model to try again
@@ -581,22 +610,18 @@ ${projectInfo}`
               { phase: 'plan', emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
             )
             if (this.agent.clarificationPending) return retryResult
-            const retryPlanText = selectPlanText(planStreamReasoning, planStreamText, retryResult)
-            this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: retryPlanText })
-            this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+            const retryPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, retryResult)
             if (!this.isActionablePlan(retryPlanText)) {
               this.onAgentStatus?.('')
               this.emitEvent({
                 kind: EventKind.Notice,
                 notice: {
                   level: 'warn',
-                  text: planHasActionableSteps(retryPlanText)
-                    ? '计划已生成但缺少可执行步骤描述，未进入执行阶段'
-                    : '两次尝试均未能解析出编号实施步骤，请手动描述计划步骤。'
+                  text: this.planFailureNotice(retryPlanText, true)
                 }
               })
               if (intent !== 'plan_only') {
-                this.emitEvent({ kind: EventKind.TurnDone })
+                this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_failed' })
               }
               return retryResult
             }
@@ -622,13 +647,11 @@ ${projectInfo}`
             kind: EventKind.Notice,
             notice: {
               level: 'warn',
-              text: planHasActionableSteps(fullPlanText)
-                ? '计划已生成但缺少可执行步骤描述，未进入执行阶段'
-                : '未能解析出编号实施步骤，未进入执行阶段'
+              text: this.planFailureNotice(fullPlanText)
             }
           })
           if (intent !== 'plan_only') {
-            this.emitEvent({ kind: EventKind.TurnDone })
+            this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_failed' })
           }
           return planResult
         }
@@ -786,9 +809,7 @@ ${projectInfo}`
 
         if (this.agent.clarificationPending) return planResult
 
-        const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: fullPlanText })
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+        const fullPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, planResult)
 
         if (!this.isActionablePlan(fullPlanText)) {
           this.onAgentStatus?.('')
@@ -796,12 +817,10 @@ ${projectInfo}`
             kind: EventKind.Notice,
             notice: {
               level: 'warn',
-              text: planHasActionableSteps(fullPlanText)
-                ? '计划已生成但缺少可执行步骤描述，未进入执行阶段'
-                : '未能解析出编号实施步骤，未进入执行阶段'
+              text: this.planFailureNotice(fullPlanText)
             }
           })
-          this.emitEvent({ kind: EventKind.TurnDone })
+          this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_failed' })
           return planResult
         }
 

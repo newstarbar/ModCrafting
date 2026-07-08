@@ -135,6 +135,15 @@ export function selectPlanText(reasoning: string, streamedText: string, finalAns
   return finalT || streamT || reasoningT
 }
 
+/** UI-visible plan source — never fall back to reasoning (avoids CoT numbered lists). */
+export function selectVisiblePlanText(streamedText: string, finalAnswer: string): string {
+  const finalT = finalAnswer.trim()
+  if (finalT && planHasActionableSteps(finalT)) return finalT
+  const streamT = streamedText.trim()
+  if (streamT && planHasActionableSteps(streamT)) return streamT
+  return finalT || streamT
+}
+
 /** Whether plan text should proceed to execute phase */
 export function isActionablePlanText(text: string): boolean {
   const trimmed = text.trim()

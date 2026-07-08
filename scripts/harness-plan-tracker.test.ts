@@ -15,7 +15,8 @@ import { buildFabricDocsSearchSummary, hasHighConfidenceLocalHit, isNoisyYarnRes
 import { buildRecipeContent } from '../src/renderer/src/harness/recipe-utils.ts'
 import { classifyFabricLog, validateFabricModJsonContent } from '../src/renderer/src/harness/fabric-utils.ts'
 import { generateBuildGradle, generateFabricModJson } from '../src/renderer/src/project/scaffold.ts'
-import { ensureDevTerminalSteps, parsePlanSteps } from '../src/renderer/src/utils/plan-steps.ts'
+import { ensureDevTerminalSteps, parsePlanSteps, planHasActionableSteps, selectVisiblePlanText, isActionablePlanText } from '../src/renderer/src/utils/plan-steps.ts'
+import { resolveTurnDoneStatus } from '../src/renderer/src/utils/turn-status.ts'
 import { needsKnowledgeInspect } from '../src/renderer/src/harness/plan-compiler.ts'
 import { finalizeTerminalSteps } from '../src/renderer/src/harness/finalize-terminal.ts'
 import { registerPanelBridge } from '../src/renderer/src/utils/panel-bridge.ts'
@@ -815,16 +816,89 @@ test('topic routing maps player interact queries to events knowledge files', () 
 test('networking-snippets stays generic without session-specific player interact tuning', () => {
   const snippetsPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/networking-snippets.md')
   const aliasesPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/api-aliases.md')
-  const workflowsPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/workflows.md')
   const snippets = fs.readFileSync(snippetsPath, 'utf-8')
   const aliases = fs.readFileSync(aliasesPath, 'utf-8')
-  const workflows = fs.readFileSync(workflowsPath, 'utf-8')
 
   assert.doesNotMatch(snippets, /空手右键/)
   assert.doesNotMatch(snippets, /EggThrow/)
   assert.match(snippets, /ExampleC2SPayload/)
   assert.doesNotMatch(aliases, /玩家交互事件速查/)
-  assert.doesNotMatch(workflows, /## 玩家交互/)
+})
+
+test('bundled fabric knowledge is curated and excludes removed meta files', () => {
+  const fabricRoot = path.join(process.cwd(), 'resources/agent-knowledge/fabric')
+  const mdFiles: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.name.endsWith('.md')) mdFiles.push(path.relative(fabricRoot, full).replace(/\\/g, '/'))
+    }
+  }
+  walk(fabricRoot)
+
+  assert.ok(mdFiles.length <= 15, `expected ≤15 bundled markdown files, got ${mdFiles.length}: ${mdFiles.join(', ')}`)
+  assert.ok(!mdFiles.includes('policies.md'))
+  assert.ok(!mdFiles.includes('workflows.md'))
+  assert.ok(!mdFiles.includes('templates.md'))
+  assert.ok(!mdFiles.includes('sources.md'))
+  assert.ok(!mdFiles.includes('yarn-reference.md'))
+  assert.ok(mdFiles.includes('yarn-gotchas.md'))
+  assert.ok(mdFiles.includes('networking-snippets.md'))
+  assert.ok(mdFiles.includes('api-aliases.md'))
+})
+
+test('selectVisiblePlanText ignores reasoning numbered lists', () => {
+  const reasoning = [
+    '1. 监听 UseItemCallback，检查玩家是否空手',
+    '2. 创建事件监听类',
+    '3. 查阅 Fabric API 文档'
+  ].join('\n')
+  const visible = '我来先查看项目现有结构，再制定计划。'
+  const selected = selectVisiblePlanText(visible, visible)
+  assert.doesNotMatch(selected, /UseItemCallback/)
+  assert.equal(parsePlanSteps(selected).length, 0)
+  assert.equal(parsePlanSteps(reasoning).length, 3)
+})
+
+test('isActionablePlanText rejects reasoning-only plans without file paths', () => {
+  const reasoningPlan = [
+    '1. 玩家空手右键时投掷 EggEntity',
+    '2. 创建事件监听类，注册 UseItemCallback',
+    '3. 查阅 Fabric API 文档确认 UseItemCallback 的使用方式'
+  ].join('\n')
+  assert.equal(planHasActionableSteps(reasoningPlan), true)
+  assert.equal(isActionablePlanText(reasoningPlan), false)
+})
+
+test('resolveTurnDoneStatus uses answered not partial when plan_failed', () => {
+  const pendingSteps = [{ id: '1', description: 'fake step', status: 'pending' as const }]
+  assert.equal(
+    resolveTurnDoneStatus({
+      hasError: false,
+      finalSteps: pendingSteps,
+      composerMode: 'agent',
+      phase: 'plan_failed'
+    }),
+    'answered'
+  )
+  assert.equal(
+    resolveTurnDoneStatus({
+      hasError: false,
+      finalSteps: pendingSteps,
+      composerMode: 'agent'
+    }),
+    'partial'
+  )
+})
+
+test('actionable plan with file paths passes isActionablePlanText', () => {
+  const plan = [
+    '1. [write] src/main/java/com/example/my_mod/EggThrowHandler.java — 空手右键投掷鸡蛋',
+    '2. [write] src/main/java/com/example/my_mod/MyMod.java — 注册事件监听'
+  ].join('\n')
+  assert.equal(isActionablePlanText(plan), true)
+  assert.equal(selectVisiblePlanText('', plan), plan)
 })
 
 test('hasHighConfidenceLocalHit prefers routed snippets over noisy yarn counts', () => {

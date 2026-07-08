@@ -110,6 +110,7 @@ export interface Event {
   retryAttempt?: number
   retryMax?: number
   phase?: string
+  planActionable?: boolean
   planSteps?: Array<{ id: string; description: string; status: string }>
   clarification?: { question: string; options?: string[] }
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
