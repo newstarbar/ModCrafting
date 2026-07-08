@@ -1174,12 +1174,28 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
         <div className="chat-header-right">
           <button
             className="chat-header-export-btn"
-            title="导出完整会话历史（含系统提示词、工具参数与结果）到桌面 JSON 文件"
+            title="导出完整会话历史到桌面 JSON 文件"
             onClick={async () => {
               try {
-                const p = await controllerRef.current?.exportSession()
-                if (p) {
-                  setCompletionFlash(`已导出: ${p.split(/[\\/]/).pop()}`)
+                const displayPayload = JSON.stringify({
+                  exportedAt: new Date().toISOString(),
+                  source: 'display-messages',
+                  sessionGoal: activePlan?.steps?.length ? activePlan.steps.map(s => s.description).join('; ') : '(未设定)',
+                  messageCount: displayMessages.length,
+                  messages: displayMessages,
+                }, null, 2)
+                const result = await window.api.sessionExport(displayPayload, 'mc-session-display')
+                if (result.success) {
+                  // Also try to dump controller messages if available
+                  try {
+                    const ctrlPayload = JSON.stringify({
+                      exportedAt: new Date().toISOString(),
+                      source: 'controller-api',
+                      messages: controllerRef.current?.getSnapshot() || []
+                    }, null, 2)
+                    await window.api.sessionExport(ctrlPayload, 'mc-session-api')
+                  } catch { /* controller may not have messages */ }
+                  setCompletionFlash(`已导出: ${result.name}`)
                   setTimeout(() => setCompletionFlash(null), 3000)
                 }
               } catch {

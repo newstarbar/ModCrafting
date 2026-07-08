@@ -19,7 +19,7 @@
 		"push:gitee": "node scripts/push-gitee-git.mjs",
 		"setup:toolchain": "node scripts/setup-toolchain.mjs",
 		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
-    "prefetch:fabric-docs": "node --experimental-strip-types scripts/prefetch-fabric-docs.ts",
+		"prefetch:fabric-docs": "node --experimental-strip-types scripts/prefetch-fabric-docs.ts",
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
 		"test:harness": "node --experimental-strip-types --test scripts/harness-plan-tracker.test.ts scripts/harness-turn-intent.test.ts",
