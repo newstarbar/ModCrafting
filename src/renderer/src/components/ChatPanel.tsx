@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import appIcon from '../../../../build/appIcon.png'
 import installerIcon from '../../../../build/installerIcon.png'
 import { Controller } from '../harness/controller'
@@ -44,6 +44,7 @@ interface ChatPanelProps {
   onRenameSession: (id: string, name: string) => void
   toolchainReady?: boolean
   onUpdateSessionMeta?: (sessionId: string, meta: { composerMode?: ComposerMode; sessionGoal?: string }) => void
+  onTemplateSelect?: (templateId: string, name: string) => void
 }
 
 const toolRegistry = new Registry()
@@ -158,7 +159,11 @@ function finalizeRunningTools(entries: ChronoEntry[], hasError: boolean): Chrono
   })
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta }) => {
+interface ChatPanelRef {
+  handleTemplateSelect: (templateId: string, name: string) => void
+}
+
+const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta }, ref) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [composerMode, setComposerMode] = useState<ComposerMode>('agent')
@@ -858,6 +863,123 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
     }
   }, [isLoading, toolchainReady])
 
+  const handleTemplateSelect = useCallback((templateId: string, name: string) => {
+    if (isLoading || clarificationPending) {
+      alert('AI 正在处理中，请稍候')
+      return
+    }
+    if (!toolchainReady) {
+      alert('构建环境初始化中，请等待进度条完成')
+      return
+    }
+    if (!projectPath) {
+      alert('请先打开一个项目')
+      return
+    }
+
+    const resolvedKey = ensureApiKey ? ensureApiKey() : Promise.resolve(apiConfig.apiKey.trim())
+    resolvedKey.then((key) => {
+      if (!key) {
+        alert('请先配置 API Key（左侧「设置」→ 保存密钥）')
+        return
+      }
+
+      const templatePrompts: Record<string, string> = {
+        'custom-block': `我需要创建一个自定义方块模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 方块的英文ID（用于代码和资源文件命名）和中文名称（用于游戏内显示）
+2. 方块的材质风格（如石头、木头、金属、水晶等）
+3. 方块的硬度值（0-10，默认为1.5）和爆炸抗性（默认为6.0）
+4. 方块是否需要特殊功能（如发光、可充能、可种植、可燃烧等）
+5. 是否需要自定义渲染或特殊行为
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-block。`,
+        'custom-item': `我需要创建一个自定义物品模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 物品的英文ID和中文名称
+2. 物品的类型（普通物品、工具、武器、材料等）
+3. 物品的使用效果（如右键使用、食用等）
+4. 是否需要自定义材质或纹理
+5. 是否需要特殊属性（如耐久度、附魔等）
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-item。`,
+        'custom-food': `我需要创建一个自定义食物模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 食物的英文ID和中文名称
+2. 食物的饱食度恢复值（1-20）
+3. 是否提供额外效果（如速度、力量等）
+4. 是否需要自定义材质
+5. 是否为肉类（影响食腐动物）
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-food。`,
+        'custom-entity': `我需要创建一个自定义实体模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 实体的英文ID和中文名称
+2. 实体类型（生物、物品、投射物等）
+3. 实体的外观和大小
+4. 实体的行为和AI（如敌对、友好、被动等）
+5. 是否需要特殊能力（如飞行、攻击等）
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-entity。`,
+        'custom-tool': `我需要创建一个自定义工具模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 工具的英文ID和中文名称
+2. 工具类型（剑、镐、斧、铲、锄）
+3. 工具的材质等级（木、石、铁、金、钻石、下界合金）
+4. 是否需要自定义属性（如攻击力、挖掘速度等）
+5. 是否需要特殊能力（如自动耕种、范围破坏等）
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-tool。`,
+        'custom-armor': `我需要创建一个自定义护甲模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 护甲的英文ID和中文名称
+2. 护甲类型（头盔、胸甲、护腿、靴子）
+3. 护甲的材质等级
+4. 是否需要自定义防御值
+5. 是否需要特殊效果（如火抗、水下呼吸等）
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-armor。`,
+        'custom-recipe': `我需要创建一个自定义配方模组。请使用 ask_clarification 工具向我询问以下信息：
+1. 配方名称和中文描述
+2. 配方类型（有序合成、无序合成、熔炉配方等）
+3. 配方输入材料
+4. 配方输出物品和数量
+5. 是否需要自定义合成形状
+
+收集完所有信息后，请使用 create_template 工具创建模组，templateId 为 custom-recipe。`
+      }
+
+      const prompt = templatePrompts[templateId] || `我需要创建一个${name}模组。请使用 ask_clarification 工具向我询问必要的信息，然后使用 create_template 工具创建模组。`
+
+      setContextFiles([])
+
+      if (!currentSessionId) {
+        const newId = onNewSession(prompt)
+        currentSessionIdRef.current = newId
+        setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now() }])
+        controllerRef.current?.clearSession()
+        controllerRef.current?.setComposerMode(composerMode)
+        controllerRef.current?.setSessionGoal(sessionGoal)
+      } else {
+        setDisplayMessages((prev) => {
+          const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now() }]
+          flushPersist(next, null)
+          return next
+        })
+      }
+
+      const ctrl = controllerRef.current
+      if (!ctrl) return
+      ctrl.setComposerMode(composerMode)
+      ctrl.setSessionGoal(sessionGoal)
+      setIsLoading(true)
+      setAgentStatus('思考中...')
+      ctrl.send(prompt).catch(() => {
+        setIsLoading(false)
+        setAgentStatus('')
+        onRunningChangeRef.current?.(false)
+      })
+    })
+  }, [isLoading, clarificationPending, toolchainReady, projectPath, apiConfig, ensureApiKey, currentSessionId, onNewSession, flushPersist, composerMode, sessionGoal, setContextFiles])
+
+  useImperativeHandle(ref, () => ({
+    handleTemplateSelect
+  }), [handleTemplateSelect])
+
   const handleComposerModeChange = useCallback((mode: ComposerMode) => {
     setComposerMode(mode)
     controllerRef.current?.setComposerMode(mode)
@@ -1276,7 +1398,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ projectPath, contextFiles, setCon
       </div>
     </div>
   )
-}
+})
 
 // Extract a clean preview summary from tool output (for collapsed view).
 // Returns user-facing info only — no AI diagnostic text, no emoji.

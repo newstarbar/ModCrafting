@@ -110,6 +110,7 @@ const App: React.FC = () => {
 	const [appView, setAppView] = useState<AppView>("hub");
 	const bottomPanelRef = useRef<BottomPanelHandle>(null);
 	const mcRuntimeRef = useRef<McRuntimePanelHandle>(null);
+	const chatPanelRef = useRef<{ handleTemplateSelect: (templateId: string, name: string) => void }>(null);
 
 	const refreshRecentProjects = useCallback(async () => {
 		const list = await window.api.listRecentProjects();
@@ -558,7 +559,7 @@ const App: React.FC = () => {
 	const addToChatContext = useCallback((text: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, text] })), []);
 	const handleCrashToChat = useCallback((c: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 崩溃报告 ---\n${c}`], rightPanelTab: "game" })), []);
 	const handleTemplateClick = useCallback((templateId: string, name: string) => {
-		setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 模板选择 ---\n已选择: ${name} (${templateId})\n在下方输入框发送消息以生成代码`] }));
+		chatPanelRef.current?.handleTemplateSelect(templateId, name);
 	}, []);
 	const handleContentClick = useCallback(async (type: string, name: string, className?: string) => {
 		if (!state.projectPath || !className) {
@@ -646,6 +647,7 @@ const App: React.FC = () => {
 						<div className="main-area">
 							{state.projectPath ? (
 								<ChatPanel
+									ref={chatPanelRef}
 									projectPath={state.projectPath}
 									contextFiles={state.chatContext}
 									setContextFiles={(f) => setState((p) => ({ ...p, chatContext: f }))}
