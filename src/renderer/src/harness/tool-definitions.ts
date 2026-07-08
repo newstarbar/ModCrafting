@@ -35,11 +35,13 @@ async function runWithCommandStream(
 // ── read_file ──
 export const readFileTool: Tool & Previewer = {
   name: 'read_file',
-  description: 'Read the content of a file. Path is relative to project root.',
+  description: '读取文件内容（含行号）。支持分页：offset 起始行（1-based），limit 最大行数。默认读前 200 行。',
   schema: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Relative path from project root' }
+      path: { type: 'string', description: '项目根目录下的相对路径' },
+      offset: { type: 'number', description: '起始行号（1-based），默认 1' },
+      limit: { type: 'number', description: '最大行数，默认 200，设 0 表示全量' }
     },
     required: ['path']
   },
@@ -49,8 +51,22 @@ export const readFileTool: Tool & Previewer = {
     const filePath = `${ctx.projectPath}/${args.path}`
     try {
       const res = await window.api.readFile(filePath)
-      if (res.success) return res.content || '(empty file)'
-      return `Error: ${res.error}`
+      if (!res.success) return `Error: ${res.error}`
+      const content = res.content || ''
+      if (!content) return '(空文件)'
+
+      const lines = content.split('\n')
+      const total = lines.length
+      const offset = Math.max(1, Number(args.offset) || 1)
+      const limit = args.limit !== undefined ? Number(args.limit) : 200
+      const effectiveLimit = limit === 0 ? total : Math.min(limit, total)
+      const end = Math.min(offset + effectiveLimit - 1, total)
+      const page = lines.slice(offset - 1, end)
+
+      const numbered = page.map((line, i) => `${offset + i} | ${line}`).join('\n')
+      const header = `文件: ${args.path}（共 ${total} 行，显示 ${offset}-${end} 行）`
+      const footer = end < total ? `\n（剩余 ${total - end} 行。用 offset=${end + 1} 继续读取）` : ''
+      return `${header}\n${numbered}${footer}`
     } catch (err) {
       return `Error reading file: ${err}`
     }
@@ -78,7 +94,7 @@ function computeLineDiff(oldContent: string, newContent: string): { added: numbe
 
 export const writeFileTool: Tool & Previewer = {
   name: 'write_file',
-  description: 'Write content to a file. Path is relative to project root. Creates directories automatically.',
+  description: '写入文件（全量覆盖）。自动创建中间目录。覆盖已有文件时显示旧内容 + diff 统计。新建文件用此工具，修改已有文件优先用 edit_file。',
   schema: {
     type: 'object',
     properties: {
@@ -145,6 +161,107 @@ export const writeFileTool: Tool & Previewer = {
       removed: 0,
       content
     }
+  }
+}
+
+// ── edit_file ──
+export const editFileTool: Tool & Previewer = {
+  name: 'edit_file',
+  description: '精确替换文件中的文本（只替换第一处匹配）。old_string 必须精确匹配（含缩进/空格），找不到会返回错误。修改已有文件优先用此工具，新建文件用 write_file。',
+  schema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '项目根目录下的相对路径' },
+      old_string: { type: 'string', description: '要替换的原始文本（精确匹配，只替换第一处）' },
+      new_string: { type: 'string', description: '替换后的新文本' }
+    },
+    required: ['path', 'old_string', 'new_string']
+  },
+  readOnly: () => false,
+  async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+    if (!ctx.projectPath) return 'No project open'
+    const filePath = `${ctx.projectPath}/${args.path}`
+    const oldStr = String(args.old_string || '')
+    const newStr = String(args.new_string || '')
+
+    if (!oldStr) return 'Error: old_string 不能为空'
+
+    // Read current file
+    let content: string
+    try {
+      const res = await window.api.readFile(filePath)
+      if (!res.success) return `Error: ${res.error}`
+      content = res.content || ''
+    } catch (err) {
+      return `Error reading file: ${err}`
+    }
+
+    // Find first match
+    const idx = content.indexOf(oldStr)
+    if (idx === -1) {
+      // Build diagnostic: show file context around keywords from oldString
+      const oldLower = oldStr.toLowerCase()
+      const lines = content.split('\n')
+      const keywords = oldLower.split(/\s+/).filter((w: string) => w.length > 3)
+      const contextLines: string[] = []
+      for (let i = 0; i < lines.length; i++) {
+        if (keywords.some((kw: string) => lines[i].toLowerCase().includes(kw))) {
+          const start = Math.max(0, i - 2)
+          const end = Math.min(lines.length, i + 3)
+          contextLines.push(`... 第 ${start + 1}-${end} 行:`)
+          for (let j = start; j < end; j++) {
+            contextLines.push(`${j + 1} | ${lines[j]}`)
+          }
+          if (contextLines.length >= 25) break
+        }
+      }
+      if (contextLines.length > 0) {
+        return `未找到 old_string。文件 ${args.path}（${lines.length} 行）中相关区域:\n${contextLines.join('\n')}\n\n请调整 old_string 精确匹配实际文件内容。注意缩进和空格必须完全一致。`
+      }
+      return `未找到 old_string。文件 ${args.path} 共 ${lines.length} 行。请用 read_file 查看后重试。`
+    }
+
+    // Check for duplicate matches
+    const secondIdx = content.indexOf(oldStr, idx + 1)
+    if (secondIdx !== -1) {
+      // Find which line each match is on
+      const before = content.substring(0, idx)
+      const lineNum = before.split('\n').length
+      const lineNum2 = content.substring(0, secondIdx).split('\n').length
+      const ctxStart = Math.max(0, idx - 40)
+      const ctxEnd = Math.min(content.length, idx + oldStr.length + 40)
+      const ctx = content.substring(ctxStart, ctxEnd)
+      return `old_string 匹配了多处（第 ${lineNum} 行和第 ${lineNum2} 行）。请提供更多上下文使匹配唯一。\n第 ${lineNum} 行附近:\n${ctx}`
+    }
+
+    // Replace
+    const newContent = content.substring(0, idx) + newStr + content.substring(idx + oldStr.length)
+    try {
+      await window.api.writeFile(filePath, newContent)
+
+      // Compute diff
+      const oldLines = oldStr.split('\n')
+      const newLines = newStr.split('\n')
+      const added = Math.max(0, newLines.length - oldLines.length)
+      const removed = Math.max(0, oldLines.length - newLines.length)
+      const before = content.substring(0, idx)
+      const lineNum = before.split('\n').length
+      const preview = newStr.length > 100 ? newStr.slice(0, 100) + '...' : newStr
+
+      let msg = `✅ ${args.path}: 第 ${lineNum} 行已替换`
+      if (added > 0 && removed > 0) msg += `（修改 ${removed + added} 行）`
+      else if (added > 0) msg += `（+${added} 行）`
+      else if (removed > 0) msg += `（-${removed} 行）`
+      msg += `\n新内容: ${preview}`
+
+      return msg
+    } catch (err) {
+      return `写入失败: ${err}`
+    }
+  },
+  preview(args: Record<string, unknown>): FileDiff | null {
+    const path = String(args.path || '')
+    return { path, added: 0, removed: 0 }
   }
 }
 
@@ -966,6 +1083,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
   const tools = [
     readFileTool,
     writeFileTool,
+    editFileTool,
     fabricDocsSearchTool,
     fabricJavadocLookupTool,
     vanillaMcWikiQueryTool,

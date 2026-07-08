@@ -259,6 +259,7 @@ export class Controller {
     const toolNameMap: Record<string, string> = {
       read_file: '读取文件',
       write_file: '写入文件',
+      edit_file: '编辑文件（精确替换）',
       list_directory: '列出目录',
       run_command: '运行命令',
       trigger_build: '触发构建',

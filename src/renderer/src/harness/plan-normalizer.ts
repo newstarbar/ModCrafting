@@ -64,6 +64,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
     case 'write':
       return [
         'write_file',
+        'edit_file',
         'complete_step',
         'fabric_content_register',
         'fabric_data_assets_generate',

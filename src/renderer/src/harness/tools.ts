@@ -57,6 +57,96 @@ function inferToolError(toolName: string, output: string, exitCode: number | nul
   return undefined
 }
 
+/** Build a helpful error message when a file operation fails.
+ *  Reads the project directory to suggest similar file names on ENOENT. */
+export async function diagnoseFileError(
+  toolName: string,
+  projectPath: string | null,
+  filePath: string,
+  rawError: string,
+  extra?: { oldString?: string; fileContent?: string }
+): Promise<string> {
+  const errLower = rawError.toLowerCase()
+
+  // ── ENOENT: file not found ──
+  if (errLower.includes('enoent') || errLower.includes('no such file')) {
+    if (!projectPath) return `文件不存在: ${filePath}`
+    const dir = filePath.substring(0, filePath.lastIndexOf('/'))
+    const baseName = filePath.substring(filePath.lastIndexOf('/') + 1).toLowerCase()
+
+    let suggestion = ''
+    try {
+      // Try to list the parent directory
+      const parentDir = dir || '.'
+      const entries = await window.api.listDirectory(`${projectPath}/${parentDir}`)
+      if (entries.length > 0) {
+        // Find similar names
+        const similar = entries
+          .filter((e) => {
+            const n = e.name.toLowerCase()
+            return n.includes(baseName.slice(0, 4)) || baseName.includes(n.slice(0, 4))
+          })
+          .slice(0, 3)
+          .map((e) => e.name + (e.isDirectory ? '/' : ''))
+        if (similar.length > 0) {
+          suggestion = `\n目录 "${parentDir}" 中的相似文件: ${similar.join(', ')}`
+        } else {
+          const allNames = entries.map((e) => e.name + (e.isDirectory ? '/' : '')).join(', ')
+          suggestion = `\n目录 "${parentDir}" 内容: ${allNames.slice(0, 200)}`
+        }
+      }
+    } catch { /* ignore */ }
+
+    return `文件不存在: ${filePath}${suggestion}\n如果要创建新文件，请使用 write_file。`
+  }
+
+  // ── EISDIR: path is a directory ──
+  if (errLower.includes('eisdir') || errLower.includes('illegal operation on a directory')) {
+    return `"${filePath}" 是一个目录，不是文件。请用 list_directory 查看目录内容，或用正确的文件路径重试。`
+  }
+
+  // ── EACCES / EPERM: permission ──
+  if (errLower.includes('eacces') || errLower.includes('eperm')) {
+    return `权限不足: ${filePath}。文件可能被其他进程（如 Gradle、游戏）占用。请关闭相关进程后重试。`
+  }
+
+  // ── ENOSPC: disk full ──
+  if (errLower.includes('enospc')) {
+    return `磁盘空间不足，无法写入 ${filePath}。请清理磁盘后重试。`
+  }
+
+  // ── edit_file specific: old_string not found ──
+  if (toolName === 'edit_file' && extra?.fileContent && extra?.oldString) {
+    const oldLower = extra.oldString.toLowerCase()
+    const lines = extra.fileContent.split('\n')
+    // Find lines containing keywords from oldString
+    const keywords = oldLower.split(/\s+/).filter((w: string) => w.length > 3)
+    const contextLines: string[] = []
+    for (let i = 0; i < lines.length; i++) {
+      if (keywords.some((kw: string) => lines[i].toLowerCase().includes(kw))) {
+        const start = Math.max(0, i - 3)
+        const end = Math.min(lines.length, i + 4)
+        for (let j = start; j < end; j++) {
+          contextLines.push(`${j + 1} | ${lines[j]}`)
+        }
+        contextLines.push('---')
+        if (contextLines.length >= 30) break
+      }
+    }
+    if (contextLines.length > 0) {
+      return `未找到目标文本。以下是文件中包含相关关键词的区域:\n${contextLines.join('\n')}\n请用 read_file 查看更多内容，然后调整 old_string 精确匹配。`
+    }
+    return `未找到目标文本。文件共 ${lines.length} 行。请用 read_file 查看文件内容后重试。`
+  }
+
+  // ── edit_file: multiple matches ──
+  if (toolName === 'edit_file' && errLower.includes('multiple matches')) {
+    return rawError // Already formatted by the tool
+  }
+
+  return rawError
+}
+
 function artifactPathFor(toolName: string, args: Record<string, unknown>): string | undefined {
   if (toolName === 'write_file' || toolName === 'read_file') {
     return typeof args.path === 'string' ? args.path : undefined
@@ -213,8 +303,15 @@ export async function executeTool(
     }
   } catch (err) {
     const duration = Date.now() - start
-    const errMsg = err instanceof Error ? err.message : String(err)
+    let errMsg = err instanceof Error ? err.message : String(err)
     logger.tool(`Error: ${tool.name}`, errMsg)
+
+    // File tools: diagnose the error with context
+    if (tool.name === 'read_file' || tool.name === 'write_file' || tool.name === 'edit_file') {
+      const filePath = typeof args.path === 'string' ? `${ctx.projectPath}/${args.path}` : ''
+      errMsg = await diagnoseFileError(tool.name, ctx.projectPath, filePath, errMsg)
+    }
+
     return {
       output: errMsg,
       error: errMsg,
