@@ -305,13 +305,13 @@ ServerTickEvents.END_SERVER_TICK.register(server -> {
 // 实体加载
 ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> { ... });
 
-// 方块交互
-AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+// 方块交互（右键方块）
+UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
     return ActionResult.PASS;
 });
 
-// 使用物品
-UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+// 实体交互（右键实体 — 注意是 UseEntityCallback 不是 PlayerInteractEntityCallback）
+UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
     return ActionResult.PASS;
 });
 

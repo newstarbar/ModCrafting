@@ -950,7 +950,10 @@ export const completeStepTool: Tool = {
   },
   readOnly: () => true,
   async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
-    const stepId = String(args.stepId || '')
+    // Extract numeric ID — handle "#1 描述文字" or "1" or "#1"
+    let stepId = String(args.stepId || '').trim()
+    const numMatch = stepId.match(/^#?(\d+)/)
+    if (numMatch) stepId = numMatch[1]
     if (ctx.planTracker) {
       const result = ctx.planTracker.advance(stepId)
       if (result.ok) {

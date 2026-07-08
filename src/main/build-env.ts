@@ -2125,6 +2125,43 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
 
   const results: string[] = []
 
+  // 0. Exact class name lookup — when keyword contains a CamelCase name,
+  //   find the matching class in Yarn and return its full API surface.
+  const classNames = keyword.split(/[\s.,()#]+/).filter((t) => /^[A-Z][a-zA-Z0-9_]+$/.test(t))
+  if (classNames.length > 0 && fs.existsSync(yarnMappingsPath())) {
+    try {
+      const yarnLines = fs.readFileSync(yarnMappingsPath(), 'utf-8').split('\n')
+      for (const cls of classNames) {
+        const lowerCls = cls.toLowerCase()
+        let startLine = -1
+        for (let i = 0; i < yarnLines.length; i++) {
+          const parts = yarnLines[i].split('\t')
+          if (parts[0] === 'c' && parts[parts.length - 1].toLowerCase().endsWith('/' + lowerCls)) {
+            startLine = i
+            break
+          }
+        }
+        if (startLine >= 0) {
+          // Collect all fields/methods of this class
+          const classLine = yarnLines[startLine]
+          const classParts: string[] = []
+          for (let i = startLine + 1; i < yarnLines.length; i++) {
+            const parts = yarnLines[i].split('\t')
+            if (parts[0] === 'c') break // next class
+            if (parts[0] === 'f') classParts.push(`  字段: ${parts[parts.length - 1]} : ${parts[1] || ''}`)
+            else if (parts[0] === 'm') classParts.push(`  方法: ${parts[parts.length - 1]} ${parts[1] || ''}`)
+            if (classParts.length >= 30) break
+          }
+          const clName = classLine.split('\t').pop() || cls
+          const header = (classParts.length > 0
+            ? `[Yarn 精确匹配] ${clName}\n${classParts.join('\n')}`
+            : `[Yarn 精确匹配] ${clName}（无额外字段/方法记录）`)
+          results.push(header)
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   // 1. Search Yarn mappings — use OR matching (each line has only one concept),
   //   then group by class and score by unique tokens matched within the class.
   const yarnPath = yarnMappingsPath()

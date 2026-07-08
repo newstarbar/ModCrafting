@@ -117,7 +117,8 @@ function isRepairDiagnosticResult(step: WorkflowStep, result: ToolResult, repair
   return REPAIR_DIAGNOSTIC_TOOLS.has(result.toolName || '')
 }
 
-/** Knowledge queries that should not consume attempt budget for non-terminal steps. */
+/** Knowledge queries that should not consume attempt budget for non-terminal steps.
+ *  However, beyond MAX_FREE_KNOWLEDGE_ROUNDS per step, they WILL count toward attempt. */
 const KNOWLEDGE_TOOLS = new Set([
   'fabric_docs_search',
   'fabric_javadoc_lookup',
@@ -126,10 +127,14 @@ const KNOWLEDGE_TOOLS = new Set([
   'fabric_mod_json_validate'
 ])
 
-function isKnowledgeRound(step: WorkflowStep, result: ToolResult | undefined): boolean {
+const MAX_FREE_KNOWLEDGE_ROUNDS = 3
+
+function isKnowledgeRound(step: WorkflowStep, result: ToolResult | undefined, knowledgeCount: number): boolean {
   if (!result || !result.ok || result.error) return false
   if (step.kind === 'build' || step.kind === 'run') return false
-  return KNOWLEDGE_TOOLS.has(result.toolName || '')
+  if (!KNOWLEDGE_TOOLS.has(result.toolName || '')) return false
+  // After MAX_FREE_KNOWLEDGE_ROUNDS, knowledge queries count as real attempts
+  return knowledgeCount < MAX_FREE_KNOWLEDGE_ROUNDS
 }
 
 function statusForPlan(step: WorkflowStep): string {
@@ -331,6 +336,7 @@ export class WorkflowEngine {
       let attempt = 0
       let loopIterations = 0
       let modelNetworkRetries = 0
+      let knowledgeQueries = 0
       const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS
       const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS * 8
 
@@ -503,9 +509,18 @@ export class WorkflowEngine {
         }
 
         this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
+
+        // Track knowledge queries and limit per step
+        if (primaryResult && KNOWLEDGE_TOOLS.has(primaryResult.toolName || '')) {
+          knowledgeQueries++
+          if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
+            roundInstruction = `【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 write_file 或 complete_step 完成当前步骤，不要再搜索文档。`
+          }
+        }
+
         if (
           !(repairMode && primaryResult && isRepairDiagnosticResult(step, primaryResult, repairMode)) &&
-          !isKnowledgeRound(step, primaryResult)
+          !isKnowledgeRound(step, primaryResult, knowledgeQueries)
         ) {
           attempt++
         }

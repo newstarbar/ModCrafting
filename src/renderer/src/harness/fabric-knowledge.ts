@@ -69,6 +69,7 @@ async function readLocalKnowledgeRoutes(): Promise<string[]> {
 }
 
 const LOCAL_SEARCH_FILES = [
+  'fabric/api-aliases.md',
   'fabric/yarn-reference.md',
   'fabric/docs/items-first-item.md',
   'fabric/docs/blocks-first-block.md',
