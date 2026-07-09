@@ -259,13 +259,14 @@ body,
 
 /* ── Sidebar (Activity Bar + Panel) ── */
 .sidebar {
-	width: var(--sidebar-width);
-	min-width: var(--sidebar-width);
+	width: calc(var(--activity-bar-width) + var(--sidebar-panel-width));
+	min-width: calc(var(--activity-bar-width) + var(--sidebar-panel-width));
+	max-width: calc(var(--activity-bar-width) + var(--sidebar-panel-width));
 	display: flex;
 	flex-direction: row;
 	overflow: hidden;
 	flex-shrink: 0;
-	transition: width var(--transition), min-width var(--transition);
+	transition: width var(--transition), min-width var(--transition), max-width var(--transition);
 }
 
 .sidebar--collapsed {
@@ -277,12 +278,14 @@ body,
 }
 
 .sidebar--collapsed .sidebar-panel {
-	width: 0;
-	min-width: 0;
+	width: 0 !important;
+	min-width: 0 !important;
+	max-width: 0;
 	border: none;
 	opacity: 0;
 	pointer-events: none;
 	overflow: hidden;
+	flex: 0 0 0;
 }
 
 .activity-bar {
@@ -338,13 +341,13 @@ body,
 .sidebar-panel {
 	width: var(--sidebar-panel-width);
 	min-width: var(--sidebar-panel-width);
+	max-width: var(--sidebar-panel-width);
+	flex: 0 0 var(--sidebar-panel-width);
 	background: var(--bg-secondary);
 	border-right: 1px solid var(--border-outer);
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	flex: 1;
-	min-width: 0;
 }
 
 .sidebar-panel-header {
@@ -1686,6 +1689,8 @@ body,
 	position: relative;
 	background: transparent;
 	touch-action: none;
+	z-index: 5;
+	user-select: none;
 }
 
 .panel-resize-handle::after {

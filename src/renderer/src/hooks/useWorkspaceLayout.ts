@@ -194,6 +194,7 @@ export function useWorkspaceLayout() {
 
 	const layoutStyle = {
 		'--sidebar-panel-width': leftCollapsed ? '0px' : `${leftWidth}px`,
+		'--sidebar-width': `calc(${ACTIVITY_BAR_WIDTH}px + ${leftCollapsed ? 0 : leftWidth}px)`,
 		'--right-panel-width': rightCollapsed ? '0px' : `${rightWidth}px`,
 	} as CSSProperties
 

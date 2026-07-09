@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 
 interface PanelResizeHandleProps {
 	side: 'left' | 'right'
@@ -13,6 +13,18 @@ const PanelResizeHandle: React.FC<PanelResizeHandleProps> = ({
 }) => {
 	const [active, setActive] = useState(false)
 
+	useEffect(() => {
+		if (!active) return
+		const prevCursor = document.body.style.cursor
+		const prevUserSelect = document.body.style.userSelect
+		document.body.style.cursor = 'col-resize'
+		document.body.style.userSelect = 'none'
+		return () => {
+			document.body.style.cursor = prevCursor
+			document.body.style.userSelect = prevUserSelect
+		}
+	}, [active])
+
 	if (disabled) return null
 
 	return (
@@ -24,13 +36,19 @@ const PanelResizeHandle: React.FC<PanelResizeHandleProps> = ({
 			onPointerDown={(e) => {
 				if (e.button !== 0) return
 				e.preventDefault()
+				e.stopPropagation()
 				setActive(true)
 				onPointerDown(e.clientX)
 				const target = e.currentTarget
 				target.setPointerCapture(e.pointerId)
-				const onUp = () => {
+				const onUp = (ev: PointerEvent) => {
+					if (ev.pointerId !== e.pointerId) return
 					setActive(false)
-					target.releasePointerCapture(e.pointerId)
+					try {
+						target.releasePointerCapture(e.pointerId)
+					} catch {
+						/* already released */
+					}
 					target.removeEventListener('pointerup', onUp)
 					target.removeEventListener('pointercancel', onUp)
 				}
