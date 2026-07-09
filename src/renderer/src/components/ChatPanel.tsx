@@ -33,6 +33,7 @@ import RollbackWarningPanel from './RollbackWarningPanel'
 import DeleteMessagePanel from './DeleteMessagePanel'
 import { removeMessageFromDisplay } from '../utils/message-delete'
 import { messagePlainText } from '../utils/message-text'
+import { shouldShowPinnedPlan } from '../utils/plan-visibility'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -488,7 +489,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           if (nextPlan) {
             activePlanRef.current = nextPlan
             setActivePlan(nextPlan)
-            flushPersist(displayMessagesRef.current, nextPlan)
+            setDisplayMessages((prev) => {
+              const next = prev.map((m) => (
+                m.id === nextPlan.anchorMsgId
+                  ? { ...m, embeddedPlan: nextSteps }
+                  : m
+              ))
+              flushPersist(next, nextPlan)
+              return next
+            })
           }
         }
         break
@@ -865,6 +874,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setIsLoading(true)
     setAgentStatus('思考中...')
     setActivePlan(null)
+    setPlanReady(false)
     setCompletionFlash('')
 
     if (!currentSessionId) {
@@ -1493,7 +1503,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         </div>
       </div>
       <div className="chat-messages" ref={chatMessagesRef} onScroll={handleScroll}>
-        {activePlan?.pinned && !displayMessages.some(m => m.role === 'assistant' && m.turnStatus) && (
+        {shouldShowPinnedPlan(activePlan, displayMessages, planReady) && activePlan && (
           <div className="chat-plan-sticky">
             <TaskPlan steps={activePlan.steps} variant="pinned" />
           </div>
