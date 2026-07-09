@@ -1,10 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
-import { templateSchemas, FormField, generatePromptFromForm, chineseToEnglishId } from './template-schemas'
+import { templateSchemas, FormField, generatePromptFromForm, chineseToEnglishId, CraftingGridData } from './template-schemas'
+import CraftingGrid, { GridSlot } from './CraftingGrid'
+import TemplatePreview from './mc/TemplatePreview'
 
 interface TemplateFormPanelProps {
   templateId: string
   onConfirm: (prompt: string) => void
   onCancel: () => void
+}
+
+function createEmptyGrid(): GridSlot[][] {
+  return Array(3).fill(null).map(() =>
+    Array(3).fill(null).map(() => ({ itemId: '', count: 0 }))
+  )
 }
 
 function renderField(
@@ -94,6 +102,28 @@ function renderField(
             onChange={(e) => onChange(field.key, e.target.checked)}
           />
         )
+      case 'craftingGrid':
+        const gridData = value as CraftingGridData || {
+          grid: createEmptyGrid(),
+          outputItem: '',
+          outputCount: 1
+        }
+        return (
+          <CraftingGrid
+            grid={gridData.grid}
+            outputItem={gridData.outputItem}
+            outputCount={gridData.outputCount}
+            onGridChange={(grid) => {
+              onChange(field.key, { ...gridData, grid })
+            }}
+            onOutputItemChange={(itemId) => {
+              onChange(field.key, { ...gridData, outputItem: itemId })
+            }}
+            onOutputCountChange={(count) => {
+              onChange(field.key, { ...gridData, outputCount: count })
+            }}
+          />
+        )
       default:
         return null
     }
@@ -122,6 +152,12 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
     schema?.fields.forEach((field) => {
       if (field.defaultValue !== undefined) {
         initialData[field.key] = field.defaultValue
+      } else if (field.type === 'craftingGrid') {
+        initialData[field.key] = {
+          grid: createEmptyGrid(),
+          outputItem: '',
+          outputCount: 1
+        }
       }
     })
     setFormData(initialData)
@@ -170,9 +206,12 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
         </div>
 
         <div className="template-form-body">
-          {schema.fields.map((field) =>
-            renderField(field, formData[field.key], customValues[field.key] || '', handleChange, handleCustomChange)
-          )}
+          <div className="template-form-fields">
+            {schema.fields.map((field) =>
+              renderField(field, formData[field.key], customValues[field.key] || '', handleChange, handleCustomChange)
+            )}
+          </div>
+          <TemplatePreview templateId={templateId} formData={formData} />
         </div>
 
         <div className="template-form-footer">

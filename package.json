@@ -23,10 +23,15 @@
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
 		"test:harness": "node --experimental-strip-types --test scripts/harness-plan-tracker.test.ts scripts/harness-turn-intent.test.ts",
+		"generate:items": "python scripts/generate_items.py",
+		"prefetch:mc-assets": "python scripts/ensure_minecraft_assets.py",
+		"prepare:renderer-assets": "python scripts/prepare_renderer_assets.py",
+		"cleanup:public-assets": "python scripts/cleanup_public_assets.py",
+		"extract:mc-gui": "python scripts/extract-mc-gui.py",
 		"generate:icon": "node scripts/generate-icon-ico.mjs",
 		"postinstall": "node scripts/ensure-native-deps.mjs",
-		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/patch-nsis-install-ui.mjs",
-		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/patch-nsis-install-ui.mjs",
 		"prebuild:win:portable": "node scripts/generate-icon-ico.mjs && node scripts/verify-portable-resources.mjs"
 	},
 	"dependencies": {

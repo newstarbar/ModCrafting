@@ -1,7 +1,7 @@
 export interface FormField {
   key: string
   label: string
-  type: 'text' | 'select' | 'number' | 'checkbox' | 'textarea'
+  type: 'text' | 'select' | 'number' | 'checkbox' | 'textarea' | 'craftingGrid'
   defaultValue?: string | number | boolean
   options?: { label: string; value: string }[]
   placeholder?: string
@@ -540,36 +540,18 @@ export const templateSchemas: Record<string, TemplateSchema> = {
         customPlaceholder: '请输入自定义配方类型...'
       },
       {
-        key: 'outputItem',
-        label: '输出物品',
-        type: 'text',
-        placeholder: '如 minecraft:diamond',
-        required: true
-      },
-      {
-        key: 'outputCount',
-        label: '输出数量',
-        type: 'number',
-        defaultValue: 1,
-        min: 1,
-        max: 64
-      },
-      {
-        key: 'inputMaterials',
-        label: '输入材料',
-        type: 'textarea',
-        placeholder: '每行一个材料，格式：物品ID 数量\n如：\nminecraft:coal 1\nminecraft:iron_ingot 2',
-        required: true
-      },
-      {
-        key: 'recipeShape',
-        label: '合成形状（有序合成）',
-        type: 'textarea',
-        placeholder: '3x3 网格，用字母代表材料\n如：\nAAA\nABA\nAAA',
-        condition: { key: 'recipeType', value: 'shaped' }
+        key: 'craftingGrid',
+        label: '合成网格',
+        type: 'craftingGrid'
       }
     ]
   }
+}
+
+export interface CraftingGridData {
+  grid: { itemId: string; count: number }[][]
+  outputItem: string
+  outputCount: number
 }
 
 export function generatePromptFromForm(templateId: string, formData: Record<string, unknown>): string {
@@ -588,6 +570,39 @@ export function generatePromptFromForm(templateId: string, formData: Record<stri
         const option = field.options.find(o => o.value === value)
         if (option) {
           displayValue = option.label
+        }
+      }
+
+      if (field.type === 'craftingGrid') {
+        const gridData = value as CraftingGridData
+        if (gridData) {
+          const { grid, outputItem, outputCount } = gridData
+          prompt += `- 输出物品：${outputItem} x${outputCount}\n`
+          prompt += `- 输入材料：\n`
+          
+          const materials: Record<string, number> = {}
+          grid.forEach(row => {
+            row.forEach(slot => {
+              if (slot.itemId) {
+                materials[slot.itemId] = (materials[slot.itemId] || 0) + (slot.count || 1)
+              }
+            })
+          })
+          
+          if (Object.keys(materials).length === 0) {
+            prompt += `  无（空配方）\n`
+          } else {
+            Object.entries(materials).forEach(([itemId, count]) => {
+              prompt += `  - ${itemId} x${count}\n`
+            })
+          }
+
+          prompt += `- 合成形状（3x3网格）：\n`
+          grid.forEach(row => {
+            const rowStr = row.map(slot => slot.itemId ? 'X' : '.').join(' ')
+            prompt += `  ${rowStr}\n`
+          })
+          continue
         }
       }
 

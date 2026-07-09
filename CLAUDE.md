@@ -16,6 +16,9 @@ npm run verify:toolchain # 检查 JDK/Gradle/Wrapper 文件是否齐全
 npm run verify:offline   # 验证离线构建流程
 npm run setup:toolchain  # 下载 JDK 21 + Gradle 9.5 到 resources/
 npm run prefetch:deps    # 预取 Fabric/Minecraft 依赖（约 1GB）
+npm run prepare:renderer-assets  # 下载 MC 客户端 JAR + 生成物品预览（发布前）
+npm run prefetch:mc-assets       # 仅下载/解压 temp/minecraft-assets
+npm run generate:items           # 从已解压资源生成 public/items 与 items.ts
 ```
 
 测试使用 Node.js 内置测试运行器（`node --experimental-strip-types --test`）。新增 harness 测试放在 `scripts/` 目录下，遵循 `harness-*.test.ts` 命名规范，然后在 `package.json` 的 `test:harness` 脚本中注册。

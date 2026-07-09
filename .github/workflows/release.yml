@@ -36,6 +36,20 @@ jobs:
             resources/gradle-home-seed
           key: toolchain-${{ hashFiles('resources/fabric-versions.json') }}
 
+      - name: Cache Minecraft client assets
+        uses: actions/cache@v4
+        with:
+          path: temp/minecraft-assets-1.21.4
+          key: mc-assets-${{ hashFiles('resources/fabric-versions.json') }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python asset dependencies
+        run: pip install -r scripts/requirements-assets.txt
+
       - name: Install dependencies
         run: npm ci
 
@@ -49,6 +63,9 @@ jobs:
         run: |
           npm run generate:icon
           node scripts/patch-nsis-install-ui.mjs
+
+      - name: Prepare renderer assets
+        run: npm run prepare:renderer-assets
 
       - name: Render release notes
         run: node scripts/render-release-notes.mjs "${{ github.ref_name }}"

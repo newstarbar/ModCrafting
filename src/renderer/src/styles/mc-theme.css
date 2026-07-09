@@ -348,3 +348,231 @@
   color: var(--text-muted);
   text-align: center;
 }
+
+/* ── MC Slot / Item Stack / HUD ── */
+.mc-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  padding: 0;
+  cursor: default;
+  background: url('../assets/mc/container/slot.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  position: relative;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+button.mc-slot {
+  cursor: pointer;
+}
+
+.mc-slot--selected {
+  box-shadow: 0 0 0 2px rgba(255, 255, 160, 0.6);
+}
+
+.mc-slot-placeholder {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.2;
+  padding: 2px;
+}
+
+.mc-item-stack {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.item-icon {
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.item-icon--slab,
+.item-icon--stairs {
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.45));
+}
+
+.mc-item-count {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 1px 1px 0 #222, -1px -1px 0 #222, 1px -1px 0 #222, -1px 1px 0 #222;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.mc-durability-bar {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 1px;
+  height: 2px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.mc-durability-bar-fill {
+  height: 100%;
+}
+
+.mc-crafting-table {
+  background: url('../assets/mc/container/crafting_table_background.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  padding: 16px;
+  border-radius: 0;
+}
+
+.mc-crafting-arrow {
+  width: 24px;
+  height: 17px;
+  background: url('../assets/mc/recipe_book/arrow.png') center / contain no-repeat;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+
+.mc-hud-bar {
+  display: flex;
+  gap: 1px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.mc-hud-icon {
+  width: 9px;
+  height: 9px;
+  image-rendering: pixelated;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.mc-hud-icon--hunger-full { background-image: url('../assets/mc/hud/food_full.png'); }
+.mc-hud-icon--hunger-half { background-image: url('../assets/mc/hud/food_half.png'); }
+.mc-hud-icon--hunger-empty { background-image: url('../assets/mc/hud/food_empty.png'); }
+.mc-hud-icon--armor-full { background-image: url('../assets/mc/hud/armor_full.png'); }
+.mc-hud-icon--armor-half { background-image: url('../assets/mc/hud/armor_half.png'); }
+.mc-hud-icon--armor-empty { background-image: url('../assets/mc/hud/armor_empty.png'); }
+
+.mc-tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.mc-tooltip-wrap--below .mc-tooltip {
+  bottom: auto;
+  top: calc(100% + 4px);
+}
+
+.mc-tooltip-wrap:hover {
+  z-index: 20;
+}
+
+.mc-tooltip-wrap .mc-tooltip,
+.mc-floating-tooltip.mc-tooltip {
+  min-width: 80px;
+  max-width: 220px;
+  padding: 6px 8px;
+  background: linear-gradient(180deg, #100010 0%, #280028 100%);
+  border: 2px solid #100010;
+  box-shadow: inset 1px 1px 0 #180018, 2px 2px 0 rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.mc-floating-tooltip.mc-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 10000;
+}
+
+.mc-floating-tooltip-anchor {
+  display: inline-flex;
+}
+
+.mc-tooltip-wrap .mc-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3000;
+}
+
+.mc-tooltip-wrap:hover .mc-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mc-tooltip-title {
+  color: #ffffff;
+  font-size: 12px;
+  text-shadow: 1px 1px #3f3f3f;
+}
+
+.mc-tooltip-line {
+  color: #aaa;
+  font-size: 11px;
+}
+
+.mc-template-preview {
+  margin-top: 12px;
+  padding: 12px;
+  border: 6px solid transparent;
+  border-image: url('../assets/mc/popup/background.png') 6 fill / 6px / 0 stretch;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.mc-template-preview-label {
+  font-size: 11px;
+  color: var(--mc-aqua);
+  text-shadow: var(--mc-shadow-sm);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mc-template-preview-slot {
+  width: 40px;
+  height: 40px;
+}
+
+.mc-template-preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.mc-template-preview-effects {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.mc-effect-slot {
+  width: 22px;
+  height: 22px;
+  background: url('../assets/mc/container/slot.png') center / 100% 100% no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  image-rendering: pixelated;
+}
+
+.mc-template-preview-effect-name {
+  font-size: 11px;
+  color: #aaa;
+}
