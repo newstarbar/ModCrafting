@@ -175,6 +175,25 @@ function finalizeRunningTools(entries: ChronoEntry[], hasError: boolean): Chrono
   })
 }
 
+function formatClarificationTextEntry(question: string, options: string[]): string {
+  const q = question.trim()
+  if (!options.length) return q
+  const opts = options.map((o, i) => `${i + 1}. ${o}`).join('\n')
+  return `${q}\n\n选项：\n${opts}`
+}
+
+function appendClarificationTextEntry(
+  entries: ChronoEntry[],
+  question: string,
+  options: string[]
+): ChronoEntry[] {
+  const content = formatClarificationTextEntry(question, options)
+  if (!content) return entries
+  const last = entries[entries.length - 1]
+  if (last?.kind === 'text' && last.content.trim() === content.trim()) return entries
+  return [...entries, { kind: 'text', content }]
+}
+
 interface ChatPanelRef {
   handleTemplateSelect: (templateId: string, name: string) => void
 }
@@ -505,6 +524,17 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           setPlanReady(false)
         } else if (event.phase === 'plan_ready') {
           setPlanReady(true)
+        } else if (event.phase === 'clarification_resume') {
+          t.streamDone = false
+          if (t.msgId) {
+            setDisplayMessages((prev) => prev.map((m) => (
+              m.id === t.msgId
+                ? { ...m, isStreaming: true, turnStatus: undefined }
+                : m
+            )))
+          } else {
+            refreshDisplay()
+          }
         }
         break
 
@@ -541,6 +571,32 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           setClarificationSelectedIndex(null)
           setIsLoading(false)
           setAgentStatus('')
+          onRunningChangeRef.current?.(false)
+
+          t.streamDone = true
+          if (t.msgId) {
+            collapseAllReasoning(t.msgId, t.entries)
+            t.entries = finalizeRunningTools(t.entries, false)
+            t.entries = appendClarificationTextEntry(
+              t.entries,
+              event.clarification.question,
+              event.clarification.options || []
+            )
+            setDisplayMessages((prev) => {
+              const next = prev.map((m) => (
+                m.id === t.msgId
+                  ? {
+                      ...m,
+                      entries: [...t.entries],
+                      isStreaming: false,
+                      turnStatus: 'answered' as const
+                    }
+                  : m
+              ))
+              flushPersist(next, activePlanRef.current)
+              return next
+            })
+          }
         }
         break
 

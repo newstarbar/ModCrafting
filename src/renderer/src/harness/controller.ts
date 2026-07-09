@@ -804,6 +804,7 @@ ${projectInfo}`
     this.agent.resetRunState()
 
     this.onAgentStatus?.('思考中...')
+    this.emitEvent({ kind: EventKind.Phase, phase: 'clarification_resume' })
 
     let planStreamText = ''
     let planStreamReasoning = ''
@@ -817,7 +818,6 @@ ${projectInfo}`
       if (this._phase === 'plan' || !this.planTracker) {
         // Resume plan phase — regenerate plan with clarified requirements
         await this.updateSystemPrompt('plan')
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_start' })
 
         const planResult = await this.agent.run(
           this.apiConfig.endpoint,
