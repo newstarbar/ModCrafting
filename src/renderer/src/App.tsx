@@ -90,6 +90,7 @@ const App: React.FC = () => {
 	const [fileChanges, setFileChanges] = useState<{ time: string; entry: string }[]>([]);
 	const [apiConfig, setApiConfig] = useState(DEFAULT_API_CONFIG);
 	const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
+	const [savedProviderIds, setSavedProviderIds] = useState<string[]>([]);
 	const [encryptionAvailable, setEncryptionAvailable] = useState(true);
 	const [usage, setUsage] = useState<UsageData>(EMPTY_USAGE);
 	const [isRunning, setIsRunning] = useState(false);
@@ -177,10 +178,11 @@ const App: React.FC = () => {
 		async function initApiConfig(): Promise<void> {
 			const settings = await window.api.loadApiConfig();
 			setEncryptionAvailable(settings.encryptionAvailable);
+			setSavedProviderIds(settings.savedProviderIds);
 
 			let apiKey = "";
 			if (settings.hasApiKey) {
-				const keyResult = await window.api.getApiKey();
+				const keyResult = await window.api.getApiKey(settings.providerId);
 				if (keyResult.success && keyResult.apiKey?.trim()) {
 					apiKey = keyResult.apiKey.trim();
 					setHasSavedApiKey(true);
@@ -191,6 +193,8 @@ const App: React.FC = () => {
 						alert(`API Key 加载失败：${keyResult.error}\n请在左侧「设置」中重新保存密钥。`);
 					}
 				}
+			} else {
+				setHasSavedApiKey(false);
 			}
 
 			setApiConfig({
@@ -212,7 +216,7 @@ const App: React.FC = () => {
 
 		if (!hasSavedApiKey) return null;
 
-		const keyResult = await window.api.getApiKey();
+		const keyResult = await window.api.getApiKey(apiConfig.providerId);
 		if (keyResult.success && keyResult.apiKey?.trim()) {
 			const key = keyResult.apiKey.trim();
 			setApiConfig((prev) => ({ ...prev, apiKey: key }));
@@ -226,7 +230,7 @@ const App: React.FC = () => {
 			alert(`API Key 读取失败：${keyResult.error}`);
 		}
 		return null;
-	}, [apiConfig.apiKey, hasSavedApiKey]);
+	}, [apiConfig.apiKey, apiConfig.providerId, hasSavedApiKey]);
 
 	const handleApiSettingsChange = useCallback(async (config: ApiSettingsPayload) => {
 		setApiConfig((prev) => ({
@@ -236,6 +240,14 @@ const App: React.FC = () => {
 			providerId: config.providerId,
 		}));
 		await window.api.saveApiConfig(config);
+
+		const keyResult = await window.api.getApiKey(config.providerId);
+		const apiKey = keyResult.success && keyResult.apiKey?.trim() ? keyResult.apiKey.trim() : "";
+		setApiConfig((prev) => ({ ...prev, apiKey }));
+		setHasSavedApiKey(Boolean(apiKey));
+
+		const refreshed = await window.api.loadApiConfig();
+		setSavedProviderIds(refreshed.savedProviderIds);
 	}, []);
 
 	const handleProviderModelChange = useCallback(
@@ -258,14 +270,16 @@ const App: React.FC = () => {
 		const trimmed = key.trim();
 		if (!trimmed) return;
 
-		const result = await window.api.saveApiKey(trimmed);
+		const result = await window.api.saveApiKey(trimmed, apiConfig.providerId);
 		if (!result.success) {
 			alert(result.error || "API Key 保存失败");
 			return;
 		}
 		setApiConfig((prev) => ({ ...prev, apiKey: trimmed }));
 		setHasSavedApiKey(true);
-	}, []);
+		const refreshed = await window.api.loadApiConfig();
+		setSavedProviderIds(refreshed.savedProviderIds);
+	}, [apiConfig.providerId]);
 
 	const loadProjectDir = useCallback(
 		async (dir: string) => {
@@ -666,6 +680,7 @@ const App: React.FC = () => {
 							fileChanges={fileChanges}
 							apiConfig={apiConfig}
 							hasSavedApiKey={hasSavedApiKey}
+							savedProviderIds={savedProviderIds}
 							encryptionAvailable={encryptionAvailable}
 							onApiSettingsChange={handleApiSettingsChange}
 							onApiKeySave={handleApiKeySave}

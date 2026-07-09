@@ -12,6 +12,7 @@ export interface ApiSettings {
   model: string
   providerId: string
   hasApiKey: boolean
+  savedProviderIds: string[]
   encryptionAvailable: boolean
 }
 
@@ -19,8 +20,46 @@ function settingsPath(): string {
   return path.join(app.getPath('userData'), 'api-settings.json')
 }
 
-function apiKeyPath(): string {
+function legacyApiKeyPath(): string {
   return path.join(app.getPath('userData'), 'api-key.bin')
+}
+
+function apiKeysDir(): string {
+  return path.join(app.getPath('userData'), 'api-keys')
+}
+
+function sanitizeProviderId(providerId: string): string {
+  return providerId.replace(/[^a-z0-9_-]/gi, '_') || DEFAULT_PROVIDER_ID
+}
+
+function apiKeyPathForProvider(providerId: string): string {
+  return path.join(apiKeysDir(), `${sanitizeProviderId(providerId)}.bin`)
+}
+
+let legacyKeyMigrated = false
+
+function migrateLegacyApiKey(): void {
+  if (legacyKeyMigrated) return
+  legacyKeyMigrated = true
+
+  const legacyPath = legacyApiKeyPath()
+  if (!fs.existsSync(legacyPath)) return
+
+  const file = readSettingsFile()
+  const endpoint = file.endpoint || DEFAULT_ENDPOINT
+  const model = file.model || DEFAULT_MODEL
+  const providerId = file.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
+  const dest = apiKeyPathForProvider(providerId)
+
+  try {
+    fs.mkdirSync(apiKeysDir(), { recursive: true })
+    if (!fs.existsSync(dest)) {
+      fs.copyFileSync(legacyPath, dest)
+    }
+    fs.unlinkSync(legacyPath)
+  } catch {
+    // Keep legacy file if migration fails
+  }
 }
 
 function readSettingsFile(): { endpoint?: string; model?: string; providerId?: string } {
@@ -33,13 +72,11 @@ function readSettingsFile(): { endpoint?: string; model?: string; providerId?: s
   }
 }
 
-function readEncryptedBuffer(): Buffer | null {
-  const p = apiKeyPath()
-  if (!fs.existsSync(p)) return null
-  const raw = fs.readFileSync(p)
+function readEncryptedBufferAt(filePath: string): Buffer | null {
+  if (!fs.existsSync(filePath)) return null
+  const raw = fs.readFileSync(filePath)
   if (raw.length === 0) return null
 
-  // New format: base64 text file
   const asText = raw.toString('utf-8').trim()
   if (/^[A-Za-z0-9+/=]+$/.test(asText) && asText.length > 16) {
     try {
@@ -48,26 +85,43 @@ function readEncryptedBuffer(): Buffer | null {
       // fall through to legacy raw buffer
     }
   }
-  // Legacy format: raw encrypted bytes
   return raw
 }
 
-function writeEncryptedBuffer(encrypted: Buffer): void {
-  fs.mkdirSync(app.getPath('userData'), { recursive: true })
-  fs.writeFileSync(apiKeyPath(), encrypted.toString('base64'), 'utf-8')
+function writeEncryptedBufferAt(filePath: string, encrypted: Buffer): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, encrypted.toString('base64'), 'utf-8')
+}
+
+function providerHasSavedKey(providerId: string): boolean {
+  const encrypted = readEncryptedBufferAt(apiKeyPathForProvider(providerId))
+  return Boolean(encrypted && encrypted.length > 0)
+}
+
+export function listSavedProviderIds(): string[] {
+  migrateLegacyApiKey()
+  if (!fs.existsSync(apiKeysDir())) return []
+
+  return fs.readdirSync(apiKeysDir())
+    .filter((name) => name.endsWith('.bin'))
+    .map((name) => name.slice(0, -4))
+    .filter((id) => providerHasSavedKey(id))
 }
 
 export function loadApiConfig(): ApiSettings {
+  migrateLegacyApiKey()
   const file = readSettingsFile()
   const endpoint = file.endpoint || DEFAULT_ENDPOINT
   const model = file.model || DEFAULT_MODEL
   const providerId = file.providerId
     || inferProviderId(endpoint, model)
+  const savedProviderIds = listSavedProviderIds()
   return {
     endpoint,
     model,
     providerId,
-    hasApiKey: fs.existsSync(apiKeyPath()) && (readEncryptedBuffer()?.length ?? 0) > 0,
+    hasApiKey: savedProviderIds.includes(sanitizeProviderId(providerId)),
+    savedProviderIds,
     encryptionAvailable: safeStorage.isEncryptionAvailable()
   }
 }
@@ -93,10 +147,11 @@ export function saveApiConfig(config: {
   }
 }
 
-export function saveApiKey(key: string): { success: boolean; error?: string } {
+export function saveApiKey(key: string, providerId: string = DEFAULT_PROVIDER_ID): { success: boolean; error?: string } {
   const trimmed = key.trim()
+  const safeProviderId = sanitizeProviderId(providerId)
   if (!trimmed) {
-    return clearApiKey()
+    return clearApiKey(safeProviderId)
   }
   if (trimmed.length < 8) {
     return { success: false, error: 'API Key 长度过短，请检查是否完整' }
@@ -105,16 +160,18 @@ export function saveApiKey(key: string): { success: boolean; error?: string } {
     return { success: false, error: '系统不支持加密存储，无法安全保存 API Key' }
   }
   try {
+    migrateLegacyApiKey()
     const encrypted = safeStorage.encryptString(trimmed)
-    writeEncryptedBuffer(encrypted)
+    writeEncryptedBufferAt(apiKeyPathForProvider(safeProviderId), encrypted)
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }
   }
 }
 
-export function getApiKey(): { success: boolean; apiKey?: string; error?: string } {
-  const encrypted = readEncryptedBuffer()
+export function getApiKey(providerId: string = DEFAULT_PROVIDER_ID): { success: boolean; apiKey?: string; error?: string } {
+  migrateLegacyApiKey()
+  const encrypted = readEncryptedBufferAt(apiKeyPathForProvider(sanitizeProviderId(providerId)))
   if (!encrypted || encrypted.length === 0) {
     return { success: true, apiKey: '' }
   }
@@ -128,15 +185,14 @@ export function getApiKey(): { success: boolean; apiKey?: string; error?: string
     }
     return { success: true, apiKey }
   } catch (err) {
-    // Corrupt file — remove so user can re-enter
-    try { clearApiKey() } catch { /* ignore */ }
+    try { clearApiKey(providerId) } catch { /* ignore */ }
     return { success: false, error: `无法解密已保存的 API Key（可能已损坏），请重新填写。${String(err)}` }
   }
 }
 
-export function clearApiKey(): { success: boolean; error?: string } {
+export function clearApiKey(providerId: string = DEFAULT_PROVIDER_ID): { success: boolean; error?: string } {
   try {
-    const p = apiKeyPath()
+    const p = apiKeyPathForProvider(sanitizeProviderId(providerId))
     if (fs.existsSync(p)) fs.unlinkSync(p)
     return { success: true }
   } catch (err) {

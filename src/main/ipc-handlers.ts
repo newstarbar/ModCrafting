@@ -387,13 +387,13 @@ export function setupIpcHandlers(): void {
     saveApiConfig(config)
   )
 
-  ipcMain.handle('secrets:saveApiKey', async (_event, key: string) =>
-    saveApiKey(key)
+  ipcMain.handle('secrets:saveApiKey', async (_event, key: string, providerId?: string) =>
+    saveApiKey(key, providerId)
   )
 
-  ipcMain.handle('secrets:getApiKey', async () => getApiKey())
+  ipcMain.handle('secrets:getApiKey', async (_event, providerId?: string) => getApiKey(providerId))
 
-  ipcMain.handle('secrets:clearApiKey', async () => clearApiKey())
+  ipcMain.handle('secrets:clearApiKey', async (_event, providerId?: string) => clearApiKey(providerId))
 
   // Agent config (knowledge sources, tool toggles, MCP placeholders)
   ipcMain.handle('agentConfig:load', async () => loadAgentConfig())

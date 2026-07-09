@@ -103,6 +103,19 @@
   border-image-source: url('../assets/mc/widget/text_field_highlighted.png');
 }
 
+/* Native select in dark UI — color-scheme fixes Windows/Electron white dropdown */
+select.mc-input.mc-select {
+  color-scheme: dark;
+  background-color: var(--bg-secondary);
+  cursor: pointer;
+  appearance: auto;
+}
+
+select.mc-input.mc-select option {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 .mc-tab {
   border: 2px solid transparent;
   border-image: url('../assets/mc/widget/tab.png') 2 fill / 2px / 0 stretch;

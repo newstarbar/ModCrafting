@@ -290,16 +290,16 @@ const api = {
   },
 
   // API config & secrets
-  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; encryptionAvailable: boolean }> =>
+  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean }> =>
     ipcRenderer.invoke('config:load'),
   saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('config:save', config),
-  saveApiKey: (key: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('secrets:saveApiKey', key),
-  getApiKey: (): Promise<{ success: boolean; apiKey?: string; error?: string }> =>
-    ipcRenderer.invoke('secrets:getApiKey'),
-  clearApiKey: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('secrets:clearApiKey'),
+  saveApiKey: (key: string, providerId?: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('secrets:saveApiKey', key, providerId),
+  getApiKey: (providerId?: string): Promise<{ success: boolean; apiKey?: string; error?: string }> =>
+    ipcRenderer.invoke('secrets:getApiKey', providerId),
+  clearApiKey: (providerId?: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('secrets:clearApiKey', providerId),
 
   // Agent config
   loadAgentConfig: (): Promise<{

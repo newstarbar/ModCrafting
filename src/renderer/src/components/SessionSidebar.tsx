@@ -1,7 +1,8 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import FileTree from './FileTree'
 import FileViewer from './FileViewer'
 import ToolsPanel from './ToolsPanel'
+import SettingsSelect from './SettingsSelect'
 import { IconFile, IconMessage, IconPanelLeftClose, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
 
 import type { ChatSession } from '../types/chat'
@@ -31,6 +32,7 @@ interface SessionSidebarProps {
   fileChanges: FileChange[]
   apiConfig: ApiConfigState
   hasSavedApiKey?: boolean
+  savedProviderIds?: string[]
   encryptionAvailable?: boolean
   onApiSettingsChange: (config: ApiSettingsPayload) => void
   onApiKeySave: (key: string) => void | Promise<void>
@@ -59,7 +61,7 @@ function pickApiSettings(config: ApiConfigState, patch: Partial<ApiSettingsPaylo
 const SessionSidebar: React.FC<SessionSidebarProps> = ({
   projectPath, projectName, sessions, currentSessionId,
   onOpenSession, onNewSession, onDeleteSession, onRenameSession,
-  fileChanges, apiConfig, hasSavedApiKey = false, encryptionAvailable = true,
+  fileChanges, apiConfig, hasSavedApiKey = false, savedProviderIds = [], encryptionAvailable = true,
   onApiSettingsChange, onApiKeySave,
   onOpenProject, onCreateProject,
   fileTreeRefreshKey = 0, selectedFilePath, selectedFile, fileContent, onSelectFile,
@@ -88,6 +90,11 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     window.addEventListener('modcrafting:open-settings', openSettings)
     return () => window.removeEventListener('modcrafting:open-settings', openSettings)
   }, [])
+
+  useEffect(() => {
+    setApiKeyDraft('')
+    setKeySaveHint('')
+  }, [apiConfig.providerId])
 
   const handleStartRename = useCallback((id: string, currentName: string) => {
     setRenamingId(id)
@@ -126,6 +133,31 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     tools: '工具',
     settings: '设置'
   }
+
+  const providerOptions = useMemo(() => [
+    ...getAllProviders().map((provider) => ({
+      value: provider.id,
+      label: provider.label,
+      saved: savedProviderIds.includes(provider.id),
+    })),
+    {
+      value: CUSTOM_PROVIDER_ID,
+      label: '自定义',
+      saved: savedProviderIds.includes(CUSTOM_PROVIDER_ID),
+    },
+  ], [savedProviderIds])
+
+  const modelOptions = useMemo(() => {
+    const models = getProvider(apiConfig.providerId)?.models ?? []
+    const options = models.map((model) => ({
+      value: model.id,
+      label: model.label,
+    }))
+    if (apiConfig.model && !models.some((m) => m.id === apiConfig.model)) {
+      options.push({ value: apiConfig.model, label: apiConfig.model })
+    }
+    return options
+  }, [apiConfig.providerId, apiConfig.model])
 
   return (
     <div className={`sidebar${panelCollapsed ? ' sidebar--collapsed' : ''}${panelDragging ? ' sidebar--dragging' : ''}`}>
@@ -310,11 +342,10 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>厂商</label>
-              <select
-                className="mc-input"
+              <SettingsSelect
                 value={apiConfig.providerId}
-                onChange={(e) => {
-                  const providerId = e.target.value
+                options={providerOptions}
+                onChange={(providerId) => {
                   if (providerId === CUSTOM_PROVIDER_ID) {
                     onApiSettingsChange(pickApiSettings(apiConfig, { providerId: CUSTOM_PROVIDER_ID }))
                     return
@@ -328,37 +359,28 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     model: resolved.modelId,
                   }))
                 }}
-                style={{ fontSize: '12px', minHeight: '32px' }}
-              >
-                {getAllProviders().map((provider) => (
-                  <option key={provider.id} value={provider.id}>{provider.label}</option>
-                ))}
-                <option value={CUSTOM_PROVIDER_ID}>自定义</option>
-              </select>
+              />
+              {savedProviderIds.length > 0 && (
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  ✓ 表示该厂商已保存 API Key
+                </div>
+              )}
 
               {apiConfig.providerId !== CUSTOM_PROVIDER_ID ? (
                 <>
                   <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型</label>
-                  <select
-                    className="mc-input"
+                  <SettingsSelect
                     value={apiConfig.model}
-                    onChange={(e) => {
-                      const resolved = resolveSelection(apiConfig.providerId, e.target.value)
+                    options={modelOptions}
+                    onChange={(modelId) => {
+                      const resolved = resolveSelection(apiConfig.providerId, modelId)
                       onApiSettingsChange(pickApiSettings(apiConfig, {
                         providerId: resolved.providerId,
                         endpoint: resolved.endpoint,
                         model: resolved.modelId,
                       }))
                     }}
-                    style={{ fontSize: '12px', minHeight: '32px' }}
-                  >
-                    {(getProvider(apiConfig.providerId)?.models ?? []).map((model) => (
-                      <option key={model.id} value={model.id}>{model.label}</option>
-                    ))}
-                    {!(getProvider(apiConfig.providerId)?.models ?? []).some((m) => m.id === apiConfig.model) && apiConfig.model && (
-                      <option value={apiConfig.model}>{apiConfig.model}</option>
-                    )}
-                  </select>
+                  />
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                     API 地址：{apiConfig.endpoint}
                   </div>
@@ -384,6 +406,12 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                 </>
               )}
 
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                API 密钥
+                {hasSavedApiKey && (
+                  <span style={{ fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>已保存</span>
+                )}
+              </label>
               <input className="mc-input" type="password"
                 placeholder={hasSavedApiKey ? '已保存密钥（输入新值可覆盖）' : 'API 密钥'}
                 value={apiKeyDraft}

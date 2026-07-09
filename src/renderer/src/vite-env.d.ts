@@ -113,11 +113,11 @@ interface ModCraftingApi {
   getAppVersion: () => Promise<string>
   openReleasePages: () => Promise<{ success: boolean }>
   onUpdateStatus: (callback: (payload: { phase: string; source?: string; percent?: number; error?: string }) => void) => () => void
-  loadApiConfig: () => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; encryptionAvailable: boolean }>
+  loadApiConfig: () => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean }>
   saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }) => Promise<{ success: boolean; error?: string }>
-  saveApiKey: (key: string) => Promise<{ success: boolean; error?: string }>
-  getApiKey: () => Promise<{ success: boolean; apiKey?: string; error?: string }>
-  clearApiKey: () => Promise<{ success: boolean; error?: string }>
+  saveApiKey: (key: string, providerId?: string) => Promise<{ success: boolean; error?: string }>
+  getApiKey: (providerId?: string) => Promise<{ success: boolean; apiKey?: string; error?: string }>
+  clearApiKey: (providerId?: string) => Promise<{ success: boolean; error?: string }>
   loadAgentConfig: () => Promise<{
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
