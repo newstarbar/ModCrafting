@@ -1,4 +1,5 @@
 :root {
+	--font-mc: "Press Start 2P", "Courier New", monospace;
 	--bg-primary: #141414;
 	--bg-secondary: #1c1c1c;
 	--bg-tertiary: #141414;
@@ -2894,46 +2895,53 @@ body,
 	justify-content: space-between;
 	align-items: center;
 	padding-bottom: 8px;
-	border-bottom: 1px solid var(--border-subtle);
 }
 
-.crafting-grid-title {
-	font-size: 13px;
-	font-weight: 500;
-	color: var(--text-primary);
-}
-
-.crafting-grid-clear-btn {
-	padding: 4px 10px;
-	background: transparent;
-	border: 1px solid var(--border-color);
-	border-radius: 3px;
+.crafting-grid-help {
 	font-size: 11px;
-	color: var(--text-muted);
-	cursor: pointer;
-}
-
-.crafting-grid-clear-btn:hover {
-	background: var(--bg-tertiary);
-	color: var(--text-secondary);
+	line-height: 1.4;
+	margin: 0;
+	text-shadow: var(--mc-shadow-sm);
 }
 
 .crafting-grid-wrapper {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	gap: 12px;
+	gap: 10px;
+	padding: 8px 4px;
 }
 
 .crafting-grid-input {
 	display: flex;
 	flex-direction: column;
 	gap: 0;
+	flex-shrink: 0;
 }
 
 .crafting-grid-row {
 	display: flex;
 	gap: 0;
+}
+
+.crafting-grid-output {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+	width: 168px;
+}
+
+.crafting-grid-title {
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+.crafting-grid-clear-btn {
+	padding: 5px 12px;
+	font-size: 8px;
 }
 
 .crafting-grid-item {
@@ -2967,57 +2975,8 @@ body,
 
 .crafting-grid-arrow {
 	font-size: 24px;
-	color: var(--accent);
+	color: var(--mc-yellow);
 	font-weight: bold;
-}
-
-.crafting-grid-output {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 4px;
-}
-
-.crafting-grid-output-slot {
-	width: 56px;
-	height: 56px;
-	background: rgba(255, 255, 255, 0.08);
-	border: 2px solid var(--accent);
-	border-radius: 4px;
-	cursor: pointer;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	position: relative;
-	transition: all 0.15s;
-}
-
-.crafting-grid-output-slot:hover {
-	background: rgba(255, 255, 255, 0.12);
-	border-color: var(--accent-hover);
-}
-
-.crafting-grid-output-placeholder {
-	font-size: 10px;
-	color: var(--text-muted);
-	text-align: center;
-	line-height: 1.2;
-}
-
-.crafting-grid-output-count {
-	width: 40px;
-	padding: 2px 6px;
-	background: var(--bg-tertiary);
-	border: 1px solid var(--border-color);
-	border-radius: 3px;
-	font-size: 12px;
-	color: var(--text);
-	text-align: center;
-	outline: none;
-}
-
-.crafting-grid-output-count:focus {
-	border-color: var(--accent);
 }
 
 /* ── Item Selector (物品选择器) ── */
@@ -3138,6 +3097,7 @@ body,
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	font-family: var(--font-sans);
 }
 
 .item-selector-footer {

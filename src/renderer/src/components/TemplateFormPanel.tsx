@@ -113,15 +113,7 @@ function renderField(
             grid={gridData.grid}
             outputItem={gridData.outputItem}
             outputCount={gridData.outputCount}
-            onGridChange={(grid) => {
-              onChange(field.key, { ...gridData, grid })
-            }}
-            onOutputItemChange={(itemId) => {
-              onChange(field.key, { ...gridData, outputItem: itemId })
-            }}
-            onOutputCountChange={(count) => {
-              onChange(field.key, { ...gridData, outputCount: count })
-            }}
+            onDataChange={(data) => onChange(field.key, data)}
           />
         )
       default:

@@ -7,7 +7,6 @@ import { McTooltipLayer, type TooltipAnchor } from './mc/McTooltipLayer'
 interface ItemSelectorProps {
   onSelect: (itemId: string) => void
   onClose: () => void
-  onClear?: () => void
 }
 
 function anchorFromElement(el: HTMLElement, title: string): TooltipAnchor {
@@ -19,7 +18,7 @@ function anchorFromElement(el: HTMLElement, title: string): TooltipAnchor {
   }
 }
 
-export default function ItemSelector({ onSelect, onClose, onClear }: ItemSelectorProps) {
+export default function ItemSelector({ onSelect, onClose }: ItemSelectorProps) {
   const [search, setSearch] = useState('')
   const [hoveredName, setHoveredName] = useState('')
   const [tooltip, setTooltip] = useState<TooltipAnchor | null>(null)
@@ -68,7 +67,7 @@ export default function ItemSelector({ onSelect, onClose, onClear }: ItemSelecto
     <div className="item-selector-overlay" onClick={handleOverlayClick}>
       <div className="item-selector-panel mc-frame">
         <div className="item-selector-header">
-          <span className="item-selector-title mc-y">选择物品</span>
+          <span className="item-selector-title mc-y mc-font-latin">选择物品</span>
           <button className="item-selector-close mc-btn" onClick={onClose}>
             ×
           </button>
@@ -78,7 +77,7 @@ export default function ItemSelector({ onSelect, onClose, onClear }: ItemSelecto
           <input
             ref={inputRef}
             type="text"
-            className="item-selector-search-input mc-input"
+            className="item-selector-search-input mc-input mc-font-latin"
             placeholder="搜索物品..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -102,16 +101,8 @@ export default function ItemSelector({ onSelect, onClose, onClear }: ItemSelecto
 
         <McTooltipLayer anchor={tooltip} placement="below" />
 
-        <div className="item-selector-hover-name" aria-live="polite">
+        <div className="item-selector-hover-name mc-font-latin" aria-live="polite">
           {hoveredName || '\u00a0'}
-        </div>
-
-        <div className="item-selector-footer">
-          {onClear && (
-            <button className="item-selector-clear-btn mc-btn" onClick={onClear}>
-              清空此位置
-            </button>
-          )}
         </div>
       </div>
     </div>

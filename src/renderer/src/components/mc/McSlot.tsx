@@ -11,6 +11,12 @@ interface McSlotProps {
   placeholder?: string
   className?: string
   lazyIcon?: boolean
+  draggable?: boolean
+  onDragStart?: (e: React.DragEvent) => void
+  onDragEnd?: (e: React.DragEvent) => void
+  onDragOver?: (e: React.DragEvent) => void
+  onDrop?: (e: React.DragEvent) => void
+  onContextMenu?: (e: React.MouseEvent) => void
 }
 
 const McSlot: React.FC<McSlotProps> = ({
@@ -22,6 +28,12 @@ const McSlot: React.FC<McSlotProps> = ({
   placeholder,
   className = '',
   lazyIcon,
+  draggable,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  onContextMenu,
 }) => {
   const inner = size - 8
   const Tag = onClick ? 'button' : 'div'
@@ -32,6 +44,12 @@ const McSlot: React.FC<McSlotProps> = ({
       className={`mc-slot ${selected ? 'mc-slot--selected' : ''} ${className}`}
       style={{ width: size, height: size }}
       onClick={onClick}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onContextMenu={onContextMenu}
     >
       {item ? (
         <McItemStack item={item} count={count} size={inner} lazyIcon={lazyIcon} />

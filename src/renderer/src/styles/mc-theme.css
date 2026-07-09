@@ -44,14 +44,15 @@
   background: transparent;
   color: var(--text-primary);
   text-shadow: var(--mc-shadow-sm);
-  font: 13px var(--font-sans);
+  font: 10px var(--font-mc);
   padding: 7px 14px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-family: var(--font-sans);
+  font-family: var(--font-mc);
+  line-height: 1.6;
 }
 
 .mc-btn:hover:not(:disabled) {
@@ -350,6 +351,71 @@
 }
 
 /* ── MC Slot / Item Stack / HUD ── */
+.mc-font,
+.mc-font-latin {
+  font-family: var(--font-mc);
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+
+.mc-count-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  max-width: 168px;
+}
+
+.mc-count-picker-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  width: 100%;
+}
+
+.mc-count-preset {
+  border: 2px solid transparent;
+  border-image: url('../assets/mc/widget/button.png') 2 fill / 2px / 0 stretch;
+  background: transparent;
+  color: var(--text-primary);
+  text-shadow: var(--mc-shadow-sm);
+  padding: 5px 2px;
+  cursor: pointer;
+  min-width: 0;
+  font-size: 8px;
+}
+
+.mc-count-preset:hover {
+  border-image-source: url('../assets/mc/widget/button_highlighted.png');
+}
+
+.mc-count-preset--active {
+  border-image-source: url('../assets/mc/widget/button_highlighted.png');
+  color: var(--mc-yellow);
+}
+
+.mc-count-picker-custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.mc-count-input {
+  width: 48px;
+  padding: 5px 6px;
+  text-align: center;
+  font-size: 8px;
+}
+
+.mc-count-suffix {
+  color: var(--mc-yellow);
+  text-shadow: var(--mc-shadow);
+  font-size: 10px;
+}
+
 .mc-slot {
   display: inline-flex;
   align-items: center;
@@ -368,16 +434,26 @@ button.mc-slot {
   cursor: pointer;
 }
 
+button.mc-slot[draggable='true'] {
+  cursor: grab;
+}
+
+button.mc-slot[draggable='true']:active {
+  cursor: grabbing;
+}
+
 .mc-slot--selected {
   box-shadow: 0 0 0 2px rgba(255, 255, 160, 0.6);
 }
 
 .mc-slot-placeholder {
+  font-family: var(--font-sans);
   font-size: 9px;
   color: var(--text-muted);
   text-align: center;
   line-height: 1.2;
   padding: 2px;
+  text-shadow: var(--mc-shadow-sm);
 }
 
 .mc-item-stack {
@@ -402,8 +478,9 @@ button.mc-slot {
   position: absolute;
   bottom: 0;
   right: 0;
-  font-size: 11px;
-  font-weight: 700;
+  font-family: var(--font-mc);
+  font-size: 8px;
+  font-weight: 400;
   color: #fff;
   text-shadow: 1px 1px 0 #222, -1px -1px 0 #222, 1px -1px 0 #222, -1px 1px 0 #222;
   line-height: 1;

@@ -610,7 +610,10 @@ export function generatePromptFromForm(templateId: string, formData: Record<stri
     }
   }
 
-  prompt += '\n请输出结构化实施计划，每行一个步骤：`N. [kind] 简短标题 — 目标路径`，其中 kind 为 write 或 inspect。'
+  prompt +=
+    '\n表单信息已齐全，无需 list_directory/read_file 探索项目。' +
+    '\n请直接输出结构化实施计划，每行一个步骤：`N. [kind] 简短标题 — 目标路径`，其中 kind 为 write、recipe 或 inspect。' +
+    '\n不要只回复一句开场白就结束，必须列出完整步骤。'
 
   return prompt
 }

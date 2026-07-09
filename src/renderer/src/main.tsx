@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import '@fontsource/press-start-2p/400.css'
 import './styles/global.css'
 import './styles/mc-theme.css'
 import './styles/project-hub.css'

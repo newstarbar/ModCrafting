@@ -402,6 +402,16 @@ export class Agent {
           : this.filterControlTools(this.registry.schemas())
       if (this.graceRound) {
         availableTools = []
+      } else if (phase === 'plan') {
+        if (readonlyRounds >= MAX_READONLY_ROUNDS) {
+          availableTools = this.filterExplorationTools(availableTools)
+          const kick =
+            '【系统】计划阶段已探索足够。停止 list_directory/read_file，直接输出结构化实施计划：' +
+            '每行 `N. [kind] 简短标题 — 目标路径`，kind 为 write、recipe 或 inspect。'
+          messages.push({ role: 'user', content: kick })
+          apiMessages.push({ role: 'user', content: kick })
+          logger.agent('KICK: plan phase exploration cap reached')
+        }
       } else if (phase === 'execute') {
         if (this.readonlyLocked) {
           availableTools = this.filterExplorationTools(availableTools)
@@ -501,20 +511,24 @@ export class Agent {
           return finalContent
         }
 
-        // Plan phase allows ask_clarification tool for gathering requirements
-        // After clarification is done, AI outputs the final plan text without tool calls
+        // Plan phase: only end the turn when there are no exploration/write tools to run.
+        // If the model outputs preamble text alongside read_file/list_directory, execute
+        // those tools and continue — do not stop after the first sentence.
         if (phase === 'plan') {
-          const clarificationCalls = toolCalls.filter((tc) => tc.name === 'ask_clarification')
-          if (clarificationCalls.length > 0) {
-            toolCalls.splice(0, toolCalls.length, ...clarificationCalls)
-          } else if (finalContent.trim()) {
-            messages.push({ role: 'assistant', content: finalContent })
-            this.finishRun(emitLifecycle)
-            return finalContent
-          } else {
-            logger.agent('No content or tool calls in plan phase, finishing')
-            this.finishRun(emitLifecycle)
-            return finalContent
+          const nonClarificationCalls = toolCalls.filter((tc) => tc.name !== 'ask_clarification')
+          if (nonClarificationCalls.length === 0) {
+            const clarificationCalls = toolCalls.filter((tc) => tc.name === 'ask_clarification')
+            if (clarificationCalls.length > 0) {
+              toolCalls.splice(0, toolCalls.length, ...clarificationCalls)
+            } else if (finalContent.trim()) {
+              messages.push({ role: 'assistant', content: finalContent })
+              this.finishRun(emitLifecycle)
+              return finalContent
+            } else {
+              logger.agent('No content or tool calls in plan phase, finishing')
+              this.finishRun(emitLifecycle)
+              return finalContent
+            }
           }
         }
 
