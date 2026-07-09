@@ -10,6 +10,7 @@ import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
 import { parsePlanSteps, isActionablePlanText } from '../utils/plan-steps'
 import { resolveTurnDoneStatus } from '../utils/turn-status'
+import { buildPreTurnSnapshot, enrichUserSnapshotAfterTurnDone, type TurnFileChange } from '../utils/rollback-snapshot'
 import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, normalizeSessionUsage, type UsageStats } from '../utils/usage'
 import type { ChatSession, PersistedMessage } from '../types/chat'
 import {
@@ -750,43 +751,21 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         const fileChanges = t.entries
           .filter(e => e.kind === 'tool' && ['write_file', 'edit_file'].includes(e.name || ''))
           .map(e => {
-            const diff = (e as any).fileDiff
+            const diff = (e as { fileDiff?: { path: string; oldContent?: string; action?: 'create' | 'update' | 'delete' } }).fileDiff
             if (!diff) return null
             return {
               path: diff.path,
               oldContent: diff.oldContent,
               action: diff.action
-            }
+            } satisfies TurnFileChange
           })
-          .filter(Boolean)
-
-        const ctrl = controllerRef.current
+          .filter((c): c is TurnFileChange => c !== null)
 
         setDisplayMessages((prev) => {
-          const next = prev.map((m) => {
+          const resolvedAnchorId = anchorId || t.msgId
+          let next = prev.map((m) => {
             if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
               const isAnchor = m.id === anchorId || m.id === t.msgId
-              const msgIndex = next.findIndex(n => n.id === m.id)
-              
-              const stateSnapshot = isAnchor ? {
-                messageIndex: msgIndex >= 0 ? msgIndex : prev.findIndex(p => p.id === m.id),
-                controllerMessages: ctrl?.getSnapshot() || [],
-                planTrackerSteps: planSnapshot?.steps.map(s => ({
-                  id: s.id,
-                  description: s.description,
-                  status: s.status
-                })),
-                phase: event.phase === 'plan' ? 'plan' : 'execute',
-                composerMode: composerModeRef.current,
-                sessionGoal: sessionGoalRef.current,
-                activePlan: planSnapshot ? { ...planSnapshot, steps: [...planSnapshot.steps] } : undefined,
-                fileSnapshots: fileChanges.map(c => ({
-                  path: c.path,
-                  content: c.oldContent || '',
-                  timestamp: Date.now()
-                }))
-              } : m.stateSnapshot
-
               return {
                 ...m,
                 ...(isAnchor ? { entries: [...t.entries] } : {}),
@@ -796,12 +775,24 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                   embeddedPlan: event.phase === 'plan_failed'
                     ? undefined
                     : (finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan)
-                } : {}),
-                stateSnapshot
+                } : {})
               }
             }
             return m
           })
+
+          if (resolvedAnchorId) {
+            next = enrichUserSnapshotAfterTurnDone(next, resolvedAnchorId, fileChanges, {
+              planTrackerSteps: planSnapshot?.steps.map(s => ({
+                id: s.id,
+                description: s.description,
+                status: s.status
+              })),
+              phase: event.phase === 'plan' ? 'plan' : 'execute',
+              activePlan: planSnapshot ? { ...planSnapshot, steps: [...planSnapshot.steps] } : undefined,
+            })
+          }
+
           flushPersist(next, turnStatus === 'planned' ? planSnapshot : null)
           return next
         })
@@ -875,14 +866,28 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!currentSessionId) {
       const newId = onNewSession(userMsg)
       currentSessionIdRef.current = newId
-      setDisplayMessages([{ id: uid(), role: 'user', content: userMsg, timestamp: Date.now() }])
+      const preSnapshot = buildPreTurnSnapshot({
+        messageIndex: 0,
+        controller: controllerRef.current,
+        composerMode,
+        sessionGoal,
+        activePlan: activePlanRef.current,
+      })
+      setDisplayMessages([{ id: uid(), role: 'user', content: userMsg, timestamp: Date.now(), stateSnapshot: preSnapshot }])
       controllerRef.current?.clearSession()
       controllerRef.current?.setComposerMode(composerMode)
       controllerRef.current?.setSessionGoal(sessionGoal)
       persistComposerMeta({ composerMode, sessionGoal })
     } else {
       setDisplayMessages((prev) => {
-        const next = [...prev, { id: uid(), role: 'user' as const, content: userMsg, timestamp: Date.now() }]
+        const preSnapshot = buildPreTurnSnapshot({
+          messageIndex: prev.length,
+          controller: controllerRef.current,
+          composerMode,
+          sessionGoal,
+          activePlan: activePlanRef.current,
+        })
+        const next = [...prev, { id: uid(), role: 'user' as const, content: userMsg, timestamp: Date.now(), stateSnapshot: preSnapshot }]
         flushPersist(next, null)
         return next
       })
@@ -949,13 +954,27 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!currentSessionId) {
       const newId = onNewSession(prompt)
       currentSessionIdRef.current = newId
-      setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now() }])
+      const preSnapshot = buildPreTurnSnapshot({
+        messageIndex: 0,
+        controller: controllerRef.current,
+        composerMode,
+        sessionGoal,
+        activePlan: activePlanRef.current,
+      })
+      setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }])
       controllerRef.current?.clearSession()
       controllerRef.current?.setComposerMode(composerMode)
       controllerRef.current?.setSessionGoal(sessionGoal)
     } else {
       setDisplayMessages((prev) => {
-        const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now() }]
+        const preSnapshot = buildPreTurnSnapshot({
+          messageIndex: prev.length,
+          controller: controllerRef.current,
+          composerMode,
+          sessionGoal,
+          activePlan: activePlanRef.current,
+        })
+        const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }]
         flushPersist(next, null)
         return next
       })
@@ -1084,7 +1103,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     const targetMsg = displayMessages[msgIndex]
     const snapshot = targetMsg.stateSnapshot
-    if (!snapshot) return
+    if (!snapshot) {
+      setCompletionFlash('无法回滚：该消息缺少状态快照')
+      if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+      completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+      return
+    }
 
     const fileCount = snapshot.fileSnapshots.length
     setRollbackWarning({
@@ -1122,10 +1146,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       ctrl.restoreSnapshot(snapshot.controllerMessages)
       ctrl.setComposerMode(snapshot.composerMode)
       ctrl.setSessionGoal(snapshot.sessionGoal)
+      ctrl.restorePlanTracker(snapshot.planTrackerSteps ?? [])
     }
 
     setDisplayMessages(restoredMessages)
     setActivePlan(snapshot.activePlan || null)
+    setPlanReady(Boolean(snapshot.activePlan?.steps.length))
     setComposerMode(snapshot.composerMode)
     setSessionGoal(snapshot.sessionGoal)
 
@@ -1352,7 +1378,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           isLoading={isLoading}
           onRetry={handleRetryTurn}
           onRollback={handleRollback}
-          canRollback={displayMessages.indexOf(msg) < displayMessages.length - 1}
+          canRollback={displayMessages.indexOf(msg) < displayMessages.length - 1 && Boolean(msg.stateSnapshot)}
         />
       </div>
     )
