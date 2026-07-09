@@ -22,6 +22,7 @@ import {
 } from '../utils/chat-persist'
 import { groupMessagesIntoTurns } from '../utils/chat-turns'
 import type { ChatTurn } from '../utils/chat-turns'
+import { isDefaultSessionName, sessionTitleFromMessage } from '../utils/session-title'
 import type { DisplayMessage, ChronoEntry } from '../types/display-message'
 import ChatComposer from './ChatComposer'
 import type { ComposerMode } from '../harness/turn-intent'
@@ -840,6 +841,16 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
   }, [refreshDisplay, collapseAllReasoning, markLastReasoningDone, flushPersist])
 
+  const maybeRenameSessionForFirstMessage = useCallback((sessionId: string, messageText: string) => {
+    const session = sessions.find((s) => s.id === sessionId)
+    if (!session || !isDefaultSessionName(session.name)) return
+    const hasUserMessage = session.messages.some((m) => m.role === 'user')
+      || displayMessages.some((m) => m.role === 'user')
+    if (hasUserMessage) return
+    const title = sessionTitleFromMessage(messageText)
+    if (title) onRenameSession(sessionId, title)
+  }, [sessions, displayMessages, onRenameSession])
+
   // Session helpers — delegated to App (single source of truth)
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading || !toolchainReady) return
@@ -904,6 +915,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       controllerRef.current?.setSessionGoal(sessionGoal)
       persistComposerMeta({ composerMode, sessionGoal })
     } else {
+      maybeRenameSessionForFirstMessage(currentSessionId, userMsg)
       setDisplayMessages((prev) => {
         const preSnapshot = buildPreTurnSnapshot({
           messageIndex: prev.length,
@@ -928,7 +940,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, composerMode, sessionGoal, clarificationPending])
+  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending])
 
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
@@ -991,6 +1003,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       controllerRef.current?.setComposerMode(composerMode)
       controllerRef.current?.setSessionGoal(sessionGoal)
     } else {
+      maybeRenameSessionForFirstMessage(currentSessionId, prompt)
       setDisplayMessages((prev) => {
         const preSnapshot = buildPreTurnSnapshot({
           messageIndex: prev.length,
@@ -1016,7 +1029,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     })
-  }, [currentSessionId, onNewSession, flushPersist, composerMode, sessionGoal, setContextFiles])
+  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextFiles])
 
   const handleTemplateFormCancel = useCallback(() => {
     setShowTemplateForm(false)

@@ -34,6 +34,7 @@ import {
 	saveCurrentSessionId
 } from "./utils/session-storage";
 import { getMostRecentSessionId, sortSessionsByUpdatedAt } from "./utils/session-sort";
+import { nextDefaultSessionName, sessionTitleFromMessage } from "./utils/session-title";
 import { registerPanelBridge, setLastBuildLogText } from "./utils/panel-bridge";
 import type { ApiConfigState, ApiSettingsPayload } from "./types/api-config";
 import { providerDisplayLabel, resolveSelection } from "../../shared/llm-providers.ts";
@@ -582,7 +583,7 @@ const App: React.FC = () => {
 	const handleNewSession = useCallback(() => {
 		const id = `session-${Date.now()}`;
 		const now = Date.now();
-		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]));
+		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name: nextDefaultSessionName(p.length), messages: [], createdAt: now, updatedAt: now }]));
 		setCurrentSessionId(id);
 	}, []);
 
@@ -595,12 +596,14 @@ const App: React.FC = () => {
 	const handleNewSessionFromChat = useCallback((firstMessage?: string) => {
 		const id = `session-${Date.now()}`;
 		const now = Date.now();
-		const msg = firstMessage || "";
-		const name = msg ? msg.slice(0, 30) + (msg.length > 30 ? "..." : "") : `会话 ${Math.floor(Math.random() * 1000)}`;
+		const msg = firstMessage?.trim() ?? "";
 		const initialMessages: PersistedMessage[] = msg
 			? [{ role: "user", content: msg, timestamp: now }]
 			: [];
-		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name, messages: initialMessages, createdAt: now, updatedAt: now }]));
+		setSessions((p) => {
+			const sessionName = msg ? sessionTitleFromMessage(msg) : nextDefaultSessionName(p.length);
+			return sortSessionsByUpdatedAt([...p, { id, name: sessionName, messages: initialMessages, createdAt: now, updatedAt: now }]);
+		});
 		setCurrentSessionId(id);
 		return id;
 	}, []);
