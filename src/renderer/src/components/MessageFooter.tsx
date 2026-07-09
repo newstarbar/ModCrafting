@@ -10,6 +10,8 @@ interface MessageFooterProps {
   turn: ChatTurn
   isLoading?: boolean
   onRetry?: (turnId: string) => void
+  onRollback?: (msgId: string) => void
+  canRollback?: boolean
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -40,7 +42,9 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
   message,
   turn,
   isLoading = false,
-  onRetry
+  onRetry,
+  onRollback,
+  canRollback = false
 }) => {
   const [feedback, setFeedback] = useState('')
   const timerRef = useRef<number | null>(null)
@@ -129,6 +133,19 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
                   </button>
                 </>
               )}
+            </>
+          )}
+          {role === 'user' && canRollback && (
+            <>
+              <span className="bubble-ft__dot">·</span>
+              <button
+                type="button"
+                className="bubble-ft__btn bubble-ft__btn--rollback"
+                onClick={() => onRollback?.(message.id)}
+                disabled={isLoading}
+              >
+                回滚
+              </button>
             </>
           )}
         </span>

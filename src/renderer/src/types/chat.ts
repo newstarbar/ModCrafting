@@ -20,6 +20,7 @@ export interface PersistedMessage {
   embeddedPlan?: PlanStep[]
   timestamp?: number
   displayId?: string
+  stateSnapshot?: any
 }
 
 export interface ChatSession {

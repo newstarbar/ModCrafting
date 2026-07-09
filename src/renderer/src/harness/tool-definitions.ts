@@ -85,7 +85,7 @@ export const readFileTool: Tool & Previewer = {
 };
 
 // ── write_file ──
-function computeLineDiff(oldContent: string, newContent: string): { added: number; removed: number; firstAdded?: string; firstRemoved?: string } {
+function computeLineDiff(oldContent: string, newContent: string): { added: number; removed: number; firstAdded?: string; firstRemoved?: string; oldContent: string } {
 	const oldLines = oldContent.split("\n");
 	const newLines = newContent.split("\n");
 	const oldSet = new Set(oldLines);
@@ -98,7 +98,8 @@ function computeLineDiff(oldContent: string, newContent: string): { added: numbe
 		added: addedLines.length,
 		removed: removedLines.length,
 		firstAdded: addedLines.length > 0 ? addedLines[0].slice(0, 80) : undefined,
-		firstRemoved: removedLines.length > 0 ? removedLines[0].slice(0, 80) : undefined
+		firstRemoved: removedLines.length > 0 ? removedLines[0].slice(0, 80) : undefined,
+		oldContent
 	};
 }
 
@@ -119,7 +120,6 @@ export const writeFileTool: Tool & Previewer = {
 		const filePath = `${ctx.projectPath}/${args.path}`;
 		const content = String(args.content || "");
 
-		// Read old file content for diff computation
 		let oldContent = "";
 		let fileExisted = false;
 		try {
@@ -140,7 +140,9 @@ export const writeFileTool: Tool & Previewer = {
 				const diff = computeLineDiff(oldContent, content);
 				const diffPayload = JSON.stringify({
 					path: String(args.path || ""),
-					...diff
+					...diff,
+					oldContent,
+					action: fileExisted ? "update" : "create"
 				});
 
 				let overwriteNote = "";
@@ -247,7 +249,6 @@ export const editFileTool: Tool & Previewer = {
 		try {
 			await window.api.writeFile(filePath, newContent);
 
-			// Compute diff
 			const oldLines = oldStr.split("\n");
 			const newLines = newStr.split("\n");
 			const added = Math.max(0, newLines.length - oldLines.length);
@@ -256,11 +257,19 @@ export const editFileTool: Tool & Previewer = {
 			const lineNum = before.split("\n").length;
 			const preview = newStr.length > 100 ? newStr.slice(0, 100) + "..." : newStr;
 
+			const diffPayload = JSON.stringify({
+				path: String(args.path || ""),
+				added,
+				removed,
+				oldContent: content,
+				action: "update" as const
+			});
+
 			let msg = `已${args.path}: 第 ${lineNum} 行已替换`;
 			if (added > 0 && removed > 0) msg += `（修改 ${removed + added} 行）`;
 			else if (added > 0) msg += `（+${added} 行）`;
 			else if (removed > 0) msg += `（-${removed} 行）`;
-			msg += `\n新内容: ${preview}`;
+			msg += `\n新内容: ${preview}\n<!-- FILE_DIFF ${diffPayload} -->`;
 
 			return msg;
 		} catch (err) {

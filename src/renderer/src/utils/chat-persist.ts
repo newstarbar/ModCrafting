@@ -23,6 +23,7 @@ export interface SerializableDisplayMessage {
   turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled' | 'answered' | 'planned'
   embeddedPlan?: PlanStep[]
   timestamp: number
+  stateSnapshot?: any
 }
 
 export interface ActivePlanSnapshot {
@@ -49,7 +50,8 @@ export function serializeDisplayMessages(
       timestamp: m.timestamp,
       displayId: m.id,
       turnStatus: m.turnStatus,
-      embeddedPlan: m.embeddedPlan
+      embeddedPlan: m.embeddedPlan,
+      stateSnapshot: m.stateSnapshot
     }
 
     if (m.entries && m.entries.length > 0) {
@@ -101,7 +103,8 @@ export function deserializeToDisplay(
         turnStatus: m.turnStatus,
         embeddedPlan: m.embeddedPlan,
         timestamp: m.timestamp ?? Date.now(),
-        isStreaming: false
+        isStreaming: false,
+        stateSnapshot: (m as any).stateSnapshot
       }
     })
 }

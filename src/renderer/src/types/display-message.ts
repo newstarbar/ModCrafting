@@ -1,4 +1,12 @@
 import type { PlanStep } from '../components/TaskPlan'
+import type { ComposerMode } from '../harness/turn-intent'
+import type { ChatMessage } from '../harness/chat-message'
+
+export interface ActivePlan {
+  steps: PlanStep[]
+  anchorMsgId: string
+  pinned: boolean
+}
 
 export interface FileDiff {
   path: string
@@ -7,6 +15,25 @@ export interface FileDiff {
   content?: string
   firstAdded?: string
   firstRemoved?: string
+  oldContent?: string
+  action?: 'create' | 'update' | 'delete'
+}
+
+export interface FileSnapshot {
+  path: string
+  content: string
+  timestamp: number
+}
+
+export interface SessionStateSnapshot {
+  messageIndex: number
+  controllerMessages: ChatMessage[]
+  planTrackerSteps?: Array<{ id: string; description: string; status: string }>
+  phase: 'plan' | 'execute'
+  composerMode: ComposerMode
+  sessionGoal: string
+  activePlan?: ActivePlan
+  fileSnapshots: FileSnapshot[]
 }
 
 export interface ChronoEntryTool {
@@ -37,4 +64,5 @@ export interface DisplayMessage {
   turnStatus?: 'completed' | 'partial' | 'error' | 'cancelled' | 'answered' | 'planned'
   embeddedPlan?: PlanStep[]
   timestamp: number
+  stateSnapshot?: SessionStateSnapshot
 }

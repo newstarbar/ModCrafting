@@ -28,6 +28,7 @@ import MarkdownContent from './MarkdownContent'
 import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 import TemplateFormPanel from './TemplateFormPanel'
+import RollbackWarningPanel from './RollbackWarningPanel'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -202,6 +203,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationSelectedIndex, setClarificationSelectedIndex] = useState<number | null>(null)
   const [showTemplateForm, setShowTemplateForm] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -743,10 +745,46 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
         const anchorId = planSnapshot?.anchorMsgId || t.msgId
 
+        const fileChanges = t.entries
+          .filter(e => e.kind === 'tool' && ['write_file', 'edit_file'].includes(e.name || ''))
+          .map(e => {
+            const diff = (e as any).fileDiff
+            if (!diff) return null
+            return {
+              path: diff.path,
+              oldContent: diff.oldContent,
+              action: diff.action
+            }
+          })
+          .filter(Boolean)
+
+        const ctrl = controllerRef.current
+
         setDisplayMessages((prev) => {
           const next = prev.map((m) => {
             if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
               const isAnchor = m.id === anchorId || m.id === t.msgId
+              const msgIndex = next.findIndex(n => n.id === m.id)
+              
+              const stateSnapshot = isAnchor ? {
+                messageIndex: msgIndex >= 0 ? msgIndex : prev.findIndex(p => p.id === m.id),
+                controllerMessages: ctrl?.getSnapshot() || [],
+                planTrackerSteps: planSnapshot?.steps.map(s => ({
+                  id: s.id,
+                  description: s.description,
+                  status: s.status
+                })),
+                phase: event.phase === 'plan' ? 'plan' : 'execute',
+                composerMode: composerModeRef.current,
+                sessionGoal: sessionGoalRef.current,
+                activePlan: planSnapshot ? { ...planSnapshot, steps: [...planSnapshot.steps] } : undefined,
+                fileSnapshots: fileChanges.map(c => ({
+                  path: c.path,
+                  content: c.oldContent || '',
+                  timestamp: Date.now()
+                }))
+              } : m.stateSnapshot
+
               return {
                 ...m,
                 ...(isAnchor ? { entries: [...t.entries] } : {}),
@@ -756,7 +794,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                   embeddedPlan: event.phase === 'plan_failed'
                     ? undefined
                     : (finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan)
-                } : {})
+                } : {}),
+                stateSnapshot
               }
             }
             return m
@@ -1035,6 +1074,79 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
   }, [isLoading, apiConfig, ensureApiKey, displayMessages, flushPersist])
 
+  const handleRollback = useCallback((msgId: string) => {
+    if (isLoading) return
+
+    const msgIndex = displayMessages.findIndex((m) => m.id === msgId)
+    if (msgIndex === -1) return
+
+    const targetMsg = displayMessages[msgIndex]
+    const snapshot = targetMsg.stateSnapshot
+    if (!snapshot) return
+
+    const fileCount = snapshot.fileSnapshots.length
+    setRollbackWarning({
+      msgId,
+      content: targetMsg.content,
+      fileCount
+    })
+  }, [isLoading, displayMessages])
+
+  const handleRollbackConfirm = useCallback(async () => {
+    if (!rollbackWarning) return
+
+    const { msgId, content: messageContent } = rollbackWarning
+    setRollbackWarning(null)
+
+    const msgIndex = displayMessages.findIndex((m) => m.id === msgId)
+    if (msgIndex === -1) return
+
+    const targetMsg = displayMessages[msgIndex]
+    const snapshot = targetMsg.stateSnapshot
+    if (!snapshot) return
+
+    for (const fs of snapshot.fileSnapshots) {
+      if (fs.content) {
+        await window.api.writeFile(`${projectPath}/${fs.path}`, fs.content)
+      } else {
+        await window.api.deleteFile(`${projectPath}/${fs.path}`).catch(() => {})
+      }
+    }
+
+    const restoredMessages = displayMessages.slice(0, msgIndex)
+
+    const ctrl = controllerRef.current
+    if (ctrl) {
+      ctrl.restoreSnapshot(snapshot.controllerMessages)
+      ctrl.setComposerMode(snapshot.composerMode)
+      ctrl.setSessionGoal(snapshot.sessionGoal)
+    }
+
+    setDisplayMessages(restoredMessages)
+    setActivePlan(snapshot.activePlan || null)
+    setComposerMode(snapshot.composerMode)
+    setSessionGoal(snapshot.sessionGoal)
+
+    setCollapsedToolIds(new Set())
+    setCollapsedReasoningKeys(new Set())
+
+    setInput(messageContent)
+
+    if (projectPath) {
+      window.api.listDirectory(projectPath)
+    }
+
+    flushPersist(restoredMessages, snapshot.activePlan || null)
+
+    setCompletionFlash('已回滚')
+    if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+    completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+  }, [rollbackWarning, displayMessages, projectPath, flushPersist])
+
+  const handleRollbackCancel = useCallback(() => {
+    setRollbackWarning(null)
+  }, [])
+
   // ======== RENDER ========
   const renderContent = (content: string) => <MarkdownContent content={content} />
 
@@ -1237,13 +1349,16 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           turn={turn}
           isLoading={isLoading}
           onRetry={handleRetryTurn}
+          onRollback={handleRollback}
+          canRollback={displayMessages.indexOf(msg) < displayMessages.length - 1}
         />
       </div>
     )
   }
 
   return (
-    <div className="chat-panel">
+    <>
+      <div className="chat-panel">
       <div className="chat-header">
         <div className="chat-header-left">
           <img src={appIcon} alt="" className="chat-brand-icon" />
@@ -1393,6 +1508,16 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         />
       )}
     </div>
+
+    {rollbackWarning && (
+      <RollbackWarningPanel
+        messageContent={rollbackWarning.content}
+        fileCount={rollbackWarning.fileCount}
+        onConfirm={handleRollbackConfirm}
+        onCancel={handleRollbackCancel}
+      />
+    )}
+    </>
   )
 })
 

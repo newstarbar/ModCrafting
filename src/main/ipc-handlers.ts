@@ -134,6 +134,19 @@ export function setupIpcHandlers(): void {
     }
   })
 
+  // File system: delete file
+  ipcMain.handle('fs:deleteFile', async (_event, filePath: string) => {
+    try {
+      fs.unlinkSync(filePath)
+      BrowserWindow.getAllWindows().forEach((win) => {
+        win.webContents.send('file:changed', filePath, 'delete')
+      })
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
   // Project: detect if a directory is a valid Gradle/Fabric project
   ipcMain.handle('project:detect', async (_event, projectPath: string) => {
     try {
