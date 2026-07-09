@@ -9,19 +9,14 @@ import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanilla
 import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from "./fabric-utils";
 import {
 	MOD_TEMPLATES,
-	generateCustomBlockClass,
-	generateCustomBlockItemClass,
-	generateCustomItemClass,
-	generateCustomFoodItemClass,
-	generateCustomToolClass,
-	generateCustomArmorClass,
-	generateBlockStatesJson,
-	generateBlockModelJson,
-	generateItemModelJson,
-	generateLootTableJson,
-	generateLangFile,
 	type ProjectCreateConfig
 } from "../project/scaffold";
+import { executeTemplateGenerate, resolveProjectConfig } from "../project/template-runner.ts";
+import {
+	generateModBlockEntitiesRegistrationClass,
+	generateModBlocksRegistrationClass,
+	generateModItemsRegistrationClass
+} from "../project/template-codegen.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
 	if (typeof args.mcVersion === "string" && args.mcVersion.trim()) return args.mcVersion.trim();
@@ -771,33 +766,29 @@ function javaPackagePath(packagePath: string): string {
 	return packagePath.replace(/\./g, "/").replace(/[^a-zA-Z0-9_/$]/g, "");
 }
 
-function mainRegistrationClass(packageName: string, modId: string): string {
-	return `package ${packageName};
-
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.util.Identifier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class ModItems {
-    private static final Logger LOGGER = LoggerFactory.getLogger("${modId}");
-    public static final Item GENERATED_ITEM = register("generated_item", new Item.Settings());
-
-    private static Item register(String name, Item.Settings settings) {
-        Identifier id = Identifier.of("${modId}", name);
-        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, id);
-        return Registry.register(Registries.ITEM, key, new Item(settings.registryKey(key)));
-    }
-
-    public static void registerModItems() {
-        LOGGER.info("Registering items for ${modId}");
-    }
-}
-`;
+function projectConfigFromPackage(packagePath: string, modId: string): ProjectCreateConfig {
+	const lastDot = packagePath.lastIndexOf(".");
+	const groupId = lastDot > 0 ? packagePath.slice(0, lastDot) : packagePath;
+	const javaPackage = lastDot > 0 ? packagePath.slice(lastDot + 1) : packagePath;
+	return {
+		projectDir: "",
+		folderName: "",
+		displayName: "",
+		modId,
+		groupId,
+		javaPackage,
+		authors: "",
+		description: "",
+		modVersion: "",
+		versions: {
+			minecraft_version: "1.21.4",
+			loader_version: "0.16.10",
+			fabric_version: "",
+			yarn_mappings: "",
+			loom_version: "",
+			gradle_version: ""
+		}
+	};
 }
 
 // ── fabric_content_register ──
@@ -818,13 +809,29 @@ export const fabricContentRegisterTool: Tool = {
 		if (!ctx.projectPath) return "No project open";
 		const packagePath = String(args.packagePath || "");
 		const modId = String(args.modId || "");
+		const kind = args.kind === "block" ? "block" : args.kind === "block_entity" ? "block_entity" : "item";
 		if (!packagePath || !modId) return "Error: packagePath and modId are required";
-		const rel = `src/main/java/${javaPackagePath(packagePath)}/ModItems.java`;
-		const content = mainRegistrationClass(packagePath, modId);
+
+		const config = projectConfigFromPackage(packagePath, modId);
+		const basePath = `src/main/java/${javaPackagePath(packagePath)}`;
+		let rel: string;
+		let content: string;
+		if (kind === "block") {
+			rel = `${basePath}/ModBlocks.java`;
+			content = generateModBlocksRegistrationClass(config);
+		} else if (kind === "block_entity") {
+			rel = `${basePath}/ModBlockEntities.java`;
+			content = generateModBlockEntitiesRegistrationClass(config);
+		} else {
+			rel = `${basePath}/ModItems.java`;
+			content = generateModItemsRegistrationClass(config);
+		}
+
 		const res = await window.api.writeFile(`${ctx.projectPath}/${rel}`, content);
 		if (!res.success) return `Error writing ${rel}: ${res.error}`;
 		logger.file(`Fabric content helper written: ${rel}`, `${content.length} bytes`);
-		return `已生成: 内容注册辅助类 → ${rel}`;
+		const kindLabel = kind === "block" ? "方块" : kind === "block_entity" ? "方块实体" : "物品";
+		return `已生成: ${kindLabel}注册辅助类 → ${rel}`;
 	}
 };
 
@@ -1064,41 +1071,53 @@ export const fabricMixinRegisterTool: Tool = {
 // ── explain_code ──
 export const explainCodeTool: Tool = {
 	name: "explain_code",
-	description: "解释指定代码的功能和逻辑。分析代码中使用的 Fabric API、Minecraft 类和设计模式，帮助理解代码意图。",
+	description: "解释指定代码的功能和逻辑。可传入 code 或 filePath（相对项目根目录），分析 Fabric API、注册链与设计意图。",
 	schema: {
 		type: "object",
 		properties: {
 			code: { type: "string", description: "要解释的代码内容" },
+			filePath: { type: "string", description: "相对项目根的源码路径，如 src/main/java/.../Foo.java" },
 			language: { type: "string", enum: ["java", "json"], description: "代码语言，默认 java" },
-			context: { type: "string", description: "额外上下文，如文件路径、相关类名等" }
-		},
-		required: ["code"]
+			context: { type: "string", description: "额外上下文，如类名、模组内容类型等" }
+		}
 	},
 	readOnly: () => true,
-	async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
-		const code = String(args.code || "");
-		const language = (args.language as string) || "java";
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		let code = String(args.code || "");
+		const filePath = String(args.filePath || "");
+		let language = (args.language as string) || "java";
 		const context = String(args.context || "");
 
-		if (!code.trim()) return "Error: code is required";
+		if (!code.trim() && filePath && ctx.projectPath) {
+			const res = await window.api.readFile(`${ctx.projectPath}/${filePath.replace(/\\/g, "/")}`);
+			if (!res.success || res.content == null) {
+				return `Error: 无法读取文件 ${filePath}: ${res.error || "empty"}`;
+			}
+			code = res.content;
+			if (filePath.endsWith(".json")) language = "json";
+		}
+
+		if (!code.trim()) return "Error: code 或 filePath 至少提供一个";
 
 		const lines = code.split("\n");
 		const lineCount = lines.length;
+		const packageLine = lines.find((l) => l.trim().startsWith("package "));
+		const pkg = packageLine?.match(/package\s+([^;]+)/)?.[1] ?? "";
 
-		let analysis = `## 代码分析报告\n\n`;
-		analysis += `**代码语言**: ${language === "java" ? "Java (Fabric Mod)" : "JSON"}\n`;
-		analysis += `**代码行数**: ${lineCount} 行\n`;
+		let analysis = `## 代码解释\n\n`;
+		analysis += `**语言**: ${language === "java" ? "Java (Fabric Mod)" : "JSON"}\n`;
+		analysis += `**行数**: ${lineCount}\n`;
+		if (filePath) analysis += `**文件**: \`${filePath}\`\n`;
+		if (pkg) analysis += `**包名**: \`${pkg}\`\n`;
 		if (context) analysis += `**上下文**: ${context}\n`;
-
 		analysis += "\n---\n\n";
 
 		if (language === "java") {
 			const imports: string[] = [];
 			const classes: string[] = [];
 			const methods: string[] = [];
-			const registries: string[] = [];
-			const identifiers: string[] = [];
-			const patterns: string[] = [];
+			const fields: string[] = [];
+			const annotations: string[] = [];
 
 			for (const line of lines) {
 				const trimmed = line.trim();
@@ -1108,115 +1127,74 @@ export const explainCodeTool: Tool = {
 				} else if (trimmed.startsWith("public class ") || trimmed.startsWith("class ")) {
 					const match = trimmed.match(/class (\w+)/);
 					if (match) classes.push(match[1]);
+				} else if (trimmed.match(/^\s*(public|private|protected)\s+[\w<>,\s]+\s+\w+\s*[;=]/)) {
+					const match = trimmed.match(/(?:public|private|protected)\s+[\w<>,\s]+\s+(\w+)\s*[;=]/);
+					if (match) fields.push(match[1]);
 				} else if (trimmed.match(/^\s*(public|private|protected)\s+\w+\s+\w+\s*\(/)) {
 					const match = trimmed.match(/(?:public|private|protected)\s+\w+\s+(\w+)\s*\(/);
 					if (match) methods.push(match[1]);
-				} else if (trimmed.includes("Registry.register") || trimmed.includes("Registries.")) {
-					registries.push(trimmed.slice(0, 80));
-				} else if (trimmed.includes("Identifier.of")) {
-					identifiers.push(trimmed.slice(0, 80));
-				} else if (trimmed.includes("@Mixin") || trimmed.includes("@Inject") || trimmed.includes("@Modify")) {
-					patterns.push(trimmed.slice(0, 80));
+				} else if (trimmed.startsWith("@")) {
+					annotations.push(trimmed.slice(0, 60));
 				}
 			}
 
-			if (imports.length > 0) {
-				analysis += `### 导入的类库\n\n`;
-				const fabricImports = imports.filter((i) => i.startsWith("net.fabricmc"));
-				const mcImports = imports.filter((i) => i.startsWith("net.minecraft"));
-				if (fabricImports.length > 0) analysis += `- **Fabric API**: ${fabricImports.join(", ")}\n`;
-				if (mcImports.length > 0) analysis += `- **Minecraft**: ${mcImports.join(", ")}\n`;
-				analysis += "\n";
+			analysis += `### 职责概览\n\n`;
+			if (code.includes("ModInitializer") || methods.includes("onInitialize")) {
+				analysis += "- **模组主入口**：在 `onInitialize` 中完成内容注册与事件订阅。\n";
 			}
-
-			if (classes.length > 0) {
-				analysis += `### 定义的类\n\n`;
-				for (const cls of classes) {
-					const isBlock = code.includes(`extends Block`);
-					const isItem = code.includes(`extends Item`);
-					const isEntity = code.includes(`extends Entity`) || code.includes(`extends MobEntity`);
-					const isMixin = code.includes(`@Mixin`);
-					let type = "";
-					if (isBlock) type = "（方块类）";
-					else if (isItem) type = "（物品类）";
-					else if (isEntity) type = "（实体类）";
-					else if (isMixin) type = "（Mixin 类）";
-					analysis += `- ${cls}${type}\n`;
-				}
-				analysis += "\n";
+			if (code.includes("ClientModInitializer") || methods.includes("onInitializeClient")) {
+				analysis += "- **客户端入口**：注册渲染器、颜色提供器等仅客户端逻辑。\n";
 			}
-
-			if (methods.length > 0) {
-				analysis += `### 关键方法\n\n`;
-				for (const method of methods) {
-					let desc = "";
-					if (method === "onInitialize") desc = "（模组初始化方法）";
-					else if (method === "onInitializeClient") desc = "（客户端初始化方法）";
-					else if (method === "register") desc = "（注册方法）";
-					else if (method === "use") desc = "（物品使用方法）";
-					else if (method === "onUse") desc = "（方块交互方法）";
-					analysis += `- ${method}${desc}\n`;
-				}
-				analysis += "\n";
+			if (code.includes("ModBlocks") || code.includes("ModItems") || code.includes("ModEntities")) {
+				analysis += "- **集中注册类**：通过静态字段持有已注册内容，并在 `registerMod*` 方法中记录日志或附加属性。\n";
 			}
-
-			if (registries.length > 0) {
-				analysis += `### 注册操作\n\n`;
-				for (const reg of registries) {
-					analysis += `- \`${reg}\`\n`;
-				}
-				analysis += "\n";
-			}
-
-			if (identifiers.length > 0) {
-				analysis += `### 标识符定义\n\n`;
-				for (const id of identifiers) {
-					analysis += `- \`${id}\`\n`;
-				}
-				analysis += "\n";
-			}
-
-			if (patterns.length > 0) {
-				analysis += `### Mixin 模式\n\n`;
-				for (const pat of patterns) {
-					analysis += `- \`${pat}\`\n`;
-				}
-				analysis += "\n";
-			}
-
-			analysis += `### 代码功能总结\n\n`;
-			if (code.includes("ModInitializer") || code.includes("onInitialize")) {
-				analysis += "这段代码是模组的初始化入口，负责注册模组内容（方块、物品等）。\n\n";
-			}
-			if (code.includes("Registry.register")) {
-				analysis += "使用 Fabric 注册系统将自定义内容注册到 Minecraft 注册表中。\n\n";
-			}
-			if (code.includes("Identifier.of")) {
-				analysis += "使用 Identifier 定义模组内容的唯一标识符（格式：modId:name）。\n\n";
+			if (code.includes("Registry.register") || code.includes("Registries.")) {
+				analysis += "- **注册链**：使用 `Identifier` → `RegistryKey` → `Registry.register` 将自定义内容加入游戏注册表（1.21+ 范式）。\n";
 			}
 			if (code.includes("@Mixin")) {
-				analysis += "使用 Mixin 技术修改 Minecraft 原版类的行为。\n\n";
+				analysis += "- **Mixin 注入**：在运行时修改原版类行为，需与 `mixins.json` 配置一致。\n";
+			}
+			if (code.includes("FoodComponent") || code.includes("ConsumableComponent")) {
+				analysis += "- **食物组件**：1.21+ 使用 `FoodComponent` + `ConsumableComponent` 定义营养与食用效果。\n";
+			}
+			if (classes.length === 0 && !analysis.includes("职责")) {
+				analysis += "- 片段代码，需结合所在类判断完整职责。\n";
+			}
+			analysis += "\n";
+
+			if (classes.length > 0) {
+				analysis += `### 类与成员\n\n`;
+				for (const cls of classes) {
+					const role =
+						code.includes(`class ${cls} extends Block`) ? "方块" :
+						code.includes(`class ${cls} extends Item`) ? "物品" :
+						code.includes(`class ${cls} extends`) && code.includes("Entity") ? "实体" :
+						code.includes("@Mixin") ? "Mixin" : "辅助类";
+					analysis += `- **${cls}**（${role}）\n`;
+				}
+				if (fields.length) analysis += `- 静态字段：${fields.slice(0, 8).join(", ")}${fields.length > 8 ? " …" : ""}\n`;
+				if (methods.length) analysis += `- 方法：${methods.slice(0, 10).join(", ")}${methods.length > 10 ? " …" : ""}\n`;
+				analysis += "\n";
 			}
 
-			analysis += `### Fabric API 使用要点\n\n`;
-			if (imports.some((i) => i.includes("Registry") || i.includes("Registries"))) {
-				analysis += "1. **Registry API**: Fabric 使用 Registry 系统管理游戏内容，注册时需要提供 RegistryKey\n\n";
-			}
-			if (imports.some((i) => i.includes("Identifier"))) {
-				analysis += "2. **Identifier**: 模组内容的唯一标识，格式为 `modId:path`\n\n";
-			}
-			if (imports.some((i) => i.includes("Item") || i.includes("Block"))) {
-				analysis += "3. **内容类**: 自定义物品继承 Item，自定义方块继承 Block\n\n";
-			}
-			if (imports.some((i) => i.includes("Fabric"))) {
-				analysis += "4. **Fabric API**: 提供事件系统、网络通信、数据生成等高级功能\n\n";
+			const fabricImports = imports.filter((i) => i.startsWith("net.fabricmc"));
+			const mcImports = imports.filter((i) => i.startsWith("net.minecraft"));
+			if (fabricImports.length || mcImports.length) {
+				analysis += `### 关键 API\n\n`;
+				if (fabricImports.length) analysis += `- Fabric：${fabricImports.slice(0, 6).join(", ")}${fabricImports.length > 6 ? " …" : ""}\n`;
+				if (mcImports.length) analysis += `- Minecraft：${mcImports.slice(0, 8).join(", ")}${mcImports.length > 8 ? " …" : ""}\n`;
+				analysis += "\n";
 			}
 
-			analysis += `### 学习建议\n\n`;
-			analysis += "如果想深入了解这段代码涉及的概念，可以学习：\n";
-			analysis += "- Fabric 模组开发基础教程\n";
-			analysis += "- Minecraft 注册表系统\n";
-			analysis += "- Java 面向对象编程\n";
+			if (annotations.length) {
+				analysis += `### 注解 / 注入点\n\n`;
+				for (const ann of annotations.slice(0, 6)) analysis += `- \`${ann}\`\n`;
+				analysis += "\n";
+			}
+
+			analysis += `### 阅读提示\n\n`;
+			analysis += "结合 `fabric.mod.json` 入口类与对应 `ModItems`/`ModBlocks` 注册类，可还原完整注册链路。";
+			analysis += "若需修改行为，优先查 Fabric API 是否提供事件钩子，再考虑 Mixin。\n";
 		} else {
 			try {
 				const json = JSON.parse(code);
@@ -1288,7 +1266,11 @@ export const fabricTemplateGenerateTool: Tool = {
 		properties: {
 			templateId: { type: "string", description: "模板 ID，如 custom-block、custom-item" },
 			name: { type: "string", description: "内容名称，如 ruby_block、magic_sword" },
-			displayName: { type: "string", description: "中文显示名称，如 红宝石方块" }
+			displayName: { type: "string", description: "中文显示名称，如 红宝石方块" },
+			formFields: {
+				type: "object",
+				description: "快捷创建表单字段（硬度、饱食度、工具类型等），键值与模板表单一致"
+			}
 		},
 		required: ["templateId", "name"]
 	},
@@ -1297,232 +1279,33 @@ export const fabricTemplateGenerateTool: Tool = {
 		if (!ctx.projectPath) return "No project open";
 		const templateId = String(args.templateId || "");
 		const name = String(args.name || "");
-		const displayName = String(args.displayName || "");
+		const displayName = args.displayName ? String(args.displayName) : undefined;
+		const formFields =
+			args.formFields && typeof args.formFields === "object" && !Array.isArray(args.formFields)
+				? (args.formFields as Record<string, unknown>)
+				: undefined;
 
 		if (!templateId || !name) return "Error: templateId and name are required";
 
 		const template = MOD_TEMPLATES.find((t) => t.id === templateId);
 		if (!template) return `Error: template "${templateId}" not found. Use list_templates to see available templates.`;
 
-		let modId = "";
-		let groupId = "";
-		let javaPackage = "";
-
-		try {
-			const jsonRes = await window.api.readFile(`${ctx.projectPath}/src/main/resources/fabric.mod.json`);
-			if (jsonRes.success && jsonRes.content) {
-				const json = JSON.parse(jsonRes.content);
-				modId = json.id || "";
-			}
-			const propsRes = await window.api.readFile(`${ctx.projectPath}/gradle.properties`);
-			if (propsRes.success && propsRes.content) {
-				const lines = propsRes.content.split("\n");
-				const groupLine = lines.find((l: string) => l.startsWith("maven_group="));
-				if (groupLine) groupId = groupLine.split("=")[1] || "";
-			}
-			const javaFiles = await window.api.listDirectory(`${ctx.projectPath}/src/main/java`);
-			for (const file of javaFiles) {
-				if (file.isDirectory) {
-					const pkgParts: string[] = [];
-					let current = `${ctx.projectPath}/src/main/java/${file.name}`;
-					pkgParts.push(file.name);
-					let entries = await window.api.listDirectory(current);
-					while (entries.length === 1 && entries[0].isDirectory) {
-						pkgParts.push(entries[0].name);
-						current = `${current}/${entries[0].name}`;
-						entries = await window.api.listDirectory(current);
-					}
-					javaPackage = pkgParts.join(".");
-					break;
-				}
-			}
-		} catch (err) {
-			return `Error reading project config: ${err}`;
-		}
-
-		if (!modId || !groupId || !javaPackage) {
+		const config = await resolveProjectConfig(ctx.projectPath);
+		if (!config) {
 			return "Error: Cannot determine project configuration. Ensure fabric.mod.json and gradle.properties exist.";
 		}
 
-		const config: ProjectCreateConfig = {
-			projectDir: ctx.projectPath,
-			folderName: "",
-			displayName: "",
-			modId,
-			groupId,
-			javaPackage,
-			authors: "",
-			description: "",
-			modVersion: "",
-			versions: {
-				minecraft_version: "",
-				loader_version: "",
-				fabric_version: "",
-				yarn_mappings: "",
-				loom_version: "",
-				gradle_version: ""
-			}
-		};
+		const result = await executeTemplateGenerate({
+			projectPath: ctx.projectPath,
+			templateId,
+			name,
+			displayName,
+			formFields,
+			config
+		});
 
-		const javaPath = `src/main/java/${groupId.replace(/\./g, "/")}/${javaPackage}`;
-		const createdFiles: string[] = [];
-
-		try {
-			switch (templateId) {
-				case "custom-block": {
-					const blockClass = generateCustomBlockClass(config, name);
-					const itemClass = generateCustomBlockItemClass(config, name);
-					const className = name.replace(/-/g, "_");
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}Block.java`, blockClass);
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}Item.java`, itemClass);
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/blockstates/${className}.json`, generateBlockStatesJson(modId, name));
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/models/block/${className}.json`, generateBlockModelJson(modId, name));
-					await window.api.writeFile(
-						`${ctx.projectPath}/src/main/resources/assets/${modId}/models/item/${className}.json`,
-						generateItemModelJson(modId, name, `${modId}:block/${className}`)
-					);
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/data/${modId}/loot_tables/blocks/${className}.json`, generateLootTableJson(modId, name));
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId));
-					createdFiles.push(
-						`${javaPath}/${className}Block.java`,
-						`${javaPath}/${className}Item.java`,
-						`src/main/resources/assets/${modId}/blockstates/${className}.json`,
-						`src/main/resources/assets/${modId}/models/block/${className}.json`,
-						`src/main/resources/assets/${modId}/models/item/${className}.json`,
-						`src/main/resources/data/${modId}/loot_tables/blocks/${className}.json`,
-						`src/main/resources/assets/${modId}/lang/zh_cn.json`
-					);
-					break;
-				}
-				case "custom-item": {
-					const itemClass = generateCustomItemClass(config, name);
-					const className = name.replace(/-/g, "_");
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}Item.java`, itemClass);
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/models/item/${className}.json`, generateItemModelJson(modId, name));
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId));
-					createdFiles.push(`${javaPath}/${className}Item.java`, `src/main/resources/assets/${modId}/models/item/${className}.json`, `src/main/resources/assets/${modId}/lang/zh_cn.json`);
-					break;
-				}
-				case "custom-food": {
-					const foodClass = generateCustomFoodItemClass(config, name);
-					const className = name.replace(/-/g, "_");
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}Item.java`, foodClass);
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/models/item/${className}.json`, generateItemModelJson(modId, name));
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId));
-					createdFiles.push(`${javaPath}/${className}Item.java`, `src/main/resources/assets/${modId}/models/item/${className}.json`, `src/main/resources/assets/${modId}/lang/zh_cn.json`);
-					break;
-				}
-				case "custom-tool": {
-					const toolType = name.includes("sword")
-						? "SwordItem"
-						: name.includes("pickaxe")
-							? "PickaxeItem"
-							: name.includes("axe")
-								? "AxeItem"
-								: name.includes("shovel")
-									? "ShovelItem"
-									: name.includes("hoe")
-										? "HoeItem"
-										: "SwordItem";
-					const toolClass = generateCustomToolClass(config, name, toolType);
-					const className = name.replace(/-/g, "_");
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}${toolType}.java`, toolClass);
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/models/item/${className}.json`, generateItemModelJson(modId, name));
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId));
-					createdFiles.push(
-						`${javaPath}/${className}${toolType}.java`,
-						`src/main/resources/assets/${modId}/models/item/${className}.json`,
-						`src/main/resources/assets/${modId}/lang/zh_cn.json`
-					);
-					break;
-				}
-				case "custom-armor": {
-					const armorType = name.includes("helmet")
-						? "HelmetItem"
-						: name.includes("chestplate")
-							? "ChestplateItem"
-							: name.includes("leggings")
-								? "LeggingsItem"
-								: name.includes("boots")
-									? "BootsItem"
-									: "ChestplateItem";
-					const armorClass = generateCustomArmorClass(config, name, armorType);
-					const className = name.replace(/-/g, "_");
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}${armorType}.java`, armorClass);
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/models/item/${className}.json`, generateItemModelJson(modId, name));
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/assets/${modId}/lang/zh_cn.json`, generateLangFile(modId));
-					createdFiles.push(
-						`${javaPath}/${className}${armorType}.java`,
-						`src/main/resources/assets/${modId}/models/item/${className}.json`,
-						`src/main/resources/assets/${modId}/lang/zh_cn.json`
-					);
-					break;
-				}
-				case "custom-entity": {
-					const className = name.replace(/-/g, "_");
-					const entityClass = `package ${groupId}.${javaPackage};
-
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnGroup;
-import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.entity.mob.ZombieEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.util.Identifier;
-
-public class ${className}Entity extends ZombieEntity {
-    public static final EntityType<${className}Entity> TYPE = EntityType.Builder.create(${className}Entity::new, SpawnGroup.MONSTER)
-        .dimensions(0.6f, 1.95f)
-        .build("${className}");
-
-    public ${className}Entity(EntityType<? extends ZombieEntity> entityType, net.minecraft.world.World world) {
-        super(entityType, world);
-    }
-
-    public static void register() {
-        Identifier id = Identifier.of("${modId}", "${name}");
-        RegistryKey<EntityType<?>> key = RegistryKey.of(RegistryKeys.ENTITY_TYPE, id);
-        Registry.register(Registries.ENTITY_TYPE, key, TYPE);
-    }
-}
-`;
-					await window.api.writeFile(`${ctx.projectPath}/${javaPath}/${className}Entity.java`, entityClass);
-					createdFiles.push(`${javaPath}/${className}Entity.java`);
-					break;
-				}
-				case "custom-recipe": {
-					const recipeJson =
-						JSON.stringify(
-							{
-								type: "minecraft:crafting_shaped",
-								pattern: ["AAA", "ABA", "AAA"],
-								key: {
-									A: { item: "minecraft:stone" },
-									B: { item: "minecraft:diamond" }
-								},
-								result: {
-									item: `${modId}:${name}`,
-									count: 1
-								}
-							},
-							null,
-							2
-						) + "\n";
-					await window.api.writeFile(`${ctx.projectPath}/src/main/resources/data/${modId}/recipes/${name}.json`, recipeJson);
-					createdFiles.push(`src/main/resources/data/${modId}/recipes/${name}.json`);
-					break;
-				}
-				default:
-					return `Error: template "${templateId}" is not supported for generation.`;
-			}
-
-			const nameText = displayName ? `（${displayName}）` : "";
-			return `已生成${template.name}模板${nameText}：\n${createdFiles.map((f) => `- ${f}`).join("\n")}\n\n注意：需要在主类中调用 register() 方法完成注册。`;
-		} catch (err) {
-			return `Error generating template: ${err}`;
-		}
+		if (!result.ok) return result.message;
+		return result.message;
 	}
 };
 

@@ -30,6 +30,9 @@ import MarkdownContent from './MarkdownContent'
 import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 import TemplateFormPanel from './TemplateFormPanel'
+import { buildTemplateParamsFromForm, isQuickCreateTemplate } from '../project/template-params'
+import { executeTemplateGenerate, resolveProjectConfig } from '../project/template-runner'
+import { isCodeExplainInput } from '../harness/turn-intent'
 import RollbackWarningPanel from './RollbackWarningPanel'
 import DeleteMessagePanel from './DeleteMessagePanel'
 import { removeMessageFromDisplay } from '../utils/message-delete'
@@ -418,12 +421,20 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       const newItems = contextFiles.slice(contextConsumedRef.current)
       contextConsumedRef.current = contextFiles.length
       const text = newItems.join('\n\n')
-      setInput((prev) => (prev ? `${prev}\n\n${text}` : text))
-      // Clear after consuming so the same content isn't re-appended
+      if (newItems.some((item) => isCodeExplainInput(item))) {
+        setComposerMode('ask')
+        composerModeRef.current = 'ask'
+        controllerRef.current?.setComposerMode('ask')
+        persistComposerMeta({ composerMode: 'ask' })
+      }
+      const prefix = newItems.some((item) => isCodeExplainInput(item)) && !text.includes('请解释')
+        ? '请解释以下代码：\n\n'
+        : ''
+      setInput((prev) => (prev ? `${prev}\n\n${prefix}${text}` : `${prefix}${text}`))
       setContextFiles([])
       contextConsumedRef.current = 0
     }
-  }, [contextFiles, setContextFiles])
+  }, [contextFiles, setContextFiles, persistComposerMeta])
 
   // Refresh display from turnRef
   const refreshDisplay = useCallback(() => {
@@ -984,9 +995,29 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     })
   }, [isLoading, clarificationPending, toolchainReady, projectPath, apiConfig, ensureApiKey])
 
-  const handleTemplateFormConfirm = useCallback((prompt: string) => {
+  const handleTemplateFormConfirm = useCallback(async (result: { prompt: string; templateId: string; formData: Record<string, unknown> }) => {
     setShowTemplateForm(false)
     setContextFiles([])
+
+    let prompt = result.prompt
+    if (isQuickCreateTemplate(result.templateId) && projectPath) {
+      const config = await resolveProjectConfig(projectPath)
+      if (config) {
+        const params = buildTemplateParamsFromForm(result.templateId, result.formData)
+        const gen = await executeTemplateGenerate({
+          projectPath,
+          templateId: params.templateId,
+          name: params.name,
+          displayName: params.displayName,
+          formFields: params.formFields,
+          config
+        })
+        const status = gen.ok
+          ? `【快捷创建】模板已生成：\n${gen.message}`
+          : `【快捷创建】生成失败：${gen.message}`
+        prompt = `${status}\n\n模板ID：${result.templateId}。请直接构建并运行测试，不要重新探索或手搓注册代码。`
+      }
+    }
 
     if (!currentSessionId) {
       const newId = onNewSession(prompt)
@@ -1029,7 +1060,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     })
-  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextFiles])
+  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextFiles, projectPath])
 
   const handleTemplateFormCancel = useCallback(() => {
     setShowTemplateForm(false)

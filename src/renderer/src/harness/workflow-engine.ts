@@ -222,8 +222,12 @@ function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
     return step.kind !== 'build' && step.kind !== 'run'
   }
   switch (step.kind) {
-    case 'inspect':
     case 'recipe':
+      return (
+        result.toolName === 'create_recipe' ||
+        result.toolName === 'fabric_recipe_generate'
+      )
+    case 'inspect':
     case 'write':
       // Only complete_step advances these; host does NOT auto-detect completion.
       // This prevents premature advancement when a step requires multiple files.

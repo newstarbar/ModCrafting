@@ -90,6 +90,7 @@ export function canToolResultAdvanceStep(
       toolName === 'write_file' ||
       toolName === 'create_recipe' ||
       toolName === 'fabric_recipe_generate' ||
+      toolName === 'fabric_template_generate' ||
       toolName === 'fabric_content_register' ||
       toolName === 'fabric_data_assets_generate' ||
       toolName === 'fabric_mixin_scaffold'

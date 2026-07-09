@@ -585,7 +585,7 @@ export async function scaffoldProject(config: ProjectCreateConfig): Promise<void
 		`${pd}/src/main/resources/assets/${modId}/models/item`,
 		`${pd}/src/main/resources/assets/${modId}/models/block`,
 		`${pd}/src/main/resources/assets/${modId}/blockstates`,
-		`${pd}/src/main/resources/data/${modId}/loot_tables/blocks`,
+		`${pd}/src/main/resources/data/${modId}/loot_table/block`,
 		`${pd}/src/main/resources/data/${modId}/tags/blocks`,
 		`${pd}/src/main/resources/data/${modId}/tags/items`,
 		`${pd}/gradle/wrapper`

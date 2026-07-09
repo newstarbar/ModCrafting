@@ -400,6 +400,10 @@ export class Agent {
         phase === 'plan'
           ? this.filterControlTools(this.registry.schemas())
           : this.filterControlTools(this.registry.schemas())
+      if (this.runLifecycleMeta.turnMode === 'chat') {
+        const chatTools = new Set(['read_file', 'explain_code', 'fabric_docs_search'])
+        availableTools = availableTools.filter((t) => chatTools.has(t.name))
+      }
       if (this.graceRound) {
         availableTools = []
       } else if (phase === 'plan') {

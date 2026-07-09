@@ -89,14 +89,23 @@ export function isToolAllowedForStep(
   options?: ToolGateOptions
 ): boolean {
   if (isRepairWriteBlocked(step, call, options)) return false
-  if (options?.repairMode && call.name === 'write_file' && (step.kind === 'build' || step.kind === 'run')) {
+
+  if (call.name === 'list_directory') return true
+  if (call.name === 'ask_clarification') return true
+
+  if (call.name === 'write_file') {
+    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
+    if (step.kind === 'build' || step.kind === 'run') return false
     return true
   }
-  // Always-available tools: exploration, writing fixes, and clarification
-  if (call.name === 'list_directory') return true
-  if (call.name === 'read_file') return true
-  if (call.name === 'write_file') return true
-  if (call.name === 'ask_clarification') return true
+
+  if (call.name === 'read_file') {
+    if (step.kind === 'recipe') {
+      return isRecipeInspectionPath(String(call.args.path || ''))
+    }
+    return true
+  }
+
   // complete_step only in non-terminal steps (build/run auto-detected by host)
   if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run') return true
 

@@ -617,7 +617,7 @@ const App: React.FC = () => {
 		try {
 			const javaDir = `${state.projectPath}/src/main/java`;
 			const entries = await window.api.listDirectory(javaDir);
-			const findFile = async (dir: string, pkgParts: string[]): Promise<string | null> => {
+			const findFile = async (dir: string, pkgParts: string[]): Promise<{ code: string; relPath: string } | null> => {
 				const dirEntries = await window.api.listDirectory(dir);
 				for (const entry of dirEntries) {
 					if (entry.isDirectory) {
@@ -625,16 +625,24 @@ const App: React.FC = () => {
 						if (result) return result;
 					} else if (entry.name === `${className}.java`) {
 						const res = await window.api.readFile(entry.path);
-						return res.success && res.content ? res.content : null;
+						if (!res.success || !res.content) return null;
+						const relPath = entry.path.replace(`${state.projectPath}/`, "").replace(/\\/g, "/");
+						return { code: res.content, relPath };
 					}
 				}
 				return null;
 			};
 			for (const entry of entries) {
 				if (entry.isDirectory) {
-					const code = await findFile(entry.path, [entry.name]);
-					if (code) {
-						setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n\`\`\`java\n${code}\n\`\`\``] }));
+					const found = await findFile(entry.path, [entry.name]);
+					if (found) {
+						setState((prev) => ({
+							...prev,
+							chatContext: [
+								...prev.chatContext,
+								`--- 代码解释 ---\n${name} (${type})\n文件: ${found.relPath}\n\`\`\`java\n${found.code}\n\`\`\``
+							]
+						}));
 						return;
 					}
 				}

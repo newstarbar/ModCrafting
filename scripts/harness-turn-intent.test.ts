@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
-import { resolveTurnIntent, buildSessionGoalBlock } from '../src/renderer/src/harness/turn-intent.ts'
+import { resolveTurnIntent, buildSessionGoalBlock, isCodeExplainInput } from '../src/renderer/src/harness/turn-intent.ts'
 import {
   compilePlanFromText,
   dropVagueSteps,
+  isTemplateQuickCreateText,
   needsKnowledgeInspect,
   parseStructuredSteps
 } from '../src/renderer/src/harness/plan-compiler.ts'
@@ -59,6 +60,19 @@ test('compilePlanFromText: structured write steps append host terminal steps', (
   assert.ok(compiled.length >= 5)
   assert.ok(compiled.some((s) => /gradlew build/i.test(s.description)))
   assert.ok(compiled.some((s) => /runClient/i.test(s.description)))
+})
+
+test('resolveTurnIntent: code explain context → chat even with project', () => {
+  const input = '--- 代码解释 ---\nFooItem (item)\n```java\nclass Foo {}\n```'
+  assert.equal(resolveTurnIntent(input, intentCtx({ composerMode: 'agent' })), 'chat')
+  assert.ok(isCodeExplainInput(input))
+})
+
+test('needsKnowledgeInspect: template quick create skips knowledge inspect', () => {
+  const text = '我需要创建一个自定义方块模组，模板ID：custom-block。\n\n详细信息：\n硬度: 2'
+  assert.ok(isTemplateQuickCreateText(text))
+  const steps = parseStructuredSteps('1. [write] fabric_template_generate — 生成方块')
+  assert.equal(needsKnowledgeInspect(steps, text), false)
 })
 
 test('compilePlanFromText: recipe-only plan skips knowledge inspect', () => {

@@ -88,7 +88,14 @@ export function dedupeByPath(steps: CompiledPlanStep[]): CompiledPlanStep[] {
   return result
 }
 
-export function needsKnowledgeInspect(steps: CompiledPlanStep[]): boolean {
+const TEMPLATE_QUICK_CREATE_RE = /模板\s*ID\s*[：:]\s*custom-(?:block|item|food|tool|armor|entity)/i
+
+export function isTemplateQuickCreateText(text: string): boolean {
+  return TEMPLATE_QUICK_CREATE_RE.test(text)
+}
+
+export function needsKnowledgeInspect(steps: CompiledPlanStep[], sourceText?: string): boolean {
+  if (sourceText && isTemplateQuickCreateText(sourceText)) return false
   if (steps.length === 0) return false
   if (isOpsOnlyPlan(steps)) return false
   if (steps.some((s) => s.kind === 'inspect')) return false
@@ -196,7 +203,7 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
     steps = appendMixinsJsonUpdateWarning(steps)
   }
 
-  if (needsKnowledgeInspect(steps)) {
+  if (needsKnowledgeInspect(steps, text)) {
     steps = prependKnowledgeInspect(steps)
   }
   steps = appendHostTerminalSteps(steps)

@@ -34,7 +34,7 @@ export interface ActivePlanSnapshot {
 
 function entriesToContent(entries: PersistedChronoEntry[]): string {
   return entries
-    .filter((e) => e.kind === 'text' || e.kind === 'reasoning')
+    .filter((e) => e.kind === 'text')
     .map((e) => e.content ?? '')
     .join('\n')
 }

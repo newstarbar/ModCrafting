@@ -17,7 +17,7 @@ export function messagePlainText(msg: DisplayMessage): string {
 
   if (msg.entries && msg.entries.length > 0) {
     return msg.entries
-      .filter((e) => e.kind === 'text' || e.kind === 'reasoning')
+      .filter((e) => e.kind === 'text')
       .map((e) => e.content ?? '')
       .join('\n')
       .trim() || msg.content.trim()

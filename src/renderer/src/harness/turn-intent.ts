@@ -42,8 +42,18 @@ function heuristicDevelop(input: string, hasProject: boolean): boolean {
   return false
 }
 
+const CODE_EXPLAIN_PATTERN = /---\s*代码解释\s*---/i
+
+export function isCodeExplainInput(input: string): boolean {
+  return CODE_EXPLAIN_PATTERN.test(input)
+}
+
 export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIntent {
   const trimmed = input.trim()
+
+  if (isCodeExplainInput(trimmed)) {
+    return 'chat'
+  }
 
   if (ctx.composerMode === 'ask') {
     return 'chat'

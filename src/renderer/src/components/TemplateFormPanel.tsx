@@ -5,7 +5,7 @@ import TemplatePreview from './mc/TemplatePreview'
 
 interface TemplateFormPanelProps {
   templateId: string
-  onConfirm: (prompt: string) => void
+  onConfirm: (result: { prompt: string; templateId: string; formData: Record<string, unknown> }) => void
   onCancel: () => void
 }
 
@@ -178,8 +178,11 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
   }, [])
 
   const handleSubmit = () => {
-    const prompt = generatePromptFromForm(templateId, formData)
-    onConfirm(prompt)
+    onConfirm({
+      prompt: generatePromptFromForm(templateId, formData),
+      templateId,
+      formData: { ...formData }
+    })
   }
 
   if (!schema) {

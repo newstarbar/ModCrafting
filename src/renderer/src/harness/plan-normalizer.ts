@@ -38,6 +38,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_file',
         'list_directory',
         'complete_step',
+        'explain_code',
         'ask_clarification',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
@@ -66,6 +67,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'write_file',
         'edit_file',
         'complete_step',
+        'fabric_template_generate',
         'fabric_content_register',
         'fabric_data_assets_generate',
         'fabric_mixin_scaffold',
@@ -104,7 +106,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_error_log'
       ]
     case 'answer':
-      return ['complete_step']
+      return ['complete_step', 'explain_code', 'read_file', 'ask_clarification']
   }
 }
 

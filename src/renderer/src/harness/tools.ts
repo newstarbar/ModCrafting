@@ -164,7 +164,29 @@ function artifactPathFor(toolName: string, args: Record<string, unknown>): strin
       : `src/main/resources/assets/${args.namespace}/models/item/${args.name}.json`
   }
   if (toolName === 'fabric_content_register' && typeof args.packagePath === 'string') {
-    return `src/main/java/${String(args.packagePath).replace(/\./g, '/')}/ModItems.java`
+    const kind = typeof args.kind === 'string' ? args.kind : 'item'
+    const base = `src/main/java/${String(args.packagePath).replace(/\./g, '/')}`
+    if (kind === 'block') return `${base}/ModBlocks.java`
+    if (kind === 'block_entity') return `${base}/ModBlockEntities.java`
+    return `${base}/ModItems.java`
+  }
+  if (toolName === 'fabric_template_generate' && typeof args.templateId === 'string') {
+    const templateId = args.templateId
+    const name = typeof args.name === 'string' ? args.name : 'generated'
+    const className = name.replace(/-/g, '_')
+    if (templateId === 'custom-block') {
+      return `src/main/java/**/${className}Block.java`
+    }
+    if (templateId === 'custom-entity') {
+      return `src/main/java/**/${className}Entity.java`
+    }
+    if (templateId === 'custom-tool' || templateId === 'custom-armor') {
+      return `src/main/java/**/${className}*.java`
+    }
+    if (templateId === 'custom-food' || templateId === 'custom-item') {
+      return `src/main/java/**/${className}Item.java`
+    }
+    return undefined
   }
   if (toolName === 'fabric_mixin_scaffold' && typeof args.mixinClass === 'string') {
     return `src/main/java/${String(args.mixinClass).replace(/\./g, '/')}.java`
