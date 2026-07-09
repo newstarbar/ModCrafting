@@ -265,6 +265,24 @@ body,
 	flex-direction: row;
 	overflow: hidden;
 	flex-shrink: 0;
+	transition: width var(--transition), min-width var(--transition);
+}
+
+.sidebar--collapsed {
+	--sidebar-panel-width: 0px;
+}
+
+.sidebar--dragging {
+	transition: none;
+}
+
+.sidebar--collapsed .sidebar-panel {
+	width: 0;
+	min-width: 0;
+	border: none;
+	opacity: 0;
+	pointer-events: none;
+	overflow: hidden;
 }
 
 .activity-bar {
@@ -358,6 +376,25 @@ body,
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	margin-top: 2px;
+}
+
+.sidebar-panel-collapse-btn {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px;
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	border-radius: var(--radius-sm);
+}
+
+.sidebar-panel-collapse-btn:hover {
+	color: var(--mc-yellow);
+	border-color: var(--border-color);
+	background: rgba(255, 255, 255, 0.04);
 }
 
 .sidebar-panel-body {
@@ -1591,12 +1628,26 @@ body,
 /* ── Right Panel ── */
 .right-panel {
 	width: var(--right-panel-width);
-	min-width: 280px;
+	min-width: var(--right-panel-width);
+	flex-shrink: 0;
 	background: var(--bg-secondary);
 	border-left: 1px solid var(--border-outer);
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	transition: width var(--transition), min-width var(--transition);
+}
+
+.right-panel--collapsed {
+	width: 0 !important;
+	min-width: 0 !important;
+	border: none;
+	overflow: hidden;
+	pointer-events: none;
+}
+
+.right-panel--dragging {
+	transition: none;
 }
 
 .right-panel-tabs {
@@ -1604,6 +1655,100 @@ body,
 	gap: 2px;
 	padding: 6px 6px 0;
 	flex-shrink: 0;
+	align-items: center;
+}
+
+.right-panel-collapse-btn {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-left: auto;
+	padding: 4px 6px;
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	border-radius: var(--radius-sm);
+}
+
+.right-panel-collapse-btn:hover {
+	color: var(--mc-yellow);
+	border-color: var(--border-color);
+	background: rgba(255, 255, 255, 0.04);
+}
+
+/* ── Workspace panel resize / expand ── */
+.panel-resize-handle {
+	flex-shrink: 0;
+	width: 5px;
+	cursor: col-resize;
+	position: relative;
+	background: transparent;
+	touch-action: none;
+}
+
+.panel-resize-handle::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 50%;
+	width: 1px;
+	transform: translateX(-50%);
+	background: transparent;
+	transition: background var(--transition);
+}
+
+.panel-resize-handle:hover::after,
+.panel-resize-handle--active::after {
+	background: var(--mc-yellow);
+	box-shadow: 0 0 6px rgba(255, 255, 85, 0.35);
+}
+
+.panel-expand-rail {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 20px;
+	z-index: 3;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none;
+}
+
+.panel-expand-rail--left {
+	left: 0;
+}
+
+.panel-expand-rail--right {
+	right: 0;
+}
+
+.panel-expand-rail__btn {
+	pointer-events: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 48px;
+	padding: 0;
+	color: var(--text-muted);
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	box-shadow: inset 1px 1px 0 var(--border-light), inset -1px -1px 0 var(--border-outer);
+	cursor: pointer;
+}
+
+.panel-expand-rail__btn:hover {
+	color: var(--mc-yellow);
+	border-color: rgba(255, 255, 85, 0.35);
+}
+
+.app-layout--resizing .sidebar,
+.app-layout--resizing .right-panel {
+	transition: none !important;
 }
 
 .right-panel-tabs .mc-tab {

@@ -118,3 +118,27 @@ export const IconGhost = (props: IconProps) => (
 export const IconLoader = (props: IconProps) => (
   <IconBase {...props}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></IconBase>
 )
+
+export const IconChevronLeft = (props: IconProps) => (
+  <IconBase {...props}><polyline points="15 18 9 12 15 6" /></IconBase>
+)
+
+export const IconChevronRight = (props: IconProps) => (
+  <IconBase {...props}><polyline points="9 18 15 12 9 6" /></IconBase>
+)
+
+export const IconPanelLeftClose = (props: IconProps) => (
+  <IconBase {...props}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <line x1="9" y1="3" x2="9" y2="21" />
+    <polyline points="15 12 12 9 15 6" />
+  </IconBase>
+)
+
+export const IconPanelRightClose = (props: IconProps) => (
+  <IconBase {...props}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <line x1="15" y1="3" x2="15" y2="21" />
+    <polyline points="9 12 12 9 9 6" />
+  </IconBase>
+)

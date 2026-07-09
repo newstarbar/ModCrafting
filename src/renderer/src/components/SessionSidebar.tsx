@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import FileTree from './FileTree'
 import FileViewer from './FileViewer'
 import ToolsPanel from './ToolsPanel'
-import { IconFile, IconMessage, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
+import { IconFile, IconMessage, IconPanelLeftClose, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
 
 import type { ChatSession } from '../types/chat'
 import { sortSessionsByUpdatedAt } from '../utils/session-sort'
@@ -34,6 +34,9 @@ interface SessionSidebarProps {
   selectedFile?: { path: string; name: string } | null
   fileContent?: string | null
   onSelectFile?: (path: string, name: string) => void
+  panelCollapsed?: boolean
+  panelDragging?: boolean
+  onTogglePanelCollapse?: () => void
 }
 
 type SidebarTab = 'sessions' | 'files' | 'tools' | 'settings'
@@ -44,7 +47,8 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   fileChanges, apiConfig, hasSavedApiKey = false, encryptionAvailable = true,
   onApiSettingsChange, onApiKeySave,
   onOpenProject, onCreateProject,
-  fileTreeRefreshKey = 0, selectedFilePath, selectedFile, fileContent, onSelectFile
+  fileTreeRefreshKey = 0, selectedFilePath, selectedFile, fileContent, onSelectFile,
+  panelCollapsed = false, panelDragging = false, onTogglePanelCollapse
 }) => {
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -109,7 +113,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   }
 
   return (
-    <div className="sidebar">
+    <div className={`sidebar${panelCollapsed ? ' sidebar--collapsed' : ''}${panelDragging ? ' sidebar--dragging' : ''}`}>
       <nav className="activity-bar">
         <button
           type="button"
@@ -157,6 +161,17 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
           {activeTab === 'sessions' && (
             <button type="button" className="mc-btn" onClick={onNewSession} title="新建对话" style={{ padding: '4px 8px' }}>
               <IconPlus size="sm" />
+            </button>
+          )}
+          {onTogglePanelCollapse && (
+            <button
+              type="button"
+              className="sidebar-panel-collapse-btn"
+              onClick={onTogglePanelCollapse}
+              title="收起左侧面板"
+              aria-label="收起左侧面板"
+            >
+              <IconPanelLeftClose size="sm" />
             </button>
           )}
         </div>

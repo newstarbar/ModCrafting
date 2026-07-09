@@ -13,7 +13,10 @@ import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import UpdateBanner from "./components/UpdateBanner";
-import { IconCode, IconGamepad, IconSquare } from "./components/Icon";
+import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./components/Icon";
+import PanelExpandRail from "./components/PanelExpandRail";
+import PanelResizeHandle from "./components/PanelResizeHandle";
+import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import { EMPTY_USAGE, normalizeSessionUsage, type UsageStats } from "./utils/usage";
 import { loadProjectVersions, type ProjectVersions } from "./utils/project-versions";
 import {
@@ -86,6 +89,7 @@ const App: React.FC = () => {
 	const [encryptionAvailable, setEncryptionAvailable] = useState(true);
 	const [usage, setUsage] = useState<UsageData>(EMPTY_USAGE);
 	const [isRunning, setIsRunning] = useState(false);
+	const workspaceLayout = useWorkspaceLayout();
 	const [projectVersions, setProjectVersions] = useState<ProjectVersions | null>(null);
 	const [buildDevStatus, setBuildDevStatus] = useState<BuildDevStatus>({ running: false });
 	const [gameDevStatus, setGameDevStatus] = useState<GameDevStatus>({ label: '', variant: 'idle' });
@@ -631,7 +635,9 @@ const App: React.FC = () => {
 					/>
 				</div>
 				<div
-					className={`app-layout workspace-view app-shell-view${overlayLocked ? " app-layout--locked" : ""}${appView !== "workspace" ? " app-shell-view--hidden" : ""}`}
+					ref={workspaceLayout.layoutRef}
+					className={`app-layout workspace-view app-shell-view${overlayLocked ? " app-layout--locked" : ""}${workspaceLayout.isResizing ? " app-layout--resizing" : ""}${appView !== "workspace" ? " app-shell-view--hidden" : ""}`}
+					style={workspaceLayout.layoutStyle}
 				>
 						<SessionSidebar
 							projectPath={state.projectPath}
@@ -655,8 +661,28 @@ const App: React.FC = () => {
 							selectedFile={state.selectedFile}
 							fileContent={state.fileContent}
 							onSelectFile={selectFile}
+							panelCollapsed={workspaceLayout.leftCollapsed}
+							panelDragging={workspaceLayout.isResizing}
+							onTogglePanelCollapse={() => workspaceLayout.toggleLeftCollapsed()}
+						/>
+						<PanelResizeHandle
+							side="left"
+							disabled={workspaceLayout.leftCollapsed}
+							onPointerDown={workspaceLayout.beginLeftResize}
 						/>
 						<div className="main-area">
+							{workspaceLayout.leftCollapsed && (
+								<PanelExpandRail
+									side="left"
+									onExpand={() => workspaceLayout.toggleLeftCollapsed(false)}
+								/>
+							)}
+							{workspaceLayout.rightCollapsed && (
+								<PanelExpandRail
+									side="right"
+									onExpand={() => workspaceLayout.toggleRightCollapsed(false)}
+								/>
+							)}
 							{state.projectPath ? (
 								<ChatPanel
 									ref={chatPanelRef}
@@ -686,7 +712,12 @@ const App: React.FC = () => {
 								/>
 							)}
 						</div>
-						<div className="right-panel">
+						<PanelResizeHandle
+							side="right"
+							disabled={workspaceLayout.rightCollapsed}
+							onPointerDown={workspaceLayout.beginRightResize}
+						/>
+						<div className={`right-panel${workspaceLayout.rightCollapsed ? " right-panel--collapsed" : ""}${workspaceLayout.isResizing ? " right-panel--dragging" : ""}`}>
 							<div className="right-panel-tabs">
 								<button
 									type="button"
@@ -708,6 +739,15 @@ const App: React.FC = () => {
 									onClick={() => setState((p) => ({ ...p, rightPanelTab: "advanced" }))}
 								>
 									<IconCode size="sm" /> 高级
+								</button>
+								<button
+									type="button"
+									className="right-panel-collapse-btn"
+									onClick={() => workspaceLayout.toggleRightCollapsed()}
+									title="收起右侧面板"
+									aria-label="收起右侧面板"
+								>
+									<IconPanelRightClose size="sm" />
 								</button>
 							</div>
 							<div className="right-panel-content">
