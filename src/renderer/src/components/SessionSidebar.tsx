@@ -56,6 +56,12 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     if (selectedFilePath) setActiveTab('files')
   }, [selectedFilePath])
 
+  useEffect(() => {
+    const openSettings = () => setActiveTab('settings')
+    window.addEventListener('modcrafting:open-settings', openSettings)
+    return () => window.removeEventListener('modcrafting:open-settings', openSettings)
+  }, [])
+
   const handleStartRename = useCallback((id: string, currentName: string) => {
     setRenamingId(id)
     setRenameValue(currentName)

@@ -47,6 +47,8 @@ interface ChatPanelProps {
   toolchainReady?: boolean
   onUpdateSessionMeta?: (sessionId: string, meta: { composerMode?: ComposerMode; sessionGoal?: string }) => void
   onTemplateSelect?: (templateId: string, name: string) => void
+  onModelChange?: (model: string) => void
+  onOpenApiSettings?: () => void
 }
 
 const toolRegistry = new Registry()
@@ -165,7 +167,7 @@ interface ChatPanelRef {
   handleTemplateSelect: (templateId: string, name: string) => void
 }
 
-const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta }, ref) {
+const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onModelChange, onOpenApiSettings }, ref) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [composerMode, setComposerMode] = useState<ComposerMode>('agent')
@@ -1497,6 +1499,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           onExecutePlan={handleExecutePlan}
           toolchainReady={toolchainReady}
           hasProject={Boolean(projectPath)}
+          model={apiConfig.model}
+          onModelChange={onModelChange ?? (() => {})}
+          onOpenApiSettings={onOpenApiSettings}
           onQuickTemplateSelect={handleTemplateSelect}
         />
       </div>

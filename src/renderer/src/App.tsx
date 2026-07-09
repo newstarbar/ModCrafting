@@ -222,6 +222,17 @@ const App: React.FC = () => {
 		await window.api.saveApiConfig({ endpoint, model });
 	}, []);
 
+	const handleModelChange = useCallback(
+		(model: string) => {
+			void handleApiSettingsChange(apiConfig.endpoint, model);
+		},
+		[handleApiSettingsChange, apiConfig.endpoint]
+	);
+
+	const openApiSettings = useCallback(() => {
+		window.dispatchEvent(new CustomEvent("modcrafting:open-settings"));
+	}, []);
+
 	const handleApiKeySave = useCallback(async (key: string) => {
 		const trimmed = key.trim();
 		if (!trimmed) return;
@@ -660,6 +671,8 @@ const App: React.FC = () => {
 									onUpdateSessionMeta={handleUpdateSessionMeta}
 									onNewSession={handleNewSessionFromChat}
 									onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
+									onModelChange={handleModelChange}
+									onOpenApiSettings={openApiSettings}
 								/>
 							) : (
 								<WorkspaceEmpty
