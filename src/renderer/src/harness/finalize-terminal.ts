@@ -21,6 +21,18 @@ function emitPlanState(planTracker: PlanTracker, emit: (event: Event) => void): 
   })
 }
 
+function emitPlanStateWithError(planTracker: PlanTracker, failedStepId: string, emit: (event: Event) => void): void {
+  const workflowSteps = normalizeWorkflowSteps(planTracker.snapshot())
+  emit({
+    kind: EventKind.PlanState,
+    planSteps: workflowSteps.map((step) => ({
+      id: step.id,
+      description: step.title,
+      status: step.id === failedStepId ? 'error' : (step.status === 'failed' ? 'error' : step.status)
+    }))
+  })
+}
+
 /** Host-driven build/run when the model did not finish terminal steps. */
 export async function finalizeTerminalSteps(options: FinalizeTerminalOptions): Promise<void> {
   const { planTracker, projectPath, emit } = options
@@ -38,7 +50,10 @@ export async function finalizeTerminalSteps(options: FinalizeTerminalOptions): P
 
     if (wfStep.kind === 'build') {
       const res = await runBuildViaPanel()
-      if (res.failed) break
+      if (res.failed) {
+        emitPlanStateWithError(planTracker, cur.id, emit)
+        break
+      }
       const advance = planTracker.advanceCurrent('host finalize build')
       if (!advance.ok) break
       emitPlanState(planTracker, emit)
@@ -46,7 +61,10 @@ export async function finalizeTerminalSteps(options: FinalizeTerminalOptions): P
     }
 
     const res = await startGameViaPanel()
-    if (!res.ok) break
+    if (!res.ok) {
+      emitPlanStateWithError(planTracker, cur.id, emit)
+      break
+    }
     const advance = planTracker.advanceCurrent('host finalize run')
     if (!advance.ok) break
     emitPlanState(planTracker, emit)

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, forwardRef, useImperat
 import { IconGamepad } from './Icon'
 import { logger } from '../utils/logger'
 import { parseMcLogs, PHASE_LABELS, PHASE_ORDER, phaseStepIndex, splitLogChunks } from '../utils/mc-phase-parser'
-import { waitForMcPlaying } from '../utils/mc-wait-playing'
+import { waitForMcRunReady } from '../utils/mc-wait-playing'
 import { summarizeCrashReport } from '../utils/log-parser'
 
 export type McExitReason = 'none' | 'normal' | 'crash' | 'manual' | 'start_failed'
@@ -201,7 +201,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
       const running = projectInstances.find((i) => i.status === 'running' || i.status === 'starting')
       if (running) {
-        const waitResult = await waitForMcPlaying({ instanceId: running.id })
+        const waitResult = await waitForMcRunReady({ instanceId: running.id })
         return {
           instanceId: running.id,
           ok: waitResult.ok,
@@ -220,7 +220,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
       clearInstanceUiState(instanceId)
 
-      const waitResult = await waitForMcPlaying({ instanceId })
+      const waitResult = await waitForMcRunReady({ instanceId })
       return {
         instanceId,
         ok: waitResult.ok,

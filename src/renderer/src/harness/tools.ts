@@ -212,13 +212,29 @@ export interface ToolResult {
   }
 }
 
-function parseTriggerBuildMeta(output: string): ToolResult['meta'] | undefined {
+export function parseTriggerBuildMeta(output: string): ToolResult['meta'] | undefined {
   const phaseMatch = output.match(/\[MC_PHASE:(\w+)\]/)
   if (!phaseMatch) return undefined
+  const phase = phaseMatch[1] as McPhase
   return {
-    mcPhase: phaseMatch[1] as McPhase,
-    runClientStarted: phaseMatch[1] === 'playing'
+    mcPhase: phase,
+    runClientStarted: phase === 'ready'
   }
+}
+
+/** Whether a tool result satisfies run-step advancement (main menu + soak complete). */
+export function isRunClientReadyResult(result: ToolResult): boolean {
+  const task = String(result.args?.task || result.args?.command || '')
+  if (result.toolName === 'trigger_build' && task === 'runClient') {
+    return Boolean(
+      (result.meta?.runClientStarted && result.meta?.mcPhase === 'ready') ||
+      /\[MC_PHASE:ready\]/i.test(String(result.output))
+    )
+  }
+  if (result.toolName === 'run_command' && /runClient/i.test(task)) {
+    return result.exitCode === 0
+  }
+  return false
 }
 
 // ======== Registry ========

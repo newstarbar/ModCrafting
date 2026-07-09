@@ -420,7 +420,7 @@ const App: React.FC = () => {
 				return {
 					ok: res.ok,
 					instanceId: res.instanceId,
-					phase: res.ok ? "playing" as const : "error" as const,
+					phase: res.ok ? 'ready' as const : 'error' as const,
 					error: res.error
 				};
 			}

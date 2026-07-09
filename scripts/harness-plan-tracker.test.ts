@@ -716,12 +716,12 @@ test('run step does not advance on trigger_build build task', () => {
     args: { task: 'build' }
   }
   const runOk: ToolResult = {
-    output: '已在右侧游戏面板启动并进入游戏。[MC_PHASE:playing]',
+    output: '游戏已进入主菜单并完成稳定观察。[MC_PHASE:ready]',
     durationMs: 1,
     ok: true,
     toolName: 'trigger_build',
     args: { task: 'runClient' },
-    meta: { mcPhase: 'playing', runClientStarted: true }
+    meta: { mcPhase: 'ready', runClientStarted: true }
   }
 
   assert.equal(
@@ -750,7 +750,7 @@ test('finalizeTerminalSteps runs host build and run via panel bridge', async () 
     },
     startGameAndWait: async () => {
       calls.push('run')
-      return { ok: true, instanceId: 'mc-1', phase: 'playing' }
+      return { ok: true, instanceId: 'mc-1', phase: 'ready' }
     }
   })
 

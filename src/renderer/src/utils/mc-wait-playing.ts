@@ -1,8 +1,14 @@
-import { parseMcLogs, isMcPlayingPhase, type McPhase } from './mc-phase-parser'
+import {
+  formatMcLogTail,
+  isMcHarnessReady,
+  parseMcLogs,
+  type McPhase
+} from './mc-phase-parser.ts'
 
 export interface WaitForMcPlayingOptions {
   instanceId: string
   timeoutMs?: number
+  soakMs?: number
   abortSignal?: AbortSignal
 }
 
@@ -10,26 +16,61 @@ export interface WaitForMcPlayingResult {
   ok: boolean
   phase: McPhase
   error?: string
+  logTail?: string
 }
 
+export const MC_RUN_READY_SOAK_MS = 5000
 const DEFAULT_TIMEOUT_MS = 8 * 60 * 1000
 
 function isFailureStatus(status: string, exitReason?: string): boolean {
-  if (status === 'crashed') return true
+  if (status === 'crashed' || status === 'stopped') return true
   if (exitReason === 'crash' || exitReason === 'start_failed') return true
   return false
 }
 
-function isPlayingPhase(phase: McPhase, _status: string): boolean {
-  return isMcPlayingPhase(phase)
+function failureMessage(lastStatus: string, lastExitReason: string | undefined, summary?: string): string {
+  if (lastExitReason === 'start_failed') return '游戏启动失败'
+  if (lastExitReason === 'crash' || lastStatus === 'crashed') return '游戏崩溃'
+  return summary || '启动过程中出现错误'
 }
 
-/** Wait until MC instance reaches playing phase or fails/times out. */
-export function waitForMcPlaying(options: WaitForMcPlayingOptions): Promise<WaitForMcPlayingResult> {
-  const { instanceId, timeoutMs = DEFAULT_TIMEOUT_MS, abortSignal } = options
+function evaluateFailure(
+  logChunks: string[],
+  lastStatus: string,
+  lastExitReason: string | undefined
+): WaitForMcPlayingResult | null {
+  const phaseInfo = parseMcLogs(logChunks, lastStatus)
+  if (phaseInfo.hasError || phaseInfo.phase === 'error') {
+    return {
+      ok: false,
+      phase: 'error',
+      error: phaseInfo.summaryLine || '启动过程中出现错误',
+      logTail: formatMcLogTail(logChunks)
+    }
+  }
+  if (isFailureStatus(lastStatus, lastExitReason)) {
+    return {
+      ok: false,
+      phase: 'error',
+      error: failureMessage(lastStatus, lastExitReason, phaseInfo.summaryLine),
+      logTail: formatMcLogTail(logChunks)
+    }
+  }
+  return null
+}
+
+/** Wait until MC instance reaches harness-ready (main menu) + stable soak period. */
+export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<WaitForMcPlayingResult> {
+  const {
+    instanceId,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    soakMs = MC_RUN_READY_SOAK_MS,
+    abortSignal
+  } = options
   const logChunks: string[] = []
   let lastStatus = 'starting'
   let lastExitReason: string | undefined
+  let soakTimer: ReturnType<typeof window.setTimeout> | null = null
 
   return new Promise((resolve) => {
     let settled = false
@@ -40,22 +81,36 @@ export function waitForMcPlaying(options: WaitForMcPlayingOptions): Promise<Wait
       resolve(result)
     }
 
+    const clearSoak = (): void => {
+      if (soakTimer != null) {
+        window.clearTimeout(soakTimer)
+        soakTimer = null
+      }
+    }
+
+    const startSoak = (): void => {
+      if (soakTimer != null) return
+      soakTimer = window.setTimeout(() => {
+        const failure = evaluateFailure(logChunks, lastStatus, lastExitReason)
+        if (failure) {
+          finish(failure)
+          return
+        }
+        finish({ ok: true, phase: 'ready' })
+      }, soakMs)
+    }
+
     const check = (): void => {
-      const phaseInfo = parseMcLogs(logChunks, lastStatus)
-      if (phaseInfo.hasError || phaseInfo.phase === 'error') {
-        finish({ ok: false, phase: 'error', error: phaseInfo.summaryLine || '启动过程中出现错误' })
+      const failure = evaluateFailure(logChunks, lastStatus, lastExitReason)
+      if (failure) {
+        clearSoak()
+        finish(failure)
         return
       }
-      if (isFailureStatus(lastStatus, lastExitReason)) {
-        finish({
-          ok: false,
-          phase: 'error',
-          error: lastExitReason === 'start_failed' ? '游戏启动失败' : '游戏崩溃'
-        })
-        return
-      }
-      if (isPlayingPhase(phaseInfo.phase, lastStatus)) {
-        finish({ ok: true, phase: 'playing' })
+      if (isMcHarnessReady(logChunks, lastStatus)) {
+        startSoak()
+      } else {
+        clearSoak()
       }
     }
 
@@ -78,7 +133,8 @@ export function waitForMcPlaying(options: WaitForMcPlayingOptions): Promise<Wait
       finish({
         ok: false,
         phase: phaseInfo.phase,
-        error: `等待游戏启动超时（${Math.round(timeoutMs / 60000)} 分钟）`
+        error: `等待游戏启动超时（${Math.round(timeoutMs / 60000)} 分钟）`,
+        logTail: formatMcLogTail(logChunks)
       })
     }, timeoutMs)
 
@@ -96,9 +152,15 @@ export function waitForMcPlaying(options: WaitForMcPlayingOptions): Promise<Wait
       unsubLog()
       unsubState()
       window.clearTimeout(timer)
+      clearSoak()
       abortSignal?.removeEventListener('abort', onAbort)
     }
 
     check()
   })
+}
+
+/** @deprecated Use waitForMcRunReady for harness / agent run-step advancement. */
+export function waitForMcPlaying(options: WaitForMcPlayingOptions): Promise<WaitForMcPlayingResult> {
+  return waitForMcRunReady(options)
 }

@@ -1,4 +1,4 @@
-export type McPhase = 'idle' | 'prepare' | 'compile' | 'launch' | 'playing' | 'done' | 'error'
+export type McPhase = 'idle' | 'prepare' | 'compile' | 'launch' | 'playing' | 'ready' | 'done' | 'error'
 
 export interface McPhaseInfo {
   phase: McPhase
@@ -12,7 +12,8 @@ const PHASE_RANK: Record<McPhase, number> = {
   compile: 2,
   launch: 3,
   playing: 4,
-  done: 5,
+  ready: 5,
+  done: 6,
   error: -1
 }
 
@@ -29,11 +30,24 @@ const CLIENT_STARTED_MARKERS = [
   'spongepowered mixin subsystem'
 ]
 
+/** Stronger signal: main menu / client init complete — used by harness run-step advancement. */
+const HARNESS_READY_MARKERS = [
+  'setting user:',
+  'minecraft client started'
+]
+
 const ERROR_MARKERS = [
   'build failed',
   'failure: build failed',
   'could not find or load main class',
-  'execution failed for task'
+  'execution failed for task',
+  'could not execute entrypoint',
+  'mixin apply failed',
+  'invalidinjectionexception',
+  '---- minecraft crash report',
+  'crashreport',
+  'fatal error',
+  'failed to start minecraft'
 ]
 
 function normalizeForMatch(text: string): string {
@@ -112,10 +126,11 @@ function phaseFromLine(line: string): { phase: McPhase; summary: string } | null
   }
 
   if (isMcClientStarted(line)) {
-    if (lower.includes('setting user:') || lower.includes('sound engine started')) {
-      return { phase: 'playing', summary: 'Minecraft 已启动，可在弹出的窗口中游戏' }
-    }
-    if (lower.includes('backend library: lwjgl') || lower.includes('openal initialized')) {
+    if (
+      lower.includes('setting user:') ||
+      lower.includes('sound engine started') ||
+      lower.includes('minecraft client started')
+    ) {
       return { phase: 'playing', summary: 'Minecraft 已启动，可在弹出的窗口中游戏' }
     }
     if (lower.includes('loading minecraft')) {
@@ -172,7 +187,7 @@ export function parseMcLogs(logChunks: string[], status: string): McPhaseInfo {
   if (status === 'stopped' || status === 'crashed') {
     if (hasError) {
       phase = 'error'
-    } else if (phase === 'playing' || PHASE_RANK[phase] >= PHASE_RANK.launch) {
+    } else if (phase === 'playing' || phase === 'ready' || PHASE_RANK[phase] >= PHASE_RANK.launch) {
       phase = 'done'
       summaryLine = '游戏已结束'
     } else if (lastMeaningful) {
@@ -181,6 +196,20 @@ export function parseMcLogs(logChunks: string[], status: string): McPhaseInfo {
   }
 
   return { phase, summaryLine, hasError }
+}
+
+/** True when logs indicate main menu / client init is far enough for harness run-step success. */
+export function isMcHarnessReady(logChunks: string[], status: string): boolean {
+  if (status === 'crashed' || status === 'stopped') return false
+  const phaseInfo = parseMcLogs(logChunks, status)
+  if (phaseInfo.hasError || phaseInfo.phase === 'error') return false
+  const corpus = normalizeForMatch(splitLogChunks(logChunks).join('\n'))
+  return HARNESS_READY_MARKERS.some((m) => corpus.includes(m))
+}
+
+export function formatMcLogTail(logChunks: string[], maxLines = 40): string {
+  const lines = splitLogChunks(logChunks).filter((l) => l.trim())
+  return lines.slice(-maxLines).join('\n')
 }
 
 export function isMcPlayingPhase(phase: McPhase): boolean {
@@ -193,6 +222,7 @@ export const PHASE_LABELS: Record<McPhase, string> = {
   compile: '编译模组',
   launch: '启动游戏',
   playing: '游戏中',
+  ready: '就绪',
   done: '已结束',
   error: '出错'
 }
@@ -202,6 +232,8 @@ export const PHASE_ORDER: McPhase[] = ['prepare', 'compile', 'launch', 'playing'
 export function phaseStepIndex(phase: McPhase, status: string): number {
   const idx = PHASE_ORDER.indexOf(phase)
   if (idx >= 0) return idx
-  if (phase === 'done' || (phase === 'playing' && status === 'running')) return PHASE_ORDER.length - 1
+  if (phase === 'done' || phase === 'ready' || (phase === 'playing' && status === 'running')) {
+    return PHASE_ORDER.length - 1
+  }
   return -1
 }

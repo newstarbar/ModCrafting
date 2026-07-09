@@ -4,6 +4,7 @@
 import { type Tool, type ToolContext, type Previewer } from "./tools";
 import type { FileDiff } from "./events";
 import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
+import { waitForMcRunReady } from "../utils/mc-wait-playing";
 import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, type RecipeKind, type RecipeKey } from "./recipe-utils";
 import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from "./fabric-knowledge";
 import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from "./fabric-utils";
@@ -723,17 +724,26 @@ export const triggerBuildTool: Tool = {
 				if (isPanelBridgeRegistered()) {
 					const res = await startGameViaPanel();
 					if (!res.ok) {
-						return `Error starting game: ${res.error || "unknown error"}`;
+						return `游戏测试失败：${res.error || "unknown error"}\n[MC_PHASE:error]`;
 					}
-					return `已在右侧游戏面板启动并进入游戏（实例 ${res.instanceId}）。[MC_PHASE:playing]`;
+					return `游戏已进入主菜单并完成稳定观察（实例 ${res.instanceId}）。[MC_PHASE:ready]`;
 				}
-				const res = await window.api.mcStartOrCreate(ctx.projectPath);
-				if (!res.success) {
-					return `Error starting game: ${res.error || "unknown error"}`;
+				const start = await window.api.mcStartOrCreate(ctx.projectPath);
+				if (!start.success) {
+					return `Error starting game: ${start.error || "unknown error"}\n[MC_PHASE:error]`;
 				}
-				return `已启动游戏实例（${res.id || "mc"}）。请在右侧「游戏」面板查看进度。[MC_PHASE:playing]`;
+				const instanceId = start.id || "";
+				if (!instanceId) {
+					return `Error starting game: 未获取到游戏实例 ID\n[MC_PHASE:error]`;
+				}
+				const wait = await waitForMcRunReady({ instanceId });
+				if (!wait.ok) {
+					const tail = wait.logTail ? `\n\n--- 游戏日志（末尾）---\n${wait.logTail}` : "";
+					return `游戏测试失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`;
+				}
+				return `游戏已进入主菜单并完成稳定观察（实例 ${instanceId}）。[MC_PHASE:ready]`;
 			} catch (err) {
-				return `Error starting game: ${err}`;
+				return `Error starting game: ${err}\n[MC_PHASE:error]`;
 			}
 		}
 

@@ -1,7 +1,7 @@
 import { EventKind, type Event } from './events.ts'
 import type { PlanTracker } from './plan-tracker.ts'
 import { filterToolCallsForStep, isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from './step-policy.ts'
-import { executeBatch, type Registry, type ToolContext, type ToolResult } from './tools.ts'
+import { executeBatch, isRunClientReadyResult, type Registry, type ToolContext, type ToolResult } from './tools.ts'
 import type { WorkflowRunResult, WorkflowStep } from './workflow-types.ts'
 import {
   assistantToolCallMessage,
@@ -66,7 +66,7 @@ export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boole
   }
   if (result.toolName === 'trigger_build') {
     if (String(result.args?.task || '') !== 'runClient') return false
-    if (/Error starting game|启动失败|failed to start/i.test(output)) return true
+    if (/Error starting game|游戏测试失败|启动失败|failed to start|\[MC_PHASE:error\]/i.test(output)) return true
     if (result.exitCode != null && result.exitCode !== 0) return true
     return Boolean(result.error)
   }
@@ -240,12 +240,7 @@ function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
         (result.toolName === 'run_command' && result.exitCode === 0)
       )
     case 'run':
-      return (
-        (result.toolName === 'trigger_build' &&
-          String(result.args?.task || '') === 'runClient' &&
-          (result.meta?.runClientStarted || result.meta?.mcPhase === 'playing')) ||
-        (result.toolName === 'run_command' && /runClient/i.test(String(result.args?.command || '')) && result.exitCode === 0)
-      )
+      return isRunClientReadyResult(result)
     case 'answer':
       return true
   }

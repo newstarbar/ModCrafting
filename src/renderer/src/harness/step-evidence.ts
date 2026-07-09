@@ -1,5 +1,6 @@
 import type { PlanStepState } from './plan-tracker.ts'
 import type { ToolResult } from './tools.ts'
+import { isRunClientReadyResult } from './tools.ts'
 import { isCombinedBuildRunDescription } from '../utils/plan-steps.ts'
 
 export type StepKind = 'inspect' | 'write' | 'build' | 'run' | 'unknown'
@@ -110,14 +111,8 @@ export function canToolResultAdvanceStep(
   }
 
   if (kind === 'run') {
-    const task = String(result.args?.task || result.args?.command || '')
-    const ok = (
-      (toolName === 'trigger_build' &&
-        task === 'runClient' &&
-        (result.meta?.runClientStarted || result.meta?.mcPhase === 'playing' || /\[MC_PHASE:playing\]/i.test(String(result.output)))) ||
-      (toolName === 'run_command' && /runClient/i.test(task) && (result.exitCode == null || result.exitCode === 0))
-    )
-    return { ok, reason: ok ? 'run_started' : 'run_tool_mismatch' }
+    const ok = isRunClientReadyResult(result)
+    return { ok, reason: ok ? 'run_ready' : 'run_tool_mismatch' }
   }
 
   return { ok: false, reason: 'unknown_step_kind' }
