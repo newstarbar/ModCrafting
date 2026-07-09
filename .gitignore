@@ -46,6 +46,19 @@ resources/.gradle-home-seed.zip.stamp
 .env.*
 .superpowers/
 
+# Python
+scripts/__pycache__/
+
 # 系统
 Thumbs.db
 .DS_Store
+
+# 渲染器物品材质（npm run prepare:renderer-assets 生成，不进仓库）
+src/renderer/public/items/
+!src/renderer/public/items/.gitkeep
+
+src/renderer/public/blocks/
+!src/renderer/public/blocks/.gitkeep
+
+# 物品元数据索引（与 public/items 同步生成）
+src/renderer/src/data/items.ts
