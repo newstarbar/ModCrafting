@@ -1,14 +1,17 @@
+import { LLM_PROVIDERS, type LlmModelDef } from '../../../shared/llm-providers.ts'
+
 export interface ModelPreset {
-	id: string
-	label: string
+  id: string
+  label: string
+  providerId: string
 }
 
-export const MODEL_PRESETS: ModelPreset[] = [
-	{ id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
-	{ id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-]
+export const MODEL_PRESETS: ModelPreset[] = LLM_PROVIDERS.flatMap((provider) =>
+  provider.models.map((model: LlmModelDef) => ({
+    id: model.id,
+    label: model.label,
+    providerId: provider.id,
+  }))
+)
 
-export function modelDisplayLabel(modelId: string): string {
-	const preset = MODEL_PRESETS.find((p) => p.id === modelId)
-	return preset?.label ?? modelId
-}
+export { modelDisplayLabel, isKnownModel } from '../../../shared/llm-providers.ts'

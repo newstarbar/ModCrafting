@@ -35,11 +35,15 @@ import {
 } from "./utils/session-storage";
 import { getMostRecentSessionId, sortSessionsByUpdatedAt } from "./utils/session-sort";
 import { registerPanelBridge, setLastBuildLogText } from "./utils/panel-bridge";
+import type { ApiConfigState, ApiSettingsPayload } from "./types/api-config";
+import { providerDisplayLabel, resolveSelection } from "../../shared/llm-providers.ts";
+import type { ProviderModelSelection } from "./components/ComposerModelMenu";
 
-const DEFAULT_API_CONFIG = {
+const DEFAULT_API_CONFIG: ApiConfigState = {
 	endpoint: "https://api.deepseek.com/v1",
 	apiKey: "",
-	model: "deepseek-v4-flash"
+	model: "deepseek-v4-flash",
+	providerId: "deepseek",
 };
 
 interface UsageData extends UsageStats {}
@@ -192,6 +196,7 @@ const App: React.FC = () => {
 			setApiConfig({
 				endpoint: settings.endpoint,
 				model: settings.model,
+				providerId: settings.providerId,
 				apiKey
 			});
 		}
@@ -223,16 +228,26 @@ const App: React.FC = () => {
 		return null;
 	}, [apiConfig.apiKey, hasSavedApiKey]);
 
-	const handleApiSettingsChange = useCallback(async (endpoint: string, model: string) => {
-		setApiConfig((prev) => ({ ...prev, endpoint, model }));
-		await window.api.saveApiConfig({ endpoint, model });
+	const handleApiSettingsChange = useCallback(async (config: ApiSettingsPayload) => {
+		setApiConfig((prev) => ({
+			...prev,
+			endpoint: config.endpoint,
+			model: config.model,
+			providerId: config.providerId,
+		}));
+		await window.api.saveApiConfig(config);
 	}, []);
 
-	const handleModelChange = useCallback(
-		(model: string) => {
-			void handleApiSettingsChange(apiConfig.endpoint, model);
+	const handleProviderModelChange = useCallback(
+		(selection: ProviderModelSelection) => {
+			const resolved = resolveSelection(selection.providerId, selection.modelId);
+			void handleApiSettingsChange({
+				endpoint: selection.endpoint || resolved.endpoint,
+				model: resolved.modelId,
+				providerId: resolved.providerId,
+			});
 		},
-		[handleApiSettingsChange, apiConfig.endpoint]
+		[handleApiSettingsChange]
 	);
 
 	const openApiSettings = useCallback(() => {
@@ -701,7 +716,7 @@ const App: React.FC = () => {
 									onUpdateSessionMeta={handleUpdateSessionMeta}
 									onNewSession={handleNewSessionFromChat}
 									onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
-									onModelChange={handleModelChange}
+									onProviderModelChange={handleProviderModelChange}
 									onOpenApiSettings={openApiSettings}
 								/>
 							) : (
@@ -806,7 +821,9 @@ const App: React.FC = () => {
 				<StatusBar
 					usage={usage}
 					running={isRunning}
-					modelLabel={apiConfig.model}
+					providerLabel={providerDisplayLabel(apiConfig.providerId, apiConfig.endpoint)}
+					modelId={apiConfig.model}
+					providerId={apiConfig.providerId}
 					toolchain={toolchainStatus}
 					toolchainProgress={toolchainProgress}
 					toolchainPercent={overlayLocked ? toolchainInit.percent : undefined}

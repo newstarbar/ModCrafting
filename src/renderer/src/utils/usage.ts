@@ -1,3 +1,8 @@
+import {
+  getModelContextWindow,
+  getProviderPricing,
+} from '../../../shared/llm-providers.ts'
+
 export interface UsageStats {
   sessionTokens: number
   turnTokens: number
@@ -24,29 +29,37 @@ export const EMPTY_USAGE: UsageStats = {
   cost: 0
 }
 
-/** Rough CNY estimate (DeepSeek-style: cached input cheaper, output pricier). */
+export interface UsagePricingContext {
+  model?: string
+  providerId?: string
+}
+
+/** Rough CNY estimate per provider (cached input cheaper where applicable). */
 export function estimateCostDelta(
   promptTokens: number,
   completionTokens: number,
   cacheHit: number,
-  cacheMiss: number
+  cacheMiss: number,
+  pricingCtx?: UsagePricingContext
 ): number {
+  const pricing = getProviderPricing(pricingCtx?.providerId)
   const hit = cacheHit
   const miss = cacheMiss > 0 ? cacheMiss : Math.max(0, promptTokens - hit)
-  const inputCost = (miss * 0.27 + hit * 0.07) / 1_000_000
-  const outputCost = completionTokens * 1.10 / 1_000_000
+  const inputCost = (miss * pricing.inputMiss + hit * pricing.inputHit) / 1_000_000
+  const outputCost = completionTokens * pricing.output / 1_000_000
   return inputCost + outputCost
 }
 
-export function contextWindowLimit(model?: string): number {
+export function contextWindowLimit(model?: string, providerId?: string): number {
+  const fromRegistry = model ? getModelContextWindow(model, providerId) : undefined
+  if (fromRegistry) return fromRegistry
+
   const m = (model || '').toLowerCase()
   if (/1m|1000k|1048k/.test(m)) return 1_000_000
-  // DeepSeek V4 系列（flash / pro）为 1M 上下文
   if (/deepseek-?v4|v4-flash|v4-pro/.test(m)) return 1_000_000
   if (/256/.test(m)) return 256_000
   if (/(^|[^0-9])32k?([^0-9]|$)/.test(m)) return 32_000
   if (/(^|[^0-9])64k?([^0-9]|$)/.test(m)) return 64_000
-  // DeepSeek V3/R1 及多数现代模型默认 128K 上下文
   return 128_000
 }
 
@@ -55,9 +68,13 @@ export function formatContextLimit(limit: number): string {
   return String(limit)
 }
 
-export function contextPercentFromPrompt(promptTokens: number, model?: string): number {
+export function contextPercentFromPrompt(
+  promptTokens: number,
+  model?: string,
+  providerId?: string
+): number {
   if (promptTokens <= 0) return 0
-  const limit = contextWindowLimit(model)
+  const limit = contextWindowLimit(model, providerId)
   return Math.min(100, Math.round((promptTokens / limit) * 100))
 }
 
@@ -102,7 +119,8 @@ function coerceUsageNumber(value: unknown): number {
 /** Restore persisted session usage; clears ephemeral turn fields and recalculates context %. */
 export function normalizeSessionUsage(
   raw: Partial<UsageStats> | undefined,
-  model?: string
+  model?: string,
+  providerId?: string
 ): UsageStats {
   if (!raw || typeof raw !== 'object') return { ...EMPTY_USAGE }
   const lastPromptTokens = coerceUsageNumber(raw.lastPromptTokens)
@@ -115,7 +133,7 @@ export function normalizeSessionUsage(
     turnCacheMissTokens: 0,
     turns: coerceUsageNumber(raw.turns),
     lastPromptTokens,
-    contextPercent: contextPercentFromPrompt(lastPromptTokens, model),
+    contextPercent: contextPercentFromPrompt(lastPromptTokens, model, providerId),
     cost: coerceUsageNumber(raw.cost)
   }
 }

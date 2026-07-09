@@ -6,6 +6,13 @@ import { IconFile, IconMessage, IconPanelLeftClose, IconPlus, IconSettings, Icon
 
 import type { ChatSession } from '../types/chat'
 import { sortSessionsByUpdatedAt } from '../utils/session-sort'
+import {
+  CUSTOM_PROVIDER_ID,
+  getAllProviders,
+  getProvider,
+  resolveSelection,
+} from '../../../shared/llm-providers.ts'
+import type { ApiConfigState, ApiSettingsPayload } from '../types/api-config'
 
 interface FileChange {
   time: string
@@ -22,10 +29,10 @@ interface SessionSidebarProps {
   onDeleteSession: (id: string) => void
   onRenameSession: (id: string, name: string) => void
   fileChanges: FileChange[]
-  apiConfig: { endpoint: string; apiKey: string; model: string }
+  apiConfig: ApiConfigState
   hasSavedApiKey?: boolean
   encryptionAvailable?: boolean
-  onApiSettingsChange: (endpoint: string, model: string) => void
+  onApiSettingsChange: (config: ApiSettingsPayload) => void
   onApiKeySave: (key: string) => void | Promise<void>
   onOpenProject: () => void
   onCreateProject: () => void
@@ -40,6 +47,14 @@ interface SessionSidebarProps {
 }
 
 type SidebarTab = 'sessions' | 'files' | 'tools' | 'settings'
+
+function pickApiSettings(config: ApiConfigState, patch: Partial<ApiSettingsPayload>): ApiSettingsPayload {
+  return {
+    endpoint: patch.endpoint ?? config.endpoint,
+    model: patch.model ?? config.model,
+    providerId: patch.providerId ?? config.providerId,
+  }
+}
 
 const SessionSidebar: React.FC<SessionSidebarProps> = ({
   projectPath, projectName, sessions, currentSessionId,
@@ -294,12 +309,81 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               API 配置
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <input className="mc-input" placeholder="API 地址" value={apiConfig.endpoint}
-                onChange={(e) => onApiSettingsChange(e.target.value, apiConfig.model)}
-                style={{ fontSize: '12px', minHeight: '32px' }} />
-              <input className="mc-input" placeholder="模型名称" value={apiConfig.model}
-                onChange={(e) => onApiSettingsChange(apiConfig.endpoint, e.target.value)}
-                style={{ fontSize: '12px', minHeight: '32px' }} />
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>厂商</label>
+              <select
+                className="mc-input"
+                value={apiConfig.providerId}
+                onChange={(e) => {
+                  const providerId = e.target.value
+                  if (providerId === CUSTOM_PROVIDER_ID) {
+                    onApiSettingsChange(pickApiSettings(apiConfig, { providerId: CUSTOM_PROVIDER_ID }))
+                    return
+                  }
+                  const provider = getProvider(providerId)
+                  const firstModel = provider?.models[0]?.id ?? apiConfig.model
+                  const resolved = resolveSelection(providerId, firstModel)
+                  onApiSettingsChange(pickApiSettings(apiConfig, {
+                    providerId: resolved.providerId,
+                    endpoint: resolved.endpoint,
+                    model: resolved.modelId,
+                  }))
+                }}
+                style={{ fontSize: '12px', minHeight: '32px' }}
+              >
+                {getAllProviders().map((provider) => (
+                  <option key={provider.id} value={provider.id}>{provider.label}</option>
+                ))}
+                <option value={CUSTOM_PROVIDER_ID}>自定义</option>
+              </select>
+
+              {apiConfig.providerId !== CUSTOM_PROVIDER_ID ? (
+                <>
+                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型</label>
+                  <select
+                    className="mc-input"
+                    value={apiConfig.model}
+                    onChange={(e) => {
+                      const resolved = resolveSelection(apiConfig.providerId, e.target.value)
+                      onApiSettingsChange(pickApiSettings(apiConfig, {
+                        providerId: resolved.providerId,
+                        endpoint: resolved.endpoint,
+                        model: resolved.modelId,
+                      }))
+                    }}
+                    style={{ fontSize: '12px', minHeight: '32px' }}
+                  >
+                    {(getProvider(apiConfig.providerId)?.models ?? []).map((model) => (
+                      <option key={model.id} value={model.id}>{model.label}</option>
+                    ))}
+                    {!(getProvider(apiConfig.providerId)?.models ?? []).some((m) => m.id === apiConfig.model) && apiConfig.model && (
+                      <option value={apiConfig.model}>{apiConfig.model}</option>
+                    )}
+                  </select>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    API 地址：{apiConfig.endpoint}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>API 地址</label>
+                  <input
+                    className="mc-input"
+                    placeholder="https://api.example.com/v1"
+                    value={apiConfig.endpoint}
+                    onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { endpoint: e.target.value }))}
+                    style={{ fontSize: '12px', minHeight: '32px' }}
+                  />
+                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型名称</label>
+                  <input
+                    className="mc-input"
+                    placeholder="model-id"
+                    value={apiConfig.model}
+                    onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { model: e.target.value }))}
+                    style={{ fontSize: '12px', minHeight: '32px' }}
+                  />
+                </>
+              )}
+
               <input className="mc-input" type="password"
                 placeholder={hasSavedApiKey ? '已保存密钥（输入新值可覆盖）' : 'API 密钥'}
                 value={apiKeyDraft}
@@ -323,6 +407,23 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                   当前系统不支持加密存储，无法安全保存 API Key。请配置系统密钥环（Windows/macOS 通常可用）。
                 </div>
               )}
+              {(() => {
+                const provider = getProvider(apiConfig.providerId)
+                if (!provider?.keyHint) return null
+                return (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '4px' }}>
+                    {provider.keyHint}
+                    {provider.docsUrl && (
+                      <>
+                        {' '}
+                        <a href={provider.docsUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+                          获取 API Key
+                        </a>
+                      </>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
               项目

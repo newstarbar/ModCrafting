@@ -14,7 +14,9 @@ import { formatProjectVersions } from '../utils/project-versions'
 interface StatusBarProps {
   usage: UsageStats
   running: boolean
-  modelLabel?: string
+  providerLabel?: string
+  modelId?: string
+  providerId?: string
   toolchain?: { jdk: string; gradle: string; deps?: string }
   toolchainProgress?: string
   toolchainPercent?: number
@@ -31,7 +33,9 @@ function contextLevelClass(percent: number): string {
 const StatusBar: React.FC<StatusBarProps> = ({
   usage,
   running,
-  modelLabel,
+  providerLabel,
+  modelId,
+  providerId,
   toolchain,
   toolchainProgress,
   toolchainPercent,
@@ -51,7 +55,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
       ? '环境就绪'
       : toolchainProgress || '环境检查中'
 
-  const contextLimit = contextWindowLimit(modelLabel)
+  const contextLimit = contextWindowLimit(modelId, providerId)
   const contextLimitLabel = formatContextLimit(contextLimit)
   const xpPercent = Math.min(100, Math.max(0, usage.contextPercent))
   const contextTitle = xpPercent > 80
@@ -88,7 +92,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
       </span>
 
       <span className="stat-sep">|</span>
-      <span className="statusbar-model stat mc-dim">{modelLabel || 'ModCrafting'}</span>
+      <span className="statusbar-model stat mc-dim">{providerLabel || 'ModCrafting'}</span>
 
       <span className="stat-sep">|</span>
       <span className="statusbar-metrics stat" title={sessionTitle}>

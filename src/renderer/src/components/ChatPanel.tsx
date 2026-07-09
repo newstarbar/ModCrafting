@@ -40,7 +40,7 @@ interface ChatPanelProps {
   contextFiles: string[]
   setContextFiles: (files: string[]) => void
   selectedFile: { path: string; name: string } | null
-  apiConfig: { endpoint: string; apiKey: string; model: string }
+  apiConfig: { endpoint: string; apiKey: string; model: string; providerId: string }
   ensureApiKey?: () => Promise<string | null>
   onUsageChange?: (usage: UsageStats) => void
   onRunningChange?: (running: boolean) => void
@@ -52,7 +52,7 @@ interface ChatPanelProps {
   toolchainReady?: boolean
   onUpdateSessionMeta?: (sessionId: string, meta: { composerMode?: ComposerMode; sessionGoal?: string }) => void
   onTemplateSelect?: (templateId: string, name: string) => void
-  onModelChange?: (model: string) => void
+  onProviderModelChange?: (selection: { providerId: string; modelId: string; endpoint: string }) => void
   onOpenApiSettings?: () => void
 }
 
@@ -172,7 +172,7 @@ interface ChatPanelRef {
   handleTemplateSelect: (templateId: string, name: string) => void
 }
 
-const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onModelChange, onOpenApiSettings }, ref) {
+const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings }, ref) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [composerMode, setComposerMode] = useState<ComposerMode>('agent')
@@ -383,7 +383,11 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setPlanReady(false)
     controllerRef.current?.setComposerMode(session.composerMode ?? 'agent')
     controllerRef.current?.setSessionGoal(session.sessionGoal ?? '')
-    const restoredUsage = normalizeSessionUsage(session.usage, apiConfigRef.current.model)
+    const restoredUsage = normalizeSessionUsage(
+      session.usage,
+      apiConfigRef.current.model,
+      apiConfigRef.current.providerId
+    )
     setUsageAccum(restoredUsage)
     onUsageChangeRef.current?.(restoredUsage)
     // Only restore controller snapshot if it does NOT already have more messages
@@ -694,8 +698,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               turnCacheHitTokens: prev.turnCacheHitTokens + hit,
               turnCacheMissTokens: prev.turnCacheMissTokens + miss,
               lastPromptTokens: promptTotal,
-              contextPercent: contextPercentFromPrompt(promptTotal, apiConfigRef.current.model),
-              cost: prev.cost + estimateCostDelta(pT, cT, hit, miss)
+              contextPercent: contextPercentFromPrompt(
+                promptTotal,
+                apiConfigRef.current.model,
+                apiConfigRef.current.providerId
+              ),
+              cost: prev.cost + estimateCostDelta(pT, cT, hit, miss, {
+                model: apiConfigRef.current.model,
+                providerId: apiConfigRef.current.providerId,
+              })
             }
             onUsageChangeRef.current?.(next)
             return next
@@ -1595,8 +1606,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           onExecutePlan={handleExecutePlan}
           toolchainReady={toolchainReady}
           hasProject={Boolean(projectPath)}
-          model={apiConfig.model}
-          onModelChange={onModelChange ?? (() => {})}
+          providerId={apiConfig.providerId}
+          modelId={apiConfig.model}
+          onProviderModelChange={onProviderModelChange ?? (() => {})}
           onOpenApiSettings={onOpenApiSettings}
           onQuickTemplateSelect={handleTemplateSelect}
         />

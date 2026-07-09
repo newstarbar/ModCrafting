@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { IconSend, IconSquare } from './Icon'
 import QuickCreateBar from './QuickCreateBar'
 import ComposerModeMenu from './ComposerModeMenu'
-import ComposerModelMenu from './ComposerModelMenu'
+import ComposerModelMenu, { type ProviderModelSelection } from './ComposerModelMenu'
 import type { ComposerMode } from '../harness/turn-intent'
 
 export interface ChatComposerProps {
@@ -20,8 +20,9 @@ export interface ChatComposerProps {
 	onExecutePlan: () => void
 	toolchainReady: boolean
 	hasProject: boolean
-	model: string
-	onModelChange: (modelId: string) => void
+	providerId: string
+	modelId: string
+	onProviderModelChange: (selection: ProviderModelSelection) => void
 	onOpenApiSettings?: () => void
 	onQuickTemplateSelect?: (templateId: string, name: string) => void
 }
@@ -41,8 +42,9 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 	onExecutePlan,
 	toolchainReady,
 	hasProject,
-	model,
-	onModelChange,
+	providerId,
+	modelId,
+	onProviderModelChange,
 	onOpenApiSettings,
 	onQuickTemplateSelect,
 }) => {
@@ -142,8 +144,9 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 					<div className="chat-input-composite__footer-spacer" />
 
 					<ComposerModelMenu
-						value={model}
-						onChange={onModelChange}
+						providerId={providerId}
+						modelId={modelId}
+						onChange={onProviderModelChange}
 						onOpenApiSettings={onOpenApiSettings}
 						disabled={disabled}
 					/>

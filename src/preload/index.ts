@@ -290,9 +290,9 @@ const api = {
   },
 
   // API config & secrets
-  loadApiConfig: (): Promise<{ endpoint: string; model: string; hasApiKey: boolean; encryptionAvailable: boolean }> =>
+  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; encryptionAvailable: boolean }> =>
     ipcRenderer.invoke('config:load'),
-  saveApiConfig: (config: { endpoint: string; model: string }): Promise<{ success: boolean; error?: string }> =>
+  saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('config:save', config),
   saveApiKey: (key: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('secrets:saveApiKey', key),

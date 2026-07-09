@@ -1519,6 +1519,27 @@ body,
 	left: auto;
 }
 
+.composer-menu-popover--grouped {
+	max-height: 320px;
+	overflow-y: auto;
+	min-width: 220px;
+}
+
+.composer-menu-group + .composer-menu-group {
+	margin-top: 4px;
+	padding-top: 4px;
+	border-top: 1px solid var(--border-color);
+}
+
+.composer-menu-group-label {
+	padding: 4px 8px 2px;
+	font-size: 10px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: none;
+	letter-spacing: 0.02em;
+}
+
 .composer-menu-item {
 	display: flex;
 	align-items: center;

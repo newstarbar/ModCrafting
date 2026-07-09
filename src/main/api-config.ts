@@ -1,13 +1,16 @@
 import { app, safeStorage } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
+import { inferProviderId } from '../shared/llm-providers.ts'
 
 const DEFAULT_ENDPOINT = 'https://api.deepseek.com/v1'
 const DEFAULT_MODEL = 'deepseek-v4-flash'
+const DEFAULT_PROVIDER_ID = 'deepseek'
 
 export interface ApiSettings {
   endpoint: string
   model: string
+  providerId: string
   hasApiKey: boolean
   encryptionAvailable: boolean
 }
@@ -20,7 +23,7 @@ function apiKeyPath(): string {
   return path.join(app.getPath('userData'), 'api-key.bin')
 }
 
-function readSettingsFile(): { endpoint?: string; model?: string } {
+function readSettingsFile(): { endpoint?: string; model?: string; providerId?: string } {
   try {
     const p = settingsPath()
     if (!fs.existsSync(p)) return {}
@@ -56,20 +59,33 @@ function writeEncryptedBuffer(encrypted: Buffer): void {
 
 export function loadApiConfig(): ApiSettings {
   const file = readSettingsFile()
+  const endpoint = file.endpoint || DEFAULT_ENDPOINT
+  const model = file.model || DEFAULT_MODEL
+  const providerId = file.providerId
+    || inferProviderId(endpoint, model)
   return {
-    endpoint: file.endpoint || DEFAULT_ENDPOINT,
-    model: file.model || DEFAULT_MODEL,
+    endpoint,
+    model,
+    providerId,
     hasApiKey: fs.existsSync(apiKeyPath()) && (readEncryptedBuffer()?.length ?? 0) > 0,
     encryptionAvailable: safeStorage.isEncryptionAvailable()
   }
 }
 
-export function saveApiConfig(config: { endpoint: string; model: string }): { success: boolean; error?: string } {
+export function saveApiConfig(config: {
+  endpoint: string
+  model: string
+  providerId?: string
+}): { success: boolean; error?: string } {
   try {
     fs.mkdirSync(app.getPath('userData'), { recursive: true })
+    const endpoint = config.endpoint || DEFAULT_ENDPOINT
+    const model = config.model || DEFAULT_MODEL
+    const providerId = config.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
     fs.writeFileSync(settingsPath(), JSON.stringify({
-      endpoint: config.endpoint || DEFAULT_ENDPOINT,
-      model: config.model || DEFAULT_MODEL
+      endpoint,
+      model,
+      providerId,
     }, null, 2), 'utf-8')
     return { success: true }
   } catch (err) {
