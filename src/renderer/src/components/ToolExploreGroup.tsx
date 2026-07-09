@@ -26,6 +26,7 @@ export interface ToolExploreGroupProps {
   kind: ExploreGroupKind
   groupKey: string
   tools: ChronoEntryTool[]
+  reasoningCount?: number
   collapsed: boolean
   collapsedToolIds: Set<string>
   runTick: number
@@ -38,6 +39,7 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
   kind,
   groupKey,
   tools,
+  reasoningCount = 0,
   collapsed,
   collapsedToolIds,
   runTick,
@@ -46,7 +48,7 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
   getToolDisplayName
 }) => {
   void runTick
-  const summary = summarizeExploreGroup(kind, tools)
+  const summary = summarizeExploreGroup(kind, tools, reasoningCount)
   const statusClass = summary.aggregateStatus
 
   return (
@@ -63,6 +65,9 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
         {collapsed && (
           <>
             <span className="tool-explore-group-stats">{summary.statsLine}</span>
+            {summary.thoughtHint && (
+              <span className="tool-explore-group-thought">{summary.thoughtHint}</span>
+            )}
             {summary.pathPreview && (
               <span className="tool-explore-group-preview" title={summary.pathPreview}>
                 {summary.pathPreview}

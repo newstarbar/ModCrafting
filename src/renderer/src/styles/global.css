@@ -1159,12 +1159,15 @@ body,
 	}
 }
 
-/* Explore tool groups — collapsed bursts of read/list/docs */
+/* Explore tool groups — soft-gap collapsed bursts of read/list/docs */
 .tool-explore-group {
 	margin-top: 8px;
-	border-radius: 4px;
-	background: rgba(255, 255, 255, 0.02);
+	padding: 7px 9px;
+	font-size: 11px;
+	font-family: var(--font-mono);
+	background: var(--bg-primary);
 	border: 1px solid #333;
+	border-radius: 0;
 	overflow: hidden;
 	max-width: 100%;
 }
@@ -1184,15 +1187,16 @@ body,
 
 .tool-explore-group-hd {
 	display: flex;
-	align-items: center;
+	align-items: baseline;
+	flex-wrap: wrap;
 	gap: 6px;
 	width: 100%;
-	padding: 6px 8px;
+	padding: 0;
 	margin: 0;
 	border: none;
 	background: none;
 	font-size: 11px;
-	font-family: var(--font-mono);
+	font-family: inherit;
 	color: var(--text-secondary);
 	cursor: pointer;
 	text-align: left;
@@ -1200,7 +1204,6 @@ body,
 }
 
 .tool-explore-group-hd:hover {
-	background: rgba(255, 255, 255, 0.04);
 	color: var(--accent);
 }
 
@@ -1208,24 +1211,26 @@ body,
 	flex-shrink: 0;
 	font-style: normal;
 	width: 10px;
+	font-size: 10px;
 }
 
 .tool-explore-group-title {
 	font-weight: 600;
 	flex-shrink: 0;
+	color: var(--text-secondary);
 }
 
 .tool-explore-group-badge {
 	flex-shrink: 0;
 	font-size: 10px;
-	padding: 1px 6px;
-	border-radius: 10px;
-	background: rgba(100, 149, 237, 0.18);
+	padding: 0 5px;
+	border-radius: 3px;
+	background: rgba(100, 149, 237, 0.15);
 	color: var(--accent);
 }
 
 .tool-explore-group--knowledge .tool-explore-group-badge {
-	background: rgba(160, 120, 220, 0.2);
+	background: rgba(160, 120, 220, 0.15);
 	color: #c9b3e8;
 }
 
@@ -1233,6 +1238,13 @@ body,
 	flex-shrink: 0;
 	font-size: 10px;
 	color: var(--text-muted);
+}
+
+.tool-explore-group-thought {
+	flex-shrink: 0;
+	font-size: 10px;
+	color: var(--text-muted);
+	font-style: italic;
 }
 
 .tool-explore-group-preview {
@@ -1246,23 +1258,21 @@ body,
 }
 
 .tool-explore-group-bd {
-	padding: 2px 6px 6px 10px;
-	border-top: 1px solid rgba(255, 255, 255, 0.04);
+	width: 100%;
+	padding: 4px 0 0 12px;
+	margin-top: 4px;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .tool-explore-item {
 	display: flex;
 	align-items: baseline;
 	flex-wrap: wrap;
-	gap: 5px;
-	padding: 4px 4px 4px 2px;
+	gap: 6px;
+	padding: 3px 0;
 	font-size: 10px;
-	font-family: var(--font-mono);
-	border-radius: 3px;
-}
-
-.tool-explore-item:hover {
-	background: rgba(255, 255, 255, 0.03);
+	font-family: inherit;
+	border-radius: 0;
 }
 
 .tool-explore-item.running {

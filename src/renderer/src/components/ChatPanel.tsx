@@ -1380,6 +1380,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                       kind={segment.kind}
                       groupKey={segment.key}
                       tools={segment.tools}
+                      reasoningCount={segment.reasoningCount}
                       collapsed={collapsedExploreGroupKeys.has(segment.key)}
                       collapsedToolIds={collapsedToolIds}
                       runTick={runTick}
