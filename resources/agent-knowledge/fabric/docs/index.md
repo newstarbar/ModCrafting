@@ -10,6 +10,7 @@
 - [events](./events.md): https://docs.fabricmc.net/zh_cn/develop/events
 - [networking](./networking.md): https://docs.fabricmc.net/zh_cn/develop/networking
 - [loom](./loom.md): https://docs.fabricmc.net/zh_cn/develop/loom/
+- [client-screenshot](../client-screenshot.md): 客户端截图、NativeImage、TitleScreen 背景（本地参考）
 
 ## 联网-only（未 bundled，搜索时可 fetch）
 

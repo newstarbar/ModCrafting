@@ -278,6 +278,33 @@ export const editFileTool: Tool & Previewer = {
 	}
 };
 
+// ── delete_file ──
+export const deleteFileTool: Tool = {
+	name: "delete_file",
+	description: "删除项目内的单个文件（相对路径）。用于移除废弃的 Java/JSON/Gradle 资源文件。",
+	schema: {
+		type: "object",
+		properties: {
+			path: { type: "string", description: "项目根目录下的相对路径" }
+		},
+		required: ["path"]
+	},
+	readOnly: () => false,
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		if (!ctx.projectPath) return "No project open";
+		const rel = String(args.path || "").replace(/\\/g, "/");
+		if (!rel || rel.includes("..")) return "Error: invalid path";
+		const filePath = `${ctx.projectPath}/${rel}`;
+		try {
+			const res = await window.api.deleteFile(filePath);
+			if (res.success) return `已删除: ${rel}`;
+			return `Error: ${res.error || "delete failed"}`;
+		} catch (err) {
+			return `Error deleting file: ${err}`;
+		}
+	}
+};
+
 // ── create_recipe ──
 export const createRecipeTool: Tool & Previewer = {
 	name: "create_recipe",
@@ -1360,6 +1387,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		readFileTool,
 		writeFileTool,
 		editFileTool,
+		deleteFileTool,
 		fabricDocsSearchTool,
 		fabricJavadocLookupTool,
 		vanillaMcWikiQueryTool,

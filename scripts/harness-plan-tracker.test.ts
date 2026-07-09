@@ -956,6 +956,33 @@ test('needsKnowledgeInspect includes player interaction keywords', () => {
   )
 })
 
+test('workflow normalizer classifies FrameCapture write step despite 读取 in title', () => {
+  const [step] = normalizeWorkflowSteps([
+    {
+      id: '2',
+      description:
+        'src/main/java/com/example/framecover/FrameCapture.java — 截图捕获工具类：读取当前帧缓冲，保存为 PNG 到 config/framecover/background.png',
+      status: 'pending',
+      kind: 'write'
+    }
+  ])
+  assert.equal(step.kind, 'write')
+  assert.ok(step.allowedTools.includes('write_file'))
+  assert.ok(step.allowedTools.includes('delete_file'))
+})
+
+test('workflow normalizer preserves explicit inspect kind from plan compile', () => {
+  const [step] = normalizeWorkflowSteps([
+    {
+      id: '1',
+      description: '查询知识库确认当前 Minecraft/Fabric 版本 API 与资源格式（fabric_docs_search / fabric_meta_version_check）',
+      status: 'pending',
+      kind: 'inspect'
+    }
+  ])
+  assert.equal(step.kind, 'inspect')
+})
+
 test('workflow normalizer allows product Fabric specialist tools for matching steps', () => {
   const steps = normalizeWorkflowSteps([
     { id: '1', description: '查询 Fabric 文档确认方块实体 API', status: 'running' },

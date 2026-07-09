@@ -16,6 +16,7 @@ import {
   resolveTurnIntent,
   buildSessionGoalBlock
 } from './turn-intent'
+import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
 
 export interface ControllerOptions {
   registry: Registry
@@ -541,6 +542,23 @@ ${projectInfo}`
           this.emitEvent({ kind: EventKind.TurnDone, phase: 'resume_missing_plan' })
           return ''
         }
+        const result = await this.beginExecuteFromTracker(streamCb)
+        this.onAgentStatus?.('')
+        return result
+      }
+
+      if (intent === 'develop' && isQuickCreateGeneratedMessage(input)) {
+        this.emitEvent({
+          kind: EventKind.Notice,
+          notice: { level: 'info', text: '快捷创建：模板已生成，跳过规划直接构建并运行。' }
+        })
+        await this.updateSystemPrompt('execute')
+        this._phase = 'execute'
+        this.planReadyAwaitingExecute = false
+        const opsPlan = '1. 构建项目（gradlew build）\n2. 启动游戏进行真实测试（runClient）'
+        this.planTracker = PlanTracker.fromPlanText(opsPlan)
+        this.emitPlanState(this.planTracker)
+        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
         const result = await this.beginExecuteFromTracker(streamCb)
         this.onAgentStatus?.('')
         return result

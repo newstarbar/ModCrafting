@@ -13,6 +13,7 @@ export interface ToolGateResult {
 }
 
 const RECIPE_DATA_PATH_RE = /(?:src\/main\/resources\/)?data\/[^/]+\/recipes?\/[^/]+\.json$/i
+const PROJECT_FILE_DELETE_RE = /^(?:src\/|data\/|gradle\/).+\.(java|json|gradle|properties|accesswidener|toml)$/i
 
 const READONLY_KNOWLEDGE_TOOLS = new Set([
   'fabric_docs_search',
@@ -27,6 +28,23 @@ export function isRecipeInspectionPath(path: string): boolean {
   const normalized = path.replace(/\\/g, '/').toLowerCase()
   if (normalized.endsWith('fabric.mod.json')) return true
   return RECIPE_DATA_PATH_RE.test(normalized)
+}
+
+/** Only allow deleting a single project file under src/, data/, or gradle/. */
+export function isProjectFileDeleteCommand(command: string): boolean {
+  const normalized = command.trim()
+  if (!normalized) return false
+  if (/[*?]/.test(normalized)) return false
+  if (/\s-rf\b|\brm\s+-rf\b|-Recurse/i.test(normalized)) return false
+
+  const match = normalized.match(
+    /^(?:rm|del|Remove-Item)\s+(?:(?:\/f\s+|\/q\s+|\/f\s+\/q\s+)|(?:-Force\s+))?(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i
+  )
+  if (!match) return false
+
+  const path = (match[1] || match[2] || match[3] || '').replace(/\\/g, '/')
+  if (!path || /\/$/.test(path)) return false
+  return PROJECT_FILE_DELETE_RE.test(path)
 }
 
 /** Only allow deleting a single recipe JSON under data/<namespace>/recipe(s)/. */
@@ -68,11 +86,16 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
   if (call.name === 'read_file' && step.kind === 'recipe') {
     return isRecipeInspectionPath(String(call.args.path || ''))
   }
+  if (call.name === 'delete_file') {
+    return step.kind === 'write'
+  }
   if (call.name === 'run_command') {
     const command = String(call.args.command || '')
     if (step.kind === 'build') return /gradlew|gradle|build/i.test(command)
     if (step.kind === 'run') return /runClient/i.test(command)
-    if (step.kind === 'recipe' || step.kind === 'write') return isRecipeCleanupCommand(command)
+    if (step.kind === 'recipe' || step.kind === 'write') {
+      return isRecipeCleanupCommand(command) || isProjectFileDeleteCommand(command)
+    }
     return false
   }
   if (call.name === 'trigger_build') {
@@ -97,6 +120,10 @@ export function isToolAllowedForStep(
     if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
     if (step.kind === 'build' || step.kind === 'run') return false
     return true
+  }
+
+  if (call.name === 'delete_file') {
+    return step.kind === 'write'
   }
 
   if (call.name === 'read_file') {

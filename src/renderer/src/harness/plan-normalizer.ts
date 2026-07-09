@@ -8,13 +8,47 @@ const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/i
 const BUILD_STEP_TITLE = '构建项目（gradlew build / trigger_build build）'
 const RUN_STEP_TITLE = '启动游戏进行真实测试（runClient）'
 
-function inferKind(description: string): StepKind {
-  const d = description.toLowerCase()
+const EXPLICIT_KIND_RE = /^\[(write|recipe|inspect)\]\s*/i
+
+const WRITE_SIGNAL_RE =
+  /创建|写入|生成|修改|移除|删除|迁移|物品|方块|blockentity|mixin|datagen|资源|模型|战利品|标签|工具类|快捷键|配置文件|\.json|\.java|\.gradle|\.properties|\.toml/i
+
+const INSPECT_SIGNAL_RE =
+  /查询|搜索|校验|验证|文档|javadoc|wiki|mappings|fabric_docs_search|fabric_meta_version_check|fabric_mod_json_validate/i
+
+function parseExplicitKind(description: string): {
+  kind?: 'inspect' | 'write' | 'recipe'
+  body: string
+} {
+  const match = description.match(EXPLICIT_KIND_RE)
+  if (!match) return { body: description }
+  const kind = match[1].toLowerCase() as 'inspect' | 'write' | 'recipe'
+  return { kind, body: description.slice(match[0].length).trim() }
+}
+
+function inferKind(
+  description: string,
+  explicitKind?: 'inspect' | 'write' | 'recipe'
+): StepKind {
+  if (explicitKind === 'write' || explicitKind === 'recipe' || explicitKind === 'inspect') {
+    return explicitKind
+  }
+
+  const parsed = parseExplicitKind(description)
+  if (parsed.kind) return parsed.kind
+
+  const d = parsed.body.toLowerCase()
   if (/runclient|启动游戏|运行游戏/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
-  if (/读取|查看|检查|获取|确认|查询|搜索|校验|验证|文档|javadoc|wiki|mappings|read|list|fabric\.mod\.json/.test(d)) return 'inspect'
   if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
-  if (/创建|写入|生成|修改|物品|方块|blockentity|mixin|datagen|资源|模型|战利品|标签|\.json|\.java|\.gradle|\.properties|\.toml/.test(d)) return 'write'
+  if (
+    INSPECT_SIGNAL_RE.test(parsed.body) ||
+    /查询知识库|知识库|mixins?\.json|mixin\s*配置|fabric\.mod\.json/.test(d)
+  ) {
+    return 'inspect'
+  }
+  if (WRITE_SIGNAL_RE.test(parsed.body)) return 'write'
+  if (/读取|查看|检查|获取|确认|read|list/.test(d)) return 'inspect'
   return 'answer'
 }
 
@@ -66,6 +100,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'write_file',
         'edit_file',
+        'delete_file',
         'complete_step',
         'fabric_template_generate',
         'fabric_content_register',
@@ -148,8 +183,8 @@ export function expandCombinedTerminalSteps(steps: PlanStepState[]): PlanStepSta
 }
 
 function normalizeStep(step: PlanStepState): WorkflowStep {
-  const kind = inferKind(step.description)
-  const explicitPath = targetPathFromDescription(step.description)
+  const kind = inferKind(step.description, step.kind)
+  const explicitPath = step.targetPath || targetPathFromDescription(step.description)
   const targetPath = explicitPath || (kind === 'recipe' ? recipePath('<modid>', 'generated_recipe') : undefined)
   return {
     id: step.id,

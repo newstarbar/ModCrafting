@@ -69,11 +69,13 @@ export async function resolveProjectConfig(projectPath: string): Promise<Project
 
     if (!javaPackage) {
       const javaFiles = await window.api.listDirectory(`${projectPath}/src/main/java`)
-      for (const file of javaFiles) {
-        if (!file.isDirectory) continue
+      const dirs = javaFiles.filter((f) => f.isDirectory).map((f) => f.name)
+      // Prefer walking standard com/example/... tree over a single dotted folder name.
+      const walkRoot = dirs.includes('com') ? 'com' : dirs[0]
+      if (walkRoot) {
         const pkgParts: string[] = []
-        let current = `${projectPath}/src/main/java/${file.name}`
-        pkgParts.push(file.name)
+        let current = `${projectPath}/src/main/java/${walkRoot}`
+        pkgParts.push(walkRoot)
         let entries = await window.api.listDirectory(current)
         while (entries.length === 1 && entries[0].isDirectory) {
           pkgParts.push(entries[0].name)
@@ -82,7 +84,6 @@ export async function resolveProjectConfig(projectPath: string): Promise<Project
         }
         javaPackage = deriveJavaPackage(pkgParts, groupId || pkgParts.join('.'), modId)
         if (!groupId) groupId = pkgParts.slice(0, -1).join('.') || pkgParts[0]
-        break
       }
     }
   } catch {

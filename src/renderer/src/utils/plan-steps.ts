@@ -1,6 +1,8 @@
 export interface ParsedPlanStep {
   id: string
   description: string
+  kind?: 'inspect' | 'write' | 'recipe'
+  targetPath?: string
 }
 
 export const OPS_STEP_PATTERN = /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行|build/i

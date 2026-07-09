@@ -211,5 +211,10 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
 }
 
 export function compiledStepsToParsed(steps: CompiledPlanStep[]): ParsedPlanStep[] {
-  return steps.map(({ id, description }) => ({ id, description }))
+  return steps.map(({ id, description, kind, targetPath }) => ({
+    id,
+    description,
+    ...(kind ? { kind } : {}),
+    ...(targetPath ? { targetPath } : {})
+  }))
 }

@@ -30,7 +30,7 @@ import MarkdownContent from './MarkdownContent'
 import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 import TemplateFormPanel from './TemplateFormPanel'
-import { buildTemplateParamsFromForm, isQuickCreateTemplate } from '../project/template-params'
+import { buildTemplateParamsFromForm, isQuickCreateTemplate, quickCreateSessionGoal } from '../project/template-params'
 import { executeTemplateGenerate, resolveProjectConfig } from '../project/template-runner'
 import { isCodeExplainInput } from '../harness/turn-intent'
 import RollbackWarningPanel from './RollbackWarningPanel'
@@ -1049,6 +1049,17 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       }
     }
 
+    const quickCreate = isQuickCreateTemplate(result.templateId)
+    const nextSessionGoal = quickCreate ? quickCreateSessionGoal(prompt) : sessionGoal
+    if (quickCreate) {
+      setSessionGoal(nextSessionGoal)
+      persistComposerMeta({ sessionGoal: nextSessionGoal })
+      controllerRef.current?.clearSession()
+    }
+
+    controllerRef.current?.setComposerMode(composerMode)
+    controllerRef.current?.setSessionGoal(nextSessionGoal)
+
     if (!currentSessionId) {
       const newId = onNewSession(prompt)
       currentSessionIdRef.current = newId
@@ -1056,13 +1067,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         messageIndex: 0,
         controller: controllerRef.current,
         composerMode,
-        sessionGoal,
+        sessionGoal: nextSessionGoal,
         activePlan: activePlanRef.current,
       })
       setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }])
-      controllerRef.current?.clearSession()
-      controllerRef.current?.setComposerMode(composerMode)
-      controllerRef.current?.setSessionGoal(sessionGoal)
     } else {
       maybeRenameSessionForFirstMessage(currentSessionId, prompt)
       setDisplayMessages((prev) => {
@@ -1070,7 +1078,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           messageIndex: prev.length,
           controller: controllerRef.current,
           composerMode,
-          sessionGoal,
+          sessionGoal: nextSessionGoal,
           activePlan: activePlanRef.current,
         })
         const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }]
@@ -1082,7 +1090,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     const ctrl = controllerRef.current
     if (!ctrl) return
     ctrl.setComposerMode(composerMode)
-    ctrl.setSessionGoal(sessionGoal)
+    ctrl.setSessionGoal(nextSessionGoal)
     setIsLoading(true)
     setAgentStatus('思考中...')
     ctrl.send(prompt).catch(() => {

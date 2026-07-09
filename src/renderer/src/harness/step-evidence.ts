@@ -89,6 +89,8 @@ export function canToolResultAdvanceStep(
     const artifactPath = result.artifactPath || String(result.args?.path || '')
     const ok = (
       toolName === 'write_file' ||
+      toolName === 'edit_file' ||
+      toolName === 'delete_file' ||
       toolName === 'create_recipe' ||
       toolName === 'fabric_recipe_generate' ||
       toolName === 'fabric_template_generate' ||

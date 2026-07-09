@@ -68,9 +68,15 @@ function displayValueForField(field: FormField, value: unknown): string {
 }
 
 /** Derive javaPackage folder name from discovered path parts and maven groupId. */
+export function modIdToJavaPackage(modId: string): string {
+  return modId.replace(/-/g, '_').replace(/[^a-z0-9_]/gi, '_') || 'mod'
+}
+
+/** Derive javaPackage folder name from discovered path parts and maven groupId. */
 export function deriveJavaPackage(pkgParts: string[], groupId: string, modId: string): string {
+  const modFallback = modIdToJavaPackage(modId)
   const groupParts = groupId.split('.').filter(Boolean)
-  if (pkgParts.length > groupParts.length) {
+  if (pkgParts.length > groupParts.length && groupParts.length > 0) {
     const prefixMatch = groupParts.every((part, index) => pkgParts[index] === part)
     if (prefixMatch) {
       const suffix = pkgParts.slice(groupParts.length)
@@ -80,9 +86,19 @@ export function deriveJavaPackage(pkgParts: string[], groupId: string, modId: st
   }
   const joined = pkgParts.join('.')
   if (joined === groupId) {
-    return modId.replace(/-/g, '_').replace(/[^a-z0-9_]/gi, '_') || pkgParts[pkgParts.length - 1] || 'mod'
+    return modFallback
   }
-  return pkgParts[pkgParts.length - 1] || joined
+  if (groupId && pkgParts.length === 1 && pkgParts[0] === groupId) {
+    return modFallback
+  }
+  if (!groupId.trim() && (joined.includes('.') || pkgParts.some((p) => p.includes('.')))) {
+    return modFallback
+  }
+  const leaf = pkgParts[pkgParts.length - 1] || joined
+  if (leaf === groupId) {
+    return modFallback
+  }
+  return leaf
 }
 
 /** Parse main entrypoint class FQN into groupId suffix / javaPackage when possible. */
@@ -272,6 +288,23 @@ export function buildQuickCreateUserMessage(options: {
   }
 
   return parts.join('\n')
+}
+
+/** User message after QuickCreate has written template files and requests build+run only. */
+export function isQuickCreateGeneratedMessage(text: string): boolean {
+  return (
+    /【快捷创建】模板已生成/.test(text) &&
+    /模板\s*ID\s*[：:]/i.test(text) &&
+    /直接构建/.test(text)
+  )
+}
+
+export function quickCreateSessionGoal(text: string): string {
+  const templateMatch = text.match(/模板\s*ID\s*[：:]\s*(\S+)/i)
+  const nameMatch = text.match(/内容\s*ID\s*[：:]\s*(\S+)/i)
+  const templateId = templateMatch?.[1]?.replace(/[。.].*$/, '') || 'template'
+  const contentId = nameMatch?.[1]
+  return contentId ? `快捷创建 ${templateId}（${contentId}）` : `快捷创建 ${templateId}`
 }
 
 export function formFieldsJsonBlock(formFields: Record<string, unknown>): string {

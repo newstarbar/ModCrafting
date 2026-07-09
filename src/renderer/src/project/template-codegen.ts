@@ -361,7 +361,7 @@ public class ${cls}Block extends Block {
             double x = pos.getX() + 0.5 + (random.nextDouble() - 0.5) * 0.4;
             double y = pos.getY() + 0.6;
             double z = pos.getZ() + 0.5 + (random.nextDouble() - 0.5) * 0.4;
-            world.addParticleClient(ParticleTypes.END_ROD, x, y, z, 0, 0.02, 0);
+            world.addParticle(ParticleTypes.END_ROD, x, y, z, 0, 0.02, 0);
         }
     }
 }
@@ -404,7 +404,7 @@ public class ModBlocks {
     private static void registerBlockItem(String name, Block block) {
         Identifier itemId = Identifier.of(${main}.MOD_ID, name);
         RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, itemId);
-        BlockItem blockItem = new BlockItem(block, new Item.Settings().registryKey(itemKey).useBlockDescriptionPrefix());
+        BlockItem blockItem = new BlockItem(block, new Item.Settings().registryKey(itemKey));
         Registry.register(Registries.ITEM, itemKey, blockItem);
     }
 

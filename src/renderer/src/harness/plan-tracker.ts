@@ -7,6 +7,9 @@ export interface PlanStepState {
   id: string
   description: string
   status: PlanStepStatus
+  /** Preserved from structured plan compile; used by workflow normalizer when set. */
+  kind?: 'inspect' | 'write' | 'recipe'
+  targetPath?: string
 }
 
 export class PlanTracker {
@@ -23,7 +26,9 @@ export class PlanTracker {
     const steps: PlanStepState[] = parsed.map((s) => ({
       id: s.id,
       description: s.description,
-      status: 'pending' as const
+      status: 'pending' as const,
+      ...(s.kind ? { kind: s.kind } : {}),
+      ...(s.targetPath ? { targetPath: s.targetPath } : {})
     }))
     return new PlanTracker(steps)
   }

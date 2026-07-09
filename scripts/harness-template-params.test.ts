@@ -5,7 +5,8 @@ import {
   javaPackageFromMainEntry,
   normalizeFormFieldsForCodegen,
   formatFormSummaryForDisplay,
-  buildQuickCreateUserMessage
+  buildQuickCreateUserMessage,
+  isQuickCreateGeneratedMessage
 } from '../src/renderer/src/project/template-params.ts'
 import { runTemplateCodegen } from '../src/renderer/src/project/template-codegen.ts'
 import type { ProjectCreateConfig } from '../src/renderer/src/project/scaffold.ts'
@@ -128,6 +129,40 @@ test('runTemplateCodegen custom-food writes nutrition and meat()', () => {
   const modItems = result.files.find((f) => f.path.endsWith('ModItems.java'))?.content || ''
   assert.match(modItems, /\.nutrition\(10\)/)
   assert.match(modItems, /\.meat\(\)/)
+})
+
+test('deriveJavaPackage avoids dotted folder when groupId missing', () => {
+  const pkg = deriveJavaPackage(['com.example'], '', 'my-mod')
+  assert.equal(pkg, 'my_mod')
+})
+
+test('isQuickCreateGeneratedMessage detects post-codegen build request', () => {
+  const message = buildQuickCreateUserMessage({
+    templateId: 'custom-block',
+    displayName: '测试',
+    name: 'ceshi',
+    formData: {},
+    createdFiles: [],
+    appliedParams: [],
+    unsupportedParams: [],
+    ok: true
+  })
+  assert.equal(isQuickCreateGeneratedMessage(message), true)
+})
+
+test('runTemplateCodegen custom-block does not emit deprecated APIs', () => {
+  const result = runTemplateCodegen({
+    templateId: 'custom-block',
+    config: baseConfig,
+    name: 'test_block',
+    displayName: '测试方块',
+    formFields: { hardness: 3, resistance: 6, materialStyle: 'stone', specialFeatures: 'glowing', customRender: 'particles' }
+  })
+  const modBlocks = result.files.find((f) => f.path.endsWith('ModBlocks.java'))?.content || ''
+  const blockClass = result.files.find((f) => f.path.endsWith('Block.java'))?.content || ''
+  assert.doesNotMatch(modBlocks, /useBlockDescriptionPrefix/)
+  assert.doesNotMatch(blockClass, /addParticleClient/)
+  assert.match(blockClass, /addParticle\(/)
 })
 
 test('javaPath uses single javaPackage segment under groupId', () => {
