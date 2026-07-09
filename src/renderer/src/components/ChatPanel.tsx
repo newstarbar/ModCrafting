@@ -37,7 +37,9 @@ import RollbackWarningPanel from './RollbackWarningPanel'
 import DeleteMessagePanel from './DeleteMessagePanel'
 import { removeMessageFromDisplay } from '../utils/message-delete'
 import { messagePlainText } from '../utils/message-text'
-import { shouldShowPinnedPlan } from '../utils/plan-visibility'
+import ToolExploreGroup from './ToolExploreGroup'
+import { groupExploreToolRuns, collectExploreGroupKeys, isExploreTool } from '../utils/tool-explore-group'
+import { extractPreview } from '../utils/tool-output-preview'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -196,6 +198,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const controllerRef = useRef<Controller | null>(null)
 
   const [collapsedToolIds, setCollapsedToolIds] = useState<Set<string>>(new Set())
+  const [collapsedExploreGroupKeys, setCollapsedExploreGroupKeys] = useState<Set<string>>(new Set())
   const [collapsedReasoningKeys, setCollapsedReasoningKeys] = useState<Set<string>>(new Set())
   const [runTick, setRunTick] = useState(0)
   const toolOutputRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -259,6 +262,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleExploreGroup = useCallback((key: string) => {
+    setCollapsedExploreGroupKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }, [])
@@ -377,8 +389,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     turnRef.current = { msgId: '', entries: [], streamDone: false }
     const display = deserializeToDisplay(session.messages, uid) as DisplayMessage[]
     const restoredPlan = restoreActivePlan(display, session.messages)
-    const { toolIds, reasoningKeys } = buildRestoredCollapseState(display)
+    const { toolIds, reasoningKeys, exploreGroupKeys } = buildRestoredCollapseState(display)
     setCollapsedToolIds(toolIds)
+    setCollapsedExploreGroupKeys(exploreGroupKeys)
     setCollapsedReasoningKeys(reasoningKeys)
     setDisplayMessages(display)
     setActivePlan(restoredPlan)
@@ -593,7 +606,19 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           markLastReasoningDone(t.msgId, t.entries)
           setCollapsedToolIds((prev) => {
             const next = new Set(prev)
-            next.delete(event.tool!.id)
+            const toolName = event.tool!.name
+            if (isExploreTool(toolName)) {
+              next.add(event.tool!.id)
+            } else {
+              next.delete(event.tool!.id)
+            }
+            return next
+          })
+          setCollapsedExploreGroupKeys((prev) => {
+            const next = new Set(prev)
+            for (const key of collectExploreGroupKeys(t.msgId, t.entries)) {
+              next.add(key)
+            }
             return next
           })
           // Parse args for display
@@ -642,6 +667,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             { error: Boolean(event.tool.error), durationMs: event.tool.durationMs }
           )
           setCollapsedToolIds((prev) => new Set(prev).add(event.tool!.id))
+          setCollapsedExploreGroupKeys((prev) => {
+            const next = new Set(prev)
+            for (const key of collectExploreGroupKeys(t.msgId, t.entries)) {
+              next.add(key)
+            }
+            return next
+          })
           // Find existing tool entry by id and update it
           for (const entry of t.entries) {
             if (entry.kind === 'tool' && entry.id === event.tool.id) {
@@ -1339,7 +1371,139 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               {msg.entries && msg.entries.length === 0 && msg.isStreaming && (
                 <span className="mc-dim" style={{ fontSize: '12px', fontStyle: 'italic' }}>思考中...</span>
               )}
-              {msg.entries && msg.entries.length > 0 && msg.entries.map((entry, i) => {
+              {msg.entries && msg.entries.length > 0 && groupExploreToolRuns(msg.id, msg.entries).map((segment) => {
+                if (segment.type === 'explore-group') {
+                  return (
+                    <ToolExploreGroup
+                      key={segment.key}
+                      kind={segment.kind}
+                      groupKey={segment.key}
+                      tools={segment.tools}
+                      collapsed={collapsedExploreGroupKeys.has(segment.key)}
+                      collapsedToolIds={collapsedToolIds}
+                      runTick={runTick}
+                      onToggleGroup={toggleExploreGroup}
+                      onToggleTool={toggleToolOutput}
+                      getToolDisplayName={getToolDisplayName}
+                    />
+                  )
+                }
+
+                if (segment.type === 'tool') {
+                  const entry = segment.entry
+                  const isCollapsed = collapsedToolIds.has(entry.id)
+                  const displayOutput = entry.liveOutput || entry.output
+                  const elapsedSec = entry.startMs && entry.status === 'running'
+                    ? Math.max(1, Math.floor((Date.now() - entry.startMs) / 1000))
+                    : null
+                  const statusMark =
+                    entry.status === 'done' ? <span className="tool-status-dot done" />
+                      : entry.status === 'running' ? <span className="tool-status-dot running" />
+                        : entry.status === 'error' ? <span className="tool-status-dot error" />
+                          : <span className="tool-status-dot pending" />
+                  const displayName = entry.displayName || getToolDisplayName(entry.name, entry.args)
+                  const diff = entry.fileDiff
+                  const showDiffStats = diff && (diff.added > 0 || diff.removed > 0)
+                  const showDiffPreview = diff && (diff.firstAdded || diff.firstRemoved) && !isCollapsed
+                  const targetPath = diff?.path
+                    || (typeof entry.args?.path === 'string' ? entry.args.path : undefined)
+                    || undefined
+                  const showPathTag = targetPath && (entry.status === 'done' || entry.status === 'error')
+                  const pathFileName = targetPath ? targetPath.split('/').pop() || targetPath : ''
+                  return (
+                    <div
+                      key={`tool-${entry.id}`}
+                      className={`tool-line${entry.status === 'running' ? ' running' : ''}`}
+                    >
+                      {statusMark}
+                      <span className="tool-line-name">{displayName}</span>
+                      {showPathTag && (
+                        <span className="tool-line-path" title={targetPath}>{pathFileName}</span>
+                      )}
+                      {showDiffStats && (
+                        <span className="tool-line-diff">
+                          {diff.added > 0 && <span className="diff-added">+{diff.added}</span>}
+                          {diff.removed > 0 && <span className="diff-removed">-{diff.removed}</span>}
+                        </span>
+                      )}
+                      {entry.durationMs != null && (
+                        <span className="mc-dim" style={{ fontSize: '10px' }}>
+                          ({entry.durationMs >= 1000
+                            ? `${(entry.durationMs / 1000).toFixed(1)}s`
+                            : `${entry.durationMs}ms`})
+                        </span>
+                      )}
+                      {elapsedSec != null && (
+                        <span className="mc-dim" style={{ fontSize: '10px' }}>({elapsedSec}s)</span>
+                      )}
+                      {(entry.status === 'done' || entry.status === 'error') && displayOutput && (
+                        <>
+                          {isCollapsed && (
+                            <span className="tool-line-preview" title={displayOutput}>
+                              {extractPreview(entry.name, displayOutput, entry.args)}
+                            </span>
+                          )}
+                          <span
+                            className="tool-line-toggle"
+                            onClick={() => toggleToolOutput(entry.id)}
+                          >
+                            {isCollapsed ? '展开 ▶' : '收起 ▲'}
+                          </span>
+                        </>
+                      )}
+                      {entry.status === 'running' && !isExploreTool(entry.name) && (
+                        <span
+                          className="tool-line-toggle mc-dim"
+                          onClick={() => toggleToolOutput(entry.id)}
+                        >
+                          {isCollapsed ? '展开日志 ▶' : '收起 ▲'}
+                        </span>
+                      )}
+                      {entry.status === 'running' && isExploreTool(entry.name) && isCollapsed && (
+                        <span className="tool-line-preview" title={displayOutput || ''}>
+                          {displayOutput
+                            ? extractPreview(entry.name, displayOutput, entry.args)
+                            : pathFileName || '…'}
+                        </span>
+                      )}
+                      {entry.status === 'pending' && (
+                        <span className="tool-line-toggle mc-dim">等待中…</span>
+                      )}
+                      {showDiffPreview && (
+                        <div className="tool-line-diff-preview">
+                          {diff.firstAdded && (
+                            <div className="diff-preview-line diff-preview-added">
+                              <span className="diff-preview-marker">+</span>
+                              <span>{diff.firstAdded}</span>
+                            </div>
+                          )}
+                          {diff.firstRemoved && (
+                            <div className="diff-preview-line diff-preview-removed">
+                              <span className="diff-preview-marker">-</span>
+                              <span>{diff.firstRemoved}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {displayOutput && !isCollapsed && (
+                        <div
+                          className="tool-line-output"
+                          ref={(el) => {
+                            if (el) toolOutputRefs.current.set(entry.id, el)
+                            else toolOutputRefs.current.delete(entry.id)
+                          }}
+                        >
+                          <pre className={entry.status === 'error' ? 'is-error' : undefined}>
+                            {displayOutput}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }
+
+                const entry = segment.entry
+                const i = segment.index
                 switch (entry.kind) {
                   case 'reasoning': {
                     const rKey = `${msg.id}-${i}`
@@ -1377,111 +1541,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                   case 'text':
                     if (suppressPlanText && isNumberedPlanText(entry.content)) return null
                     return <div key={`t-${i}`}>{renderContent(entry.content)}</div>
-                  case 'tool': {
-                    const isCollapsed = collapsedToolIds.has(entry.id)
-                    const displayOutput = entry.liveOutput || entry.output
-                    const elapsedSec = entry.startMs && entry.status === 'running'
-                      ? Math.max(1, Math.floor((Date.now() - entry.startMs) / 1000))
-                      : null
-                    const statusMark =
-                      entry.status === 'done' ? <span className="tool-status-dot done" />
-                        : entry.status === 'running' ? <span className="tool-status-dot running" />
-                          : entry.status === 'error' ? <span className="tool-status-dot error" />
-                            : <span className="tool-status-dot pending" />
-                    const displayName = entry.displayName || getToolDisplayName(entry.name, entry.args)
-                    const diff = entry.fileDiff
-                    const showDiffStats = diff && (diff.added > 0 || diff.removed > 0)
-                    const showDiffPreview = diff && (diff.firstAdded || diff.firstRemoved) && !isCollapsed
-                    // Extract target path for file operations
-                    const targetPath = diff?.path
-                      || (typeof entry.args?.path === 'string' ? entry.args.path : undefined)
-                      || undefined
-                    const showPathTag = targetPath && (entry.status === 'done' || entry.status === 'error')
-                    const pathFileName = targetPath ? targetPath.split('/').pop() || targetPath : ''
-                    return (
-                      <div
-                        key={`tool-${entry.id}`}
-                        className={`tool-line${entry.status === 'running' ? ' running' : ''}`}
-                      >
-                        {statusMark}
-                        <span className="tool-line-name">{displayName}</span>
-                        {showPathTag && (
-                          <span className="tool-line-path" title={targetPath}>{pathFileName}</span>
-                        )}
-                        {showDiffStats && (
-                          <span className="tool-line-diff">
-                            {diff.added > 0 && <span className="diff-added">+{diff.added}</span>}
-                            {diff.removed > 0 && <span className="diff-removed">-{diff.removed}</span>}
-                          </span>
-                        )}
-                        {entry.durationMs != null && (
-                          <span className="mc-dim" style={{ fontSize: '10px' }}>
-                            ({entry.durationMs >= 1000
-                              ? `${(entry.durationMs / 1000).toFixed(1)}s`
-                              : `${entry.durationMs}ms`})
-                          </span>
-                        )}
-                        {elapsedSec != null && (
-                          <span className="mc-dim" style={{ fontSize: '10px' }}>({elapsedSec}s)</span>
-                        )}
-                        {(entry.status === 'done' || entry.status === 'error') && displayOutput && (
-                          <>
-                            {isCollapsed && (
-                              <span className="tool-line-preview" title={displayOutput}>
-                                {extractPreview(entry.name, displayOutput, entry.args)}
-                              </span>
-                            )}
-                            <span
-                              className="tool-line-toggle"
-                              onClick={() => toggleToolOutput(entry.id)}
-                            >
-                              {isCollapsed ? '展开 ▶' : '收起 ▲'}
-                            </span>
-                          </>
-                        )}
-                        {entry.status === 'running' && (
-                          <span
-                            className="tool-line-toggle mc-dim"
-                            onClick={() => toggleToolOutput(entry.id)}
-                          >
-                            {isCollapsed ? '展开日志 ▶' : '收起 ▲'}
-                          </span>
-                        )}
-                        {entry.status === 'pending' && (
-                          <span className="tool-line-toggle mc-dim">等待中…</span>
-                        )}
-                        {showDiffPreview && (
-                          <div className="tool-line-diff-preview">
-                            {diff.firstAdded && (
-                              <div className="diff-preview-line diff-preview-added">
-                                <span className="diff-preview-marker">+</span>
-                                <span>{diff.firstAdded}</span>
-                              </div>
-                            )}
-                            {diff.firstRemoved && (
-                              <div className="diff-preview-line diff-preview-removed">
-                                <span className="diff-preview-marker">-</span>
-                                <span>{diff.firstRemoved}</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {displayOutput && !isCollapsed && (
-                          <div
-                            className="tool-line-output"
-                            ref={(el) => {
-                              if (el) toolOutputRefs.current.set(entry.id, el)
-                              else toolOutputRefs.current.delete(entry.id)
-                            }}
-                          >
-                            <pre className={entry.status === 'error' ? 'is-error' : undefined}>
-                              {displayOutput}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  }
                   default:
                     return null
                 }
@@ -1683,133 +1742,5 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     </>
   )
 })
-
-// Extract a clean preview summary from tool output (for collapsed view).
-// Returns user-facing info only — no AI diagnostic text, no emoji.
-function extractPreview(toolName: string, output: string, args?: Record<string, unknown>): string {
-  if (!output) return ""
-
-  // File tools
-  if (toolName === "read_file") {
-    const path = String(args?.path || "")
-    const fileName = path.split("/").pop() || path
-    const match = output.match(/共 (\d+) 行，显示 (\d+)-(\d+) 行/)
-    if (match) return `${fileName}  ${match[2]}-${match[3]} / ${match[1]} 行`
-    const sizeMatch = output.match(/(\d+)\s*bytes/)
-    return sizeMatch ? `${fileName} (${sizeMatch[1]} bytes)` : fileName
-  }
-  if (toolName === "write_file") {
-    const path = String(args?.path || "")
-    const fileName = path.split("/").pop() || path
-    const diffMatch = output.match(/新增 (\d+) 行.*删除 (\d+) 行/)
-    const sizeMatch = output.match(/(\d+)\s*bytes/)
-    if (diffMatch) return `${fileName}  +${diffMatch[1]} -${diffMatch[2]}`
-    if (sizeMatch) return `${fileName}  + 行 (${sizeMatch[1]} bytes)`
-    return fileName
-  }
-  if (toolName === "edit_file") {
-    const path = String(args?.path || "")
-    const fileName = path.split("/").pop() || path
-    const lineMatch = output.match(/第 (\d+) 行/)
-    const diffMatch = output.match(/\+(\d+) 行|修改 (\d+) 行/)
-    const lineInfo = lineMatch ? `第 ${lineMatch[1]} 行` : ""
-    const diffInfo = diffMatch ? ` +${diffMatch[1] || diffMatch[2]}` : ""
-    return `${fileName}${lineInfo ? " " + lineInfo : ""}${diffInfo}`
-  }
-
-  // Directory
-  if (toolName === "list_directory") {
-    const path = String(args?.path || "")
-    const dirName = path.split("/").pop() || "/"
-    const items = output.split("\n").filter(l => l.trim() && !l.startsWith("total"))
-    return `${dirName} (${items.length} 项)`
-  }
-
-  // Build/Run
-  if (toolName === "trigger_build" || toolName === "run_command") {
-    if (output.includes("BUILD SUCCESSFUL")) {
-      const timeMatch = output.match(/(\d+)s/)
-      return timeMatch ? `BUILD SUCCESSFUL (${timeMatch[1]}s)` : "BUILD SUCCESSFUL"
-    }
-    if (output.includes("BUILD FAILED")) return "BUILD FAILED"
-    if (output.includes("MC_PHASE:ready") || output.includes("稳定观察")) return "游戏测试通过"
-    if (output.includes("MC_PHASE:playing") || output.includes("已启动游戏")) return "游戏运行中"
-    const exitMatch = output.match(/\[exit code: (\d+)\]|\[退出码: (\d+)\]/)
-    const exitCode = exitMatch?.[1] ?? exitMatch?.[2]
-    if (exitCode && exitCode !== "0") return `退出码 ${exitCode}`
-    return "已完成"
-  }
-
-  // Knowledge search
-  if (toolName === "fabric_docs_search" || toolName === "fabric_javadoc_lookup" || toolName === "vanilla_mc_wiki_query") {
-    const kw = String(args?.keyword || "")
-    const summary = output.match(/结果：(.+)$/m)?.[1] || ""
-    return summary ? `${kw.slice(0,28)} → ${summary}` : kw.slice(0,36)
-  }
-  if (toolName === "fabric_meta_version_check") {
-    const mc = output.match(/"minecraft_version":\s*"([^"]+)"/)?.[1] || ""
-    return mc ? `MC ${mc}` : "版本查询"
-  }
-
-  // Recipe
-  if (toolName === "create_recipe" || toolName === "fabric_recipe_generate") {
-    const name = String(args?.name || "")
-    if (name) return `${name}.json`
-    const pm = output.match(/已生成配方:\s*(\S+)/)
-    if (pm) { const p = pm[1]; return p.split("/").pop() || p }
-    return "配方"
-  }
-
-  // Content/data
-  if (toolName === "fabric_content_register") {
-    const p = String(args?.path || args?.className || "")
-    return p ? p.replace(/^.*\//, "") : "内容注册"
-  }
-  if (toolName === "fabric_data_assets_generate") {
-    const files = output.match(/- (\S+)/g)
-    return files ? `${files.length} 个资源文件` : "资源生成"
-  }
-
-  // Mixin
-  if (toolName === "fabric_mixin_scaffold") {
-    const cls = args?.mixinClass ? String(args.mixinClass).split(".").pop() : null
-    return cls || "Mixin"
-  }
-  if (toolName === "fabric_mixin_register") {
-    const cls = String(args?.mixinClass || "").split(".").pop() || ""
-    return cls ? `${cls} 已注册` : "已注册"
-  }
-
-  // Debug/log
-  if (toolName === "fabric_log_debugger") {
-    const k = output.match(/"kind":\s*"([^"]+)"/)?.[1] || ""
-    return k || "日志分析"
-  }
-  if (toolName === "read_error_log") {
-    if (output.includes("BUILD FAILED")) return "BUILD FAILED"
-    if (output.includes("BUILD SUCCESSFUL")) return "BUILD SUCCESSFUL"
-    return "日志"
-  }
-
-  // Validation
-  if (toolName === "fabric_mod_json_validate") {
-    if (output.includes('"ok": true')) return "校验通过"
-    const issues = (output.match(/issue|warning/gi) || []).length
-    return issues > 0 ? `${issues} 个问题` : "校验完成"
-  }
-
-  // Meta
-  if (toolName === "complete_step") {
-    const m = output.match(/步骤 #(\d+)/)
-    return m ? `步骤 ${m[1]} 已完成` : "步骤完成"
-  }
-  if (toolName === "ask_clarification") {
-    const q = String(args?.question || "")
-    return q.length > 40 ? q.slice(0, 40) + "…" : q || "需要确认"
-  }
-
-  const fl = output.split("\n")[0]?.trim() || ""
-  return fl.length > 52 ? fl.slice(0, 52) + "…" : fl
-}
 
 export default ChatPanel

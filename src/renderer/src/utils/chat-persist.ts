@@ -1,5 +1,7 @@
 import type { PlanStep } from '../components/TaskPlan'
 import type { PersistedChronoEntry, PersistedMessage } from '../types/chat'
+import type { ChronoEntry } from '../types/display-message.ts'
+import { collectExploreGroupKeys } from './tool-explore-group.ts'
 
 export interface SerializableChronoEntry {
   kind: 'reasoning' | 'text' | 'tool'
@@ -111,11 +113,15 @@ export function deserializeToDisplay(
 
 export function buildRestoredCollapseState(
   messages: SerializableDisplayMessage[]
-): { toolIds: Set<string>; reasoningKeys: Set<string> } {
+): { toolIds: Set<string>; reasoningKeys: Set<string>; exploreGroupKeys: Set<string> } {
   const toolIds = new Set<string>()
   const reasoningKeys = new Set<string>()
+  const exploreGroupKeys = new Set<string>()
   for (const msg of messages) {
     if (!msg.entries?.length) continue
+    collectExploreGroupKeys(msg.id, msg.entries as ChronoEntry[]).forEach((k) => {
+      exploreGroupKeys.add(k)
+    })
     msg.entries.forEach((entry, i) => {
       if (entry.kind === 'tool' && entry.id) {
         toolIds.add(entry.id)
@@ -124,7 +130,7 @@ export function buildRestoredCollapseState(
       }
     })
   }
-  return { toolIds, reasoningKeys }
+  return { toolIds, reasoningKeys, exploreGroupKeys }
 }
 
 export function restoreActivePlan(
