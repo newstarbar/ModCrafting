@@ -1012,10 +1012,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           formFields: params.formFields,
           config
         })
-        const status = gen.ok
-          ? `【快捷创建】模板已生成：\n${gen.message}`
-          : `【快捷创建】生成失败：${gen.message}`
-        prompt = `${status}\n\n模板ID：${result.templateId}。请直接构建并运行测试，不要重新探索或手搓注册代码。`
+        prompt = gen.message
       }
     }
 

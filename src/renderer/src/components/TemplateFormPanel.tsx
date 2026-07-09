@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { templateSchemas, FormField, generatePromptFromForm, chineseToEnglishId, CraftingGridData } from './template-schemas'
+import { formFieldsJsonBlock, isQuickCreateTemplate, normalizeFormFieldsForCodegen } from '../project/template-params'
 import CraftingGrid, { GridSlot } from './CraftingGrid'
 import TemplatePreview from './mc/TemplatePreview'
 
@@ -178,8 +179,13 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
   }, [])
 
   const handleSubmit = () => {
+    let prompt = generatePromptFromForm(templateId, formData)
+    if (isQuickCreateTemplate(templateId)) {
+      const { formFields } = normalizeFormFieldsForCodegen(templateId, formData)
+      prompt += `\n\n${formFieldsJsonBlock(formFields)}`
+    }
     onConfirm({
-      prompt: generatePromptFromForm(templateId, formData),
+      prompt,
       templateId,
       formData: { ...formData }
     })

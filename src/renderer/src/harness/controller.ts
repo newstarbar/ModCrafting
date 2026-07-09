@@ -306,6 +306,7 @@ export class Controller {
       fabric_meta_version_check: '查询 Fabric 版本',
       fabric_mod_json_validate: '校验 fabric.mod.json',
       fabric_recipe_generate: '生成 Fabric 配方',
+      fabric_template_generate: '生成模板代码',
       fabric_content_register: '生成内容注册',
       fabric_data_assets_generate: '生成资源数据',
       fabric_mixin_scaffold: '生成 Mixin 脚手架',
@@ -372,7 +373,8 @@ ${projectInfo}`
 - **禁止空泛步骤**（确保无错、测试功能、输出总结）。
 - **每步只做一件事**；最多 6 步。
 - **禁止重复步骤。**
-- **用户已通过模板表单提交完整需求时，禁止先探索项目；直接输出计划。**`
+- **用户已通过模板表单提交完整需求时，禁止先探索项目；直接输出计划。**
+- **用户消息含【结构化参数 JSON】时，执行阶段须调用 \`fabric_template_generate\` 并传入完整 \`formFields\`（勿省略硬度、饱食度等表单参数）。**`
       : `## 🔧 第二阶段：执行计划
 
 规则（优先级从高到低）：
@@ -380,7 +382,7 @@ ${projectInfo}`
 2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
-5. Mixin 用 fabric_mixin_register 注册；配方用 create_recipe/fabric_recipe_generate。
+5. Mixin 用 fabric_mixin_register 注册；配方用 create_recipe/fabric_recipe_generate；模板用 fabric_template_generate（必须传入 formFields）。
 6. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。`
 
     const extraRules = mode === 'execute'

@@ -1,6 +1,12 @@
 import type { ProjectCreateConfig } from './scaffold.ts'
 import { mainClassName } from './scaffold.ts'
 import {
+  buildQuickCreateUserMessage,
+  deriveJavaPackage,
+  javaPackageFromMainEntry,
+  normalizeFormFieldsForCodegen
+} from './template-params.ts'
+import {
   mergeLangEntries,
   patchClientInitializer,
   patchMainInitializer,
@@ -21,6 +27,8 @@ export interface TemplateGenerateOutput {
   ok: boolean
   message: string
   createdFiles: string[]
+  appliedParams?: string[]
+  unsupportedParams?: string[]
 }
 
 export async function resolveProjectConfig(projectPath: string): Promise<ProjectCreateConfig | null> {
@@ -30,16 +38,6 @@ export async function resolveProjectConfig(projectPath: string): Promise<Project
   let mcVersion = '1.21.4'
 
   try {
-    const jsonRes = await window.api.readFile(`${projectPath}/src/main/resources/fabric.mod.json`)
-    if (jsonRes.success && jsonRes.content) {
-      const json = JSON.parse(jsonRes.content) as { id?: string; depends?: { minecraft?: string } }
-      modId = json.id || ''
-      const mcDep = json.depends?.minecraft
-      if (typeof mcDep === 'string') {
-        const m = mcDep.match(/([\d.]+)/)
-        if (m) mcVersion = m[1]
-      }
-    }
     const propsRes = await window.api.readFile(`${projectPath}/gradle.properties`)
     if (propsRes.success && propsRes.content) {
       const lines = propsRes.content.split('\n')
@@ -48,20 +46,44 @@ export async function resolveProjectConfig(projectPath: string): Promise<Project
       const mcLine = lines.find((l: string) => l.startsWith('minecraft_version='))
       if (mcLine) mcVersion = mcLine.split('=')[1]?.trim() || mcVersion
     }
-    const javaFiles = await window.api.listDirectory(`${projectPath}/src/main/java`)
-    for (const file of javaFiles) {
-      if (!file.isDirectory) continue
-      const pkgParts: string[] = []
-      let current = `${projectPath}/src/main/java/${file.name}`
-      pkgParts.push(file.name)
-      let entries = await window.api.listDirectory(current)
-      while (entries.length === 1 && entries[0].isDirectory) {
-        pkgParts.push(entries[0].name)
-        current = `${current}/${entries[0].name}`
-        entries = await window.api.listDirectory(current)
+
+    const jsonRes = await window.api.readFile(`${projectPath}/src/main/resources/fabric.mod.json`)
+    if (jsonRes.success && jsonRes.content) {
+      const json = JSON.parse(jsonRes.content) as {
+        id?: string
+        depends?: { minecraft?: string }
+        entrypoints?: { main?: string[] }
       }
-      javaPackage = pkgParts.join('.')
-      break
+      modId = json.id || ''
+      const mcDep = json.depends?.minecraft
+      if (typeof mcDep === 'string') {
+        const m = mcDep.match(/([\d.]+)/)
+        if (m) mcVersion = m[1]
+      }
+      const mainEntry = json.entrypoints?.main?.[0]
+      if (typeof mainEntry === 'string' && groupId) {
+        const fromEntry = javaPackageFromMainEntry(mainEntry, groupId, modId)
+        if (fromEntry) javaPackage = fromEntry
+      }
+    }
+
+    if (!javaPackage) {
+      const javaFiles = await window.api.listDirectory(`${projectPath}/src/main/java`)
+      for (const file of javaFiles) {
+        if (!file.isDirectory) continue
+        const pkgParts: string[] = []
+        let current = `${projectPath}/src/main/java/${file.name}`
+        pkgParts.push(file.name)
+        let entries = await window.api.listDirectory(current)
+        while (entries.length === 1 && entries[0].isDirectory) {
+          pkgParts.push(entries[0].name)
+          current = `${current}/${entries[0].name}`
+          entries = await window.api.listDirectory(current)
+        }
+        javaPackage = deriveJavaPackage(pkgParts, groupId || pkgParts.join('.'), modId)
+        if (!groupId) groupId = pkgParts.slice(0, -1).join('.') || pkgParts[0]
+        break
+      }
     }
   } catch {
     return null
@@ -101,23 +123,31 @@ async function writeProjectFile(projectPath: string, rel: string, content: strin
 }
 
 export async function executeTemplateGenerate(input: TemplateGenerateInput): Promise<TemplateGenerateOutput> {
-  const { projectPath, templateId, name, displayName, formFields, config } = input
+  const { projectPath, templateId, name, displayName, formFields: rawFormFields = {}, config } = input
   if (templateId === 'custom-recipe') {
     return { ok: false, message: 'custom-recipe 请使用 create_recipe / fabric_recipe_generate', createdFiles: [] }
   }
+
+  const normalized = normalizeFormFieldsForCodegen(templateId, rawFormFields)
 
   const params: TemplateCodegenParams & { templateId: string } = {
     templateId,
     config,
     name,
     displayName,
-    formFields,
+    formFields: normalized.formFields,
     mcVersion: config.versions.minecraft_version || '1.21.4'
   }
 
   const result = runTemplateCodegen(params)
   if (!result.files.length) {
-    return { ok: false, message: `不支持的模板: ${templateId}`, createdFiles: [] }
+    return {
+      ok: false,
+      message: `不支持的模板: ${templateId}`,
+      createdFiles: [],
+      appliedParams: normalized.appliedSummary,
+      unsupportedParams: normalized.unsupportedSummary
+    }
   }
 
   const createdFiles: string[] = []
@@ -164,18 +194,49 @@ export async function executeTemplateGenerate(input: TemplateGenerateInput): Pro
     }
   }
 
+  const appliedParams = [
+    ...normalized.appliedSummary,
+    ...(result.appliedParams || [])
+  ].filter((v, i, arr) => arr.indexOf(v) === i)
+  const unsupportedParams = [
+    ...normalized.unsupportedSummary,
+    ...(result.unsupportedParams || [])
+  ].filter((v, i, arr) => arr.indexOf(v) === i)
+
   if (errors.length) {
     return {
       ok: false,
-      message: `部分文件写入失败:\n${errors.join('\n')}`,
-      createdFiles
+      message: buildQuickCreateUserMessage({
+        templateId,
+        displayName,
+        name,
+        formData: normalized.formFields,
+        createdFiles,
+        appliedParams,
+        unsupportedParams,
+        ok: false,
+        errorDetail: `部分文件写入失败:\n${errors.join('\n')}`
+      }),
+      createdFiles,
+      appliedParams,
+      unsupportedParams
     }
   }
 
-  const label = displayName ? `（${displayName}）` : ''
   return {
     ok: true,
-    message: `已生成模板 ${templateId}${label}：\n${createdFiles.map((f) => `- ${f}`).join('\n')}`,
-    createdFiles
+    message: buildQuickCreateUserMessage({
+      templateId,
+      displayName,
+      name,
+      formData: normalized.formFields,
+      createdFiles,
+      appliedParams,
+      unsupportedParams,
+      ok: true
+    }),
+    createdFiles,
+    appliedParams,
+    unsupportedParams
   }
 }

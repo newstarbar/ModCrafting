@@ -18,9 +18,12 @@ export interface TemplateCodegenResult {
   files: GeneratedFile[]
   /** Extra registration calls to ensure exist in main initializer */
   mainInitCalls: string[]
+  appliedParams?: string[]
+  unsupportedParams?: string[]
 }
 
 function num(value: unknown, fallback: number): number {
+  if (value === '' || value === null || value === undefined) return fallback
   const n = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(n) ? n : fallback
 }
@@ -129,6 +132,21 @@ function toolMaterialExpr(material: string): string {
       return 'ToolMaterials.NETHERITE'
     default:
       return 'ToolMaterials.IRON'
+  }
+}
+
+function armorMaterialExpr(material: string): string {
+  switch (material) {
+    case 'leather':
+      return 'ArmorMaterials.LEATHER'
+    case 'gold':
+      return 'ArmorMaterials.GOLD'
+    case 'diamond':
+      return 'ArmorMaterials.DIAMOND'
+    case 'netherite':
+      return 'ArmorMaterials.NETHERITE'
+    default:
+      return 'ArmorMaterials.IRON'
   }
 }
 
@@ -290,11 +308,36 @@ export function generateCustomBlockBundle(input: TemplateCodegenParams): Templat
   const main = mainClassName(javaPackage)
   const hardness = num(formFields.hardness, 1.5)
   const resistance = num(formFields.resistance, 6)
-  const glowing = str(formFields.specialFeatures) === 'glowing'
+  const specialFeatures = str(formFields.specialFeatures, 'none')
+  const glowing = specialFeatures === 'glowing'
+  const flammable = specialFeatures === 'flammable'
   const particles = str(formFields.customRender) === 'particles'
   const materialStyle = str(formFields.materialStyle, 'stone')
   const luminance = glowing ? 15 : 0
+  const appliedParams = [
+    `硬度=${hardness}`,
+    `爆炸抗性=${resistance}`,
+    `材质风格=${materialStyle}`,
+    ...(glowing ? ['发光=是'] : []),
+    ...(flammable ? ['可燃=是'] : []),
+    ...(particles ? ['粒子效果=是'] : [])
+  ]
+  const unsupportedParams: string[] = []
+  if (['powerable', 'farmable', 'custom_drop'].includes(specialFeatures)) {
+    unsupportedParams.push(`特殊功能=${specialFeatures}`)
+  }
+  const customRender = str(formFields.customRender, 'no')
+  if (['block_entity', 'custom_model'].includes(customRender)) {
+    unsupportedParams.push(`自定义渲染=${customRender}`)
+  }
   const jp = javaPath(config)
+
+  const blockSettingLines = [
+    `.strength(${hardness}f, ${resistance}f)`,
+    `.sounds(${blockSoundGroup(materialStyle)})`,
+    luminance > 0 ? `.luminance(state -> ${luminance})` : '',
+    flammable ? `.burnable()` : ''
+  ].filter(Boolean).join('\n            ')
 
   const blockClass = particles
     ? `package ${groupId}.${javaPackage};
@@ -349,8 +392,7 @@ import net.minecraft.util.Identifier;
 public class ModBlocks {
     public static final Block ${id.toUpperCase()} = registerBlock("${id}",
         new ${cls}Block(Block.Settings.create()
-            .strength(${hardness}f, ${resistance}f)
-            .sounds(${blockSoundGroup(materialStyle)})${luminance > 0 ? `\n            .luminance(state -> ${luminance})` : ''}));
+            ${blockSettingLines}));
 
     private static Block registerBlock(String name, Block block) {
         registerBlockItem(name, block);
@@ -400,7 +442,9 @@ public class ModBlocks {
       },
       { path: `src/main/resources/assets/${modId}/lang/zh_cn.json`, content: mergeLangEntries(null, lang) }
     ],
-    mainInitCalls: ['ModBlocks.registerModBlocks()']
+    mainInitCalls: ['ModBlocks.registerModBlocks()'],
+    appliedParams,
+    unsupportedParams
   }
 }
 
@@ -410,6 +454,17 @@ export function generateCustomItemBundle(input: TemplateCodegenParams): Template
   const id = simpleName(name)
   const main = mainClassName(javaPackage)
   const maxStack = Math.min(64, Math.max(1, Math.floor(num(formFields.maxStackSize, 64))))
+  const hasDurability = boolYes(formFields.hasDurability)
+  const durability = hasDurability ? 100 : 0
+  const settingsChain = hasDurability
+    ? `.maxCount(${maxStack}).maxDamage(${durability})`
+    : `.maxCount(${maxStack})`
+  const appliedParams = [`最大堆叠=${maxStack}`, ...(hasDurability ? [`耐久度=${durability}`] : [])]
+  const unsupportedParams: string[] = []
+  const itemType = str(formFields.itemType, 'normal')
+  const specialEffect = str(formFields.specialEffect, 'none')
+  if (itemType !== 'normal') unsupportedParams.push(`物品类型=${itemType}`)
+  if (specialEffect !== 'none') unsupportedParams.push(`特殊效果=${specialEffect}`)
   const jp = javaPath(config)
 
   const modItems = `package ${groupId}.${javaPackage};
@@ -422,7 +477,7 @@ import net.minecraft.registry.RegistryKeys;
 import net.minecraft.util.Identifier;
 
 public class ModItems {
-    public static final Item ${id.toUpperCase()} = register("${id}", new Item.Settings().maxCount(${maxStack}));
+    public static final Item ${id.toUpperCase()} = register("${id}", new Item.Settings()${settingsChain});
 
     private static Item register(String name, Item.Settings settings) {
         Identifier itemId = Identifier.of(${main}.MOD_ID, name);
@@ -448,7 +503,9 @@ public class ModItems {
         content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
       }
     ],
-    mainInitCalls: ['ModItems.registerModItems()']
+    mainInitCalls: ['ModItems.registerModItems()'],
+    appliedParams,
+    unsupportedParams
   }
 }
 
@@ -459,9 +516,28 @@ export function generateCustomFoodBundle(input: TemplateCodegenParams): Template
   const main = mainClassName(javaPackage)
   const nutrition = Math.floor(num(formFields.hunger, 6))
   const saturation = num(formFields.saturation, 0.6)
+  const isMeat = boolYes(formFields.isMeat)
   const effect = str(formFields.effect, 'none')
   const effectExpr = statusEffectExpr(effect)
+  const appliedParams = [
+    `饱食度=${nutrition}`,
+    `饱和度=${saturation}`,
+    ...(isMeat ? ['肉类=是'] : []),
+    ...(effectExpr ? [`效果=${effect}`] : [])
+  ]
+  const unsupportedParams: string[] = []
+  if (effect !== 'none' && !effectExpr) unsupportedParams.push(`效果=${effect}（自定义）`)
   const jp = javaPath(config)
+
+  const foodBuilder = effectExpr
+    ? `new FoodComponent.Builder()
+            .nutrition(${nutrition})
+            .saturationModifier(${saturation}f)${isMeat ? '\n            .meat()' : ''}
+            .build()`
+    : `new FoodComponent.Builder()
+            .nutrition(${nutrition})
+            .saturationModifier(${saturation}f)${isMeat ? '\n            .meat()' : ''}
+            .build()`
 
   const consumableBlock = effectExpr
     ? `
@@ -470,16 +546,10 @@ export function generateCustomFoodBundle(input: TemplateCodegenParams): Template
             .consumeEffect(new ApplyEffectsConsumeEffect(
                 new StatusEffectInstance(${effectExpr}, 30 * 20, 0), 1.0f))
             .build();
-        FoodComponent food = new FoodComponent.Builder()
-            .nutrition(${nutrition})
-            .saturationModifier(${saturation}f)
-            .build();
+        FoodComponent food = ${foodBuilder};
         settings.food(food, consumable);`
     : `
-        FoodComponent food = new FoodComponent.Builder()
-            .nutrition(${nutrition})
-            .saturationModifier(${saturation}f)
-            .build();
+        FoodComponent food = ${foodBuilder};
         settings.food(food);`
 
   const imports = effectExpr
@@ -528,7 +598,9 @@ public class ModItems {
         content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
       }
     ],
-    mainInitCalls: ['ModItems.registerModItems()']
+    mainInitCalls: ['ModItems.registerModItems()'],
+    appliedParams,
+    unsupportedParams
   }
 }
 
@@ -541,6 +613,9 @@ export function generateCustomToolBundle(input: TemplateCodegenParams): Template
   const toolClass = toolTypeClass(toolType)
   const material = toolMaterialExpr(str(formFields.material, 'iron'))
   const durability = Math.floor(num(formFields.durability, 250))
+  const specialAbility = str(formFields.specialAbility, 'none')
+  const appliedParams = [`工具类型=${toolType}`, `材质=${str(formFields.material, 'iron')}`, `耐久=${durability}`]
+  const unsupportedParams = specialAbility !== 'none' ? [`特殊能力=${specialAbility}`] : []
   const jp = javaPath(config)
 
   const modItems = `package ${groupId}.${javaPackage};
@@ -582,7 +657,9 @@ public class ModItems {
         content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
       }
     ],
-    mainInitCalls: ['ModItems.registerModItems()']
+    mainInitCalls: ['ModItems.registerModItems()'],
+    appliedParams,
+    unsupportedParams
   }
 }
 
@@ -592,8 +669,16 @@ export function generateCustomArmorBundle(input: TemplateCodegenParams): Templat
   const id = simpleName(name)
   const main = mainClassName(javaPackage)
   const armorType = str(formFields.armorType, 'chestplate')
-  const durability = Math.floor(num(formFields.durability, 240))
+  const materialKey = str(formFields.material, 'iron')
+  const armorMat = armorMaterialExpr(materialKey)
+  const protection = Math.floor(num(formFields.protection ?? formFields.durability, 8))
+  const maxDamage = Math.max(1, protection * 30)
   const typeConst = armorItemClass(armorType)
+  const appliedParams = [`护甲部位=${armorType}`, `材质=${materialKey}`, `防护值=${protection}`, `耐久=${maxDamage}`]
+  const unsupportedParams: string[] = []
+  const specialEffect = str(formFields.specialEffect ?? formFields.effect, 'none')
+  if (specialEffect !== 'none') unsupportedParams.push(`特殊效果=${specialEffect}`)
+  if (armorType === 'full_set') unsupportedParams.push('全套护甲（需分别生成四件）')
   const jp = javaPath(config)
 
   const modItems = `package ${groupId}.${javaPackage};
@@ -613,8 +698,8 @@ public class ModItems {
     private static Item register(String name) {
         Identifier itemId = Identifier.of(${main}.MOD_ID, name);
         RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, itemId);
-        Item.Settings settings = new Item.Settings().registryKey(itemKey).maxDamage(${durability});
-        ArmorItem item = new ArmorItem(ArmorMaterials.IRON, ${typeConst}, settings);
+        Item.Settings settings = new Item.Settings().registryKey(itemKey).maxDamage(${maxDamage});
+        ArmorItem item = new ArmorItem(${armorMat}, ${typeConst}, settings);
         return Registry.register(Registries.ITEM, itemKey, item);
     }
 
@@ -636,7 +721,9 @@ public class ModItems {
         content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
       }
     ],
-    mainInitCalls: ['ModItems.registerModItems()']
+    mainInitCalls: ['ModItems.registerModItems()'],
+    appliedParams,
+    unsupportedParams
   }
 }
 
@@ -649,7 +736,10 @@ export function generateCustomEntityBundle(input: TemplateCodegenParams): Templa
   const health = num(formFields.health, 20)
   const entityType = str(formFields.entityType, 'passive')
   const size = str(formFields.size, 'normal')
+  const specialAbility = str(formFields.specialAbility, 'none')
   const dims = entityDimensions(size)
+  const appliedParams = [`生命值=${health}`, `实体类型=${entityType}`, `体型=${size}`]
+  const unsupportedParams = specialAbility !== 'none' ? [`特殊能力=${specialAbility}`] : []
   const jp = javaPath(config)
   const cjp = clientJavaPath(config)
 
@@ -737,7 +827,9 @@ public class ${main}ClientEntityRenderers {
         content: mergeLangEntries(null, { [`entity.${modId}.${id}`]: displayName || id })
       }
     ],
-    mainInitCalls: ['ModEntities.registerModEntities()']
+    mainInitCalls: ['ModEntities.registerModEntities()'],
+    appliedParams,
+    unsupportedParams
   }
 }
 
