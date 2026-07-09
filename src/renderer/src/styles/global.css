@@ -1688,6 +1688,21 @@ body,
 	color: var(--accent);
 }
 
+.settings-docs-link {
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--accent);
+	font: inherit;
+	font-size: 11px;
+	cursor: pointer;
+	text-decoration: underline;
+}
+
+.settings-docs-link:hover {
+	opacity: 0.85;
+}
+
 .chat-input-area .mc-input {
 	flex: 1;
 	min-height: 40px;

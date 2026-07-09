@@ -300,6 +300,8 @@ const api = {
     ipcRenderer.invoke('secrets:getApiKey', providerId),
   clearApiKey: (providerId?: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('secrets:clearApiKey', providerId),
+  openExternalUrl: (url: string): Promise<{ success: boolean; usedFallback?: boolean; error?: string }> =>
+    ipcRenderer.invoke('shell:openExternal', url),
 
   // Agent config
   loadAgentConfig: (): Promise<{

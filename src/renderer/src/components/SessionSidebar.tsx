@@ -58,6 +58,22 @@ function pickApiSettings(config: ApiConfigState, patch: Partial<ApiSettingsPaylo
   }
 }
 
+function providerUsesManualModel(providerId: string): boolean {
+  if (providerId === CUSTOM_PROVIDER_ID) return true
+  const provider = getProvider(providerId)
+  return (provider?.models.length ?? 0) === 0
+}
+
+function modelIdForProviderSwitch(targetProviderId: string, currentModel: string): string {
+  const provider = getProvider(targetProviderId)
+  const preset = provider?.models[0]?.id
+  if (preset) return preset
+  if (targetProviderId === 'doubao' && /^ep-[a-z0-9-]+$/i.test(currentModel) && currentModel !== 'ep-xxxxxxxx') {
+    return currentModel
+  }
+  return ''
+}
+
 const SessionSidebar: React.FC<SessionSidebarProps> = ({
   projectPath, projectName, sessions, currentSessionId,
   onOpenSession, onNewSession, onDeleteSession, onRenameSession,
@@ -126,6 +142,13 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     setKeySaveHint('密钥已保存')
     window.setTimeout(() => setKeySaveHint(''), 2000)
   }, [apiKeyDraft, onApiKeySave])
+
+  const handleOpenDocsUrl = useCallback(async (url: string) => {
+    const result = await window.api.openExternalUrl(url)
+    if (!result.success) {
+      alert(result.error || '无法打开链接')
+    }
+  }, [])
 
   const tabLabels: Record<SidebarTab, string> = {
     sessions: '对话',
@@ -351,8 +374,8 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     return
                   }
                   const provider = getProvider(providerId)
-                  const firstModel = provider?.models[0]?.id ?? apiConfig.model
-                  const resolved = resolveSelection(providerId, firstModel)
+                  const nextModel = modelIdForProviderSwitch(providerId, apiConfig.model)
+                  const resolved = resolveSelection(providerId, nextModel)
                   onApiSettingsChange(pickApiSettings(apiConfig, {
                     providerId: resolved.providerId,
                     endpoint: resolved.endpoint,
@@ -366,26 +389,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                 </div>
               )}
 
-              {apiConfig.providerId !== CUSTOM_PROVIDER_ID ? (
-                <>
-                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型</label>
-                  <SettingsSelect
-                    value={apiConfig.model}
-                    options={modelOptions}
-                    onChange={(modelId) => {
-                      const resolved = resolveSelection(apiConfig.providerId, modelId)
-                      onApiSettingsChange(pickApiSettings(apiConfig, {
-                        providerId: resolved.providerId,
-                        endpoint: resolved.endpoint,
-                        model: resolved.modelId,
-                      }))
-                    }}
-                  />
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    API 地址：{apiConfig.endpoint}
-                  </div>
-                </>
-              ) : (
+              {apiConfig.providerId === CUSTOM_PROVIDER_ID ? (
                 <>
                   <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>API 地址</label>
                   <input
@@ -403,6 +407,39 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { model: e.target.value }))}
                     style={{ fontSize: '12px', minHeight: '32px' }}
                   />
+                </>
+              ) : providerUsesManualModel(apiConfig.providerId) ? (
+                <>
+                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>推理接入点 ID</label>
+                  <input
+                    className="mc-input"
+                    placeholder="ep-2024xxxxxxxx-xxxxx"
+                    value={apiConfig.model === 'ep-xxxxxxxx' ? '' : apiConfig.model}
+                    onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { model: e.target.value.trim() }))}
+                    style={{ fontSize: '12px', minHeight: '32px' }}
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    API 地址：{apiConfig.endpoint}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型</label>
+                  <SettingsSelect
+                    value={apiConfig.model}
+                    options={modelOptions}
+                    onChange={(modelId) => {
+                      const resolved = resolveSelection(apiConfig.providerId, modelId)
+                      onApiSettingsChange(pickApiSettings(apiConfig, {
+                        providerId: resolved.providerId,
+                        endpoint: resolved.endpoint,
+                        model: resolved.modelId,
+                      }))
+                    }}
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    API 地址：{apiConfig.endpoint}
+                  </div>
                 </>
               )}
 
@@ -444,9 +481,13 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     {provider.docsUrl && (
                       <>
                         {' '}
-                        <a href={provider.docsUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+                        <button
+                          type="button"
+                          className="settings-docs-link"
+                          onClick={() => void handleOpenDocsUrl(provider.docsUrl)}
+                        >
                           获取 API Key
-                        </a>
+                        </button>
                       </>
                     )}
                   </div>

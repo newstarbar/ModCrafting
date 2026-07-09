@@ -44,6 +44,7 @@ import {
   readKnowledgeFile,
   saveKnowledgeFile
 } from './knowledge-service'
+import { openExternalWithFallback } from './external-url'
 
 // Track active watchers
 const watchers = new Map<string, fs.FSWatcher>()
@@ -394,6 +395,8 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('secrets:getApiKey', async (_event, providerId?: string) => getApiKey(providerId))
 
   ipcMain.handle('secrets:clearApiKey', async (_event, providerId?: string) => clearApiKey(providerId))
+
+  ipcMain.handle('shell:openExternal', async (_event, url: string) => openExternalWithFallback(url))
 
   // Agent config (knowledge sources, tool toggles, MCP placeholders)
   ipcMain.handle('agentConfig:load', async () => loadAgentConfig())

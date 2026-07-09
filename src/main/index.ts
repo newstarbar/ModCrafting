@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { setupMenu } from './menu'
 import { setupIpcHandlers } from './ipc-handlers'
+import { openExternalWithFallback } from './external-url'
 import { setupTerminalHandlers, stopAllTerminalSessions } from './terminal-handler'
 import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
 import { initUpdater } from './updater'
@@ -78,6 +79,11 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void openExternalWithFallback(url)
+    return { action: 'deny' }
   })
 
   // Load the renderer

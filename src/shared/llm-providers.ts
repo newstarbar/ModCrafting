@@ -74,12 +74,8 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
     label: '豆包',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     docsUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
-    keyHint: '火山方舟 API Key；模型名称填推理接入点 ID（ep-xxx），在方舟控制台创建。',
-    models: [
-      { id: 'ep-xxxxxxxx', label: '接入点 ID（ep-xxx）', contextWindow: 128_000 },
-      { id: 'doubao-pro-32k', label: 'Doubao Pro 32K', contextWindow: 32_000 },
-      { id: 'doubao-lite-32k', label: 'Doubao Lite 32K', contextWindow: 32_000 },
-    ],
+    keyHint: '火山方舟 API Key；模型名称填你在控制台创建的推理接入点 ID（ep- 开头），在下方模型框填写。',
+    models: [],
   },
   {
     id: 'minimax',
@@ -220,7 +216,7 @@ export function resolveSelection(providerId: string, modelId: string): LlmSelect
     providerId: provider.id,
     modelId: resolvedModelId,
     endpoint: provider.baseUrl,
-    modelLabel: model?.label ?? resolvedModelId,
+    modelLabel: modelDisplayLabel(resolvedModelId, provider.id),
   }
 }
 
@@ -232,6 +228,7 @@ export function inferProviderId(
   if (savedId && getProvider(savedId)) return savedId
   const byEndpoint = findProviderByEndpoint(endpoint)
   if (byEndpoint) return byEndpoint.id
+  if (/^ep-[a-z0-9-]+$/i.test(model)) return 'doubao'
   for (const provider of LLM_PROVIDERS) {
     if (provider.models.some((m) => m.id === model)) return provider.id
   }
@@ -254,6 +251,13 @@ export function providerDisplayLabel(providerId?: string, endpoint?: string): st
 }
 
 export function modelDisplayLabel(modelId: string, providerId?: string): string {
+  if (!modelId) return '未配置模型'
+  if (modelId === 'ep-xxxxxxxx') {
+    return '豆包（请填写接入点）'
+  }
+  if (providerId === 'doubao' && /^ep-[a-z0-9-]+$/i.test(modelId)) {
+    return '豆包接入点'
+  }
   if (providerId) {
     const model = findModelInProvider(providerId, modelId)
     if (model) return model.label

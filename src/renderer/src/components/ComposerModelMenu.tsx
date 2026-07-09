@@ -77,7 +77,7 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
       </button>
       {open && (
         <div className="composer-menu-popover composer-menu-popover--grouped" role="menu">
-          {providers.map((provider) => (
+          {providers.filter((p) => p.models.length > 0).map((provider) => (
             <div key={provider.id} className="composer-menu-group" role="presentation">
               <div className="composer-menu-group-label">{provider.label}</div>
               {provider.models.map((preset) => (
