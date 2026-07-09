@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { MOD_TEMPLATES } from '../project/scaffold'
 import { IconSquare, IconPackage, IconGhost, IconWrench } from './Icon'
 import {
 	type ModContent,
@@ -10,14 +9,12 @@ import {
 interface PreviewPanelProps {
 	projectPath: string | null
 	refreshKey?: number
-	onTemplateClick?: (templateId: string, name: string) => void
 	onContentClick?: (type: string, name: string, className?: string) => void
 }
 
 const PreviewPanel: React.FC<PreviewPanelProps> = ({
 	projectPath,
 	refreshKey = 0,
-	onTemplateClick,
 	onContentClick,
 }) => {
 	const [modJson, setModJson] = useState<Record<string, unknown> | null>(null)
@@ -224,27 +221,8 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
 					)}
 
 					{blocks.length === 0 && items.length === 0 && entities.length === 0 && recipes.length === 0 && (
-						<div className="preview-card">
-							<div className="preview-card-title">快速模板</div>
-							<div className="preview-templates">
-								{MOD_TEMPLATES.map((template) => {
-									const IconComponent = categoryIcons[template.category] || IconSquare
-									return (
-										<div
-											key={template.id}
-											className="preview-template-item"
-											onClick={() => onTemplateClick?.(template.id, template.name)}
-										>
-											<IconComponent className="preview-template-icon" />
-											<div className="preview-template-info">
-												<span className="preview-template-name">{template.name}</span>
-												<span className="preview-template-desc">{template.description}</span>
-											</div>
-										</div>
-									)
-								})}
-							</div>
-							<div className="preview-hint">在 AI 对话中输入「创建一个自定义方块」即可快速生成模板代码</div>
+						<div className="preview-card preview-card--hint">
+							<p className="preview-hint">暂无模组内容。使用聊天输入区上方的「快捷创建」添加方块、物品或配方。</p>
 						</div>
 					)}
 				</>

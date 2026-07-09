@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { IconSend, IconSquare } from './Icon'
+import QuickCreateBar from './QuickCreateBar'
 import type { ComposerMode } from '../harness/turn-intent'
 
 const MODE_OPTIONS: { id: ComposerMode; label: string; hint: string }[] = [
@@ -23,6 +24,7 @@ export interface ChatComposerProps {
   onExecutePlan: () => void
   toolchainReady: boolean
   hasProject: boolean
+  onQuickTemplateSelect?: (templateId: string, name: string) => void
 }
 
 const ChatComposer: React.FC<ChatComposerProps> = ({
@@ -39,7 +41,8 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
   planReady,
   onExecutePlan,
   toolchainReady,
-  hasProject
+  hasProject,
+  onQuickTemplateSelect,
 }) => {
   const [goalExpanded, setGoalExpanded] = useState(false)
 
@@ -89,6 +92,13 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
           </button>
         )}
       </div>
+
+      {hasProject && onQuickTemplateSelect && (
+        <QuickCreateBar
+          disabled={disabled}
+          onSelect={onQuickTemplateSelect}
+        />
+      )}
 
       <div className="chat-composer__modes" role="tablist" aria-label="对话模式">
         {MODE_OPTIONS.map((opt) => (

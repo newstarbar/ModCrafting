@@ -558,9 +558,6 @@ const App: React.FC = () => {
 	}, []);
 	const addToChatContext = useCallback((text: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, text] })), []);
 	const handleCrashToChat = useCallback((c: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 崩溃报告 ---\n${c}`], rightPanelTab: "game" })), []);
-	const handleTemplateClick = useCallback((templateId: string, name: string) => {
-		chatPanelRef.current?.handleTemplateSelect(templateId, name);
-	}, []);
 	const handleContentClick = useCallback(async (type: string, name: string, className?: string) => {
 		if (!state.projectPath || !className) {
 			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`] }));
@@ -704,7 +701,6 @@ const App: React.FC = () => {
 									<PreviewPanel
 										projectPath={state.projectPath}
 										refreshKey={state.fileTreeRefreshKey}
-										onTemplateClick={handleTemplateClick}
 										onContentClick={handleContentClick}
 									/>
 								</div>

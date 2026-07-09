@@ -1213,6 +1213,60 @@ body,
 	padding: 4px;
 }
 
+.chat-composer__quick-create {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.chat-composer__quick-create-label {
+	flex-shrink: 0;
+	font-size: 11px;
+	color: var(--mc-yellow);
+	text-shadow: var(--mc-shadow-sm);
+}
+
+.chat-composer__quick-create-scroll {
+	display: flex;
+	gap: 4px;
+	overflow-x: auto;
+	min-width: 0;
+	flex: 1;
+	padding-bottom: 2px;
+	scrollbar-width: thin;
+}
+
+.chat-composer__quick-create-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+	padding: 3px 8px;
+	font-size: 11px;
+	font-family: var(--font-sans);
+	color: var(--text-primary);
+	background: rgba(0, 0, 0, 0.35);
+	border: 1px solid var(--border-color);
+	box-shadow: inset 1px 1px 0 var(--border-light), inset -1px -1px 0 var(--border-outer);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.chat-composer__quick-create-chip:hover:not(:disabled) {
+	border-color: var(--mc-yellow);
+	color: var(--mc-yellow);
+}
+
+.chat-composer__quick-create-chip:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.chat-composer__quick-create-icon {
+	opacity: 0.85;
+}
+
 .chat-composer__modes {
 	display: flex;
 	gap: 4px;

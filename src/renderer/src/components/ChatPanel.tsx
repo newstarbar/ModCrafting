@@ -1497,6 +1497,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           onExecutePlan={handleExecutePlan}
           toolchainReady={toolchainReady}
           hasProject={Boolean(projectPath)}
+          onQuickTemplateSelect={handleTemplateSelect}
         />
       </div>
 
