@@ -30,6 +30,9 @@ import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 import TemplateFormPanel from './TemplateFormPanel'
 import RollbackWarningPanel from './RollbackWarningPanel'
+import DeleteMessagePanel from './DeleteMessagePanel'
+import { removeMessageFromDisplay } from '../utils/message-delete'
+import { messagePlainText } from '../utils/message-text'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -207,6 +210,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [showTemplateForm, setShowTemplateForm] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
+  const [deletePending, setDeletePending] = useState<{ msgId: string; role: 'user' | 'assistant'; preview: string } | null>(null)
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -1175,6 +1179,61 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setRollbackWarning(null)
   }, [])
 
+  const handleDeleteMessage = useCallback((msgId: string) => {
+    if (isLoading) return
+
+    const msgIndex = displayMessages.findIndex((m) => m.id === msgId)
+    if (msgIndex === -1) return
+
+    const targetMsg = displayMessages[msgIndex]
+    const preview = messagePlainText(targetMsg).slice(0, 200) || '(无文本内容)'
+
+    setDeletePending({
+      msgId,
+      role: targetMsg.role,
+      preview,
+    })
+  }, [isLoading, displayMessages])
+
+  const handleDeleteConfirm = useCallback(() => {
+    if (!deletePending) return
+
+    const { msgId } = deletePending
+    setDeletePending(null)
+
+    const { next, removedIds } = removeMessageFromDisplay(displayMessages, msgId)
+
+    let nextPlan = activePlanRef.current
+    if (nextPlan && removedIds.includes(nextPlan.anchorMsgId)) {
+      nextPlan = null
+    }
+
+    const serialized = serializeDisplayMessages(next, nextPlan)
+    if (!nextPlan) {
+      nextPlan = restoreActivePlan(next, serialized)
+    }
+
+    setDisplayMessages(next)
+    setActivePlan(nextPlan)
+    setPlanReady(Boolean(nextPlan?.steps.length))
+
+    const ctrl = controllerRef.current
+    if (ctrl) {
+      ctrl.restoreSnapshot(toControllerMessages(serialized))
+      ctrl.restorePlanTracker([])
+    }
+
+    flushPersist(next, nextPlan)
+
+    setCompletionFlash('已删除')
+    if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+    completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+  }, [deletePending, displayMessages, flushPersist])
+
+  const handleDeleteCancel = useCallback(() => {
+    setDeletePending(null)
+  }, [])
+
   // ======== RENDER ========
   const renderContent = (content: string) => <MarkdownContent content={content} />
 
@@ -1378,6 +1437,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           isLoading={isLoading}
           onRetry={handleRetryTurn}
           onRollback={handleRollback}
+          onDelete={handleDeleteMessage}
           canRollback={displayMessages.indexOf(msg) < displayMessages.length - 1 && Boolean(msg.stateSnapshot)}
         />
       </div>
@@ -1547,6 +1607,14 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         fileCount={rollbackWarning.fileCount}
         onConfirm={handleRollbackConfirm}
         onCancel={handleRollbackCancel}
+      />
+    )}
+    {deletePending && (
+      <DeleteMessagePanel
+        role={deletePending.role}
+        preview={deletePending.preview}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
       />
     )}
     </>

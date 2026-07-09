@@ -719,6 +719,10 @@ body,
 	color: var(--error);
 }
 
+.bubble-ft__btn--delete:hover:not(:disabled) {
+	color: var(--error);
+}
+
 .bubble-ft__dot {
 	opacity: 0.4;
 	user-select: none;

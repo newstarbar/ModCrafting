@@ -11,6 +11,7 @@ interface MessageFooterProps {
   isLoading?: boolean
   onRetry?: (turnId: string) => void
   onRollback?: (msgId: string) => void
+  onDelete?: (msgId: string) => void
   canRollback?: boolean
 }
 
@@ -44,6 +45,7 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
   isLoading = false,
   onRetry,
   onRollback,
+  onDelete,
   canRollback = false
 }) => {
   const [feedback, setFeedback] = useState('')
@@ -113,6 +115,15 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
         <span className="bubble-ft__actions">
           <button type="button" className="bubble-ft__btn" onClick={() => void handleCopy()}>
             复制
+          </button>
+          <span className="bubble-ft__dot">·</span>
+          <button
+            type="button"
+            className="bubble-ft__btn bubble-ft__btn--delete"
+            onClick={() => onDelete?.(message.id)}
+            disabled={isLoading}
+          >
+            删除
           </button>
           {role === 'assistant' && (
             <>
