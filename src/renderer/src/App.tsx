@@ -67,7 +67,7 @@ const App: React.FC = () => {
 		projectName: "未打开项目",
 		selectedFile: null,
 		fileContent: null,
-		rightPanelTab: "game",
+		rightPanelTab: "preview",
 		chatContext: [],
 		fileTreeRefreshKey: 0
 	});
@@ -246,7 +246,7 @@ const App: React.FC = () => {
 			}
 
 			const name = dir.split(/[/\\]/).pop() || "未知项目";
-			setState((prev) => ({ ...prev, projectPath: dir, projectName: name, selectedFile: null, fileContent: null, fileTreeRefreshKey: prev.fileTreeRefreshKey + 1, rightPanelTab: "game" }));
+			setState((prev) => ({ ...prev, projectPath: dir, projectName: name, selectedFile: null, fileContent: null, fileTreeRefreshKey: prev.fileTreeRefreshKey + 1, rightPanelTab: "preview" }));
 			setAppView("workspace");
 			window.api.setTitle(`ModCrafting - ${name}`);
 			await window.api.saveRecentProject(dir);
@@ -676,17 +676,17 @@ const App: React.FC = () => {
 							<div className="right-panel-tabs">
 								<button
 									type="button"
-									className={`mc-tab ${state.rightPanelTab === "game" ? "active" : ""}`}
-									onClick={() => setState((p) => ({ ...p, rightPanelTab: "game" }))}
-								>
-									<IconGamepad size="sm" /> 游戏
-								</button>
-								<button
-									type="button"
 									className={`mc-tab ${state.rightPanelTab === "preview" ? "active" : ""}`}
 									onClick={() => setState((p) => ({ ...p, rightPanelTab: "preview" }))}
 								>
 									<IconSquare size="sm" /> 预览
+								</button>
+								<button
+									type="button"
+									className={`mc-tab ${state.rightPanelTab === "game" ? "active" : ""}`}
+									onClick={() => setState((p) => ({ ...p, rightPanelTab: "game" }))}
+								>
+									<IconGamepad size="sm" /> 游戏
 								</button>
 								<button
 									type="button"
@@ -697,7 +697,18 @@ const App: React.FC = () => {
 								</button>
 							</div>
 							<div className="right-panel-content">
-								<div className="right-panel-body" style={{ display: state.rightPanelTab === "game" ? "block" : "none" }}>
+								<div
+									className="right-panel-body right-panel-body--preview"
+									hidden={state.rightPanelTab !== "preview"}
+								>
+									<PreviewPanel
+										projectPath={state.projectPath}
+										refreshKey={state.fileTreeRefreshKey}
+										onTemplateClick={handleTemplateClick}
+										onContentClick={handleContentClick}
+									/>
+								</div>
+								<div className="right-panel-body" hidden={state.rightPanelTab !== "game"}>
 									<McRuntimePanel
 										ref={mcRuntimeRef}
 										projectPath={state.projectPath}
@@ -706,10 +717,10 @@ const App: React.FC = () => {
 										onRuntimeStatusChange={handleRuntimeStatusChange}
 									/>
 								</div>
-								<div className="right-panel-body" style={{ display: state.rightPanelTab === "preview" ? "block" : "none", overflow: "auto" }}>
-									<PreviewPanel projectPath={state.projectPath} onTemplateClick={handleTemplateClick} onContentClick={handleContentClick} />
-								</div>
-								<div className="right-panel-body" style={{ display: state.rightPanelTab === "advanced" ? "flex" : "none", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+								<div
+									className="right-panel-body right-panel-body--advanced"
+									hidden={state.rightPanelTab !== "advanced"}
+								>
 									<BottomPanel
 										ref={bottomPanelRef}
 										projectPath={state.projectPath}

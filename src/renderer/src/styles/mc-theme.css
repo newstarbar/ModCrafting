@@ -148,6 +148,22 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.preview-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preview-refresh-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.25);
+}
+
 .preview-title {
   font-size: 13px;
   font-weight: 600;
