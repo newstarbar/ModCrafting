@@ -1,10 +1,11 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import FileTree from './FileTree'
 import FileViewer from './FileViewer'
 import ToolsPanel from './ToolsPanel'
 import { IconFile, IconMessage, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
 
 import type { ChatSession } from '../types/chat'
+import { sortSessionsByUpdatedAt } from '../utils/session-sort'
 
 interface FileChange {
   time: string
@@ -51,6 +52,13 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const [expandedChanges, setExpandedChanges] = useState(false)
   const [apiKeyDraft, setApiKeyDraft] = useState('')
   const [keySaveHint, setKeySaveHint] = useState('')
+  const activeSessionItemRef = useRef<HTMLDivElement | null>(null)
+
+  const sortedSessions = sortSessionsByUpdatedAt(sessions)
+
+  useEffect(() => {
+    activeSessionItemRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [currentSessionId])
 
   useEffect(() => {
     if (selectedFilePath) setActiveTab('files')
@@ -157,14 +165,15 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
         {activeTab === 'sessions' && (
           <>
             <div className="session-list">
-              {sessions.length === 0 ? (
+              {sortedSessions.length === 0 ? (
                 <div style={{ padding: '24px 12px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '12px' }}>
                   暂无对话记录
                 </div>
               ) : (
-                [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).map((s) => (
+                sortedSessions.map((s) => (
                   <div
                     key={s.id}
+                    ref={s.id === currentSessionId ? activeSessionItemRef : undefined}
                     className={`session-item mc-inset ${s.id === currentSessionId ? 'active' : ''}`}
                     onClick={() => onOpenSession(s.id)}
                   >

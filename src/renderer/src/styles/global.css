@@ -1235,10 +1235,18 @@ body,
 	display: flex;
 	gap: 4px;
 	overflow-x: auto;
+	overflow-y: hidden;
 	min-width: 0;
 	flex: 1;
 	padding-bottom: 2px;
-	scrollbar-width: thin;
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+	-webkit-overflow-scrolling: touch;
+	mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+}
+
+.chat-composer__quick-create-scroll::-webkit-scrollbar {
+	display: none;
 }
 
 .chat-composer__quick-create-chip {

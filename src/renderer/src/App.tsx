@@ -30,6 +30,7 @@ import {
 	loadCurrentSessionId,
 	saveCurrentSessionId
 } from "./utils/session-storage";
+import { getMostRecentSessionId, sortSessionsByUpdatedAt } from "./utils/session-sort";
 import { registerPanelBridge, setLastBuildLogText } from "./utils/panel-bridge";
 
 const DEFAULT_API_CONFIG = {
@@ -130,11 +131,12 @@ const App: React.FC = () => {
 		projectPathForSessionsRef.current = path;
 		const loaded = loadSessions(path);
 		const loadedSessionId = loadCurrentSessionId(path);
+		const sorted = sortSessionsByUpdatedAt(loaded);
 		const validSessionId = loadedSessionId && loaded.some((s) => s.id === loadedSessionId)
 			? loadedSessionId
-			: loaded[0]?.id ?? null;
+			: getMostRecentSessionId(sorted);
 
-		setSessions(loaded);
+		setSessions(sorted);
 		setCurrentSessionId(validSessionId);
 		const activeSession = validSessionId ? loaded.find((s) => s.id === validSessionId) : null;
 		setUsage(normalizeSessionUsage(activeSession?.usage));
@@ -518,14 +520,16 @@ const App: React.FC = () => {
 	}, []);
 
 	const handlePersistSession = useCallback((sessionId: string, messages: PersistedMessage[]) => {
-		setSessions((prev) => prev.map((s) => (
-			s.id === sessionId ? { ...s, messages, updatedAt: Date.now() } : s
-		)));
+		setSessions((prev) => sortSessionsByUpdatedAt(
+			prev.map((s) => (
+				s.id === sessionId ? { ...s, messages, updatedAt: Date.now() } : s
+			))
+		));
 	}, []);
 
 	const handleUpdateSessionMeta = useCallback((sessionId: string, meta: { composerMode?: 'agent' | 'plan' | 'ask'; sessionGoal?: string }) => {
 		setSessions((prev) => prev.map((s) => (
-			s.id === sessionId ? { ...s, ...meta, updatedAt: Date.now() } : s
+			s.id === sessionId ? { ...s, ...meta } : s
 		)));
 	}, []);
 
@@ -534,7 +538,7 @@ const App: React.FC = () => {
 		const sid = currentSessionIdRef.current;
 		if (!sid) return;
 		setSessions((prev) => prev.map((s) => (
-			s.id === sid ? { ...s, usage: nextUsage, updatedAt: Date.now() } : s
+			s.id === sid ? { ...s, usage: nextUsage } : s
 		)));
 	}, []);
 
@@ -545,7 +549,7 @@ const App: React.FC = () => {
 	const handleNewSession = useCallback(() => {
 		const id = `session-${Date.now()}`;
 		const now = Date.now();
-		setSessions((p) => [...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]);
+		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name: `会话 ${p.length + 1}`, messages: [], createdAt: now, updatedAt: now }]));
 		setCurrentSessionId(id);
 	}, []);
 
@@ -563,7 +567,7 @@ const App: React.FC = () => {
 		const initialMessages: PersistedMessage[] = msg
 			? [{ role: "user", content: msg, timestamp: now }]
 			: [];
-		setSessions((p) => [...p, { id, name, messages: initialMessages, createdAt: now, updatedAt: now }]);
+		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name, messages: initialMessages, createdAt: now, updatedAt: now }]));
 		setCurrentSessionId(id);
 		return id;
 	}, []);
