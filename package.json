@@ -30,8 +30,8 @@
 		"extract:mc-gui": "python scripts/extract-mc-gui.py",
 		"generate:icon": "node scripts/generate-icon-ico.mjs",
 		"postinstall": "node scripts/ensure-native-deps.mjs",
-		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/patch-nsis-install-ui.mjs",
-		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/setup-nsisbi.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/setup-nsisbi.mjs && node scripts/patch-nsis-install-ui.mjs",
 		"prebuild:win:portable": "node scripts/generate-icon-ico.mjs && node scripts/verify-portable-resources.mjs"
 	},
 	"dependencies": {

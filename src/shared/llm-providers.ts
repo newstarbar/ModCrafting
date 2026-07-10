@@ -50,15 +50,15 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://bigmodel.cn/apikey/platform",
 		keyHint: "在智谱开放平台创建 API Key。",
 		models: [
-			{ id: "glm-4-plus", label: "GLM-4 Plus", contextWindow: 128_000 },
-			{ id: "glm-4-flash", label: "GLM-4 Flash", contextWindow: 128_000 },
-			{ id: "glm-4-air", label: "GLM-4 Air", contextWindow: 128_000 },
-			{ id: "glm-4-long", label: "GLM-4 Long", contextWindow: 1_000_000 }
+			{ id: "glm-5.2", label: "GLM-5.2", contextWindow: 128_000 },
+			{ id: "glm-5.1", label: "GLM-5.1", contextWindow: 128_000 },
+			{ id: "glm-5-turbo", label: "GLM-5 Turbo", contextWindow: 128_000 },
+			{ id: "glm-5", label: "GLM-5", contextWindow: 1_000_000 }
 		]
 	},
 	{
 		id: "moonshot",
-		label: "Moonshot Kimi",
+		label: "Kimi",
 		baseUrl: "https://api.moonshot.cn/v1",
 		docsUrl: "https://platform.moonshot.cn/console/api-keys",
 		keyHint: "在 Moonshot 开放平台创建 API Key。",
@@ -90,42 +90,6 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		]
 	},
 	{
-		id: "stepfun",
-		label: "阶跃星辰",
-		baseUrl: "https://api.stepfun.com/v1",
-		docsUrl: "https://platform.stepfun.com/interface-key",
-		keyHint: "在阶跃星辰开放平台创建 API Key。",
-		models: [
-			{ id: "step-1-8k", label: "Step-1 8K", contextWindow: 8_000 },
-			{ id: "step-2-16k", label: "Step-2 16K", contextWindow: 16_000 },
-			{ id: "step-3", label: "Step-3", contextWindow: 128_000 }
-		]
-	},
-	{
-		id: "baichuan",
-		label: "百川",
-		baseUrl: "https://api.baichuan-ai.com/v1",
-		docsUrl: "https://platform.baichuan-ai.com/console/apikey",
-		keyHint: "在百川智能开放平台创建 API Key。",
-		models: [
-			{ id: "Baichuan4", label: "Baichuan 4", contextWindow: 128_000 },
-			{ id: "Baichuan3-Turbo", label: "Baichuan3 Turbo", contextWindow: 128_000 },
-			{ id: "Baichuan3-Turbo-128k", label: "Baichuan3 Turbo 128K", contextWindow: 128_000 }
-		]
-	},
-	{
-		id: "lingyi",
-		label: "零一万物",
-		baseUrl: "https://api.lingyiwanwu.com/v1",
-		docsUrl: "https://platform.lingyiwanwu.com/apikeys",
-		keyHint: "在零一万物开放平台创建 API Key。",
-		models: [
-			{ id: "yi-large", label: "Yi Large", contextWindow: 32_000 },
-			{ id: "yi-medium", label: "Yi Medium", contextWindow: 16_000 },
-			{ id: "yi-spark", label: "Yi Spark", contextWindow: 16_000 }
-		]
-	},
-	{
 		id: "siliconflow",
 		label: "硅基流动",
 		baseUrl: "https://api.siliconflow.cn/v1",
@@ -135,18 +99,6 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 			{ id: "deepseek-ai/DeepSeek-V3", label: "DeepSeek V3", contextWindow: 128_000 },
 			{ id: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen2.5 72B", contextWindow: 32_000 },
 			{ id: "THUDM/glm-4-9b-chat", label: "GLM-4 9B", contextWindow: 128_000 }
-		]
-	},
-	{
-		id: "qianfan",
-		label: "百度文心",
-		baseUrl: "https://qianfan.baidubce.com/v2",
-		docsUrl: "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
-		keyHint: "千帆平台 API Key（兼容 OpenAI 模式）；部分模型需在控制台开通。",
-		models: [
-			{ id: "ernie-4.0-turbo-8k", label: "ERNIE 4.0 Turbo", contextWindow: 8_000 },
-			{ id: "ernie-3.5-8k", label: "ERNIE 3.5", contextWindow: 8_000 },
-			{ id: "deepseek-v3", label: "DeepSeek V3（千帆）", contextWindow: 128_000 }
 		]
 	}
 ];
