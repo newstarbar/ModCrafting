@@ -23,10 +23,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://platform.deepseek.com/api_keys",
 		keyHint: "在 DeepSeek 开放平台创建 API Key，填入上方密钥框。",
 		models: [
-			{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", contextWindow: 1_000_000 },
 			{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", contextWindow: 1_000_000 },
+			{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", contextWindow: 1_000_000 },
+			{ id: "deepseek-v3.2", label: "DeepSeek V3.2", contextWindow: 160_000 },
 			{ id: "deepseek-chat", label: "DeepSeek Chat (V3)", contextWindow: 128_000 },
-			{ id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", contextWindow: 128_000 }
+			{ id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", contextWindow: 64_000 }
 		]
 	},
 	{
@@ -36,11 +37,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://bailian.console.aliyun.com/?tab=model#/api-key",
 		keyHint: "使用阿里云百炼 / DashScope API Key（sk- 开头）。",
 		models: [
-			{ id: "qwen-max", label: "Qwen Max", contextWindow: 128_000 },
-			{ id: "qwen-plus", label: "Qwen Plus", contextWindow: 128_000 },
-			{ id: "qwen-turbo", label: "Qwen Turbo", contextWindow: 128_000 },
-			{ id: "qwen3-235b-a22b", label: "Qwen3 235B", contextWindow: 128_000 },
-			{ id: "qwen3-32b", label: "Qwen3 32B", contextWindow: 128_000 }
+			{ id: "qwen3.7-max", label: "Qwen3.7 Max", contextWindow: 1_000_000 },
+			{ id: "qwen3.7-plus", label: "Qwen3.7 Plus", contextWindow: 1_000_000 },
+			{ id: "qwen3.6-flash", label: "Qwen3.6 Flash", contextWindow: 128_000 },
+			{ id: "qwen3.5-omni", label: "Qwen3.5 Omni", contextWindow: 128_000 },
+			{ id: "qwen3-235b-a22b", label: "Qwen3 235B", contextWindow: 128_000 }
 		]
 	},
 	{
@@ -50,10 +51,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://bigmodel.cn/apikey/platform",
 		keyHint: "在智谱开放平台创建 API Key。",
 		models: [
-			{ id: "glm-5.2", label: "GLM-5.2", contextWindow: 128_000 },
-			{ id: "glm-5.1", label: "GLM-5.1", contextWindow: 128_000 },
+			{ id: "glm-5.2", label: "GLM-5.2", contextWindow: 1_000_000 },
+			{ id: "glm-5.1", label: "GLM-5.1", contextWindow: 200_000 },
+			{ id: "glm-5", label: "GLM-5", contextWindow: 1_000_000 },
 			{ id: "glm-5-turbo", label: "GLM-5 Turbo", contextWindow: 128_000 },
-			{ id: "glm-5", label: "GLM-5", contextWindow: 1_000_000 }
+			{ id: "glm-4.9", label: "GLM-4.9", contextWindow: 128_000 }
 		]
 	},
 	{
@@ -63,10 +65,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://platform.moonshot.cn/console/api-keys",
 		keyHint: "在 Moonshot 开放平台创建 API Key。",
 		models: [
-			{ id: "moonshot-v1-8k", label: "Kimi 8K", contextWindow: 8_000 },
-			{ id: "moonshot-v1-32k", label: "Kimi 32K", contextWindow: 32_000 },
-			{ id: "moonshot-v1-128k", label: "Kimi 128K", contextWindow: 128_000 },
-			{ id: "kimi-k2-turbo-preview", label: "Kimi K2 Turbo", contextWindow: 128_000 }
+			{ id: "kimi-k2.6", label: "Kimi K2.6", contextWindow: 262_144 },
+			{ id: "kimi-k2.5", label: "Kimi K2.5", contextWindow: 262_144 },
+			{ id: "kimi-k2.7-code", label: "Kimi K2.7 Code", contextWindow: 262_144 },
+			{ id: "kimi-k2.7-code-highspeed", label: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
+			{ id: "moonshot-v1-128k", label: "Moonshot V1 128K", contextWindow: 128_000 }
 		]
 	},
 	{
@@ -74,8 +77,14 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		label: "豆包",
 		baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
 		docsUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
-		keyHint: "火山方舟 API Key；模型名称填你在控制台创建的推理接入点 ID（ep- 开头），在下方模型框填写。",
-		models: []
+		keyHint: "火山方舟 API Key；可直接使用模型名称或在控制台创建的推理接入点 ID（ep- 开头）。",
+		models: [
+			{ id: "doubao-seed-2-1-pro-260628", label: "豆包 2.1 Pro", contextWindow: 256_000 },
+			{ id: "doubao-seed-2-1-turbo-260628", label: "豆包 2.1 Turbo", contextWindow: 256_000 },
+			{ id: "doubao-seed-evolving", label: "豆包 Evolving", contextWindow: 256_000 },
+			{ id: "doubao-seed-2-0-pro-260215", label: "豆包 2.0 Pro", contextWindow: 256_000 },
+			{ id: "doubao-seed-2-0-lite-260428", label: "豆包 2.0 Lite", contextWindow: 256_000 }
+		]
 	},
 	{
 		id: "minimax",
@@ -84,21 +93,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
 		keyHint: "在 MiniMax 开放平台创建 API Key。",
 		models: [
-			{ id: "abab6.5s-chat", label: "ABAB 6.5s Chat", contextWindow: 128_000 },
-			{ id: "abab6.5g-chat", label: "ABAB 6.5g Chat", contextWindow: 128_000 },
-			{ id: "abab6.5t-chat", label: "ABAB 6.5t Chat", contextWindow: 128_000 }
-		]
-	},
-	{
-		id: "siliconflow",
-		label: "硅基流动",
-		baseUrl: "https://api.siliconflow.cn/v1",
-		docsUrl: "https://cloud.siliconflow.cn/account/ak",
-		keyHint: "在硅基流动控制台创建 API Key；模型名使用平台提供的完整模型 ID。",
-		models: [
-			{ id: "deepseek-ai/DeepSeek-V3", label: "DeepSeek V3", contextWindow: 128_000 },
-			{ id: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen2.5 72B", contextWindow: 32_000 },
-			{ id: "THUDM/glm-4-9b-chat", label: "GLM-4 9B", contextWindow: 128_000 }
+			{ id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_000_000 },
+			{ id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800 },
+			{ id: "MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed", contextWindow: 204_800 },
+			{ id: "MiniMax-M2.5", label: "MiniMax M2.5", contextWindow: 204_800 },
+			{ id: "MiniMax-M2.1", label: "MiniMax M2.1", contextWindow: 204_800 }
 		]
 	}
 ];
