@@ -1,5 +1,7 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import { detectOpenCode, openProjectInOpenCode } from './opencode-bridge.ts'
+import { loadAgentConfig, DEFAULT_OPENCODE_MODEL } from './agent-config.ts'
+import { getApiKey, loadApiConfig } from './api-config.ts'
 import {
   abortOpenCodeSession,
   createOpenCodeSession,
@@ -23,6 +25,25 @@ function attachEventForward(win: BrowserWindow | null): void {
   })
 }
 
+function buildServeConfig(override?: Record<string, unknown>): Record<string, unknown> {
+  const agentCfg = loadAgentConfig()
+  const api = loadApiConfig()
+  const keyRes = getApiKey(api.providerId)
+  const model =
+    (typeof override?.model === 'string' && override.model) ||
+    agentCfg.openCodeModel ||
+    DEFAULT_OPENCODE_MODEL
+
+  const config: Record<string, unknown> = {
+    ...override,
+    model
+  }
+  if (keyRes.success && keyRes.apiKey) {
+    config.apiKey = keyRes.apiKey
+  }
+  return config
+}
+
 export function setupOpenCodeHandlers(getMainWindow: () => BrowserWindow | null): void {
   ipcMain.handle('opencode:detect', async () => detectOpenCode())
 
@@ -33,7 +54,7 @@ export function setupOpenCodeHandlers(getMainWindow: () => BrowserWindow | null)
   ipcMain.handle('opencode:serverStart', async (_event, projectPath: string, config?: Record<string, unknown>) => {
     const win = getMainWindow()
     attachEventForward(win)
-    return startOpenCodeServer(projectPath, config)
+    return startOpenCodeServer(projectPath, buildServeConfig(config))
   })
 
   ipcMain.handle('opencode:serverStop', async () => {

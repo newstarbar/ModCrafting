@@ -65,11 +65,17 @@ async function waitForHealth(baseUrl: string, timeoutMs = 20_000): Promise<strin
   throw new Error(`OpenCode server did not become healthy within ${timeoutMs}ms`)
 }
 
-function spawnServe(port: number, projectPath: string, config?: Record<string, unknown>): ChildProcess {
+function spawnServe(
+  port: number,
+  projectPath: string,
+  config?: Record<string, unknown>,
+  extraEnv?: Record<string, string>
+): ChildProcess {
   const command = resolveOpenCodeCommand()
   const args = ['serve', '--hostname=127.0.0.1', `--port=${port}`]
   const env = {
     ...process.env,
+    ...extraEnv,
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config ?? {}),
     PWD: projectPath
   }
@@ -112,7 +118,25 @@ export async function startOpenCodeServer(
 
   const port = await pickFreePort()
   const url = `http://127.0.0.1:${port}`
-  const proc = spawnServe(port, projectPath, config)
+
+  const cfg = { ...(config || {}) }
+  const apiKey = typeof cfg.apiKey === 'string' ? cfg.apiKey : ''
+  const model = typeof cfg.model === 'string' ? cfg.model : ''
+  delete cfg.apiKey
+
+  const openCodeConfig: Record<string, unknown> = {
+    $schema: 'https://opencode.ai/config.json',
+    ...cfg
+  }
+  if (model) openCodeConfig.model = model
+
+  const extraEnv: Record<string, string> = {}
+  if (apiKey) {
+    extraEnv.OPENAI_API_KEY = apiKey
+    extraEnv.OPENCODE_API_KEY = apiKey
+  }
+
+  const proc = spawnServe(port, projectPath, openCodeConfig, extraEnv)
   const abort = new AbortController()
 
   active = { proc, url, port, projectPath, abort }

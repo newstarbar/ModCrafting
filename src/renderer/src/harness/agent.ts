@@ -780,24 +780,29 @@ export class Agent {
             return finalContent
           }
 
-          // Idle detection: no file writes and no build/run progress for 3 rounds → force stop
-          const hadProgress = hasSuccessfulWrite || hasBuild
-          if (hadProgress) {
-            this.consecutiveIdleRounds = 0
+          // Idle detection (execute only): plan phase may legitimately only search docs /
+          // ask clarification before emitting a plan — do not require write_file there.
+          if (phase !== 'plan') {
+            const hadProgress = hasSuccessfulWrite || hasBuild
+            if (hadProgress) {
+              this.consecutiveIdleRounds = 0
+            } else {
+              this.consecutiveIdleRounds++
+            }
+            if (this.consecutiveIdleRounds >= 3) {
+              const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
+              pushRoundHistory('检测到连续多轮无实质进展（无文件写入、无构建）。')
+              finalContent = finalContent.trim() || `执行停滞：连续 ${this.consecutiveIdleRounds} 轮无文件写入或构建进展，已自动结束。${remaining}`
+              this.emit({
+                kind: EventKind.Notice,
+                notice: { level: 'warn', text: `连续 ${this.consecutiveIdleRounds} 轮无进展，已自动结束本轮` }
+              })
+              logger.agent('Loop escape: idle rounds cap reached', { step, phase, idleRounds: this.consecutiveIdleRounds })
+              this.finishRun(emitLifecycle)
+              return finalContent
+            }
           } else {
-            this.consecutiveIdleRounds++
-          }
-          if (this.consecutiveIdleRounds >= 3) {
-            const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
-            pushRoundHistory('检测到连续多轮无实质进展（无文件写入、无构建）。')
-            finalContent = finalContent.trim() || `执行停滞：连续 ${this.consecutiveIdleRounds} 轮无文件写入或构建进展，已自动结束。${remaining}`
-            this.emit({
-              kind: EventKind.Notice,
-              notice: { level: 'warn', text: `连续 ${this.consecutiveIdleRounds} 轮无进展，已自动结束本轮` }
-            })
-            logger.agent('Loop escape: idle rounds cap reached', { step, phase, idleRounds: this.consecutiveIdleRounds })
-            this.finishRun(emitLifecycle)
-            return finalContent
+            this.consecutiveIdleRounds = 0
           }
 
           let instruction = ''

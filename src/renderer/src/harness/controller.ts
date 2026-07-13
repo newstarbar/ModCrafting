@@ -50,6 +50,7 @@ export class Controller {
   private planReadyAwaitingExecute = false
   private lastTurnMode: 'chat' | 'develop' | 'plan_only' | 'resume' = 'chat'
   private useOpenCodeDelegate = false
+  private openCodeModel = 'opencode/deepseek-v4-flash-free'
   private openCodeAdapter: OpenCodeAdapter | null = null
 
   // Callbacks
@@ -85,7 +86,8 @@ export class Controller {
 
     this.openCodeAdapter = new OpenCodeAdapter({
       sink: this.sink,
-      onStatus: (status) => this.onAgentStatus?.(status)
+      onStatus: (status) => this.onAgentStatus?.(status),
+      getModel: () => this.openCodeModel
     })
 
     void this.refreshOpenCodeSettings()
@@ -94,7 +96,14 @@ export class Controller {
   async refreshOpenCodeSettings(): Promise<void> {
     try {
       const cfg = await window.api.loadAgentConfig()
-      this.useOpenCodeDelegate = cfg.useOpenCodeDelegate === true
+      const prefer = cfg.useOpenCodeDelegate !== false
+      this.openCodeModel = cfg.openCodeModel || 'opencode/deepseek-v4-flash-free'
+      if (!prefer) {
+        this.useOpenCodeDelegate = false
+        return
+      }
+      const detect = await window.api.opencodeDetect()
+      this.useOpenCodeDelegate = detect.installed === true
     } catch {
       this.useOpenCodeDelegate = false
     }
@@ -104,8 +113,8 @@ export class Controller {
     | ((step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>)
     | undefined {
     if (!this.useOpenCodeDelegate || !this.openCodeAdapter || !this._projectPath) return undefined
-    return async (_step, instruction) =>
-      this.openCodeAdapter!.delegateWriteTask(this._projectPath!, instruction)
+    return async (step, instruction) =>
+      this.openCodeAdapter!.delegateWriteTask(this._projectPath!, instruction, step.targetPath)
   }
 
   private emitPlanValidationNotice(planText: string): void {
@@ -769,6 +778,7 @@ ${projectInfo}`
     } finally {
       this._running = false
       this.abortController = null
+      void this.openCodeAdapter?.stopServer()
     }
   }
 
@@ -799,6 +809,7 @@ ${projectInfo}`
     } finally {
       this._running = false
       this.abortController = null
+      void this.openCodeAdapter?.stopServer()
     }
   }
 
@@ -927,6 +938,7 @@ ${projectInfo}`
     } finally {
       this._running = false
       this.abortController = null
+      void this.openCodeAdapter?.stopServer()
     }
   }
 

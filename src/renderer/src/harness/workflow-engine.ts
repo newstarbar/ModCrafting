@@ -410,6 +410,13 @@ export class WorkflowEngine {
           if (delegated.output?.trim()) {
             finalContent = delegated.output
           }
+          this.emit({
+            kind: EventKind.Notice,
+            notice: {
+              level: 'info',
+              text: 'OpenCode 写码步骤已完成（已验证文件变更），继续后续步骤'
+            }
+          })
           this.emitPlanState()
           continue
         }
