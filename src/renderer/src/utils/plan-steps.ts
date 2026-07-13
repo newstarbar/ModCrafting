@@ -3,6 +3,7 @@ export interface ParsedPlanStep {
   description: string
   kind?: 'inspect' | 'write' | 'recipe'
   targetPath?: string
+  evidence?: string
 }
 
 export const OPS_STEP_PATTERN = /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行|build/i
@@ -117,8 +118,63 @@ export function isOpsOnlyPlan(steps: ParsedPlanStep[]): boolean {
   return steps.every((s) => OPS_STEP_PATTERN.test(s.description))
 }
 
+/** Prefer numbered lines; also accept fenced/raw JSON plan arrays. */
+function tryParseJsonPlanLite(text: string): ParsedPlanStep[] {
+  const candidates: string[] = []
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence?.[1]) candidates.push(fence[1].trim())
+  const arrayStart = text.indexOf('[')
+  const arrayEnd = text.lastIndexOf(']')
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    candidates.push(text.slice(arrayStart, arrayEnd + 1).trim())
+  }
+  for (const raw of candidates) {
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === 'object' && Array.isArray((parsed as { steps?: unknown }).steps)
+          ? (parsed as { steps: unknown[] }).steps
+          : null
+      if (!list || list.length === 0) continue
+      const steps: ParsedPlanStep[] = []
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i] as {
+          kind?: string
+          description?: string
+          title?: string
+          targetPath?: string
+          path?: string
+          evidence?: string
+        }
+        if (!item || typeof item !== 'object') continue
+        const description = String(item.description || item.title || '').trim()
+        if (!description) continue
+        const kindRaw = String(item.kind || '').toLowerCase()
+        const kind = (['write', 'recipe', 'inspect'].includes(kindRaw)
+          ? kindRaw
+          : undefined) as ParsedPlanStep['kind']
+        const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
+        const evidence = item.evidence ? String(item.evidence).trim() : undefined
+        steps.push({
+          id: String(i + 1),
+          description,
+          ...(kind ? { kind } : {}),
+          ...(targetPath ? { targetPath } : {}),
+          ...(evidence ? { evidence } : {})
+        })
+      }
+      if (steps.length > 0) return steps
+    } catch {
+      // next
+    }
+  }
+  return []
+}
+
 export function planHasActionableSteps(text: string): boolean {
-  return parsePlanSteps(text).length >= 1
+  if (parsePlanSteps(text).length >= 1) return true
+  return tryParseJsonPlanLite(text).length >= 1
 }
 
 /**
@@ -146,19 +202,22 @@ export function selectVisiblePlanText(streamedText: string, finalAnswer: string)
   return finalT || streamT
 }
 
-/** Whether plan text should proceed to execute phase */
+/** Whether plan text should proceed to execute phase (numbered or JSON plans). */
 export function isActionablePlanText(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed) return false
   if (/无法制定|暂无.*计划|等待用户提供|仅打招呼|无法输出.*计划|无法继续.*计划/i.test(trimmed)) {
     return false
   }
-  if (!planHasActionableSteps(trimmed)) return false
-  const steps = parsePlanSteps(trimmed)
-  const corpus = `${trimmed}\n${steps.map((s) => s.description).join('\n')}`
-  const hasFileRef = /\.(java|json|gradle|properties|toml)|src\/|gradle\//i.test(corpus)
+  const numbered = parsePlanSteps(trimmed)
+  const jsonSteps = tryParseJsonPlanLite(trimmed)
+  const steps = numbered.length > 0 ? numbered : jsonSteps
+  if (steps.length === 0) return false
+  const corpus = `${trimmed}\n${steps.map((s) => `${s.description} ${s.targetPath || ''} ${s.evidence || ''}`).join('\n')}`
+  const hasFileRef = /\.(java|json|gradle|properties|toml)|src\/|gradle\/|data\//i.test(corpus)
   const hasOpsRef =
     isOpsOnlyPlan(steps) ||
     /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行/i.test(corpus)
-  return hasFileRef || hasOpsRef
+  const hasStructuredKind = steps.some((s) => Boolean(s.kind || s.targetPath))
+  return hasFileRef || hasOpsRef || hasStructuredKind
 }

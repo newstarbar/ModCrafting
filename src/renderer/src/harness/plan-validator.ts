@@ -35,6 +35,28 @@ export function validateCompiledSteps(steps: CompiledPlanStep[]): PlanValidation
       })
     }
 
+    if (
+      !step.hostManaged &&
+      step.kind &&
+      step.kind !== 'inspect' &&
+      !step.evidence?.trim()
+    ) {
+      issues.push({
+        stepId: step.id,
+        field: 'evidence',
+        message: '建议为步骤提供验收 evidence（如「mixins.json 含 FooMixin」）'
+      })
+    }
+
+    // inspect may omit evidence but still benefit from a check phrase
+    if (!step.hostManaged && step.kind === 'inspect' && !step.evidence?.trim()) {
+      issues.push({
+        stepId: step.id,
+        field: 'evidence',
+        message: '建议为 inspect 步骤写明验收（如「已确认 Yarn 方法签名」）'
+      })
+    }
+
     if (!step.kind && !PATH_HINT_RE.test(step.description) && !step.hostManaged) {
       issues.push({
         stepId: step.id,

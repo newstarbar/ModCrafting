@@ -42,10 +42,16 @@ test('gradle-error-parser extracts file:line:message and stable signature', () =
 test('plan-validator flags write steps without path', () => {
   const issues = validateCompiledSteps([
     { id: '1', description: '随便改点东西', kind: 'write' },
-    { id: '2', description: '写 src/main/java/com/example/A.java', kind: 'write', targetPath: 'src/main/java/com/example/A.java' }
+    {
+      id: '2',
+      description: '写 src/main/java/com/example/A.java',
+      kind: 'write',
+      targetPath: 'src/main/java/com/example/A.java',
+      evidence: '文件含 class A'
+    }
   ])
   assert.ok(issues.some((i) => i.stepId === '1' && i.field === 'targetPath'))
-  assert.ok(!issues.some((i) => i.stepId === '2'))
+  assert.ok(!issues.some((i) => i.stepId === '2' && i.field === 'targetPath'))
   assert.ok(formatPlanValidationIssues(issues).includes('步骤 #1'))
 })
 

@@ -17,9 +17,9 @@ test('resolveSelection returns correct endpoint for DeepSeek', () => {
 })
 
 test('resolveSelection returns correct endpoint for DashScope', () => {
-  const sel = resolveSelection('dashscope', 'qwen-max')
+  const sel = resolveSelection('dashscope', 'qwen3.7-max')
   assert.equal(sel.endpoint, 'https://dashscope.aliyuncs.com/compatible-mode/v1')
-  assert.equal(sel.modelId, 'qwen-max')
+  assert.equal(sel.modelId, 'qwen3.7-max')
 })
 
 test('inferProviderId matches endpoint URL', () => {

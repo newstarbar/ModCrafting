@@ -71,6 +71,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'read_file',
         'list_directory',
+        'grep',
         'complete_step',
         'explain_code',
         'ask_clarification',
@@ -89,6 +90,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'complete_step',
         'read_file',
         'list_directory',
+        'grep',
         'run_command',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
@@ -111,6 +113,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'create_recipe',
         'read_file',
         'list_directory',
+        'grep',
         'run_command',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
@@ -122,9 +125,11 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'trigger_build',
         'run_command',
+        'edit_file',
         'write_file',
         'read_file',
         'list_directory',
+        'grep',
         'fabric_log_debugger',
         'fabric_docs_search',
         'read_error_log'
@@ -133,9 +138,11 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'trigger_build',
         'run_command',
+        'edit_file',
         'write_file',
         'read_file',
         'list_directory',
+        'grep',
         'fabric_log_debugger',
         'fabric_docs_search',
         'read_error_log'
@@ -192,6 +199,7 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
     kind,
     status: normalizeStatus(step.status),
     targetPath,
+    ...(step.evidence ? { evidence: step.evidence } : {}),
     allowedTools: defaultAllowedTools(kind),
     maxAttempts: defaultMaxAttempts(kind),
     validation: kind === 'recipe'

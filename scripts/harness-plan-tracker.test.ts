@@ -922,7 +922,7 @@ test('doc search block message appears after write-step search limit', () => {
   ])[0]
   const blocked = buildDocSearchBlockedResult(step, { name: 'fabric_docs_search', args: { keyword: 'CustomPayload' } })
   assert.match(blocked.output, /doc_search_limit/)
-  assert.match(blocked.output, /write_file/)
+  assert.match(blocked.output, /edit_file/)
 })
 
 test('empty tool call instruction names write_file target path', () => {
@@ -930,7 +930,7 @@ test('empty tool call instruction names write_file target path', () => {
     { id: '1', description: 'src/main/java/com/example/network/Payload.java — 定义载荷', status: 'running' }
   ])[0]
   const instruction = buildEmptyToolCallInstruction(step)
-  assert.match(instruction, /write_file\("src\/main\/java\/com\/example\/network\/Payload\.java"/)
+  assert.match(instruction, /edit_file\("src\/main\/java\/com\/example\/network\/Payload\.java"/)
   assert.match(instruction, /complete_step/)
 })
 

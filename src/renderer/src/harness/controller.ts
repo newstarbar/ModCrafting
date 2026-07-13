@@ -347,6 +347,7 @@ export class Controller {
       read_file: '读取文件',
       write_file: '写入文件',
       edit_file: '编辑文件（精确替换）',
+      grep: '搜索项目源码',
       list_directory: '列出目录',
       run_command: '运行命令',
       trigger_build: '触发构建',
@@ -415,15 +416,17 @@ ${projectInfo}`
 计划格式要求：
 - **每行一个步骤**：\`N. [kind] 简短标题 — 目标路径\`
 - **kind** 仅允许：\`write\` | \`recipe\` | \`inspect\`
+- **每步必须含一句验收**（evidence），例如：\`evidence: mixins.json 含 FooMixin\`
 - 示例：
-  1. [write] src/main/java/.../Mixin.java — 二段跳逻辑
-  2. [recipe] data/<modid>/recipe/jump_boots.json — 跳跃靴配方
+  1. [write] src/main/java/.../Mixin.java — 二段跳逻辑；evidence: 类含 @Mixin 与注入方法
+  2. [recipe] data/<modid>/recipe/jump_boots.json — 跳跃靴配方；evidence: 配方 JSON 合法且 result 正确
 
 计划必须精简：
 - **禁止写构建/运行步骤**（主机会自动追加 gradlew build 与 runClient）。
 - **禁止空泛步骤**（确保无错、测试功能、输出总结）。
 - **每步只做一件事**；最多 6 步。
 - **禁止重复步骤。**
+- **不确定路径/类名时先 ask_clarification 或 grep，禁止方案对比长文。**
 - **用户已通过模板表单提交完整需求时，禁止先探索项目；直接输出计划。**
 - **用户消息含【结构化参数 JSON】时，执行阶段须调用 \`fabric_template_generate\` 并传入完整 \`formFields\`（勿省略硬度、饱食度等表单参数）。**`
       : `## 🔧 第二阶段：执行计划
@@ -448,7 +451,7 @@ ${phaseHeader}
 ## 可用工具
 ${toolDescs}
 
-${mode === 'plan' ? '## 当前：输出计划阶段\n信息不足时可以使用 ask_clarification 工具提问，收集完信息后输出计划文本。' : '## 当前：执行阶段\n直接调用工具执行计划。多用 write_file 批量写入。最后 trigger_build 构建并启动游戏测试。'}
+${mode === 'plan' ? '## 当前：输出计划阶段\n信息不足时可以使用 ask_clarification / grep 工具提问或勘察，收集完信息后输出计划文本。每步须含验收 evidence。' : '## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。'}
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**

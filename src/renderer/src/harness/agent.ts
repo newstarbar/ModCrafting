@@ -5,6 +5,7 @@
 import type { Sink, Event } from './events'
 import { EventKind } from './events'
 import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from './tools'
+import { FileSession } from './file-session'
 import type { PlanTracker } from './plan-tracker'
 import { normalizeWorkflowSteps } from './plan-normalizer'
 import { WorkflowEngine } from './workflow-engine'
@@ -50,12 +51,13 @@ export interface RunOptions {
 const MAX_READONLY_ROUNDS = 3
 const REPEAT_SUCCESS_THRESHOLD = 2
 const MAX_FINAL_READINESS_BLOCKS = 3
-const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'read_error_log', 'run_command']
+const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'grep', 'read_error_log', 'run_command']
 const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES
 const CONTROL_TOOL_NAMES = ['complete_step']
 const PLAN_READONLY_TOOL_NAMES = new Set([
   'read_file',
   'list_directory',
+  'grep',
   'fabric_docs_search',
   'fabric_javadoc_lookup',
   'vanilla_mc_wiki_query',
@@ -106,6 +108,8 @@ export class Agent {
   // Context compaction
   private assistantTurnCount = 0
   compactionTranscripts: CompactionResult[] = []
+  /** ACI: files read this agent run (read-before-edit) */
+  private fileSession = new FileSession()
 
   constructor(opts: AgentOptions) {
     this.registry = opts.registry
@@ -134,6 +138,7 @@ export class Agent {
     this.clarificationCount = 0
     this.assistantTurnCount = 0
     this.compactionTranscripts = []
+    this.fileSession.clear()
   }
 
   private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
@@ -201,6 +206,7 @@ export class Agent {
       onToolDispatch: this.onToolDispatch,
       onToolResult: this.onToolResult,
       openCodeDelegate,
+      fileSession: this.fileSession,
       modelCall: async (workflowMessages, tools, onChunk) => {
         const compactedMessages = microCompact(workflowMessages, this.assistantTurnCount)
         this.assistantTurnCount++
@@ -621,6 +627,7 @@ export class Agent {
           callId: `step_${step}`,
           abortSignal,
           planTracker,
+          fileSession: this.fileSession,
           onPlanStateChange: (steps) => {
             this.emit({ kind: EventKind.PlanState, planSteps: steps })
           }

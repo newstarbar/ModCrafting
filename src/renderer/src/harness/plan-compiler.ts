@@ -13,6 +13,8 @@ export interface CompiledPlanStep extends ParsedPlanStep {
   kind?: StructuredStepKind
   targetPath?: string
   hostManaged?: boolean
+  evidence?: string
+  allowedTools?: string[]
 }
 
 const STRUCTURED_KIND_RE = /^\[(write|recipe|inspect)\]\s*/i
@@ -93,11 +95,17 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
           ? kindRaw
           : undefined) as StructuredStepKind | undefined
         const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
+        const evidence = item.evidence ? String(item.evidence).trim() : undefined
+        const allowedTools = Array.isArray(item.allowedTools)
+          ? item.allowedTools.map(String).filter(Boolean)
+          : undefined
         steps.push({
           id: String(i + 1),
           description,
           kind,
-          targetPath
+          targetPath,
+          ...(evidence ? { evidence } : {}),
+          ...(allowedTools && allowedTools.length > 0 ? { allowedTools } : {})
         })
       }
       if (steps.length > 0) return steps
@@ -273,10 +281,11 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
 }
 
 export function compiledStepsToParsed(steps: CompiledPlanStep[]): ParsedPlanStep[] {
-  return steps.map(({ id, description, kind, targetPath }) => ({
+  return steps.map(({ id, description, kind, targetPath, evidence }) => ({
     id,
     description,
     ...(kind ? { kind } : {}),
-    ...(targetPath ? { targetPath } : {})
+    ...(targetPath ? { targetPath } : {}),
+    ...(evidence ? { evidence } : {})
   }))
 }

@@ -11,6 +11,7 @@ export interface PlanStepState {
   /** Preserved from structured plan compile; used by workflow normalizer when set. */
   kind?: 'inspect' | 'write' | 'recipe'
   targetPath?: string
+  evidence?: string
 }
 
 export class PlanTracker {
@@ -29,7 +30,8 @@ export class PlanTracker {
       description: s.description,
       status: 'pending' as const,
       ...(s.kind ? { kind: s.kind } : {}),
-      ...(s.targetPath ? { targetPath: s.targetPath } : {})
+      ...(s.targetPath ? { targetPath: s.targetPath } : {}),
+      ...(s.evidence ? { evidence: s.evidence } : {})
     }))
     return new PlanTracker(steps)
   }

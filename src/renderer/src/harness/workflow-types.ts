@@ -14,6 +14,7 @@ export interface WorkflowStep {
   kind: StepKind
   status: WorkflowStatus
   targetPath?: string
+  evidence?: string
   allowedTools: string[]
   maxAttempts: number
   validation?: StepValidation

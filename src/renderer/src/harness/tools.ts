@@ -6,6 +6,7 @@ import type { McPhase } from '../utils/mc-phase-parser.ts'
 import type { FileDiff } from './events.ts'
 import type { PlanTracker, PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
+import type { FileSession } from './file-session.ts'
 
 // A single tool that the agent can call
 export interface Tool {
@@ -29,6 +30,8 @@ export interface ToolContext {
   onProgress?: (chunk: string) => void
   planTracker?: PlanTracker | null
   onPlanStateChange?: (steps: PlanStepState[]) => void
+  /** ACI: tracks files read this run for read-before-edit */
+  fileSession?: FileSession
 }
 
 const MAX_TOOL_OUTPUT = 32 * 1024 // 32KB max output
@@ -148,7 +151,7 @@ export async function diagnoseFileError(
 }
 
 function artifactPathFor(toolName: string, args: Record<string, unknown>): string | undefined {
-  if (toolName === 'write_file' || toolName === 'read_file') {
+  if (toolName === 'write_file' || toolName === 'read_file' || toolName === 'edit_file') {
     return typeof args.path === 'string' ? args.path : undefined
   }
   if (toolName === 'create_recipe' && typeof args.namespace === 'string' && typeof args.name === 'string') {

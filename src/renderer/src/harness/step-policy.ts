@@ -114,9 +114,10 @@ export function isToolAllowedForStep(
   if (isRepairWriteBlocked(step, call, options)) return false
 
   if (call.name === 'list_directory') return true
+  if (call.name === 'grep') return true
   if (call.name === 'ask_clarification') return true
 
-  if (call.name === 'write_file') {
+  if (call.name === 'write_file' || call.name === 'edit_file') {
     if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
     if (step.kind === 'build' || step.kind === 'run') return false
     return true

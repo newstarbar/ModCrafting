@@ -10,7 +10,11 @@ import {
   toolResultMessage
 } from './chat-message.ts'
 import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.ts'
-import { formatGradleErrorsForPrompt, gradleErrorSignature } from './gradle-error-parser.ts'
+import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from './gradle-error-parser.ts'
+import { classifyFabricLog } from './fabric-utils.ts'
+import { canToolResultAdvanceStep } from './step-evidence.ts'
+import { FileSession } from './file-session.ts'
+import { workflowStepToPlanStep } from './workflow-types.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -43,6 +47,8 @@ export interface WorkflowEngineOptions {
   onToolResult?: (name: string, id: string, output: string) => void
   modelCall: WorkflowModelCall
   openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
+  /** Shared ACI read session for this run; created if omitted */
+  fileSession?: FileSession
 }
 
 let workflowToolId = 0
@@ -53,10 +59,62 @@ const REPAIR_EXTRA_TOOLS = [
   'edit_file',
   'write_file',
   'read_file',
+  'grep',
   'read_error_log',
   'fabric_log_debugger',
   'fabric_docs_search'
 ] as const
+
+const REPAIR_DIAG_DEDUP_TOOLS = new Set(['read_error_log', 'fabric_log_debugger'])
+
+function stableArgsKey(args: Record<string, unknown> | undefined): string {
+  const a = args || {}
+  const keys = Object.keys(a).sort()
+  const sorted: Record<string, unknown> = {}
+  for (const k of keys) sorted[k] = a[k]
+  return JSON.stringify(sorted)
+}
+
+function firstStackFrame(log: string): string {
+  const lines = log.split('\n')
+  for (const line of lines) {
+    const m = line.match(/(?:at\s+)?((?:src\/|net\/|com\/)[^\s(:]+\.(?:java|kt))(?::(\d+))?/i)
+    if (m) return `${m[1].replace(/\\/g, '/')}${m[2] ? `:${m[2]}` : ''}`
+  }
+  const gradle = parseGradleErrors(log, 1)
+  if (gradle[0]?.file) {
+    return `${gradle[0].file}${gradle[0].line != null ? `:${gradle[0].line}` : ''}`
+  }
+  return ''
+}
+
+export function repairErrorSignature(output: string, kind: 'build' | 'run'): string {
+  const gradleSig = gradleErrorSignature(output)
+  const entries = parseGradleErrors(output, 1)
+  if (kind === 'build' && entries.length > 0) return `gradle|${gradleSig}`
+
+  const classified = classifyFabricLog(output)
+  const frame = firstStackFrame(output)
+  return `${classified.kind}|${frame || gradleSig.slice(0, 200)}`
+}
+
+function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
+  const gradleEntries = parseGradleErrors(output, 8)
+  const structuredGradle = formatGradleErrorsForPrompt(output)
+  const classified = classifyFabricLog(output)
+  const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
+  const fabricBlock =
+    gradleEntries.length === 0 || kind === 'run'
+      ? `\n--- Fabric/MC 分类 ---\n[${classified.kind}] ${classified.title}\n建议：${classified.advice}\n`
+      : `\n--- Fabric/MC 补充 ---\n[${classified.kind}] ${classified.title}：${classified.advice}\n`
+  return (
+    `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
+    `流程：观察（read_error_log / fabric_log_debugger）→ 最小补丁（edit_file 优先）→ 再验证（${retry}）。\n` +
+    `在成功 edit_file/write_file 之前禁止直接调用 ${retry}。\n\n` +
+    `--- 错误摘要 ---\n${structuredGradle}` +
+    fabricBlock
+  )
+}
 
 export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boolean {
   if (step.kind !== 'build' && step.kind !== 'run') return false
@@ -83,17 +141,6 @@ export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boole
 
 function repairExtraTools(step: WorkflowStep): string[] {
   return [...new Set([...step.allowedTools, ...REPAIR_EXTRA_TOOLS])]
-}
-
-function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
-  const structured = formatGradleErrorsForPrompt(output)
-  const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
-  return (
-    `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
-    `流程：观察（read_error_log / fabric_log_debugger）→ 最小补丁（edit_file 优先）→ 再验证（${retry}）。\n` +
-    `在成功 edit_file/write_file 之前禁止直接调用 ${retry}。\n\n` +
-    `--- 错误摘要 ---\n${structured}`
-  )
 }
 
 function writeFileRetryInstruction(kind: 'build' | 'run'): string {
@@ -140,7 +187,7 @@ export function buildDocSearchBlockedResult(step: WorkflowStep, call: ToolCallWi
   return {
     output:
       `blocked: [doc_search_limit] 当前步骤 #${step.id} 已进行 ${MAX_DOC_SEARCH_PER_WRITE_STEP} 次 fabric_docs_search。` +
-      `请直接 write_file 写入目标文件，或 complete_step 标记完成，不要再搜索文档。`,
+      `请直接 edit_file（优先）或 write_file 写入目标文件，或 complete_step 标记完成，不要再搜索文档。`,
     error: 'doc_search_limit: fabric_docs_search',
     durationMs: 0,
     ok: false,
@@ -169,11 +216,11 @@ export function detectExistingHandlerHint(step: WorkflowStep, result: ToolResult
 
 export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
   const targetHint = step.targetPath
-    ? `write_file("${step.targetPath}", ...)`
-    : 'write_file(<目标路径>, ...)'
+    ? `edit_file("${step.targetPath}", ...)`
+    : 'edit_file(<目标路径>, ...) 或 write_file(<新文件路径>, ...)'
   return (
     `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
-    `请立即调用 ${targetHint} 或 complete_step()，不要只输出旁白。`
+    `请立即调用 ${targetHint}（修改已有文件优先 edit_file）或 complete_step()，不要只输出旁白。`
   )
 }
 
@@ -189,7 +236,7 @@ export function buildStepFailureMessage(
     `步骤 #${step.id}「${step.title}」未能自动完成（已用 ${attempt}/${maxIterations} 轮）。` +
     `最后工具：${lastToolName || '无'}。\n\n` +
     repairNote +
-    `建议：发送「继续」恢复执行，或根据日志用 write_file 修复后重试。\n\n` +
+    `建议：发送「继续」恢复执行，或根据日志用 edit_file 修复后重试。\n\n` +
     `未完成步骤：\n${remaining}`
   )
 }
@@ -218,10 +265,18 @@ function normalizeModelToolCalls(
   }))
 }
 
-function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
+function resultCompletesStep(
+  step: WorkflowStep,
+  result: ToolResult,
+  stepHasEvidence: boolean
+): boolean {
   if (!result.ok || result.error) return false
   if (result.toolName === 'complete_step') {
-    return step.kind !== 'build' && step.kind !== 'run'
+    if (step.kind === 'build' || step.kind === 'run') return false
+    if (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe') {
+      return stepHasEvidence
+    }
+    return true
   }
   switch (step.kind) {
     case 'recipe':
@@ -230,10 +285,17 @@ function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
         result.toolName === 'fabric_recipe_generate'
       )
     case 'inspect':
-    case 'write':
-      // Only complete_step advances these; host does NOT auto-detect completion.
-      // This prevents premature advancement when a step requires multiple files.
+      // Evidence tools set stepHasEvidence; advancement requires complete_step
       return false
+    case 'write': {
+      const planStep = {
+        ...workflowStepToPlanStep(step),
+        kind: step.kind,
+        targetPath: step.targetPath,
+        evidence: step.evidence
+      }
+      return canToolResultAdvanceStep(planStep, result).ok
+    }
     case 'build':
       return (
         (result.toolName === 'trigger_build' &&
@@ -248,6 +310,24 @@ function resultCompletesStep(step: WorkflowStep, result: ToolResult): boolean {
   }
 }
 
+function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
+  if (!result.ok || result.error) return false
+  if (step.kind === 'recipe') {
+    return (
+      result.toolName === 'create_recipe' ||
+      result.toolName === 'fabric_recipe_generate'
+    )
+  }
+  if (step.kind !== 'write' && step.kind !== 'inspect') return false
+  const planStep = {
+    ...workflowStepToPlanStep(step),
+    kind: step.kind,
+    targetPath: step.targetPath,
+    evidence: step.evidence
+  }
+  return canToolResultAdvanceStep(planStep, result).ok
+}
+
 export class WorkflowEngine {
   private steps: WorkflowStep[]
   private planTracker: PlanTracker
@@ -259,6 +339,7 @@ export class WorkflowEngine {
   private onToolResult?: (name: string, id: string, output: string) => void
   private modelCall: WorkflowModelCall
   private openCodeDelegate?: WorkflowEngineOptions['openCodeDelegate']
+  private fileSession: FileSession
 
   constructor(options: WorkflowEngineOptions) {
     this.steps = options.steps
@@ -271,6 +352,7 @@ export class WorkflowEngine {
     this.onToolResult = options.onToolResult
     this.modelCall = options.modelCall
     this.openCodeDelegate = options.openCodeDelegate
+    this.fileSession = options.fileSession || new FileSession()
   }
 
   private planState(): Array<{ id: string; description: string; status: string }> {
@@ -301,17 +383,20 @@ export class WorkflowEngine {
     const prefix = repairMode ? '【修复模式】' : '【工作流步骤】'
     const repairGate =
       repairMode && repairWriteRequired
-        ? '必须先 write_file 修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
+        ? '必须先 edit_file（优先）修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
         : ''
     const clarifyHint = tools.includes('ask_clarification')
-      ? '如果对文件路径、类名、配置项等细节不确定，先用 ask_clarification 向用户确认，不要猜。\n'
+      ? '如果对文件路径、类名、配置项等细节不确定，先用 ask_clarification / grep 向用户确认或搜索，不要猜。\n'
+      : ''
+    const evidenceHint = step.evidence
+      ? `验收标准: ${step.evidence}\n`
       : ''
     return {
       role: 'user',
       content:
         `${prefix}${repairGate}${clarifyHint}只执行当前步骤，不要重复已完成操作。\n` +
-        `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n允许工具: ${tools.join(', ') || '无'}\n` +
-        `如果需要工具，只能调用允许工具列表中的工具。工具成功后主机会自动推进。`
+        `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(', ') || '无'}\n` +
+        `修改已有文件优先 edit_file（须先 read_file）。工具成功且满足验收证据后主机会推进。`
     }
   }
 
@@ -343,6 +428,7 @@ export class WorkflowEngine {
       callId: `workflow_${step.id}`,
       abortSignal: this.abortSignal,
       planTracker: this.planTracker,
+      fileSession: this.fileSession,
       onPlanStateChange: () => this.emitPlanState()
     }
     return executeBatch(
@@ -435,6 +521,9 @@ export class WorkflowEngine {
       let repairRounds = 0
       let lastFailureOutput = ''
       const seenRepairSignatures = new Set<string>()
+      const seenDiagSignatures = new Set<string>()
+      let stepHasEvidence = false
+      let debuggerPrefetched = false
       let attempt = 0
       let loopIterations = 0
       let modelNetworkRetries = 0
@@ -513,6 +602,54 @@ export class WorkflowEngine {
         const gate = filterToolCallsForStep(step, calls, policyOptions)
         const resultsById = new Map<string, ToolResult>()
 
+        // Drop complete_step without prior write/inspect evidence (prevents tracker advance)
+        const executableAllowed: ToolCallWithId[] = []
+        for (const call of gate.allowed) {
+          if (
+            call.name === 'complete_step' &&
+            (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe') &&
+            !stepHasEvidence
+          ) {
+            const rejected: ToolResult = {
+              output:
+                `blocked: [step_evidence_required] 步骤 #${step.id} 尚无验收证据，禁止裸 complete_step。` +
+                `请先完成写入/勘察工具（路径匹配 targetPath，或 inspect 的 read/grep/docs）。`,
+              error: 'step_evidence_required: complete_step',
+              durationMs: 0,
+              ok: false,
+              toolName: call.name,
+              args: call.args,
+              exitCode: null,
+              errorKind: 'step_evidence_required'
+            }
+            this.emitRejected(call.id, rejected)
+            resultsById.set(call.id, rejected)
+            gate.rejected.push(rejected)
+            continue
+          }
+          if (repairMode && REPAIR_DIAG_DEDUP_TOOLS.has(call.name)) {
+            const diagSig = `${call.name}\0${stableArgsKey(call.args)}`
+            if (seenDiagSignatures.has(diagSig)) {
+              const rejected: ToolResult = {
+                output:
+                  `blocked: [repair_diag_dedup] "${call.name}" 已用相同参数执行过。请改用 edit_file 做最小补丁，或更换诊断参数。`,
+                error: 'repair_diag_dedup',
+                durationMs: 0,
+                ok: false,
+                toolName: call.name,
+                args: call.args,
+                exitCode: null,
+                errorKind: 'repair_diag_dedup'
+              }
+              this.emitRejected(call.id, rejected)
+              resultsById.set(call.id, rejected)
+              gate.rejected.push(rejected)
+              continue
+            }
+          }
+          executableAllowed.push(call)
+        }
+
         for (const call of calls) {
           if (
             isDocSearchLimitedStep(step) &&
@@ -531,16 +668,16 @@ export class WorkflowEngine {
           }
         }
 
-        if (gate.allowed.length === 0) {
+        if (executableAllowed.length === 0) {
           const repairWriteBlockedOnly =
             repairMode &&
             repairWriteRequired &&
             calls.length > 0 &&
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
           const rejectionHint = [
-            gate.rejected.map((r) => r.output).join('\n'),
+            [...resultsById.values(), ...gate.rejected].map((r) => r.output).filter(Boolean).join('\n'),
             repairWriteBlockedOnly
-              ? '修复模式下必须先 write_file 修改代码，再重新构建。'
+              ? '修复模式下必须先 edit_file 修改代码，再重新构建。'
               : `本步骤允许的工具：${(repairMode ? repairExtraTools(step) : step.allowedTools).join(', ') || '无'}。请改用其中之一完成当前步骤。`
           ].join('\n\n')
           this.appendToolRound(
@@ -554,12 +691,18 @@ export class WorkflowEngine {
           continue
         }
 
-        const executed = await this.executeAllowedCalls(step, gate.allowed)
+        const executed = await this.executeAllowedCalls(step, executableAllowed)
         for (const [id, result] of executed) {
           resultsById.set(id, result)
+          if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || '') && result.ok && !result.error) {
+            seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`)
+          }
+          if (recordsStepEvidence(step, result)) {
+            stepHasEvidence = true
+          }
         }
 
-        const primaryResult = resultsById.get(gate.allowed[0].id)
+        const primaryResult = resultsById.get(executableAllowed[0].id)
         if (primaryResult?.toolName) lastToolName = primaryResult.toolName
 
         if (
@@ -587,7 +730,9 @@ export class WorkflowEngine {
           }
         }
 
-        const success = primaryResult ? resultCompletesStep(step, primaryResult) : undefined
+        const success = primaryResult
+          ? resultCompletesStep(step, primaryResult, stepHasEvidence)
+          : undefined
         let roundInstruction: string | undefined
 
         if (success) {
@@ -606,7 +751,7 @@ export class WorkflowEngine {
         }
 
         if (primaryResult && isTerminalFailure(step, primaryResult)) {
-          const signature = gradleErrorSignature(primaryResult.output)
+          const signature = repairErrorSignature(primaryResult.output, step.kind as 'build' | 'run')
           if (seenRepairSignatures.has(signature)) {
             roundInstruction =
               '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 edit_file 做不同修改，或 ask_clarification 向用户确认。'
@@ -620,6 +765,26 @@ export class WorkflowEngine {
           repairRounds++
           lastFailureOutput = primaryResult.output
           roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as 'build' | 'run')
+          if (!debuggerPrefetched) {
+            debuggerPrefetched = true
+            const dbg = this.registry.get('fabric_log_debugger')
+            if (dbg) {
+              try {
+                const dbgOut = await dbg.execute(
+                  {
+                    projectPath: this.projectPath,
+                    callId: `repair_prefetch_${step.id}`,
+                    fileSession: this.fileSession
+                  },
+                  { log: lastFailureOutput.slice(0, 12000) }
+                )
+                roundInstruction += `\n--- 自动诊断（仅此一次）---\n${dbgOut}`
+                seenDiagSignatures.add(`fabric_log_debugger\0${stableArgsKey({ log: lastFailureOutput.slice(0, 12000) })}`)
+              } catch {
+                // ignore prefetch errors
+              }
+            }
+          }
           this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
           if (repairRounds > MAX_REPAIR_ROUNDS) {
             attempt = maxIterations
@@ -651,7 +816,7 @@ export class WorkflowEngine {
           if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
             roundInstruction = [
               roundInstruction,
-              `【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 write_file 或 complete_step 完成当前步骤，不要再搜索文档。`
+              `【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 edit_file 或 complete_step 完成当前步骤，不要再搜索文档。`
             ].filter(Boolean).join('\n\n')
           }
         }

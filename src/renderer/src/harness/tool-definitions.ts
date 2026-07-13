@@ -14,6 +14,8 @@ import {
 } from "../project/scaffold";
 import { executeTemplateGenerate, resolveProjectConfig } from "../project/template-runner.ts";
 import { validateFileEditGate } from "./edit-gate.ts";
+import { guardedWriteFile } from "./guarded-write.ts";
+import { grepInProject } from "./grep-search.ts";
 import {
 	generateModBlockEntitiesRegistrationClass,
 	generateModBlocksRegistrationClass,
@@ -73,6 +75,7 @@ export const readFileTool: Tool & Previewer = {
 			const numbered = page.map((line, i) => `${offset + i} | ${line}`).join("\n");
 			const header = `文件: ${args.path}（共 ${total} 行，显示 ${offset}-${end} 行）`;
 			const footer = end < total ? `\n（剩余 ${total - end} 行。用 offset=${end + 1} 继续读取）` : "";
+			ctx.fileSession?.markRead(String(args.path || ""));
 			return `${header}\n${numbered}${footer}`;
 		} catch (err) {
 			return `Error reading file: ${err}`;
@@ -114,62 +117,21 @@ export const writeFileTool: Tool & Previewer = {
 	readOnly: () => false,
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
 		if (!ctx.projectPath) return "No project open";
-		const filePath = `${ctx.projectPath}/${args.path}`;
+		const relPath = String(args.path || "");
 		const content = String(args.content || "");
 
-		let oldContent = "";
-		let fileExisted = false;
-		try {
-			const old = await window.api.readFile(filePath);
-			if (old.success && old.content !== undefined) {
-				oldContent = old.content;
-				fileExisted = true;
-			}
-		} catch {
-			// File doesn't exist yet (new file) — that's fine
-		}
+		const written = await guardedWriteFile(ctx, relPath, content, { allowOverwrite: false });
+		if (!written.ok) return written.message;
 
-		if (fileExisted && oldContent.length > 0) {
-			return (
-				`blocked: [aci_write_gate] 文件已存在：${args.path}。` +
-				`请用 edit_file 做精确替换；write_file 仅用于新建文件。` +
-				`若需整文件重写，先用 read_file 确认后仍应优先 edit_file 分步修改。`
-			)
-		}
-
-		const gate = validateFileEditGate(String(args.path || ""), content)
-		if (!gate.ok) {
-			return `blocked: [edit_gate] ${gate.reason}。请修正内容后重试。`
-		}
-
-		try {
-			const res = await window.api.writeFile(filePath, content);
-			if (res.success) {
-				logger.file(`Written: ${args.path}`, `${content.length} bytes`);
-
-				const diff = computeLineDiff(oldContent, content);
-				const diffPayload = JSON.stringify({
-					path: String(args.path || ""),
-					...diff,
-					oldContent,
-					action: fileExisted ? "update" : "create"
-				});
-
-				let overwriteNote = "";
-				if (fileExisted && oldContent.trim()) {
-					const MAX_SHOW = 2000;
-					const shown = oldContent.length > MAX_SHOW ? oldContent.slice(0, MAX_SHOW) + `\n...(截断，原文件共 ${oldContent.length} 字节)` : oldContent;
-					overwriteNote =
-						`\n注意: 覆盖已有文件（${oldContent.length} 字节）。被覆盖的旧内容：\n\`\`\`\n${shown}\n\`\`\`\n` +
-						`新增 ${diff.added} 行，删除 ${diff.removed} 行。检查是否误删了所需条目。\n`;
-				}
-
-				return `已写入: ${args.path} (${content.length} bytes)${overwriteNote}\n<!-- FILE_DIFF ${diffPayload} -->`;
-			}
-			return `Error: ${res.error}`;
-		} catch (err) {
-			return `Error writing file: ${err}`;
-		}
+		logger.file(`Written: ${relPath}`, `${content.length} bytes`);
+		const diff = computeLineDiff(written.oldContent, content);
+		const diffPayload = JSON.stringify({
+			path: relPath,
+			...diff,
+			oldContent: written.oldContent,
+			action: written.fileExisted ? "update" : "create"
+		});
+		return `已写入: ${relPath} (${content.length} bytes)\n<!-- FILE_DIFF ${diffPayload} -->`;
 	},
 	preview(args: Record<string, unknown>): FileDiff | null {
 		const path = String(args.path || "");
@@ -184,29 +146,62 @@ export const writeFileTool: Tool & Previewer = {
 	}
 };
 
+function stripTrailingWsPerLine(s: string): string {
+	return s
+		.split("\n")
+		.map((line) => line.replace(/[ \t]+$/g, ""))
+		.join("\n");
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+	if (!needle) return 0;
+	let count = 0;
+	let from = 0;
+	while (true) {
+		const i = haystack.indexOf(needle, from);
+		if (i === -1) break;
+		count++;
+		from = i + needle.length;
+	}
+	return count;
+}
+
 // ── edit_file ──
 export const editFileTool: Tool & Previewer = {
 	name: "edit_file",
-	description: "精确替换文件中的文本（只替换第一处匹配）。old_string 必须精确匹配（含缩进/空格），找不到会返回错误。修改已有文件优先用此工具，新建文件用 write_file。",
+	description:
+		"精确替换文件中的文本。默认只替换第一处；设 replace_all=true 可替换全部。old_string 须精确匹配。修改已有文件优先用此工具（须先 read_file），新建用 write_file。",
 	schema: {
 		type: "object",
 		properties: {
 			path: { type: "string", description: "项目根目录下的相对路径" },
-			old_string: { type: "string", description: "要替换的原始文本（精确匹配，只替换第一处）" },
-			new_string: { type: "string", description: "替换后的新文本" }
+			old_string: { type: "string", description: "要替换的原始文本（精确匹配）" },
+			new_string: { type: "string", description: "替换后的新文本" },
+			replace_all: {
+				type: "boolean",
+				description: "为 true 时替换文件中全部匹配；默认 false（仅第一处，且要求唯一）"
+			}
 		},
 		required: ["path", "old_string", "new_string"]
 	},
 	readOnly: () => false,
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
 		if (!ctx.projectPath) return "No project open";
-		const filePath = `${ctx.projectPath}/${args.path}`;
-		const oldStr = String(args.old_string || "");
+		const relPath = String(args.path || "");
+		const filePath = `${ctx.projectPath}/${relPath}`;
+		let oldStr = String(args.old_string || "");
 		const newStr = String(args.new_string || "");
+		const replaceAll = args.replace_all === true;
 
 		if (!oldStr) return "Error: old_string 不能为空";
 
-		// Read current file
+		if (ctx.fileSession && !ctx.fileSession.hasRead(relPath)) {
+			return (
+				`blocked: [aci_read_gate] 编辑前须先 read_file：${relPath}。` +
+				`请先读取该文件再调用 edit_file。`
+			);
+		}
+
 		let content: string;
 		try {
 			const res = await window.api.readFile(filePath);
@@ -216,10 +211,20 @@ export const editFileTool: Tool & Previewer = {
 			return `Error reading file: ${err}`;
 		}
 
-		// Find first match
-		const idx = content.indexOf(oldStr);
+		let idx = content.indexOf(oldStr);
 		if (idx === -1) {
-			// Build diagnostic: show file context around keywords from oldString
+			const strippedContent = stripTrailingWsPerLine(content);
+			const strippedOld = stripTrailingWsPerLine(oldStr);
+			const fallbackIdx = strippedContent.indexOf(strippedOld);
+			if (fallbackIdx !== -1 && strippedOld) {
+				// Map stripped match back onto original by line alignment when possible
+				oldStr = strippedOld;
+				content = strippedContent;
+				idx = fallbackIdx;
+			}
+		}
+
+		if (idx === -1) {
 			const oldLower = oldStr.toLowerCase();
 			const lines = content.split("\n");
 			const keywords = oldLower.split(/\s+/).filter((w: string) => w.length > 3);
@@ -236,53 +241,53 @@ export const editFileTool: Tool & Previewer = {
 				}
 			}
 			if (contextLines.length > 0) {
-				return `未找到 old_string。文件 ${args.path}（${lines.length} 行）中相关区域:\n${contextLines.join("\n")}\n\n请调整 old_string 精确匹配实际文件内容。注意缩进和空格必须完全一致。`;
+				return `未找到 old_string。文件 ${relPath}（${lines.length} 行）中相关区域:\n${contextLines.join("\n")}\n\n请调整 old_string 精确匹配实际文件内容。注意缩进和空格必须完全一致。`;
 			}
-			return `未找到 old_string。文件 ${args.path} 共 ${lines.length} 行。请用 read_file 查看后重试。`;
+			return `未找到 old_string。文件 ${relPath} 共 ${lines.length} 行。请用 read_file 查看后重试。`;
 		}
 
-		// Check for duplicate matches
-		const secondIdx = content.indexOf(oldStr, idx + 1);
-		if (secondIdx !== -1) {
-			// Find which line each match is on
-			const before = content.substring(0, idx);
-			const lineNum = before.split("\n").length;
-			const lineNum2 = content.substring(0, secondIdx).split("\n").length;
-			const ctxStart = Math.max(0, idx - 40);
-			const ctxEnd = Math.min(content.length, idx + oldStr.length + 40);
-			const ctx = content.substring(ctxStart, ctxEnd);
-			return `old_string 匹配了多处（第 ${lineNum} 行和第 ${lineNum2} 行）。请提供更多上下文使匹配唯一。\n第 ${lineNum} 行附近:\n${ctx}`;
+		const matchCount = countOccurrences(content, oldStr);
+		if (!replaceAll && matchCount > 1) {
+			const lineNum = content.substring(0, idx).split("\n").length;
+			const lineNum2 = content.substring(0, content.indexOf(oldStr, idx + 1)).split("\n").length;
+			return (
+				`old_string 匹配了多处（至少第 ${lineNum} 行和第 ${lineNum2} 行，共 ${matchCount} 处）。` +
+				`请提供更多上下文使匹配唯一，或设置 replace_all=true 替换全部。`
+			);
 		}
 
-		// Replace
-		const newContent = content.substring(0, idx) + newStr + content.substring(idx + oldStr.length);
+		const newContent = replaceAll
+			? content.split(oldStr).join(newStr)
+			: content.substring(0, idx) + newStr + content.substring(idx + oldStr.length);
 
-		const gate = validateFileEditGate(String(args.path || ""), newContent)
+		const gate = validateFileEditGate(relPath, newContent);
 		if (!gate.ok) {
-			return `blocked: [edit_gate] ${gate.reason}。编辑未落盘，请修正后重试。`
+			return `blocked: [edit_gate] ${gate.reason}。编辑未落盘，请修正后重试。`;
 		}
 
 		try {
 			await window.api.writeFile(filePath, newContent);
+			ctx.fileSession?.markRead(relPath);
 
 			const oldLines = oldStr.split("\n");
 			const newLines = newStr.split("\n");
-			const added = Math.max(0, newLines.length - oldLines.length);
-			const removed = Math.max(0, oldLines.length - newLines.length);
-			const before = content.substring(0, idx);
-			const lineNum = before.split("\n").length;
+			const added = Math.max(0, newLines.length - oldLines.length) * (replaceAll ? matchCount : 1);
+			const removed = Math.max(0, oldLines.length - newLines.length) * (replaceAll ? matchCount : 1);
+			const lineNum = content.substring(0, idx).split("\n").length;
 			const preview = newStr.length > 100 ? newStr.slice(0, 100) + "..." : newStr;
 
 			const diffPayload = JSON.stringify({
-				path: String(args.path || ""),
+				path: relPath,
 				added,
 				removed,
 				oldContent: content,
 				action: "update" as const
 			});
 
-			let msg = `已${args.path}: 第 ${lineNum} 行已替换`;
-			if (added > 0 && removed > 0) msg += `（修改 ${removed + added} 行）`;
+			let msg = replaceAll
+				? `已编辑 ${relPath}: 替换全部 ${matchCount} 处`
+				: `已编辑 ${relPath}: 第 ${lineNum} 行已替换`;
+			if (added > 0 && removed > 0) msg += `（修改约 ${removed + added} 行）`;
 			else if (added > 0) msg += `（+${added} 行）`;
 			else if (removed > 0) msg += `（-${removed} 行）`;
 			msg += `\n新内容: ${preview}\n<!-- FILE_DIFF ${diffPayload} -->`;
@@ -295,6 +300,32 @@ export const editFileTool: Tool & Previewer = {
 	preview(args: Record<string, unknown>): FileDiff | null {
 		const path = String(args.path || "");
 		return { path, added: 0, removed: 0 };
+	}
+};
+
+// ── grep ──
+export const grepTool: Tool = {
+	name: "grep",
+	description: "在项目源码中按正则搜索（返回 path:line | snippet）。勘察类名/引用时优先于盲目 read_file。只读。",
+	schema: {
+		type: "object",
+		properties: {
+			pattern: { type: "string", description: "正则表达式" },
+			path: { type: "string", description: "相对搜索根目录，默认 src" },
+			glob: { type: "string", description: "文件名 glob，如 *.java 或 **/*Mixin*.java" },
+			max_matches: { type: "number", description: "最多返回条数，默认 40" },
+			case_sensitive: { type: "boolean", description: "默认 false（不区分大小写）" }
+		},
+		required: ["pattern"]
+	},
+	readOnly: () => true,
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		return grepInProject(ctx, String(args.pattern || ""), {
+			path: args.path ? String(args.path) : undefined,
+			glob: args.glob ? String(args.glob) : undefined,
+			maxMatches: typeof args.max_matches === "number" ? args.max_matches : undefined,
+			caseInsensitive: args.case_sensitive !== true
+		});
 	}
 };
 
@@ -374,16 +405,10 @@ export const createRecipeTool: Tool & Previewer = {
 			result: { item: result, count: Number.isFinite(count) ? count : 1 },
 			mcVersion
 		});
-		try {
-			const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content);
-			if (res.success) {
-				logger.file(`Recipe written: ${path}`, `${content.length} bytes`);
-				return `已生成配方: ${path} (${content.length} bytes)`;
-			}
-			return `Error creating recipe: ${res.error}`;
-		} catch (err) {
-			return `Error creating recipe: ${err}`;
-		}
+		const written = await guardedWriteFile(ctx, path, content, { allowOverwrite: true });
+		if (!written.ok) return `Error creating recipe: ${written.message}`;
+		logger.file(`Recipe written: ${path}`, `${content.length} bytes`);
+		return `已生成配方: ${path} (${content.length} bytes)`;
 	},
 	preview(args: Record<string, unknown>): FileDiff | null {
 		const namespace = String(args.namespace || "");
@@ -582,8 +607,8 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
 			mcVersion
 		});
 		const path = recipePath(namespace, name, mcVersion);
-		const res = await window.api.writeFile(`${ctx.projectPath}/${path}`, content);
-		if (!res.success) return `Error creating recipe: ${res.error}`;
+		const written = await guardedWriteFile(ctx, path, content, { allowOverwrite: true });
+		if (!written.ok) return `Error creating recipe: ${written.message}`;
 		logger.file(`Recipe written: ${path}`, `${content.length} bytes`);
 		return `已生成配方 written: ${path} (${content.length} bytes)`;
 	},
@@ -884,8 +909,8 @@ export const fabricContentRegisterTool: Tool = {
 			content = generateModItemsRegistrationClass(config);
 		}
 
-		const res = await window.api.writeFile(`${ctx.projectPath}/${rel}`, content);
-		if (!res.success) return `Error writing ${rel}: ${res.error}`;
+		const written = await guardedWriteFile(ctx, rel, content, { allowOverwrite: true });
+		if (!written.ok) return `Error writing ${rel}: ${written.message}`;
 		logger.file(`Fabric content helper written: ${rel}`, `${content.length} bytes`);
 		const kindLabel = kind === "block" ? "方块" : kind === "block_entity" ? "方块实体" : "物品";
 		return `已生成: ${kindLabel}注册辅助类 → ${rel}`;
@@ -922,8 +947,8 @@ export const fabricDataAssetsGenerateTool: Tool = {
 			mcVersion
 		});
 		for (const file of files) {
-			const res = await window.api.writeFile(`${ctx.projectPath}/${file.path}`, file.content);
-			if (!res.success) return `Error writing ${file.path}: ${res.error}`;
+			const written = await guardedWriteFile(ctx, file.path, file.content, { allowOverwrite: true });
+			if (!written.ok) return `Error writing ${file.path}: ${written.message}`;
 		}
 		return `已生成: 资源文件${files.map((file) => `\n- ${file.path}`).join("")}`;
 	}
@@ -981,8 +1006,8 @@ public class ${simpleName} {
 			{ path: configPath, content: config },
 			{ path: classPath, content }
 		]) {
-			const res = await window.api.writeFile(`${ctx.projectPath}/${file.path}`, file.content);
-			if (!res.success) return `Error writing ${file.path}: ${res.error}`;
+			const written = await guardedWriteFile(ctx, file.path, file.content, { allowOverwrite: true });
+			if (!written.ok) return `Error writing ${file.path}: ${written.message}`;
 		}
 		return `已生成: Mixin 脚手架\n- ${configPath}\n- ${classPath}\n注意: 此为模板代码，需手动填写注入逻辑。`;
 	}
@@ -1117,8 +1142,8 @@ export const fabricMixinRegisterTool: Tool = {
 
 		const newContent = JSON.stringify(config, null, 2) + "\n";
 		const configPath = `src/main/resources/${existing.name}`;
-		const res = await window.api.writeFile(`${ctx.projectPath}/${configPath}`, newContent);
-		if (!res.success) return `Error: ${res.error}`;
+		const written = await guardedWriteFile(ctx, configPath, newContent, { allowOverwrite: true });
+		if (!written.ok) return `Error: ${written.message}`;
 
 		const existingList = arr.length > 1 ? `，现有条目：${arr.join(", ")}` : "";
 		return `已在 ${existing.name} 的 ${key} 数组中注册 ${mixinClass}${existingList}`;
@@ -1407,6 +1432,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		readFileTool,
 		writeFileTool,
 		editFileTool,
+		grepTool,
 		deleteFileTool,
 		fabricDocsSearchTool,
 		fabricJavadocLookupTool,

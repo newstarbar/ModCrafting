@@ -54,6 +54,9 @@ function patternMatchesPath(pattern: string, actualPath: string): boolean {
 
 function writePathMatchesStep(step: PlanStepState, artifactPath: string | undefined): boolean {
   if (!artifactPath) return false
+  if (step.targetPath) {
+    if (patternMatchesPath(step.targetPath, artifactPath)) return true
+  }
   const paths = extractPaths(step.description)
   if (paths.length > 0) {
     return paths.some((p) => patternMatchesPath(p, artifactPath))
@@ -77,17 +80,24 @@ export function canToolResultAdvanceStep(
   if (!step) return { ok: false, reason: 'no_current_step' }
   if (!resultOk(result)) return { ok: false, reason: 'tool_failed' }
 
-  const kind = inferStepKind(step.description)
+  const kind =
+    step.kind === 'inspect' || step.kind === 'write'
+      ? step.kind
+      : inferStepKind(step.description)
   const toolName = result.toolName
 
   if (kind === 'inspect') {
-    const ok = toolName === 'read_file' || toolName === 'list_directory'
+    const ok =
+      toolName === 'read_file' ||
+      toolName === 'list_directory' ||
+      toolName === 'grep' ||
+      toolName === 'fabric_docs_search'
     return { ok, reason: ok ? 'inspect_ok' : 'inspect_tool_mismatch' }
   }
 
   if (kind === 'write') {
     const artifactPath = result.artifactPath || String(result.args?.path || '')
-    const ok = (
+    const isWriteTool =
       toolName === 'write_file' ||
       toolName === 'edit_file' ||
       toolName === 'delete_file' ||
@@ -96,8 +106,13 @@ export function canToolResultAdvanceStep(
       toolName === 'fabric_template_generate' ||
       toolName === 'fabric_content_register' ||
       toolName === 'fabric_data_assets_generate' ||
-      toolName === 'fabric_mixin_scaffold'
-    ) && (writePathMatchesStep(step, artifactPath) || Boolean(result.artifactPath))
+      toolName === 'fabric_mixin_scaffold' ||
+      toolName === 'fabric_mixin_register'
+    if (!isWriteTool) return { ok: false, reason: 'write_tool_mismatch' }
+    const hasExplicitPath = Boolean(step.targetPath) || extractPaths(step.description).length > 0
+    const ok = hasExplicitPath
+      ? writePathMatchesStep(step, artifactPath)
+      : Boolean(artifactPath)
     return { ok, reason: ok ? 'file_written' : 'write_path_mismatch' }
   }
 
