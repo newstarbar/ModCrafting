@@ -8,21 +8,25 @@
 
 1. 安装 OpenCode CLI：`npm i -g opencode-ai@latest`（或使用本仓库 `optionalDependencies`）
 2. 验证：`opencode --version`
-3. 配置 API Key（任选其一环境变量）：
-   - `MODCRAFTING_EVAL_API_KEY`
-   - `OPENCODE_API_KEY`
-   - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`（按你用的模型）
-4. 可选模型：`MODCRAFTING_EVAL_MODEL` 或 `OPENCODE_MODEL`
+3. **默认模型（免费）**：评测默认使用 OpenCode Zen 的 `opencode/deepseek-v4-flash-free`（DeepSeek V4 Flash Free，限时免费）
+   - 首次请在本机跑一次 `opencode` 并登录/连接 Zen（按 TUI 提示），以便 headless `serve` 能用同一凭证
+   - 覆盖模型：`$env:OPENCODE_MODEL="opencode/deepseek-v4-flash"` 或 `opencode/deepseek-v4-flash-free`
+4. 付费第三方 Key **不是必须**；若不用 Zen、改走自备 API，再设：
+   - `MODCRAFTING_EVAL_API_KEY` / `OPENCODE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 5. 本机已有工具链：`resources/jdk-21`、`resources/gradle-9.5`（`npm run setup:toolchain`）
 
 ## 一键运行
 
 ```bash
+# 推荐：先本机登录 Zen（免费 deepseek-v4-flash-free），再跑评测
+opencode   # TUI 里连上 Zen / 选 deepseek-v4-flash-free 一次即可
+
 # 跑全部可自动任务（较慢：每题可能含 gradlew build）
 npm run eval:opencode
 
-# 只跑子集
-npm run eval:opencode -- --tasks T01,T04,T10
+# 显式指定免费模型（与默认相同）
+$env:OPENCODE_MODEL="opencode/deepseek-v4-flash-free"
+npm run eval:opencode -- --tasks T01,T04
 
 # 冒烟：跳过 Gradle（只验文件/JSON/输出）
 npm run eval:opencode -- --skip-build --tasks T07

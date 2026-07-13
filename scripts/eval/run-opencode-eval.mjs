@@ -10,9 +10,8 @@
  *   npm run eval:opencode -- --engine noop   # setup+verify only (agent skipped; expect fails unless fixtures pre-solved)
  *
  * Env:
- *   MODCRAFTING_EVAL_API_KEY / OPENCODE_API_KEY / OPENAI_API_KEY
- *   MODCRAFTING_EVAL_MODEL / OPENCODE_MODEL
- *   OPENCODE_PROVIDER
+ *   OPENCODE_MODEL / MODCRAFTING_EVAL_MODEL  (default: opencode/deepseek-v4-flash-free)
+ *   OPENCODE_API_KEY / MODCRAFTING_EVAL_API_KEY  (Zen 免费模型通常无需付费 Key；若本机已登录 opencode 可省略)
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import path from 'path'
@@ -152,6 +151,10 @@ async function main() {
     }
     opencodeVersion = det.version
     console.log('OpenCode:', opencodeVersion)
+    console.log(
+      'Model:',
+      process.env.OPENCODE_MODEL || process.env.MODCRAFTING_EVAL_MODEL || 'opencode/deepseek-v4-flash-free'
+    )
   }
 
   const report = {

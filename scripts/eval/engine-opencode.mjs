@@ -59,10 +59,13 @@ async function api(baseUrl, method, apiPath, body) {
 }
 
 function buildConfigContent(env) {
-  const model = env.OPENCODE_MODEL || env.MODCRAFTING_EVAL_MODEL || ''
-  const cfg = { $schema: 'https://opencode.ai/config.json' }
-  if (model) cfg.model = model
-  return cfg
+  // OpenCode Zen free tier (see https://opencode.ai/docs/zen/)
+  const DEFAULT_MODEL = 'opencode/deepseek-v4-flash-free'
+  const model = env.OPENCODE_MODEL || env.MODCRAFTING_EVAL_MODEL || DEFAULT_MODEL
+  return {
+    $schema: 'https://opencode.ai/config.json',
+    model
+  }
 }
 
 /**
