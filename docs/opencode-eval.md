@@ -1,81 +1,99 @@
-# OpenCode vs ModCrafting Agent 评测指南
+# OpenCode 自动化评测
 
-本文件用于 Phase 1 本机对比评测。在集成 OpenCode 前，用同一模型、同一模组项目、同一批任务量化差距。
+用**同一批可机器验收的任务**驱动 OpenCode（`opencode serve`），按文件/JSON/`gradlew build` 判定通过与否，并写出报告。不再依赖手工打分表。
+
+> 说明：当前自动化引擎为 **OpenCode**。ModCrafting 应用内 Agent 仍需 Electron/`window.api`，暂未做无 UI 对照跑；两侧对比可先看 OpenCode 通过率，再在应用内对同一任务做抽查。
 
 ## 前置条件
 
-1. 本机安装 OpenCode CLI：`npm i -g opencode-ai@latest` 或 `scoop install opencode`
+1. 安装 OpenCode CLI：`npm i -g opencode-ai@latest`（或使用本仓库 `optionalDependencies`）
 2. 验证：`opencode --version`
-3. ModCrafting 中配置与 OpenCode 相同的 API Key / 模型
-4. 准备一个可复现的 Fabric 模组项目（建议用 ModCrafting 新建模板项目）
+3. 配置 API Key（任选其一环境变量）：
+   - `MODCRAFTING_EVAL_API_KEY`
+   - `OPENCODE_API_KEY`
+   - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`（按你用的模型）
+4. 可选模型：`MODCRAFTING_EVAL_MODEL` 或 `OPENCODE_MODEL`
+5. 本机已有工具链：`resources/jdk-21`、`resources/gradle-9.5`（`npm run setup:toolchain`）
 
-## 评测任务（8–12 项）
+## 一键运行
 
-| ID | 任务 | 类型 | 验收标准 |
-|----|------|------|----------|
-| T01 | 添加一个简单物品（含 lang + 模型占位） | 写码 | `gradlew build` 成功，物品注册类存在 |
-| T02 | 为 T01 物品添加合成配方 | 配方 | `data/<modid>/recipe/*.json` 合法 |
-| T03 | 新建 Mixin 修改玩家跳跃高度 | Mixin | mixins.json 已注册，Java 编译通过 |
-| T04 | 修复故意引入的编译错误（错误类名） | 修复 | 一次 build 内修复或 ≤2 轮修复 |
-| T05 | 修复 Gradle 依赖版本不匹配 | 修复 | build 成功 |
-| T06 | 多文件重构：把逻辑从 main 类抽到 Handler | 重构 | 至少 2 个文件正确修改 |
-| T07 | 探索陌生项目：说明 mod 入口与资源结构 | 勘察 | 正确指出 main/client 入口与 assets 路径 |
-| T08 | 运行客户端并处理启动崩溃日志 | 闭环 | 能读日志并给出可行修复 |
-| T09 | 添加方块 + blockstate + 模型 | 写码 | 资源路径正确 |
-| T10 | fabric.mod.json 缺字段修复 | 领域 | validate 通过，build 成功 |
+```bash
+# 跑全部可自动任务（较慢：每题可能含 gradlew build）
+npm run eval:opencode
 
-## 评分维度（每项 1–5 分）
+# 只跑子集
+npm run eval:opencode -- --tasks T01,T04,T10
 
-| 维度 | 说明 |
+# 冒烟：跳过 Gradle（只验文件/JSON/输出）
+npm run eval:opencode -- --skip-build --tasks T07
+
+# 列出任务
+npm run eval:opencode -- --dry-run
+
+# 失败工作区保留在 temp/opencode-eval/workspaces
+npm run eval:opencode -- --keep
+```
+
+## 报告输出
+
+| 路径 | 内容 |
 |------|------|
-| 一次成功率 | 无需人工纠正即完成任务 |
-| 人工介入次数 | 越少越好（记录次数） |
-| 错误工具次数 | 调用了与步骤无关的工具 |
-| 计划可用性 | 计划是否含路径/步骤类型/可执行性 |
-| build/run 修复轮数 | 失败到成功的轮次 |
-| 耗时（分钟） | 从发 prompt 到验收通过 |
+| `temp/opencode-eval/results.json` | 机器可读结果 |
+| `temp/opencode-eval/results.md` | 人类可读表 |
+| `docs/opencode-eval-results.md` | 同上（便于在仓库内查看；勿提交 API Key） |
 
-## 记录表
+退出码：`0` = 全部通过，`1` = 有失败，`2` = 未安装 OpenCode。
 
-复制下表，每个任务跑两遍（ModCrafting / OpenCode CLI）：
+## 任务目录（机器验收）
 
+定义文件：[`scripts/eval/tasks.json`](../scripts/eval/tasks.json)
+
+| ID | 任务 | 自动验收要点 |
+|----|------|----------------|
+| T01 | 添加物品 copper_coin | Java/lang/model 存在 + build |
+| T02 | 合成配方 | recipe JSON 合法 + build |
+| T03 | Mixin 跳跃 | Mixin 源码 + mixins.json + build |
+| T04 | 修编译错误 | 去掉错误符号 + build |
+| T05 | 修错误 Fabric API 版本 | properties 修复 + build |
+| T06 | 抽 EvalInitHandler | 新文件 + 主类委托 + build |
+| T07 | 探索问答（不改文件） | 输出含入口/assets + 无文件变更 |
+| T09 | 添加方块资源 | blockstate/model + build |
+| T10 | 修残缺 fabric.mod.json | JSON 合法含 entrypoints + build |
+| T08 | runClient 崩溃闭环 | **默认跳过**（过重） |
+
+## 架构
+
+```mermaid
+flowchart LR
+  CLI[run-opencode-eval] --> Scaffold[scaffoldEvalProject]
+  Scaffold --> Setup[task.setup mutations]
+  Setup --> Engine[opencode serve + session.prompt]
+  Engine --> Verify[file/json/gradle checks]
+  Verify --> Report[results.json / md]
 ```
-任务: T__
-引擎: ModCrafting | OpenCode
-模型: ___________
-项目: ___________
 
-一次成功率:     /5
-人工介入次数:
-错误工具次数:
-计划可用性:       /5
-build/run 修复轮:
-耗时(分钟):
+## 本地校验 harness（不调 LLM）
 
-备注:
+验证脚手架与断言逻辑本身：
 
-
+```bash
+node --experimental-strip-types --test scripts/harness-opencode-eval.test.ts
 ```
 
-## OpenCode 侧操作提示
+或已包含在：
 
-- 进入项目目录后运行 `opencode`
-- 勘察类任务用 **plan** agent（Tab 切换）
-- 写码类任务用 **build** agent
-- 记录是否手动切换 agent、是否触发权限确认
+```bash
+npm run test:harness
+```
 
-## ModCrafting 侧操作提示
+## 扩展任务
 
-- 使用 Agent 模式（非 Ask）
-- 计划模式先生成计划，再点「执行计划」
-- 记录澄清提问次数与计划步骤质量
+编辑 `scripts/eval/tasks.json`：
 
-## 退出标准
+- `setup`：引用 `scripts/eval/setups.mjs` 中的函数名（如 `injectCompileError`）
+- `verify`：使用 `fileExists` / `fileContains` / `fileMatches` / `globExists` / `jsonValid` / `gradleBuild` / `agentOutputContainsAny` / `noFileChanges` 等
+- `agent`：`build`（默认）或 `plan`（勘察类）
 
-- 完成至少 8 个任务的对比记录
-- 若 OpenCode 在「通用写码」维度平均高出 ModCrafting ≥1 分，进入 Phase 2/4
-- 若差距不明显，优先做 Phase 3 自研加强，暂缓 SDK 嵌入
+## 与旧手工表的关系
 
-## 评测结果归档
-
-建议将填好的表格保存为 `docs/opencode-eval-results.md`（本地，不提交敏感 API 信息）。
+旧「1–5 分主观维度」已弃用。自动化只输出 **PASS/FAIL + 耗时 + 失败检查项**。若仍要主观对比 ModCrafting UI，对同一 `tasks.json` prompt 在应用内手跑并对照报告即可。

@@ -1,0 +1,133 @@
+{
+  "modId": "evalmod",
+  "groupId": "com.example",
+  "projectName": "evalmod",
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "添加简单物品",
+      "type": "write",
+      "prompt": "在模组中新增一个物品 copper_coin（铜币）。需要：注册到 ModItems（或新建注册类）、en_us/zh_cn 语言、item model JSON。不要改无关文件。完成后确保项目可编译。",
+      "setup": [],
+      "verify": [
+        { "type": "fileMatches", "pattern": "src/main/java/**/*.java", "contains": "copper_coin" },
+        { "type": "fileExists", "path": "src/main/resources/assets/evalmod/lang/en_us.json" },
+        { "type": "fileExists", "path": "src/main/resources/assets/evalmod/models/item/copper_coin.json" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T02",
+      "title": "添加合成配方",
+      "type": "recipe",
+      "prompt": "为物品 copper_coin 添加一个 shapeless 合成配方：4 个 minecraft:copper_ingot → 1 个 evalmod:copper_coin。写入 data/evalmod/recipe/（或 recipes/）下的 JSON。",
+      "setup": ["ensureCopperCoinStub"],
+      "verify": [
+        { "type": "globExists", "pattern": "src/main/resources/data/evalmod/recipe*/**/copper_coin*.json" },
+        { "type": "jsonValidGlob", "pattern": "src/main/resources/data/evalmod/recipe*/**/copper_coin*.json" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T03",
+      "title": "新建 Mixin 改跳跃高度",
+      "type": "mixin",
+      "prompt": "新建一个 Mixin，修改玩家跳跃高度（例如 PlayerEntity 或 LivingEntity 的 jump）。必须：创建 Mixin Java 类，并在 mixins.json（或 *.mixins.json）中注册。确保可编译。",
+      "setup": ["ensureMixinsJson"],
+      "verify": [
+        { "type": "fileMatches", "pattern": "src/**/*Mixin*.java", "contains": "@Mixin" },
+        { "type": "fileMatches", "pattern": "src/main/resources/**/*mixins*.json", "contains": "Mixin" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T04",
+      "title": "修复故意引入的编译错误",
+      "type": "repair",
+      "prompt": "项目目前无法编译。请阅读编译错误，用最小改动修复，然后确保 gradlew build 成功。不要重写整个项目。",
+      "setup": ["injectCompileError"],
+      "verify": [
+        { "type": "fileNotContains", "path": "src/main/java/com/example/eval_mod/BrokenHelper.java", "contains": "MissingClassThatDoesNotExist" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T05",
+      "title": "修复 Gradle 依赖版本不匹配",
+      "type": "repair",
+      "prompt": "build.gradle / gradle.properties 中有错误的 Fabric API 版本，导致依赖解析或编译失败。请修复版本以匹配本项目的 Minecraft/Fabric Loader，并确保 build 成功。",
+      "setup": ["injectBadFabricVersion"],
+      "verify": [
+        { "type": "fileNotContains", "path": "gradle.properties", "contains": "99.0.0+broken" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T06",
+      "title": "多文件重构抽 Handler",
+      "type": "refactor",
+      "prompt": "把 EvalMod.onInitialize 里对 ModItems.registerModItems 的调用逻辑抽到新建类 EvalInitHandler（同包），由 Handler 负责调用注册；主类只委托给 Handler。至少修改/新建 2 个 Java 文件。",
+      "setup": [],
+      "verify": [
+        { "type": "fileExists", "path": "src/main/java/com/example/eval_mod/EvalInitHandler.java" },
+        { "type": "fileContains", "path": "src/main/java/com/example/eval_mod/EvalMod.java", "contains": "EvalInitHandler" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T07",
+      "title": "探索项目结构（输出问答）",
+      "type": "inspect",
+      "prompt": "不要改文件。阅读 fabric.mod.json 与源码，用简短中文回答：1) main 入口类 FQN 2) client 入口类 FQN 3) assets 根路径（含 modid）。",
+      "setup": [],
+      "verify": [
+        { "type": "agentOutputContainsAny", "needles": ["com.example.eval_mod.EvalMod", "EvalMod"] },
+        { "type": "agentOutputContainsAny", "needles": ["EvalModClient", "client"] },
+        { "type": "agentOutputContainsAny", "needles": ["assets/evalmod", "assets\\\\evalmod"] },
+        { "type": "noFileChanges" }
+      ],
+      "timeoutMs": 300000,
+      "agent": "plan"
+    },
+    {
+      "id": "T09",
+      "title": "添加方块与资源",
+      "type": "write",
+      "prompt": "新增方块 polished_copper_block：Java 注册、blockstate、block model、item model、zh_cn/en_us 语言。路径必须在 assets/evalmod/ 下。确保可编译。",
+      "setup": [],
+      "verify": [
+        { "type": "fileMatches", "pattern": "src/main/java/**/*.java", "contains": "polished_copper_block" },
+        { "type": "fileExists", "path": "src/main/resources/assets/evalmod/blockstates/polished_copper_block.json" },
+        { "type": "fileExists", "path": "src/main/resources/assets/evalmod/models/block/polished_copper_block.json" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "T10",
+      "title": "修复残缺 fabric.mod.json",
+      "type": "domain",
+      "prompt": "fabric.mod.json 缺少必要字段或 entrypoints 损坏，请修复为合法 Fabric mod 元数据（保留 id=evalmod），并确保 build 成功。",
+      "setup": ["breakFabricModJson"],
+      "verify": [
+        { "type": "jsonValid", "path": "src/main/resources/fabric.mod.json" },
+        { "type": "fileContains", "path": "src/main/resources/fabric.mod.json", "contains": "\"id\"" },
+        { "type": "fileContains", "path": "src/main/resources/fabric.mod.json", "contains": "entrypoints" },
+        { "type": "gradleBuild" }
+      ],
+      "timeoutMs": 600000
+    }
+  ],
+  "skipped": [
+    {
+      "id": "T08",
+      "reason": "runClient 过重且不稳定，自动化评测默认跳过；需要时手动跑"
+    }
+  ]
+}
