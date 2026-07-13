@@ -1,4 +1,5 @@
-import { compilePlanFromText, compiledStepsToParsed } from './plan-compiler.ts'
+import { compilePlanFromText, compiledStepsToParsed, type CompiledPlanStep } from './plan-compiler.ts'
+import { validateCompiledSteps, formatPlanValidationIssues } from './plan-validator.ts'
 import { isOpsOnlyPlan, type ParsedPlanStep } from '../utils/plan-steps.ts'
 
 export type PlanStepStatus = 'pending' | 'running' | 'completed'
@@ -31,6 +32,15 @@ export class PlanTracker {
       ...(s.targetPath ? { targetPath: s.targetPath } : {})
     }))
     return new PlanTracker(steps)
+  }
+
+  static validationIssuesFromText(text: string) {
+    const compiled = compilePlanFromText(text)
+    return validateCompiledSteps(compiled)
+  }
+
+  static formatValidationIssues(text: string): string {
+    return formatPlanValidationIssues(PlanTracker.validationIssuesFromText(text))
   }
 
   static fromSteps(steps: PlanStepState[]): PlanTracker {

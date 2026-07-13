@@ -239,6 +239,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
   const [deletePending, setDeletePending] = useState<{ msgId: string; role: 'user' | 'assistant'; preview: string } | null>(null)
+  const [openCodeInstalled, setOpenCodeInstalled] = useState(false)
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -373,8 +374,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     })
     controllerRef.current = ctrl
     void reloadAgentToolRegistry(ctrl)
-    const onConfigSaved = (): void => { void reloadAgentToolRegistry(controllerRef.current) }
+    const onConfigSaved = (): void => {
+      void reloadAgentToolRegistry(controllerRef.current)
+      void controllerRef.current?.refreshOpenCodeSettings()
+    }
     window.addEventListener('agent-config-saved', onConfigSaved)
+    void window.api.opencodeDetect().then((res) => setOpenCodeInstalled(res.installed))
     return () => {
       window.removeEventListener('agent-config-saved', onConfigSaved)
       ctrl.cancel()
@@ -1177,6 +1182,22 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     persistComposerMeta({ sessionGoal: goal })
   }, [persistComposerMeta])
 
+  const handleOpenInOpenCode = useCallback(async () => {
+    if (!projectPath) return
+    const res = await window.api.opencodeOpenProject(projectPath)
+    if (!res.success) {
+      setDisplayMessages((prev) => [
+        ...prev,
+        {
+          id: `sys-opencode-${Date.now()}`,
+          role: 'assistant' as const,
+          content: `无法在 OpenCode 中打开项目：${res.error || '未知错误'}`,
+          timestamp: Date.now()
+        }
+      ])
+    }
+  }, [projectPath])
+
   const handleCancel = useCallback(() => {
     controllerRef.current?.cancel()
     const t = turnRef.current
@@ -1777,6 +1798,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           onProviderModelChange={onProviderModelChange ?? (() => {})}
           onOpenApiSettings={onOpenApiSettings}
           onQuickTemplateSelect={handleTemplateSelect}
+          openCodeInstalled={openCodeInstalled}
+          onOpenInOpenCode={handleOpenInOpenCode}
         />
       </div>
 

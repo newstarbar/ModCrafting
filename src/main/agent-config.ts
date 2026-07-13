@@ -23,12 +23,15 @@ export interface AgentConfig {
   knowledgeSourceOverrides: KnowledgeSourceOverride[]
   disabledTools: string[]
   mcpServers: McpServerConfig[]
+  /** Phase 4 PoC: delegate write steps to local OpenCode server when available */
+  useOpenCodeDelegate?: boolean
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
   knowledgeSourceOverrides: [],
   disabledTools: [],
-  mcpServers: []
+  mcpServers: [],
+  useOpenCodeDelegate: false
 }
 
 function configPath(): string {
@@ -43,7 +46,8 @@ export function loadAgentConfig(): AgentConfig {
     return {
       knowledgeSourceOverrides: Array.isArray(parsed.knowledgeSourceOverrides) ? parsed.knowledgeSourceOverrides : [],
       disabledTools: Array.isArray(parsed.disabledTools) ? parsed.disabledTools : [],
-      mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : []
+      mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
+      useOpenCodeDelegate: parsed.useOpenCodeDelegate === true
     }
   } catch {
     return { ...DEFAULT_CONFIG }
@@ -56,7 +60,8 @@ export function saveAgentConfig(config: AgentConfig): { success: boolean; error?
     fs.writeFileSync(configPath(), JSON.stringify({
       knowledgeSourceOverrides: config.knowledgeSourceOverrides || [],
       disabledTools: config.disabledTools || [],
-      mcpServers: config.mcpServers || []
+      mcpServers: config.mcpServers || [],
+      useOpenCodeDelegate: config.useOpenCodeDelegate === true
     }, null, 2), 'utf-8')
     return { success: true }
   } catch (err) {

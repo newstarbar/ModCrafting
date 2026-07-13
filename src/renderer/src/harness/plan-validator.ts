@@ -1,0 +1,55 @@
+import type { CompiledPlanStep } from './plan-compiler.ts'
+
+export interface PlanValidationIssue {
+  stepId: string
+  field: 'kind' | 'targetPath' | 'description' | 'evidence'
+  message: string
+}
+
+const PATH_HINT_RE = /(?:src\/|data\/|gradle\/)/i
+
+/** Machine-check plan steps after compilation. */
+export function validateCompiledSteps(steps: CompiledPlanStep[]): PlanValidationIssue[] {
+  const issues: PlanValidationIssue[] = []
+
+  for (const step of steps) {
+    if (step.hostManaged) continue
+
+    if (!step.description?.trim()) {
+      issues.push({ stepId: step.id, field: 'description', message: '步骤描述为空' })
+    }
+
+    if (step.kind === 'write' && !step.targetPath && !PATH_HINT_RE.test(step.description)) {
+      issues.push({
+        stepId: step.id,
+        field: 'targetPath',
+        message: 'write 步骤应包含目标路径（[write] 标签或 src/data/gradle 路径）'
+      })
+    }
+
+    if (step.kind === 'recipe' && !step.targetPath && !/配方|recipe/i.test(step.description)) {
+      issues.push({
+        stepId: step.id,
+        field: 'targetPath',
+        message: 'recipe 步骤应指明配方路径或配方名称'
+      })
+    }
+
+    if (!step.kind && !PATH_HINT_RE.test(step.description) && !step.hostManaged) {
+      issues.push({
+        stepId: step.id,
+        field: 'kind',
+        message: '建议使用 [write|recipe|inspect] 标签标注步骤类型'
+      })
+    }
+  }
+
+  return issues
+}
+
+export function formatPlanValidationIssues(issues: PlanValidationIssue[]): string {
+  if (issues.length === 0) return ''
+  return issues
+    .map((i) => `步骤 #${i.stepId}（${i.field}）：${i.message}`)
+    .join('\n')
+}

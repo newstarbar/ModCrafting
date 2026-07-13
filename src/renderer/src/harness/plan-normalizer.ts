@@ -98,8 +98,8 @@ function defaultAllowedTools(kind: StepKind): string[] {
       ]
     case 'write':
       return [
-        'write_file',
         'edit_file',
+        'write_file',
         'delete_file',
         'complete_step',
         'fabric_template_generate',

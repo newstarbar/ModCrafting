@@ -143,7 +143,7 @@ export function isToolAllowedForStep(
 function rejectedRepairWriteResult(step: WorkflowStep, call: ToolCallWithId): ToolResult {
   return {
     output:
-      `blocked: [repair_write_required] 当前步骤 #${step.id}（${step.title}）在修复模式下必须先 read_error_log / fabric_log_debugger 分析并用 write_file 修改代码，再重新构建。禁止直接调用 "${call.name}"。`,
+      `blocked: [repair_write_required] 当前步骤 #${step.id}（${step.title}）在修复模式下必须先 read_error_log / fabric_log_debugger 分析并用 edit_file 修改代码，再重新构建。禁止直接调用 "${call.name}"。`,
     error: `repair_write_required: ${call.name}`,
     durationMs: 0,
     ok: false,

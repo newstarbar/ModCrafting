@@ -49,7 +49,69 @@ function parseStructuredLine(description: string): { kind?: StructuredStepKind; 
   return { kind, body, targetPath: pathMatch?.[1]?.replace(/\\/g, '/') }
 }
 
+const JSON_PLAN_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/i
+
+export interface JsonPlanStepInput {
+  kind?: string
+  description?: string
+  title?: string
+  targetPath?: string
+  path?: string
+  evidence?: string
+  allowedTools?: string[]
+}
+
+/** Prefer fenced/raw JSON plan arrays when present; otherwise fall back to numbered lines. */
+export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
+  const candidates: string[] = []
+  const fence = text.match(JSON_PLAN_FENCE_RE)
+  if (fence?.[1]) candidates.push(fence[1].trim())
+  const arrayStart = text.indexOf('[')
+  const arrayEnd = text.lastIndexOf(']')
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    candidates.push(text.slice(arrayStart, arrayEnd + 1).trim())
+  }
+
+  for (const raw of candidates) {
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === 'object' && Array.isArray((parsed as { steps?: unknown }).steps)
+          ? (parsed as { steps: unknown[] }).steps
+          : null
+      if (!list || list.length === 0) continue
+
+      const steps: CompiledPlanStep[] = []
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i] as JsonPlanStepInput
+        if (!item || typeof item !== 'object') continue
+        const description = String(item.description || item.title || '').trim()
+        if (!description) continue
+        const kindRaw = String(item.kind || '').toLowerCase()
+        const kind = (['write', 'recipe', 'inspect'].includes(kindRaw)
+          ? kindRaw
+          : undefined) as StructuredStepKind | undefined
+        const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
+        steps.push({
+          id: String(i + 1),
+          description,
+          kind,
+          targetPath
+        })
+      }
+      if (steps.length > 0) return steps
+    } catch {
+      // try next candidate
+    }
+  }
+  return null
+}
+
 export function parseStructuredSteps(text: string): CompiledPlanStep[] {
+  const fromJson = parseJsonPlanSteps(text)
+  if (fromJson) return fromJson
+
   const raw = parsePlanSteps(text)
   return raw.map((step) => {
     const { kind, body, targetPath } = parseStructuredLine(step.description)

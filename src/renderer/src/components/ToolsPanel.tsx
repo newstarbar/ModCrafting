@@ -31,6 +31,7 @@ interface AgentConfigState {
   knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
   disabledTools: string[]
   mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+  useOpenCodeDelegate?: boolean
 }
 
 function uid(): string {
@@ -48,6 +49,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
   const [activity, setActivity] = useState<ToolActivityEntry[]>([])
   const [saveHint, setSaveHint] = useState('')
   const [loading, setLoading] = useState(true)
+  const [useOpenCodeDelegate, setUseOpenCodeDelegate] = useState(false)
 
   const builtinTools = useMemo(() => {
     const registry = new Registry()
@@ -63,6 +65,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
         window.api.listKnowledgeFiles()
       ])
       setDisabledTools(new Set(cfg.disabledTools || []))
+      setUseOpenCodeDelegate(cfg.useOpenCodeDelegate === true)
       const overrideMap = new Map((cfg.knowledgeSourceOverrides || []).map((o) => [o.id, o]))
       setSources(FABRIC_KNOWLEDGE_SOURCES.map((source) => {
         const override = overrideMap.get(source.id)
@@ -112,6 +115,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
         enabled: s.enabled
       })),
       disabledTools: [...disabledTools],
+      useOpenCodeDelegate,
       mcpServers: mcpServers.map((s) => ({
         id: s.id,
         name: s.name,
@@ -127,11 +131,12 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
     if (res.success) {
       setSaveHint('已保存')
       onConfigSaved?.()
+      window.dispatchEvent(new Event('agent-config-saved'))
       window.setTimeout(() => setSaveHint(''), 2000)
     } else {
       setSaveHint(res.error || '保存失败')
     }
-  }, [sources, disabledTools, mcpServers, onConfigSaved])
+  }, [sources, disabledTools, mcpServers, useOpenCodeDelegate, onConfigSaved])
 
   const saveKnowledgeFile = useCallback(async () => {
     if (!selectedKnowledgeFile) return
@@ -212,6 +217,19 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
 
       {section === 'tools' && (
         <div className="tools-panel-section">
+          <div className="tools-panel-card">
+            <label className="tools-panel-row">
+              <input
+                type="checkbox"
+                checked={useOpenCodeDelegate}
+                onChange={(e) => setUseOpenCodeDelegate(e.target.checked)}
+              />
+              <strong>委托写码给 OpenCode（PoC）</strong>
+            </label>
+            <div className="mc-dim" style={{ fontSize: 12, marginTop: 4 }}>
+              开启后，执行阶段的 write 步骤可委托本机 OpenCode serve；Fabric 专用工具与计划审批仍走自研 harness。需已安装 OpenCode CLI。
+            </div>
+          </div>
           {builtinTools.map((tool) => (
             <div key={tool.name} className="tools-panel-card">
               <label className="tools-panel-row">

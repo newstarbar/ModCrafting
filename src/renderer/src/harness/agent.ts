@@ -44,6 +44,7 @@ export interface RunOptions {
   opsOnlyPlan?: boolean
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
+  openCodeDelegate?: (step: import('./workflow-types.ts').WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
 }
 
 const MAX_READONLY_ROUNDS = 3
@@ -52,6 +53,19 @@ const MAX_FINAL_READINESS_BLOCKS = 3
 const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'read_error_log', 'run_command']
 const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES
 const CONTROL_TOOL_NAMES = ['complete_step']
+const PLAN_READONLY_TOOL_NAMES = new Set([
+  'read_file',
+  'list_directory',
+  'fabric_docs_search',
+  'fabric_javadoc_lookup',
+  'vanilla_mc_wiki_query',
+  'fabric_meta_version_check',
+  'fabric_mod_json_validate',
+  'fabric_log_debugger',
+  'read_error_log',
+  'explain_code',
+  'ask_clarification'
+])
 
 function stableStringify(args: Record<string, unknown>): string {
   const keys = Object.keys(args).sort()
@@ -174,7 +188,8 @@ export class Agent {
     planTracker: PlanTracker,
     emitLifecycle: boolean,
     abortSignal?: AbortSignal,
-    onStream?: (text: string, reasoning?: string) => void
+    onStream?: (text: string, reasoning?: string) => void,
+    openCodeDelegate?: RunOptions['openCodeDelegate']
   ): Promise<string> {
     const engine = new WorkflowEngine({
       steps: normalizeWorkflowSteps(planTracker.steps),
@@ -185,8 +200,8 @@ export class Agent {
       emit: (event) => this.emit(event),
       onToolDispatch: this.onToolDispatch,
       onToolResult: this.onToolResult,
+      openCodeDelegate,
       modelCall: async (workflowMessages, tools, onChunk) => {
-        // Micro-compact old tool results before sending to API
         const compactedMessages = microCompact(workflowMessages, this.assistantTurnCount)
         this.assistantTurnCount++
         let text = ''
@@ -334,7 +349,8 @@ export class Agent {
         planTracker,
         emitLifecycle,
         abortSignal,
-        onStream
+        onStream,
+        options.openCodeDelegate
       )
     }
 
@@ -398,7 +414,7 @@ export class Agent {
       // Build available tools
       let availableTools =
         phase === 'plan'
-          ? this.filterControlTools(this.registry.schemas())
+          ? this.filterControlTools(this.registry.schemas()).filter((t) => PLAN_READONLY_TOOL_NAMES.has(t.name))
           : this.filterControlTools(this.registry.schemas())
       if (this.runLifecycleMeta.turnMode === 'chat') {
         const chatTools = new Set(['read_file', 'explain_code', 'fabric_docs_search'])

@@ -10,6 +10,7 @@ import {
   toolResultMessage
 } from './chat-message.ts'
 import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.ts'
+import { formatGradleErrorsForPrompt, gradleErrorSignature } from './gradle-error-parser.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -41,6 +42,7 @@ export interface WorkflowEngineOptions {
   onToolDispatch?: (name: string, id: string) => void
   onToolResult?: (name: string, id: string, output: string) => void
   modelCall: WorkflowModelCall
+  openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
 }
 
 let workflowToolId = 0
@@ -48,6 +50,7 @@ let workflowToolId = 0
 const MAX_REPAIR_ROUNDS = 3
 const MAX_MODEL_NETWORK_RETRIES = 2
 const REPAIR_EXTRA_TOOLS = [
+  'edit_file',
   'write_file',
   'read_file',
   'read_error_log',
@@ -83,14 +86,13 @@ function repairExtraTools(step: WorkflowStep): string[] {
 }
 
 function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
-  const tail = output.trim().split('\n').slice(-80).join('\n')
+  const structured = formatGradleErrorsForPrompt(output)
   const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
   return (
     `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
-    `必须先 read_error_log 或 fabric_log_debugger 分析错误，再用 write_file 修改代码。\n` +
-    `在成功 write_file 之前禁止直接调用 ${retry}。\n` +
-    `修改代码后再调用 ${retry} 验证修复结果。\n\n` +
-    `--- 错误摘要 ---\n${tail}`
+    `流程：观察（read_error_log / fabric_log_debugger）→ 最小补丁（edit_file 优先）→ 再验证（${retry}）。\n` +
+    `在成功 edit_file/write_file 之前禁止直接调用 ${retry}。\n\n` +
+    `--- 错误摘要 ---\n${structured}`
   )
 }
 
@@ -256,6 +258,7 @@ export class WorkflowEngine {
   private onToolDispatch?: (name: string, id: string) => void
   private onToolResult?: (name: string, id: string, output: string) => void
   private modelCall: WorkflowModelCall
+  private openCodeDelegate?: WorkflowEngineOptions['openCodeDelegate']
 
   constructor(options: WorkflowEngineOptions) {
     this.steps = options.steps
@@ -267,6 +270,7 @@ export class WorkflowEngine {
     this.onToolDispatch = options.onToolDispatch
     this.onToolResult = options.onToolResult
     this.modelCall = options.modelCall
+    this.openCodeDelegate = options.openCodeDelegate
   }
 
   private planState(): Array<{ id: string; description: string; status: string }> {
@@ -390,11 +394,40 @@ export class WorkflowEngine {
       if (step.status === 'pending') step.status = 'running'
       this.emitPlanState()
 
+      if (
+        this.openCodeDelegate &&
+        step.kind === 'write' &&
+        this.projectPath &&
+        !this.abortSignal?.aborted
+      ) {
+        const instruction =
+          `完成 Fabric 模组写码步骤：${step.title}` +
+          (step.targetPath ? `\n目标路径：${step.targetPath}` : '')
+        const delegated = await this.openCodeDelegate(step, instruction)
+        if (delegated.ok) {
+          step.status = 'completed'
+          this.planTracker.advanceCurrent('opencode_delegate')
+          if (delegated.output?.trim()) {
+            finalContent = delegated.output
+          }
+          this.emitPlanState()
+          continue
+        }
+        this.emit({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: `OpenCode 委托失败，回退自研 Agent：${delegated.error || 'unknown'}`
+          }
+        })
+      }
+
       let completed = false
       let repairMode = false
       let repairWriteRequired = false
       let repairRounds = 0
       let lastFailureOutput = ''
+      const seenRepairSignatures = new Set<string>()
       let attempt = 0
       let loopIterations = 0
       let modelNetworkRetries = 0
@@ -566,6 +599,15 @@ export class WorkflowEngine {
         }
 
         if (primaryResult && isTerminalFailure(step, primaryResult)) {
+          const signature = gradleErrorSignature(primaryResult.output)
+          if (seenRepairSignatures.has(signature)) {
+            roundInstruction =
+              '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 edit_file 做不同修改，或 ask_clarification 向用户确认。'
+            this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+            attempt++
+            continue
+          }
+          seenRepairSignatures.add(signature)
           repairMode = true
           repairWriteRequired = true
           repairRounds++
@@ -581,7 +623,7 @@ export class WorkflowEngine {
 
         if (
           repairMode &&
-          primaryResult?.toolName === 'write_file' &&
+          (primaryResult?.toolName === 'write_file' || primaryResult?.toolName === 'edit_file') &&
           primaryResult.ok &&
           !primaryResult.error
         ) {

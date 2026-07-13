@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { setupMenu } from './menu'
 import { setupIpcHandlers } from './ipc-handlers'
+import { setupOpenCodeHandlers, shutdownOpenCode } from './opencode-handlers'
 import { openExternalWithFallback } from './external-url'
 import { setupTerminalHandlers, stopAllTerminalSessions } from './terminal-handler'
 import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
@@ -20,6 +21,7 @@ let shutdownStarted = false
 async function runShutdownCleanup(): Promise<void> {
   stopAllTerminalSessions()
   stopAllMcInstances()
+  await shutdownOpenCode()
   await stopGradleDaemonsOnExit()
 }
 
@@ -99,6 +101,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   setupMenu()
   setupIpcHandlers()
+  setupOpenCodeHandlers(() => mainWindow)
   setupTerminalHandlers()
   setupMcRuntimeHandlers()
   createWindow()

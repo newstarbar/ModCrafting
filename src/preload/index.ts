@@ -341,7 +341,45 @@ const api = {
 
   // Session export
   sessionExport: (payload: string, suggestedName?: string): Promise<{ success: boolean; path: string; name: string }> =>
-    ipcRenderer.invoke('session:export', payload, suggestedName)
+    ipcRenderer.invoke('session:export', payload, suggestedName),
+
+  // OpenCode bridge (optional local install)
+  opencodeDetect: (): Promise<{ installed: boolean; version?: string; command?: string; error?: string }> =>
+    ipcRenderer.invoke('opencode:detect'),
+  opencodeOpenProject: (projectPath: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('opencode:openProject', projectPath),
+  opencodeServerStart: (projectPath: string, config?: Record<string, unknown>): Promise<{
+    running: boolean
+    url?: string
+    port?: number
+    projectPath?: string
+    version?: string
+    error?: string
+  }> => ipcRenderer.invoke('opencode:serverStart', projectPath, config),
+  opencodeServerStop: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('opencode:serverStop'),
+  opencodeServerState: (): Promise<{
+    running: boolean
+    url?: string
+    port?: number
+    projectPath?: string
+    version?: string
+    error?: string
+  }> => ipcRenderer.invoke('opencode:serverState'),
+  opencodeSessionCreate: (title?: string): Promise<{ id?: string; error?: string }> =>
+    ipcRenderer.invoke('opencode:sessionCreate', title),
+  opencodeSessionPrompt: (sessionId: string, text: string, agent?: string): Promise<{
+    ok: boolean
+    data?: unknown
+    error?: string
+  }> => ipcRenderer.invoke('opencode:sessionPrompt', sessionId, text, agent),
+  opencodeSessionAbort: (sessionId: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('opencode:sessionAbort', sessionId),
+  onOpenCodeEvent: (callback: (payload: unknown) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => callback(payload)
+    ipcRenderer.on('opencode:event', handler)
+    return () => ipcRenderer.removeListener('opencode:event', handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

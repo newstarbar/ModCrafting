@@ -13,6 +13,7 @@ import {
 	type ProjectCreateConfig
 } from "../project/scaffold";
 import { executeTemplateGenerate, resolveProjectConfig } from "../project/template-runner.ts";
+import { validateFileEditGate } from "./edit-gate.ts";
 import {
 	generateModBlockEntitiesRegistrationClass,
 	generateModBlocksRegistrationClass,
@@ -101,7 +102,7 @@ function computeLineDiff(oldContent: string, newContent: string): { added: numbe
 
 export const writeFileTool: Tool & Previewer = {
 	name: "write_file",
-	description: "写入文件（全量覆盖）。自动创建中间目录。覆盖已有文件时显示旧内容 + diff 统计。新建文件用此工具，修改已有文件优先用 edit_file。",
+	description: "新建文件（全量写入）。仅用于不存在的路径；修改已有文件必须用 edit_file。自动创建中间目录。",
 	schema: {
 		type: "object",
 		properties: {
@@ -126,6 +127,19 @@ export const writeFileTool: Tool & Previewer = {
 			}
 		} catch {
 			// File doesn't exist yet (new file) — that's fine
+		}
+
+		if (fileExisted && oldContent.length > 0) {
+			return (
+				`blocked: [aci_write_gate] 文件已存在：${args.path}。` +
+				`请用 edit_file 做精确替换；write_file 仅用于新建文件。` +
+				`若需整文件重写，先用 read_file 确认后仍应优先 edit_file 分步修改。`
+			)
+		}
+
+		const gate = validateFileEditGate(String(args.path || ""), content)
+		if (!gate.ok) {
+			return `blocked: [edit_gate] ${gate.reason}。请修正内容后重试。`
 		}
 
 		try {
@@ -242,6 +256,12 @@ export const editFileTool: Tool & Previewer = {
 
 		// Replace
 		const newContent = content.substring(0, idx) + newStr + content.substring(idx + oldStr.length);
+
+		const gate = validateFileEditGate(String(args.path || ""), newContent)
+		if (!gate.ok) {
+			return `blocked: [edit_gate] ${gate.reason}。编辑未落盘，请修正后重试。`
+		}
+
 		try {
 			await window.api.writeFile(filePath, newContent);
 

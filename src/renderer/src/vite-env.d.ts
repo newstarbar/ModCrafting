@@ -123,11 +123,13 @@ interface ModCraftingApi {
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
     mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+    useOpenCodeDelegate?: boolean
   }>
   saveAgentConfig: (config: {
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
     mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
+    useOpenCodeDelegate?: boolean
   }) => Promise<{ success: boolean; error?: string }>
   listKnowledgeFiles: () => Promise<Array<{ path: string; bundled: boolean; overridden: boolean }>>
   knowledgeReadLocal: (relPath: string) => Promise<{ success: boolean; content?: string; source?: 'override' | 'bundled'; error?: string }>
@@ -139,6 +141,34 @@ interface ModCraftingApi {
     truncated?: boolean
     error?: string
   }>
+  sessionExport: (payload: string, suggestedName?: string) => Promise<{ success: boolean; path: string; name: string }>
+  opencodeDetect: () => Promise<{ installed: boolean; version?: string; command?: string; error?: string }>
+  opencodeOpenProject: (projectPath: string) => Promise<{ success: boolean; error?: string }>
+  opencodeServerStart: (projectPath: string, config?: Record<string, unknown>) => Promise<{
+    running: boolean
+    url?: string
+    port?: number
+    projectPath?: string
+    version?: string
+    error?: string
+  }>
+  opencodeServerStop: () => Promise<{ success: boolean }>
+  opencodeServerState: () => Promise<{
+    running: boolean
+    url?: string
+    port?: number
+    projectPath?: string
+    version?: string
+    error?: string
+  }>
+  opencodeSessionCreate: (title?: string) => Promise<{ id?: string; error?: string }>
+  opencodeSessionPrompt: (sessionId: string, text: string, agent?: string) => Promise<{
+    ok: boolean
+    data?: unknown
+    error?: string
+  }>
+  opencodeSessionAbort: (sessionId: string) => Promise<{ success: boolean }>
+  onOpenCodeEvent: (callback: (payload: unknown) => void) => () => void
 }
 
 declare global {

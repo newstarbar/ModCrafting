@@ -17,6 +17,8 @@ import {
   buildSessionGoalBlock
 } from './turn-intent'
 import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
+import { OpenCodeAdapter } from './opencode-adapter.ts'
+import type { WorkflowStep } from './workflow-types.ts'
 
 export interface ControllerOptions {
   registry: Registry
@@ -47,6 +49,8 @@ export class Controller {
   private sessionGoal = ''
   private planReadyAwaitingExecute = false
   private lastTurnMode: 'chat' | 'develop' | 'plan_only' | 'resume' = 'chat'
+  private useOpenCodeDelegate = false
+  private openCodeAdapter: OpenCodeAdapter | null = null
 
   // Callbacks
   onEvent?: (event: Event) => void
@@ -76,6 +80,42 @@ export class Controller {
       onToolResult: (name, _id, output) => {
         this.onAgentStatus?.(`${name} 完成`)
         logger.tool(`${name} completed`, output.slice(0, 100))
+      }
+    })
+
+    this.openCodeAdapter = new OpenCodeAdapter({
+      sink: this.sink,
+      onStatus: (status) => this.onAgentStatus?.(status)
+    })
+
+    void this.refreshOpenCodeSettings()
+  }
+
+  async refreshOpenCodeSettings(): Promise<void> {
+    try {
+      const cfg = await window.api.loadAgentConfig()
+      this.useOpenCodeDelegate = cfg.useOpenCodeDelegate === true
+    } catch {
+      this.useOpenCodeDelegate = false
+    }
+  }
+
+  private buildOpenCodeDelegate():
+    | ((step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>)
+    | undefined {
+    if (!this.useOpenCodeDelegate || !this.openCodeAdapter || !this._projectPath) return undefined
+    return async (_step, instruction) =>
+      this.openCodeAdapter!.delegateWriteTask(this._projectPath!, instruction)
+  }
+
+  private emitPlanValidationNotice(planText: string): void {
+    const issuesText = PlanTracker.formatValidationIssues(planText)
+    if (!issuesText) return
+    this.emitEvent({
+      kind: EventKind.Notice,
+      notice: {
+        level: 'info',
+        text: `计划校验提示（可继续执行）：\n${issuesText}`
       }
     })
   }
@@ -173,6 +213,7 @@ export class Controller {
       planActionable: actionable
     })
     this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
+    this.emitPlanValidationNotice(fullPlanText)
     return fullPlanText
   }
 
@@ -484,7 +525,8 @@ ${projectInfo}`
         phase: 'execute',
         emitLifecycle: true,
         planTracker: this.planTracker,
-        opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
+        opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
+        openCodeDelegate: this.buildOpenCodeDelegate()
       }
     )
   }
@@ -615,8 +657,11 @@ ${projectInfo}`
               role: 'user',
               content:
                 '你刚才的回复不符合计划格式要求。请严格按照以下格式输出实施计划：\n\n' +
+                '方式 A（推荐编号行）：\n' +
                 'N. [kind] 简短标题 — 目标路径\n\n' +
-                '其中 kind 必须是 write、recipe 或 inspect。每行一个步骤，最多 6 步。\n' +
+                '方式 B（JSON）：\n' +
+                '```json\n[{"kind":"write","description":"...","targetPath":"src/..."},...]\n```\n\n' +
+                '其中 kind 必须是 write、recipe 或 inspect。每行/每项一个步骤，最多 6 步。\n' +
                 '不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。'
             })
             this.onAgentStatus?.('重新生成计划...')
@@ -892,6 +937,7 @@ ${projectInfo}`
       this.agent.clarificationPending = false
       logger.agent('Turn cancelled')
     }
+    void this.openCodeAdapter?.abort()
   }
 
   approve(id: string, allow: boolean): void {
