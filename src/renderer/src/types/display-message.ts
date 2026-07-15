@@ -28,7 +28,7 @@ export interface FileSnapshot {
 export interface SessionStateSnapshot {
   messageIndex: number
   controllerMessages: ChatMessage[]
-  planTrackerSteps?: Array<{ id: string; description: string; status: string }>
+  planTrackerSteps?: PlanStep[]
   phase: 'plan' | 'execute'
   composerMode: ComposerMode
   sessionGoal: string

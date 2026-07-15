@@ -12,9 +12,9 @@ export type StructuredStepKind = 'write' | 'recipe' | 'inspect'
 export interface CompiledPlanStep extends ParsedPlanStep {
   kind?: StructuredStepKind
   targetPath?: string
+  targetPaths?: string[]
   hostManaged?: boolean
   evidence?: string
-  allowedTools?: string[]
 }
 
 const STRUCTURED_KIND_RE = /^\[(write|recipe|inspect)\]\s*/i
@@ -43,12 +43,15 @@ function isHostTerminalStep(description: string): boolean {
   return BUILD_STEP_PATTERN.test(d) || RUN_STEP_PATTERN.test(d)
 }
 
-function parseStructuredLine(description: string): { kind?: StructuredStepKind; body: string; targetPath?: string } {
+function parseStructuredLine(description: string): { kind?: StructuredStepKind; body: string; targetPath?: string; evidence?: string } {
   const kindMatch = description.match(STRUCTURED_KIND_RE)
   const kind = kindMatch ? (kindMatch[1].toLowerCase() as StructuredStepKind) : undefined
-  const body = kindMatch ? description.slice(kindMatch[0].length).trim() : description
+  const taggedBody = kindMatch ? description.slice(kindMatch[0].length).trim() : description
+  const evidenceMatch = taggedBody.match(/[;；]\s*evidence\s*[:：]\s*(.+)$/i)
+  const evidence = evidenceMatch?.[1]?.trim()
+  const body = evidenceMatch ? taggedBody.slice(0, evidenceMatch.index).trim() : taggedBody
   const pathMatch = body.match(PATH_RE)
-  return { kind, body, targetPath: pathMatch?.[1]?.replace(/\\/g, '/') }
+  return { kind, body, targetPath: pathMatch?.[1]?.replace(/\\/g, '/'), evidence }
 }
 
 const JSON_PLAN_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/i
@@ -59,8 +62,8 @@ export interface JsonPlanStepInput {
   title?: string
   targetPath?: string
   path?: string
+  targetPaths?: string[]
   evidence?: string
-  allowedTools?: string[]
 }
 
 /** Prefer fenced/raw JSON plan arrays when present; otherwise fall back to numbered lines. */
@@ -95,17 +98,17 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
           ? kindRaw
           : undefined) as StructuredStepKind | undefined
         const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
-        const evidence = item.evidence ? String(item.evidence).trim() : undefined
-        const allowedTools = Array.isArray(item.allowedTools)
-          ? item.allowedTools.map(String).filter(Boolean)
+        const targetPaths = Array.isArray(item.targetPaths)
+          ? item.targetPaths.map(String).map((path) => path.replace(/\\/g, '/')).filter(Boolean)
           : undefined
+        const evidence = item.evidence ? String(item.evidence).trim() : undefined
         steps.push({
           id: String(i + 1),
           description,
           kind,
           targetPath,
-          ...(evidence ? { evidence } : {}),
-          ...(allowedTools && allowedTools.length > 0 ? { allowedTools } : {})
+          ...(targetPaths && targetPaths.length > 0 ? { targetPaths } : {}),
+          ...(evidence ? { evidence } : {})
         })
       }
       if (steps.length > 0) return steps
@@ -122,12 +125,13 @@ export function parseStructuredSteps(text: string): CompiledPlanStep[] {
 
   const raw = parsePlanSteps(text)
   return raw.map((step) => {
-    const { kind, body, targetPath } = parseStructuredLine(step.description)
+    const { kind, body, targetPath, evidence } = parseStructuredLine(step.description)
     return {
       ...step,
       description: body || step.description,
       kind,
-      targetPath
+      targetPath,
+      ...(evidence ? { evidence } : {})
     }
   })
 }
@@ -150,7 +154,7 @@ export function dedupeByPath(steps: CompiledPlanStep[]): CompiledPlanStep[] {
   const seen = new Set<string>()
   const result: CompiledPlanStep[] = []
   for (const step of steps) {
-    const key = (step.targetPath || step.description).toLowerCase().replace(/[\s`*_、,，。.；;：:()（）!！?？~-]/g, '')
+    const key = (step.targetPath || step.targetPaths?.join('|') || step.description).toLowerCase().replace(/[\s`*_、,，。.；;：:()（）!！?？~-]/g, '')
     if (key && seen.has(key)) continue
     if (key) seen.add(key)
     result.push(step)
@@ -173,7 +177,7 @@ export function needsKnowledgeInspect(steps: CompiledPlanStep[], sourceText?: st
   const onlyRecipe = steps.every((s) => s.kind === 'recipe' || /配方|recipe/i.test(s.description))
   if (onlyRecipe) return false
   const missingPath = steps.some(
-    (s) => (s.kind === 'write' || !s.kind) && !s.targetPath && !PATH_RE.test(s.description)
+    (s) => (s.kind === 'write' || !s.kind) && !s.targetPath && !s.targetPaths?.length && !PATH_RE.test(s.description)
   )
   return missingPath
 }
@@ -281,11 +285,12 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
 }
 
 export function compiledStepsToParsed(steps: CompiledPlanStep[]): ParsedPlanStep[] {
-  return steps.map(({ id, description, kind, targetPath, evidence }) => ({
+  return steps.map(({ id, description, kind, targetPath, targetPaths, evidence }) => ({
     id,
     description,
     ...(kind ? { kind } : {}),
     ...(targetPath ? { targetPath } : {}),
+    ...(targetPaths?.length ? { targetPaths } : {}),
     ...(evidence ? { evidence } : {})
   }))
 }

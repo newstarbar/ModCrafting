@@ -27,7 +27,7 @@ export interface AgentConfig {
   mcpServers: McpServerConfig[]
   /**
    * User preference for OpenCode write delegation.
-   * Default true: enable when CLI is detected. Explicit false disables.
+   * Opt-in only: enable when the user explicitly selects it and CLI is detected.
    */
   useOpenCodeDelegate?: boolean
   /** OpenCode Zen / provider model id */
@@ -38,7 +38,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   knowledgeSourceOverrides: [],
   disabledTools: [],
   mcpServers: [],
-  useOpenCodeDelegate: true,
+  useOpenCodeDelegate: false,
   openCodeModel: DEFAULT_OPENCODE_MODEL
 }
 
@@ -58,8 +58,8 @@ export function loadAgentConfig(): AgentConfig {
       knowledgeSourceOverrides: Array.isArray(parsed.knowledgeSourceOverrides) ? parsed.knowledgeSourceOverrides : [],
       disabledTools: Array.isArray(parsed.disabledTools) ? parsed.disabledTools : [],
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
-      // Missing key → prefer on; only explicit false disables
-      useOpenCodeDelegate: parsed.useOpenCodeDelegate !== false,
+      // Missing key migrates to the safer opt-in default. Explicit true is preserved.
+      useOpenCodeDelegate: parsed.useOpenCodeDelegate === true,
       openCodeModel: model
     }
   } catch {
@@ -77,7 +77,7 @@ export function saveAgentConfig(config: AgentConfig): { success: boolean; error?
       knowledgeSourceOverrides: config.knowledgeSourceOverrides || [],
       disabledTools: config.disabledTools || [],
       mcpServers: config.mcpServers || [],
-      useOpenCodeDelegate: config.useOpenCodeDelegate !== false,
+      useOpenCodeDelegate: config.useOpenCodeDelegate === true,
       openCodeModel: model
     }, null, 2), 'utf-8')
     return { success: true }

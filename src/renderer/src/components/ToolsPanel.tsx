@@ -50,7 +50,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
   const [activity, setActivity] = useState<ToolActivityEntry[]>([])
   const [saveHint, setSaveHint] = useState('')
   const [loading, setLoading] = useState(true)
-  const [useOpenCodeDelegate, setUseOpenCodeDelegate] = useState(true)
+  const [useOpenCodeDelegate, setUseOpenCodeDelegate] = useState(false)
   const [openCodeModel, setOpenCodeModel] = useState('opencode/deepseek-v4-flash-free')
   const [openCodeInstalled, setOpenCodeInstalled] = useState(false)
 
@@ -68,7 +68,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
         window.api.listKnowledgeFiles()
       ])
       setDisabledTools(new Set(cfg.disabledTools || []))
-      setUseOpenCodeDelegate(cfg.useOpenCodeDelegate !== false)
+      setUseOpenCodeDelegate(cfg.useOpenCodeDelegate === true)
       setOpenCodeModel(cfg.openCodeModel || 'opencode/deepseek-v4-flash-free')
       const overrideMap = new Map((cfg.knowledgeSourceOverrides || []).map((o) => [o.id, o]))
       setSources(FABRIC_KNOWLEDGE_SOURCES.map((source) => {
@@ -230,7 +230,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
                 checked={useOpenCodeDelegate}
                 onChange={(e) => setUseOpenCodeDelegate(e.target.checked)}
               />
-              <strong>用 OpenCode 写码（检测到 CLI 时默认开）</strong>
+              <strong>用 OpenCode 写码（显式开启后生效）</strong>
             </label>
             <div className="mc-dim" style={{ fontSize: 12, marginTop: 4 }}>
               {openCodeInstalled

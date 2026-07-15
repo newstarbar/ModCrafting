@@ -199,10 +199,22 @@ export class OpenCodeAdapter {
     }
   }
 
+  private pathMatches(pattern: string, actual: string): boolean {
+    const normalizedPattern = pattern.replace(/\\/g, '/').replace(/^\/+/, '')
+    const normalizedActual = actual.replace(/\\/g, '/').replace(/^\/+/, '')
+    const escaped = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    const regexSource = escaped
+      .replace(/\*\*/g, '__DOUBLE_STAR__')
+      .replace(/\*/g, '[^/]*')
+      .replace(/__DOUBLE_STAR__/g, '.*')
+    const regex = new RegExp(`^${regexSource}$`)
+    return regex.test(normalizedActual) || normalizedActual.endsWith(`/${normalizedPattern}`)
+  }
+
   async delegateWriteTask(
     projectPath: string,
     instruction: string,
-    targetPath?: string
+    targetPaths?: string[]
   ): Promise<OpenCodeDelegateResult> {
     try {
       const server = await this.ensureServer(projectPath)
@@ -242,15 +254,17 @@ export class OpenCodeAdapter {
       const after = await this.snapshotSources(projectPath)
       const changedPaths = this.diffSnapshots(before, after)
 
-      let evidenceOk = changedPaths.length > 0
-      if (targetPath) {
-        const exists = await this.verifyTargetPath(projectPath, targetPath)
-        const touched = changedPaths.some(
-          (p) => p.replace(/\\/g, '/') === targetPath.replace(/\\/g, '/') ||
-            p.replace(/\\/g, '/').endsWith(targetPath.replace(/\\/g, '/'))
-        )
-        evidenceOk = exists && (touched || changedPaths.length > 0)
-      }
+      const expected = (targetPaths || []).map((path) => path.replace(/\\/g, '/'))
+      const allExpectedTouched = expected.length === 0 || expected.every((target) =>
+        changedPaths.some((changed) => this.pathMatches(target, changed))
+      )
+      const allExpectedExist = expected.length === 0 || (await Promise.all(
+        expected.filter((path) => !path.includes('*')).map((path) => this.verifyTargetPath(projectPath, path))
+      )).every(Boolean)
+      const unrelated = expected.length === 0
+        ? []
+        : changedPaths.filter((changed) => !expected.some((target) => this.pathMatches(target, changed)))
+      const evidenceOk = changedPaths.length > 0 && allExpectedTouched && allExpectedExist && unrelated.length === 0
 
       if (output) {
         this.emit({ kind: EventKind.Message, text: output })
@@ -264,8 +278,8 @@ export class OpenCodeAdapter {
           output,
           evidenceOk: false,
           changedPaths,
-          error: targetPath
-            ? `委托完成但未验证到目标文件变更：${targetPath}`
+          error: expected.length > 0
+            ? `委托变更未通过目标校验。期望：${expected.join(', ')}；实际：${changedPaths.join(', ') || '无'}；未声明：${unrelated.join(', ') || '无'}`
             : '委托完成但未检测到 src/ 下文件变更'
         }
       }

@@ -5,6 +5,10 @@ export interface PlanStep {
   id: string
   description: string
   status: 'pending' | 'running' | 'completed' | 'error'
+  kind?: 'inspect' | 'write' | 'recipe'
+  targetPath?: string
+  targetPaths?: string[]
+  evidence?: string
 }
 
 interface TaskPlanProps {

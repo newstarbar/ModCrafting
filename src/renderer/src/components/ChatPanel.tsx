@@ -142,8 +142,17 @@ function getToolDisplayName(name: string, args?: Record<string, unknown>): strin
   return TOOL_DISPLAY_NAMES[name] || name
 }
 
-function toPlanSteps(steps: Array<{ id: string; description: string; status: string }>): PlanStep[] {
+function toPlanSteps(steps: Array<{
+  id: string
+  description: string
+  status: string
+  kind?: 'inspect' | 'write' | 'recipe'
+  targetPath?: string
+  targetPaths?: string[]
+  evidence?: string
+}>): PlanStep[] {
   return steps.map((s) => ({
+    ...s,
     id: s.id,
     description: s.description,
     status: (s.status === 'completed' || s.status === 'running' || s.status === 'error'

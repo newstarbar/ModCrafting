@@ -7,6 +7,10 @@ export interface ChatToolCall {
 export interface ChatMessage {
   role: string
   content: string
+  /** Internal provenance; stripped before sending to providers. */
+  origin?: 'user' | 'assistant' | 'tool' | 'harness'
+  taskId?: string
+  phase?: 'chat' | 'plan' | 'execute'
   tool_calls?: ChatToolCall[]
   tool_call_id?: string
   name?: string
@@ -35,6 +39,7 @@ export function assistantToolCallMessage(content: string, calls: ModelToolCall[]
   return {
     role: 'assistant',
     content: content || '',
+    origin: 'assistant',
     tool_calls: calls.map(modelToolCallToChatToolCall)
   }
 }
@@ -42,6 +47,7 @@ export function assistantToolCallMessage(content: string, calls: ModelToolCall[]
 export function toolResultMessage(call: Pick<ModelToolCall, 'id' | 'name'>, output: string): ChatMessage {
   return {
     role: 'tool',
+    origin: 'tool',
     tool_call_id: call.id,
     name: call.name,
     content: output

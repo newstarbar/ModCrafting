@@ -52,6 +52,7 @@ export class Controller {
   private useOpenCodeDelegate = false
   private openCodeModel = 'opencode/deepseek-v4-flash-free'
   private openCodeAdapter: OpenCodeAdapter | null = null
+  private taskId = `task_${Date.now().toString(36)}`
 
   // Callbacks
   onEvent?: (event: Event) => void
@@ -96,7 +97,7 @@ export class Controller {
   async refreshOpenCodeSettings(): Promise<void> {
     try {
       const cfg = await window.api.loadAgentConfig()
-      const prefer = cfg.useOpenCodeDelegate !== false
+      const prefer = cfg.useOpenCodeDelegate === true
       this.openCodeModel = cfg.openCodeModel || 'opencode/deepseek-v4-flash-free'
       if (!prefer) {
         this.useOpenCodeDelegate = false
@@ -110,11 +111,21 @@ export class Controller {
   }
 
   private buildOpenCodeDelegate():
-    | ((step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>)
+    | ((step: WorkflowStep, instruction: string) => Promise<{
+      ok: boolean
+      output?: string
+      error?: string
+      evidenceOk?: boolean
+      changedPaths?: string[]
+    }>)
     | undefined {
     if (!this.useOpenCodeDelegate || !this.openCodeAdapter || !this._projectPath) return undefined
     return async (step, instruction) =>
-      this.openCodeAdapter!.delegateWriteTask(this._projectPath!, instruction, step.targetPath)
+      this.openCodeAdapter!.delegateWriteTask(
+        this._projectPath!,
+        instruction,
+        step.targetPaths?.length ? step.targetPaths : (step.targetPath ? [step.targetPath] : undefined)
+      )
   }
 
   private emitPlanValidationNotice(planText: string): void {
@@ -176,7 +187,11 @@ export class Controller {
 
   /** Skip execute when plan has no concrete steps */
   private isActionablePlan(planText: string): boolean {
-    return isActionablePlanText(planText)
+    if (!isActionablePlanText(planText)) return false
+    return !PlanTracker.validationIssuesFromText(planText).some((issue) =>
+      issue.field === 'description' || issue.field === 'kind' ||
+      issue.field === 'targetPath' || issue.field === 'evidence'
+    )
   }
 
   private buildExecuteConfirmMessage(tracker: PlanTracker): string {
@@ -193,6 +208,18 @@ export class Controller {
       content += '\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。'
     }
     return content
+  }
+
+  private retainCurrentUserAsNewTask(): void {
+    const system = this.messages.find((message) => message.role === 'system')
+    const currentUser = [...this.messages].reverse().find((message) =>
+      message.role === 'user' && message.origin !== 'harness'
+    )
+    this.taskId = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
+    this.messages = [
+      ...(system ? [{ ...system, origin: 'harness' as const }] : []),
+      ...(currentUser ? [{ ...currentUser, origin: 'user' as const, taskId: this.taskId }] : [])
+    ]
   }
 
   private emitPlanState(tracker: PlanTracker): void {
@@ -366,9 +393,14 @@ export class Controller {
       fabric_log_debugger: '分析 Fabric 日志',
       read_error_log: '读取错误日志',
       complete_step: '完成任务步骤',
-      ask_clarification: '向用户提问'
+      ask_clarification: '向用户提问',
+      submit_plan: '提交结构化计划'
     }
-    const toolDescs = this.registry.names().filter((name) => name !== 'complete_step').map((name) => {
+    const toolDescs = this.registry.names().filter((name) => {
+      if (name === 'complete_step') return false
+      const tool = this.registry.get(name)
+      return mode !== 'plan' || Boolean(tool?.readOnly())
+    }).map((name) => {
       const t = this.registry.get(name)
       const cn = toolNameMap[name] || name
       const kind = t?.readOnly() ? '（只读）' : '（写入）'
@@ -411,15 +443,12 @@ ${projectInfo}`
 
 **重要：在制定计划前，如果信息不足，必须使用 ask_clarification 工具向用户询问必要的信息。**
 工具调用格式：\`<tool_call>{"name": "ask_clarification", "args": {"question": "你的问题"}}<\/tool_call>\`
-收集完所有信息后，再输出结构化实施计划。
+收集完所有信息后，调用 submit_plan 提交结构化实施计划。若模型不支持原生工具调用，可使用 XML fallback。
 
-计划格式要求：
-- **每行一个步骤**：\`N. [kind] 简短标题 — 目标路径\`
-- **kind** 仅允许：\`write\` | \`recipe\` | \`inspect\`
-- **每步必须含一句验收**（evidence），例如：\`evidence: mixins.json 含 FooMixin\`
-- 示例：
-  1. [write] src/main/java/.../Mixin.java — 二段跳逻辑；evidence: 类含 @Mixin 与注入方法
-  2. [recipe] data/<modid>/recipe/jump_boots.json — 跳跃靴配方；evidence: 配方 JSON 合法且 result 正确
+submit_plan 参数要求：
+- 参数为 \`{"steps":[...]}\`，每个步骤包含 \`kind\`、\`description\`、\`evidence\`，并提供 \`targetPath\` 或 \`targetPaths\`。
+- **kind** 仅允许：\`write\` | \`recipe\` | \`inspect\`。
+- 示例：\`{"steps":[{"kind":"write","description":"实现二段跳 Mixin","targetPath":"src/main/java/.../JumpMixin.java","evidence":"类含 @Mixin 与注入方法"}]}\`
 
 计划必须精简：
 - **禁止写构建/运行步骤**（主机会自动追加 gradlew build 与 runClient）。
@@ -451,7 +480,7 @@ ${phaseHeader}
 ## 可用工具
 ${toolDescs}
 
-${mode === 'plan' ? '## 当前：输出计划阶段\n信息不足时可以使用 ask_clarification / grep 工具提问或勘察，收集完信息后输出计划文本。每步须含验收 evidence。' : '## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。'}
+${mode === 'plan' ? '## 当前：输出计划阶段\n信息不足时可以使用 ask_clarification / grep 工具提问或勘察，收集完信息后调用 submit_plan。' : '## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。'}
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**
@@ -468,9 +497,9 @@ ${projectInfo}`
     const prompt = await this.buildSystemPrompt(mode)
     const sysIdx = this.messages.findIndex((m) => m.role === 'system')
     if (sysIdx >= 0) {
-      this.messages[sysIdx] = { role: 'system', content: prompt }
+      this.messages[sysIdx] = { role: 'system', content: prompt, origin: 'harness' }
     } else {
-      this.messages.unshift({ role: 'system', content: prompt })
+      this.messages.unshift({ role: 'system', content: prompt, origin: 'harness' })
     }
   }
 
@@ -515,6 +544,7 @@ ${projectInfo}`
   }
 
   private async runExecutePhase(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+    await this.refreshOpenCodeSettings()
     await this.updateSystemPrompt('execute')
     this._phase = 'execute'
     this.planReadyAwaitingExecute = false
@@ -551,7 +581,10 @@ ${projectInfo}`
     }
     this.messages.push({
       role: 'user',
-      content: this.buildExecuteConfirmMessage(this.planTracker)
+      content: this.buildExecuteConfirmMessage(this.planTracker),
+      origin: 'harness',
+      taskId: this.taskId,
+      phase: 'execute'
     })
     return this.runExecutePhase(streamCb)
   }
@@ -567,7 +600,7 @@ ${projectInfo}`
     this.lastTurnMode = intent === 'plan_only' ? 'plan_only' : intent
 
     if (options.pushUser) {
-      this.messages.push({ role: 'user', content: input })
+      this.messages.push({ role: 'user', content: input, origin: 'user', taskId: this.taskId })
     }
     this.onAgentStatus?.('思考中...')
 
@@ -619,10 +652,11 @@ ${projectInfo}`
       }
 
       if (intent === 'develop' && this._phase === 'execute' && this.planTracker && !this.planTracker.allDone()) {
-        // Detect if user is asking for something NEW (not continuing/fixing current plan)
-        const isNewRequest = /^\s*(不[对行要]|我不要|换个|改成|改为|我想做|我想要|新建|另外|重新做|放弃|算了|别|不要这个|stop|new\b)/i.test(input) ||
-          (input.length > 15 && !/[继续接往下执行试试试修复改重]$/.test(input) && !/build|编译|错误|error|fail|crash|崩溃|bug|问题|修/.test(input.toLowerCase()))
+        // Only explicit replacement language starts a new task. Length-based guessing
+        // previously discarded active plans for ordinary corrections and details.
+        const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(input)
         if (isNewRequest) {
+          this.retainCurrentUserAsNewTask()
           this.planTracker = null
           this._phase = 'plan'
           this.planReadyAwaitingExecute = false
@@ -636,6 +670,10 @@ ${projectInfo}`
       }
 
       if (intent === 'develop' || intent === 'plan_only') {
+        if (intent === 'develop' && this.planTracker?.allDone()) {
+          this.retainCurrentUserAsNewTask()
+          this.planTracker = null
+        }
         if (intent === 'plan_only') {
           this._phase = 'plan'
           this.planTracker = null
@@ -667,13 +705,15 @@ ${projectInfo}`
           if (!this.messages.some((m) => m.role === 'user' && (m.content || '').includes('请严格按照以下格式输出实施计划'))) {
             this.messages.push({
               role: 'user',
+              origin: 'harness',
+              phase: 'plan',
               content:
                 '你刚才的回复不符合计划格式要求。请严格按照以下格式输出实施计划：\n\n' +
                 '方式 A（推荐编号行）：\n' +
                 'N. [kind] 简短标题 — 目标路径\n\n' +
                 '方式 B（JSON）：\n' +
                 '```json\n[{"kind":"write","description":"...","targetPath":"src/..."},...]\n```\n\n' +
-                '其中 kind 必须是 write、recipe 或 inspect。每行/每项一个步骤，最多 6 步。\n' +
+                '其中 kind 必须是 write、recipe 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence。最多 6 步。\n' +
                 '不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。'
             })
             this.onAgentStatus?.('重新生成计划...')
@@ -820,7 +860,7 @@ ${projectInfo}`
   async send(input: string): Promise<string> {
     if (this._running) {
       logger.agent('Queuing steer message')
-      this.messages.push({ role: 'user', content: '[mid-turn] ' + input })
+      this.messages.push({ role: 'user', content: '[mid-turn] ' + input, origin: 'user', taskId: this.taskId })
       return ''
     }
     return this.runTurn(input, { pushUser: true })
@@ -831,7 +871,10 @@ ${projectInfo}`
     if (this._running) return ''
 
     this.trimTrailingAssistants()
-    const lastUser = [...this.messages].reverse().find((m) => m.role === 'user')
+    const lastUser = [...this.messages].reverse().find((m) =>
+      m.role === 'user' && m.origin !== 'harness' &&
+      !/^(?:\[mid-turn\]|\[SYSTEM:|【系统|STOP EXPLORING)/.test(m.content || '')
+    )
     if (!lastUser) return ''
 
     // Drop injected execute-confirm prompts so plan phase can run again
@@ -856,7 +899,7 @@ ${projectInfo}`
 
     this.agent.clarificationPending = false
 
-    this.messages.push({ role: 'user', content: answer })
+    this.messages.push({ role: 'user', content: answer, origin: 'user', taskId: this.taskId })
 
     this._running = true
     this.abortController = new AbortController()
@@ -908,6 +951,15 @@ ${projectInfo}`
 
         this.planTracker = PlanTracker.fromPlanText(fullPlanText)
         this.emitPlanState(this.planTracker)
+
+        if (this.composerMode === 'plan' || this.lastTurnMode === 'plan_only') {
+          this._phase = 'plan'
+          this.planReadyAwaitingExecute = true
+          this.onAgentStatus?.('')
+          this.emitEvent({ kind: EventKind.Phase, phase: 'plan_ready' })
+          this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready', composerMode: this.composerMode })
+          return planResult
+        }
 
         const execResult = await this.beginExecuteFromTracker(streamCb)
         this.onAgentStatus?.('')
@@ -1029,23 +1081,42 @@ ${projectInfo}`
   }
 
   restoreSnapshot(messages: ChatMessage[]): void {
-    this.messages = [...messages]
+    this.messages = messages.map((message) => ({
+      ...message,
+      origin: message.origin || (
+        message.role === 'system' ||
+        /^\[SYSTEM:|^【系统|^【注意】|^计划已确认。/.test(message.content || '')
+          ? 'harness'
+          : message.role === 'user'
+            ? 'user'
+            : message.role === 'tool'
+              ? 'tool'
+              : 'assistant'
+      )
+    }))
     this._phase = messages.some((m) => m.role === 'user' || m.role === 'assistant') ? 'execute' : 'plan'
     this.agent.resetRunState()
   }
 
   /** Rebuild the plan tracker from persisted plan steps, so the workflow
    *  engine can resume execution after a session reload. */
-  restorePlanTracker(steps: Array<{ id: string; description: string; status: string }>): void {
+  restorePlanTracker(steps: Array<{
+    id: string
+    description: string
+    status: string
+    kind?: 'inspect' | 'write' | 'recipe'
+    targetPath?: string
+    targetPaths?: string[]
+    evidence?: string
+  }>): void {
     if (!steps || steps.length === 0) {
       this.planTracker = null
       return
     }
-    // Build plan text from steps for PlanTracker.fromPlanText
-    const planText = steps
-      .map((s) => `${s.id}. ${s.description}`)
-      .join('\n')
-    this.planTracker = PlanTracker.fromPlanText(planText)
+    this.planTracker = PlanTracker.fromSteps(steps.map((step) => ({
+      ...step,
+      status: step.status === 'completed' || step.status === 'running' ? step.status : 'pending'
+    })))
     if (this.planTracker) {
       // Restore step statuses
       for (const step of steps) {

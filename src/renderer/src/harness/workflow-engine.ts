@@ -1,6 +1,6 @@
 import { EventKind, type Event } from './events.ts'
 import type { PlanTracker } from './plan-tracker.ts'
-import { filterToolCallsForStep, isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from './step-policy.ts'
+import { isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from './step-policy.ts'
 import { executeBatch, isRunClientReadyResult, type Registry, type ToolContext, type ToolResult } from './tools.ts'
 import type { WorkflowRunResult, WorkflowStep } from './workflow-types.ts'
 import {
@@ -15,6 +15,7 @@ import { classifyFabricLog } from './fabric-utils.ts'
 import { canToolResultAdvanceStep } from './step-evidence.ts'
 import { FileSession } from './file-session.ts'
 import { workflowStepToPlanStep } from './workflow-types.ts'
+import { validateToolCalls } from './tool-call-validator.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -280,22 +281,12 @@ function resultCompletesStep(
   }
   switch (step.kind) {
     case 'recipe':
-      return (
-        result.toolName === 'create_recipe' ||
-        result.toolName === 'fabric_recipe_generate'
-      )
+      return false
     case 'inspect':
       // Evidence tools set stepHasEvidence; advancement requires complete_step
       return false
-    case 'write': {
-      const planStep = {
-        ...workflowStepToPlanStep(step),
-        kind: step.kind,
-        targetPath: step.targetPath,
-        evidence: step.evidence
-      }
-      return canToolResultAdvanceStep(planStep, result).ok
-    }
+    case 'write':
+      return false
     case 'build':
       return (
         (result.toolName === 'trigger_build' &&
@@ -328,6 +319,37 @@ function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
   return canToolResultAdvanceStep(planStep, result).ok
 }
 
+function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[]): boolean {
+  const successful = results.filter((result) => result.ok && !result.error)
+  if (step.kind === 'inspect') {
+    return successful.some((result) => recordsStepEvidence(step, result))
+  }
+  if (step.kind === 'recipe') {
+    return successful.some((result) => recordsStepEvidence(step, result))
+  }
+  if (step.kind !== 'write') return false
+
+  const requiredPaths = step.targetPaths?.length
+    ? step.targetPaths
+    : (step.targetPath ? [step.targetPath] : [])
+  if (requiredPaths.length === 0) {
+    return successful.some((result) => recordsStepEvidence(step, result))
+  }
+  return requiredPaths.every((targetPath) => successful.some((result) => {
+    const artifacts = result.artifactPaths?.length
+      ? result.artifactPaths
+      : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
+    return artifacts.some((artifactPath) => {
+      const planStep = {
+        ...workflowStepToPlanStep(step),
+        kind: 'write' as const,
+        targetPath
+      }
+      return canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok
+    })
+  }))
+}
+
 export class WorkflowEngine {
   private steps: WorkflowStep[]
   private planTracker: PlanTracker
@@ -355,11 +377,23 @@ export class WorkflowEngine {
     this.fileSession = options.fileSession || new FileSession()
   }
 
-  private planState(): Array<{ id: string; description: string; status: string }> {
+  private planState(): Array<{
+    id: string
+    description: string
+    status: string
+    kind?: 'inspect' | 'write' | 'recipe'
+    targetPath?: string
+    targetPaths?: string[]
+    evidence?: string
+  }> {
     return this.steps.map((step) => ({
       id: step.id,
       description: step.title,
-      status: statusForPlan(step)
+      status: statusForPlan(step),
+      ...(step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' ? { kind: step.kind } : {}),
+      ...(step.targetPath ? { targetPath: step.targetPath } : {}),
+      ...(step.targetPaths?.length ? { targetPaths: [...step.targetPaths] } : {}),
+      ...(step.evidence ? { evidence: step.evidence } : {})
     }))
   }
 
@@ -421,8 +455,6 @@ export class WorkflowEngine {
 
   private async executeAllowedCalls(step: WorkflowStep, calls: ToolCallWithId[]): Promise<Map<string, ToolResult>> {
     if (calls.length === 0) return new Map()
-    const MAX_PARALLEL = 8
-    const selected = calls.slice(0, MAX_PARALLEL)
     const ctx: ToolContext = {
       projectPath: this.projectPath,
       callId: `workflow_${step.id}`,
@@ -432,7 +464,7 @@ export class WorkflowEngine {
       onPlanStateChange: () => this.emitPlanState()
     }
     return executeBatch(
-      selected,
+      calls,
       this.registry,
       ctx,
       (name, id, args) => {
@@ -479,6 +511,7 @@ export class WorkflowEngine {
       if (!step) break
       if (step.status === 'pending') step.status = 'running'
       this.emitPlanState()
+      const delegatedEvidence: ToolResult[] = []
 
       if (
         this.openCodeDelegate &&
@@ -486,27 +519,44 @@ export class WorkflowEngine {
         this.projectPath &&
         !this.abortSignal?.aborted
       ) {
+        const targets = step.targetPaths?.length
+          ? step.targetPaths
+          : (step.targetPath ? [step.targetPath] : [])
         const instruction =
-          `完成 Fabric 模组写码步骤：${step.title}` +
-          (step.targetPath ? `\n目标路径：${step.targetPath}` : '')
+          `完成 Fabric 模组写码步骤：${step.title}\n` +
+          `目标路径：${targets.join(', ') || '由当前步骤确定'}\n` +
+          `验收标准：${step.evidence || '目标文件产生最小、正确的变更'}\n` +
+          `当前计划：\n${this.planTracker.toContextBlock()}`
         const delegated = await this.openCodeDelegate(step, instruction)
         if (delegated.ok) {
-          step.status = 'completed'
-          this.planTracker.advanceCurrent('opencode_delegate')
           if (delegated.output?.trim()) {
             finalContent = delegated.output
           }
+          const changedPaths = delegated.changedPaths || []
+          delegatedEvidence.push({
+            output: `OpenCode 已验证变更：${changedPaths.join(', ')}`,
+            durationMs: 0,
+            ok: true,
+            toolName: 'write_file',
+            args: { path: changedPaths[0] || step.targetPath || '' },
+            artifactPath: changedPaths[0],
+            artifactPaths: changedPaths,
+            exitCode: 0
+          })
+          baseMessages.push({
+            role: 'system',
+            content:
+              `【OpenCode 委托证据】已修改并验证：${changedPaths.join(', ')}。` +
+              `请核对验收标准后调用 complete_step 完成当前步骤；不要重复写入。`
+          })
           this.emit({
             kind: EventKind.Notice,
             notice: {
               level: 'info',
-              text: 'OpenCode 写码步骤已完成（已验证文件变更），继续后续步骤'
+              text: 'OpenCode 已产生经过目标校验的文件变更，等待 Harness 验收步骤'
             }
           })
-          this.emitPlanState()
-          continue
-        }
-        this.emit({
+        } else this.emit({
           kind: EventKind.Notice,
           notice: {
             level: 'warn',
@@ -522,7 +572,8 @@ export class WorkflowEngine {
       let lastFailureOutput = ''
       const seenRepairSignatures = new Set<string>()
       const seenDiagSignatures = new Set<string>()
-      let stepHasEvidence = false
+      const evidenceResults: ToolResult[] = [...delegatedEvidence]
+      let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
       let debuggerPrefetched = false
       let attempt = 0
       let loopIterations = 0
@@ -580,8 +631,8 @@ export class WorkflowEngine {
         }
         finalContent = modelResult.text || streamText || finalContent
 
-        const calls = normalizeModelToolCalls(modelResult.toolCalls)
-        if (calls.length === 0) {
+        const allCalls = normalizeModelToolCalls(modelResult.toolCalls)
+        if (allCalls.length === 0) {
           // Answer steps auto-complete on text output; no tool calls needed.
           if (step.kind === 'answer') {
             step.status = 'completed'
@@ -599,32 +650,72 @@ export class WorkflowEngine {
           continue
         }
 
-        const gate = filterToolCallsForStep(step, calls, policyOptions)
-        const resultsById = new Map<string, ToolResult>()
+        const validation = validateToolCalls(allCalls, allowedTools)
+        for (const [id, rejected] of validation.rejected) {
+          this.emitRejected(id, rejected)
+        }
+        const calls = validation.accepted
+        if (calls.length === 0) {
+          this.appendToolRound(
+            baseMessages,
+            modelResult.text || streamText,
+            allCalls,
+            validation.rejected,
+            '所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。'
+          )
+          attempt++
+          continue
+        }
 
-        // Drop complete_step without prior write/inspect evidence (prevents tracker advance)
+        const resultsById = new Map<string, ToolResult>(validation.rejected)
         const executableAllowed: ToolCallWithId[] = []
-        for (const call of gate.allowed) {
-          if (
-            call.name === 'complete_step' &&
-            (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe') &&
-            !stepHasEvidence
-          ) {
+        let controlBarrierReached = false
+        let projectedDocSearchCount = fabricDocsSearchCount
+        for (const call of calls) {
+          if (executableAllowed.length >= 8) {
             const rejected: ToolResult = {
-              output:
-                `blocked: [step_evidence_required] 步骤 #${step.id} 尚无验收证据，禁止裸 complete_step。` +
-                `请先完成写入/勘察工具（路径匹配 targetPath，或 inspect 的 read/grep/docs）。`,
-              error: 'step_evidence_required: complete_step',
+              output: `blocked: [tool_call_limit] 单轮最多执行 8 个工具，"${call.name}" 已延后。`,
+              error: 'tool_call_limit',
               durationMs: 0,
               ok: false,
               toolName: call.name,
               args: call.args,
               exitCode: null,
-              errorKind: 'step_evidence_required'
+              errorKind: 'tool_call_limit'
             }
             this.emitRejected(call.id, rejected)
             resultsById.set(call.id, rejected)
-            gate.rejected.push(rejected)
+            continue
+          }
+          if (controlBarrierReached) {
+            const rejected: ToolResult = {
+              output: `blocked: [after_control_barrier] "${call.name}" 位于控制调用之后，未执行。请在下一轮调用。`,
+              error: 'after_control_barrier',
+              durationMs: 0,
+              ok: false,
+              toolName: call.name,
+              args: call.args,
+              exitCode: null,
+              errorKind: 'after_control_barrier'
+            }
+            this.emitRejected(call.id, rejected)
+            resultsById.set(call.id, rejected)
+            continue
+          }
+          if (!isToolAllowedForStep(step, call, policyOptions)) {
+            const rejected = createRejectedToolResult(step, call, policyOptions)
+            this.emitRejected(call.id, rejected)
+            resultsById.set(call.id, rejected)
+            continue
+          }
+          if (
+            isDocSearchLimitedStep(step) &&
+            call.name === 'fabric_docs_search' &&
+            projectedDocSearchCount >= MAX_DOC_SEARCH_PER_WRITE_STEP
+          ) {
+            const rejected = buildDocSearchBlockedResult(step, call)
+            this.emitRejected(call.id, rejected)
+            resultsById.set(call.id, rejected)
             continue
           }
           if (repairMode && REPAIR_DIAG_DEDUP_TOOLS.has(call.name)) {
@@ -643,28 +734,13 @@ export class WorkflowEngine {
               }
               this.emitRejected(call.id, rejected)
               resultsById.set(call.id, rejected)
-              gate.rejected.push(rejected)
               continue
             }
           }
           executableAllowed.push(call)
-        }
-
-        for (const call of calls) {
-          if (
-            isDocSearchLimitedStep(step) &&
-            call.name === 'fabric_docs_search' &&
-            fabricDocsSearchCount >= MAX_DOC_SEARCH_PER_WRITE_STEP
-          ) {
-            const rejected = buildDocSearchBlockedResult(step, call)
-            this.emitRejected(call.id, rejected)
-            resultsById.set(call.id, rejected)
-            continue
-          }
-          if (!isToolAllowedForStep(step, call, policyOptions)) {
-            const rejected = createRejectedToolResult(step, call, policyOptions)
-            this.emitRejected(call.id, rejected)
-            resultsById.set(call.id, rejected)
+          if (call.name === 'fabric_docs_search') projectedDocSearchCount++
+          if (call.name === 'complete_step' || call.name === 'ask_clarification') {
+            controlBarrierReached = true
           }
         }
 
@@ -675,7 +751,7 @@ export class WorkflowEngine {
             calls.length > 0 &&
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
           const rejectionHint = [
-            [...resultsById.values(), ...gate.rejected].map((r) => r.output).filter(Boolean).join('\n'),
+            [...resultsById.values()].map((r) => r.output).filter(Boolean).join('\n'),
             repairWriteBlockedOnly
               ? '修复模式下必须先 edit_file 修改代码，再重新构建。'
               : `本步骤允许的工具：${(repairMode ? repairExtraTools(step) : step.allowedTools).join(', ') || '无'}。请改用其中之一完成当前步骤。`
@@ -683,7 +759,7 @@ export class WorkflowEngine {
           this.appendToolRound(
             baseMessages,
             modelResult.text || streamText,
-            calls,
+            allCalls,
             resultsById,
             rejectionHint
           )
@@ -697,30 +773,31 @@ export class WorkflowEngine {
           if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || '') && result.ok && !result.error) {
             seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`)
           }
-          if (recordsStepEvidence(step, result)) {
-            stepHasEvidence = true
-          }
+          evidenceResults.push(result)
         }
+        stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
 
-        const primaryResult = resultsById.get(executableAllowed[0].id)
-        if (primaryResult?.toolName) lastToolName = primaryResult.toolName
+        const orderedResults = executableAllowed
+          .map((call) => resultsById.get(call.id))
+          .filter((result): result is ToolResult => Boolean(result))
+        const lastResult = orderedResults[orderedResults.length - 1]
+        if (lastResult?.toolName) lastToolName = lastResult.toolName
 
-        if (
-          primaryResult?.toolName === 'fabric_docs_search' &&
-          primaryResult.ok &&
-          !primaryResult.error
-        ) {
-          fabricDocsSearchCount++
-        }
+        fabricDocsSearchCount += orderedResults.filter((result) =>
+          result.toolName === 'fabric_docs_search' && result.ok && !result.error
+        ).length
 
-        if (primaryResult?.toolName === 'ask_clarification' && primaryResult.ok) {
-          const question = String(primaryResult.args?.question || '')
-          const options = Array.isArray(primaryResult.args?.options)
-            ? (primaryResult.args.options as string[]).map(String)
+        const clarificationResult = orderedResults.find((result) =>
+          result.toolName === 'ask_clarification' && result.ok && !result.error
+        )
+        if (clarificationResult) {
+          const question = String(clarificationResult.args?.question || '')
+          const options = Array.isArray(clarificationResult.args?.options)
+            ? (clarificationResult.args.options as string[]).map(String)
             : undefined
-          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
+          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
           return {
-            finalContent: primaryResult.output,
+            finalContent: clarificationResult.output,
             allDone: false,
             partial: false,
             needsClarification: true,
@@ -730,32 +807,32 @@ export class WorkflowEngine {
           }
         }
 
-        const success = primaryResult
-          ? resultCompletesStep(step, primaryResult, stepHasEvidence)
-          : undefined
+        const decisiveResult = orderedResults.find((result) =>
+          isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence)
+        )
+        const success = decisiveResult
+          ? resultCompletesStep(step, decisiveResult, stepHasEvidence)
+          : false
         let roundInstruction: string | undefined
 
         if (success) {
           repairMode = false
           repairWriteRequired = false
           repairRounds = 0
-          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById)
+          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
           step.status = 'completed'
-          // complete_step already advanced planTracker inside its execute(); don't double-advance
-          if (primaryResult!.toolName !== 'complete_step') {
-            this.planTracker.advanceCurrent(primaryResult!.toolName || 'workflow evidence')
-          }
+          this.planTracker.advanceCurrent(decisiveResult!.toolName || 'workflow evidence')
           completed = true
           this.emitPlanState()
           break
         }
 
-        if (primaryResult && isTerminalFailure(step, primaryResult)) {
-          const signature = repairErrorSignature(primaryResult.output, step.kind as 'build' | 'run')
+        if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
+          const signature = repairErrorSignature(decisiveResult.output, step.kind as 'build' | 'run')
           if (seenRepairSignatures.has(signature)) {
             roundInstruction =
               '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 edit_file 做不同修改，或 ask_clarification 向用户确认。'
-            this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+            this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
             attempt++
             continue
           }
@@ -763,7 +840,7 @@ export class WorkflowEngine {
           repairMode = true
           repairWriteRequired = true
           repairRounds++
-          lastFailureOutput = primaryResult.output
+          lastFailureOutput = decisiveResult.output
           roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as 'build' | 'run')
           if (!debuggerPrefetched) {
             debuggerPrefetched = true
@@ -785,7 +862,7 @@ export class WorkflowEngine {
               }
             }
           }
-          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
           if (repairRounds > MAX_REPAIR_ROUNDS) {
             attempt = maxIterations
             break
@@ -793,26 +870,29 @@ export class WorkflowEngine {
           continue
         }
 
-        if (
-          repairMode &&
-          (primaryResult?.toolName === 'write_file' || primaryResult?.toolName === 'edit_file') &&
-          primaryResult.ok &&
-          !primaryResult.error
-        ) {
+        const repairWrite = orderedResults.find((result) =>
+          (result.toolName === 'write_file' || result.toolName === 'edit_file') && result.ok && !result.error
+        )
+        if (repairMode && repairWrite) {
           repairWriteRequired = false
           roundInstruction = writeFileRetryInstruction(step.kind as 'build' | 'run')
-          this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
           continue
         }
 
-        const existingHandlerHint = primaryResult ? detectExistingHandlerHint(step, primaryResult) : undefined
+        const existingHandlerHint = orderedResults
+          .map((result) => detectExistingHandlerHint(step, result))
+          .find(Boolean)
         if (existingHandlerHint) {
           roundInstruction = existingHandlerHint
         }
 
         // Track knowledge queries and limit per step
-        if (primaryResult && KNOWLEDGE_TOOLS.has(primaryResult.toolName || '')) {
-          knowledgeQueries++
+        const successfulKnowledge = orderedResults.filter((result) =>
+          result.ok && !result.error && KNOWLEDGE_TOOLS.has(result.toolName || '')
+        )
+        if (successfulKnowledge.length > 0) {
+          knowledgeQueries += successfulKnowledge.length
           if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
             roundInstruction = [
               roundInstruction,
@@ -821,12 +901,21 @@ export class WorkflowEngine {
           }
         }
 
-        this.appendToolRound(baseMessages, modelResult.text || streamText, calls, resultsById, roundInstruction)
+        const requestedCompletion = orderedResults.some((result) => result.toolName === 'complete_step' && result.ok)
+        if (requestedCompletion && !success) {
+          roundInstruction = [
+            roundInstruction,
+            `blocked: [step_evidence_required] 步骤 #${step.id} 尚未满足验收证据，未推进计划。`
+          ].filter(Boolean).join('\n\n')
+        }
 
-        if (
-          !(repairMode && primaryResult && isRepairDiagnosticResult(step, primaryResult, repairMode)) &&
-          !isKnowledgeRound(step, primaryResult, knowledgeQueries)
-        ) {
+        this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+
+        const repairDiagnosticRound = repairMode && orderedResults.length > 0 &&
+          orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode))
+        const freeKnowledgeRound = successfulKnowledge.length === orderedResults.length &&
+          knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS
+        if (!repairDiagnosticRound && !freeKnowledgeRound) {
           attempt++
         }
       }

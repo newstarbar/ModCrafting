@@ -24,6 +24,13 @@ test('resolveTurnIntent: feature statement in agent mode → develop', () => {
   assert.equal(resolveTurnIntent('玩家可以进行二段跳', intentCtx()), 'develop')
 })
 
+test('resolveTurnIntent: question in agent mode stays read-only chat', () => {
+  assert.equal(
+    resolveTurnIntent('为什么这个 Mixin 不生效？', intentCtx({ composerMode: 'agent', hasProject: true })),
+    'chat'
+  )
+})
+
 test('resolveTurnIntent: same input in ask mode → chat', () => {
   assert.equal(resolveTurnIntent('玩家可以进行二段跳', intentCtx({ composerMode: 'ask' })), 'chat')
 })

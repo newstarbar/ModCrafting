@@ -7,7 +7,7 @@
 //   system prompt    micro-placeholders    last RECENT_WINDOW messages
 //                    or LLM summary
 
-import type { ChatMessage, ModelToolCall } from './chat-message'
+import type { ChatMessage } from './chat-message'
 
 // ── Thresholds ──
 
@@ -88,7 +88,7 @@ function compactToolResult(name: string, output: string): string {
  */
 export function microCompact(
   messages: ChatMessage[],
-  assistantTurnCount: number
+  _assistantTurnCount: number
 ): ChatMessage[] {
   if (messages.length <= RECENT_WINDOW) return messages
 
@@ -109,7 +109,9 @@ export function microCompact(
     }
 
     if (messages[i].role === 'tool') {
-      const age = assistantTurnCount - assistantTurnsSeen
+      // Age is derived from the actual message positions. A per-run counter is
+      // reset between turns and previously made old session results immortal.
+      const age = assistantTurnsSeen
       if (age >= MICRO_COMPACT_AGE) {
         const name = (messages[i] as any).name || 'unknown'
         compacted[i] = {
@@ -180,7 +182,7 @@ function buildSummarizeMessages(messages: ChatMessage[]): ChatMessage[] {
         return `[${name}]: ${(m.content || '').slice(0, 300)}`
       }
       if (m.role === 'assistant' && m.tool_calls) {
-        const names = m.tool_calls.map((tc: ModelToolCall) => tc.name).join(', ')
+        const names = m.tool_calls.map((tc) => tc.function.name).join(', ')
         return `[assistant → 调用: ${names}]`
       }
       return `[${m.role}]: ${(m.content || '').slice(0, 200)}`

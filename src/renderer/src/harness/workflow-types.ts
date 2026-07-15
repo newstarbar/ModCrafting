@@ -14,6 +14,7 @@ export interface WorkflowStep {
   kind: StepKind
   status: WorkflowStatus
   targetPath?: string
+  targetPaths?: string[]
   evidence?: string
   allowedTools: string[]
   maxAttempts: number
@@ -34,6 +35,10 @@ export function workflowStepToPlanStep(step: WorkflowStep): PlanStepState {
   return {
     id: step.id,
     description: step.title,
-    status: step.status === 'failed' ? 'pending' : step.status
+    status: step.status === 'failed' ? 'pending' : step.status,
+    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' ? step.kind : undefined,
+    targetPath: step.targetPath,
+    targetPaths: step.targetPaths,
+    evidence: step.evidence
   }
 }

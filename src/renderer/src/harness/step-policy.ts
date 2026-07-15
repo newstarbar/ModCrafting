@@ -68,6 +68,15 @@ export interface ToolGateOptions {
 }
 
 const REPAIR_WRITE_BLOCKED_TOOLS = new Set(['trigger_build', 'run_command'])
+const REPAIR_OVERRIDE_TOOLS = new Set([
+  'edit_file',
+  'write_file',
+  'read_file',
+  'grep',
+  'read_error_log',
+  'fabric_log_debugger',
+  'fabric_docs_search'
+])
 
 export function isRepairWriteBlocked(
   step: WorkflowStep,
@@ -113,6 +122,10 @@ export function isToolAllowedForStep(
 ): boolean {
   if (isRepairWriteBlocked(step, call, options)) return false
 
+  const explicitlyAllowed = step.allowedTools.includes(call.name)
+  const repairOverride = Boolean(options?.repairMode && REPAIR_OVERRIDE_TOOLS.has(call.name))
+  if (!explicitlyAllowed && !repairOverride) return false
+
   if (call.name === 'list_directory') return true
   if (call.name === 'grep') return true
   if (call.name === 'ask_clarification') return true
@@ -137,7 +150,6 @@ export function isToolAllowedForStep(
   // complete_step only in non-terminal steps (build/run auto-detected by host)
   if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run') return true
 
-  if (!step.allowedTools.includes(call.name)) return false
   return commandAllowedForStep(step, call, options)
 }
 

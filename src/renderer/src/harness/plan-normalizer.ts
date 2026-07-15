@@ -91,6 +91,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_file',
         'list_directory',
         'grep',
+        'ask_clarification',
         'run_command',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
@@ -114,6 +115,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_file',
         'list_directory',
         'grep',
+        'ask_clarification',
         'run_command',
         'fabric_docs_search',
         'fabric_javadoc_lookup',
@@ -130,6 +132,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_file',
         'list_directory',
         'grep',
+        'ask_clarification',
         'fabric_log_debugger',
         'fabric_docs_search',
         'read_error_log'
@@ -143,6 +146,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'read_file',
         'list_directory',
         'grep',
+        'ask_clarification',
         'fabric_log_debugger',
         'fabric_docs_search',
         'read_error_log'
@@ -193,12 +197,14 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
   const kind = inferKind(step.description, step.kind)
   const explicitPath = step.targetPath || targetPathFromDescription(step.description)
   const targetPath = explicitPath || (kind === 'recipe' ? recipePath('<modid>', 'generated_recipe') : undefined)
+  const targetPaths = step.targetPaths?.length ? [...step.targetPaths] : (targetPath ? [targetPath] : undefined)
   return {
     id: step.id,
     title: step.description,
     kind,
     status: normalizeStatus(step.status),
     targetPath,
+    targetPaths,
     ...(step.evidence ? { evidence: step.evidence } : {}),
     allowedTools: defaultAllowedTools(kind),
     maxAttempts: defaultMaxAttempts(kind),

@@ -1057,21 +1057,23 @@ export const completeStepTool: Tool = {
 		},
 		required: ["stepId"]
 	},
-	readOnly: () => true,
+	readOnly: () => false,
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
 		// Extract numeric ID — handle "#1 描述文字" or "1" or "#1"
 		let stepId = String(args.stepId || "").trim();
 		const numMatch = stepId.match(/^#?(\d+)/);
 		if (numMatch) stepId = numMatch[1];
 		if (ctx.planTracker) {
-			const result = ctx.planTracker.advance(stepId);
-			if (result.ok) {
-				ctx.onPlanStateChange?.(ctx.planTracker.snapshot());
-				return result.message;
+			const current = ctx.planTracker.currentStep;
+			if (!current) return "Error: 所有计划步骤已完成，无需再调用 complete_step。";
+			if (current.id !== stepId) {
+				return `Error: 当前步骤是 #${current.id}：${current.description}，不能完成 #${stepId || "空"}。`;
 			}
-			return `Error: ${result.message}`;
+			// Control tools never mutate tracker state themselves. WorkflowEngine validates
+			// evidence and performs the single authoritative state transition.
+			return `[STEP_COMPLETE_REQUEST:${stepId}]`;
 		}
-		return `[STEP_DONE:${stepId}]`;
+		return `[STEP_COMPLETE_REQUEST:${stepId}]`;
 	}
 };
 
@@ -1391,6 +1393,51 @@ export const fabricTemplateGenerateTool: Tool = {
 	}
 };
 
+// ── submit_plan ──
+export const submitPlanTool: Tool = {
+	name: "submit_plan",
+	description:
+		"提交经过勘察后的结构化实施计划。仅用于计划阶段；每个步骤必须包含 kind、description、targetPath 和 evidence。",
+	schema: {
+		type: "object",
+		properties: {
+			steps: {
+				type: "array",
+				minItems: 1,
+				maxItems: 6,
+				items: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						kind: { type: "string", enum: ["write", "recipe", "inspect"] },
+						description: { type: "string", minLength: 1 },
+						targetPath: { type: "string", minLength: 1 },
+						targetPaths: {
+							type: "array",
+							minItems: 1,
+							uniqueItems: true,
+							items: { type: "string", minLength: 1 }
+						},
+						evidence: { type: "string", minLength: 1 }
+					},
+					required: ["kind", "description", "evidence"],
+					anyOf: [
+						{ required: ["targetPath"] },
+						{ required: ["targetPaths"] }
+					]
+				}
+			}
+		},
+		required: ["steps"],
+		additionalProperties: false
+	},
+	readOnly: () => true,
+	async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		const steps = Array.isArray(args.steps) ? args.steps : [];
+		return `\`\`\`json\n${JSON.stringify(steps, null, 2)}\n\`\`\``;
+	}
+};
+
 // ── ask_clarification ──
 export const askClarificationTool: Tool = {
 	name: "ask_clarification",
@@ -1453,6 +1500,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		explainCodeTool,
 		listTemplatesTool,
 		fabricTemplateGenerateTool,
+		submitPlanTool,
 		askClarificationTool,
 		completeStepTool
 	];

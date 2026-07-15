@@ -19,7 +19,7 @@ export function validateCompiledSteps(steps: CompiledPlanStep[]): PlanValidation
       issues.push({ stepId: step.id, field: 'description', message: '步骤描述为空' })
     }
 
-    if (step.kind === 'write' && !step.targetPath && !PATH_HINT_RE.test(step.description)) {
+    if (step.kind === 'write' && !step.targetPath && !step.targetPaths?.length && !PATH_HINT_RE.test(step.description)) {
       issues.push({
         stepId: step.id,
         field: 'targetPath',
@@ -27,7 +27,7 @@ export function validateCompiledSteps(steps: CompiledPlanStep[]): PlanValidation
       })
     }
 
-    if (step.kind === 'recipe' && !step.targetPath && !/配方|recipe/i.test(step.description)) {
+    if (step.kind === 'recipe' && !step.targetPath && !step.targetPaths?.length && !/配方|recipe/i.test(step.description)) {
       issues.push({
         stepId: step.id,
         field: 'targetPath',

@@ -14,7 +14,7 @@ export interface TurnIntentContext {
 const RESUME_PATTERN = /^(继续|接着|往下|continue|执行计划|开始执行|执行)$/i
 const GREETING_PATTERN = /^(你好|您好|嗨|hello|hi|hey|在吗|谢谢|感谢|好的|ok|okay|再见|拜拜)[\s!！。.?？~，,]*$/i
 const QA_PATTERN = /^(什么是|为什么|怎么|如何|能否|是否|解释|说明|什么意思|这段|请问)/i
-const DEV_PATTERN = /创建|实现|开发|添加|修改|构建|写一个|制作|生成.{0,8}(模组|mod|类|文件|物品|功能)/i
+const DEV_PATTERN = /创建|实现|开发|添加|修改|修复|删除|重构|构建|写一个|制作|帮我.{0,8}(做|改|修|加)|生成.{0,8}(模组|mod|类|文件|物品|功能)|\b(create|implement|add|modify|fix|delete|refactor|build)\b/i
 const FEATURE_PATTERN = /可以进行|能够|支持|二段跳|配方|物品|方块|mixin|功能|效果|技能/i
 const PLAN_ADJUST_PATTERN = /调整计划|修改计划|重新计划|重做计划/i
 
@@ -84,8 +84,11 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
     if (hasIncompletePlan && isResumeInput(trimmed)) {
       return 'resume'
     }
-    // In execute phase: develop continues (fix, adjust), but new-feature detection is in runTurn
-    return 'develop'
+    // Agent mode is capable of acting, but questions/explanations remain read-only.
+    // Only an explicit mutation signal enters the plan -> execute workflow.
+    if (heuristicChat(trimmed)) return 'chat'
+    if (heuristicDevelop(trimmed, false)) return 'develop'
+    return 'chat'
   }
 
   if (heuristicChat(trimmed)) return 'chat'

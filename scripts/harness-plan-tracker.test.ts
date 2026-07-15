@@ -587,7 +587,7 @@ test('workflow engine ends with friendly partial after repair rounds exhausted',
   assert.match(result.finalContent, /修复|BUILD FAILED|未能自动完成/)
 })
 
-test('workflow engine completes recipe step after first create_recipe and does not execute repeats', async () => {
+test('workflow engine completes recipe step only after evidence-backed complete_step', async () => {
   const registry = new Registry()
   const executed: string[] = []
   registry.add({
@@ -600,11 +600,19 @@ test('workflow engine completes recipe step after first create_recipe and does n
       return '✅ Recipe written: src/main/resources/data/my-mod/recipes/dirt_to_diamond.json (200 bytes)'
     }
   })
+  registry.add({
+    name: 'complete_step',
+    description: 'complete step',
+    schema: { type: 'object', properties: { stepId: { type: 'string' } }, required: ['stepId'] },
+    readOnly: () => false,
+    async execute() { return '[STEP_COMPLETE_REQUEST:1]' }
+  })
 
   const tracker = PlanTracker.fromSteps([
     { id: '1', description: '创建 data/<modid>/recipes/dirt_to_diamond.json 配方文件', status: 'running' }
   ])
   const steps = normalizeWorkflowSteps(tracker.steps)
+  let call = 0
   const engine = new WorkflowEngine({
     steps,
     planTracker: tracker,
@@ -613,15 +621,20 @@ test('workflow engine completes recipe step after first create_recipe and does n
     emit: () => {},
     onToolDispatch: () => {},
     onToolResult: () => {},
-    modelCall: async () => ({
-      finishReason: undefined,
-      toolCalls: [
-        { name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } },
-        { name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } }
-      ],
-      text: '',
-      reasoning: ''
-    })
+    modelCall: async () => {
+      call++
+      return {
+        finishReason: undefined,
+        toolCalls: call === 1
+          ? [
+              { name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } },
+              { name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } }
+            ]
+          : [{ name: 'complete_step', args: { stepId: '1' } }],
+        text: '',
+        reasoning: ''
+      }
+    }
   })
 
   const result = await engine.run([])
@@ -643,6 +656,13 @@ test('workflow engine permits mod id read during recipe step before create_recip
       executed.push(`read:${args.path}`)
       return '{"id":"my-mod"}'
     }
+  })
+  registry.add({
+    name: 'complete_step',
+    description: 'complete step',
+    schema: { type: 'object', properties: { stepId: { type: 'string' } }, required: ['stepId'] },
+    readOnly: () => false,
+    async execute() { return '[STEP_COMPLETE_REQUEST:1]' }
   })
   registry.add({
     name: 'create_recipe',
@@ -674,7 +694,9 @@ test('workflow engine permits mod id read during recipe step before create_recip
         finishReason: undefined,
         toolCalls: call === 1
           ? [{ name: 'read_file', args: { path: 'src/main/resources/fabric.mod.json' } }]
-          : [{ name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } }],
+          : call === 2
+            ? [{ name: 'create_recipe', args: { namespace: 'my-mod', name: 'dirt_to_diamond', ingredients: [{ item: 'minecraft:dirt', count: 4 }], result: 'minecraft:diamond' } }]
+            : [{ name: 'complete_step', args: { stepId: '1' } }],
         text: '',
         reasoning: ''
       }

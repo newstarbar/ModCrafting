@@ -12,7 +12,7 @@ import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
 import { isRepeatGuardedToolCall } from './repeat-guard.ts'
-import { microCompact, estimatePromptTokens, type CompactionResult } from './context-compact'
+import { prepareMessages, estimatePromptTokens, type CompactionResult } from './context-compact'
 import {
   appendToolRoundHistory,
   type ChatMessage,
@@ -24,6 +24,8 @@ import {
   isRetryableFetchError,
   sleep
 } from './fetch-retry.ts'
+import { validateToolCalls } from './tool-call-validator.ts'
+import { getModelContextWindow } from '../../../shared/llm-providers.ts'
 
 export { isRepeatGuardedToolCall } from './repeat-guard.ts'
 export type { ChatMessage } from './chat-message.ts'
@@ -45,7 +47,13 @@ export interface RunOptions {
   opsOnlyPlan?: boolean
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
-  openCodeDelegate?: (step: import('./workflow-types.ts').WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
+  openCodeDelegate?: (step: import('./workflow-types.ts').WorkflowStep, instruction: string) => Promise<{
+    ok: boolean
+    output?: string
+    error?: string
+    evidenceOk?: boolean
+    changedPaths?: string[]
+  }>
 }
 
 const MAX_READONLY_ROUNDS = 3
@@ -66,6 +74,7 @@ const PLAN_READONLY_TOOL_NAMES = new Set([
   'fabric_log_debugger',
   'read_error_log',
   'explain_code',
+  'submit_plan',
   'ask_clarification'
 ])
 
@@ -172,6 +181,46 @@ export class Agent {
 
   private emit(e: Event): void { this.sink.emit(e) }
 
+  private async prepareApiMessages(
+    messages: ChatMessage[],
+    endpoint: string,
+    apiKey: string,
+    model: string,
+    abortSignal?: AbortSignal
+  ): Promise<ChatMessage[]> {
+    const prepared = await prepareMessages(
+      messages,
+      this.assistantTurnCount,
+      { contextWindow: getModelContextWindow(model) ?? 128_000 },
+      async (summaryMessages) => {
+        let text = ''
+        await this.streamFromAPI(
+          endpoint,
+          apiKey,
+          model,
+          summaryMessages,
+          [],
+          abortSignal,
+          (chunk) => { if (chunk) text += chunk },
+          2048
+        )
+        return { text }
+      },
+      (result) => {
+        this.compactionTranscripts.push(result)
+        this.emit({
+          kind: EventKind.CompactionDone,
+          compaction: {
+            trigger: 'context_budget',
+            messagesBefore: result.savedTranscript.length,
+            messagesAfter: 10
+          }
+        })
+      }
+    )
+    return prepared.messages
+  }
+
   private finishRun(emitLifecycle: boolean, error?: string, phase?: string): void {
     if (emitLifecycle) {
       this.emit({
@@ -208,7 +257,13 @@ export class Agent {
       openCodeDelegate,
       fileSession: this.fileSession,
       modelCall: async (workflowMessages, tools, onChunk) => {
-        const compactedMessages = microCompact(workflowMessages, this.assistantTurnCount)
+        const compactedMessages = await this.prepareApiMessages(
+          workflowMessages,
+          apiEndpoint,
+          apiKey,
+          apiModel,
+          abortSignal
+        )
         this.assistantTurnCount++
         let text = ''
         let reasoningText = ''
@@ -403,7 +458,13 @@ export class Agent {
         : [...messages]
 
       // Micro-compact: replace tool results older than 3 turns with placeholders
-      const apiMessages = microCompact(rawApiMessages, this.assistantTurnCount)
+      const apiMessages = await this.prepareApiMessages(
+        rawApiMessages,
+        apiEndpoint,
+        apiKey,
+        apiModel,
+        abortSignal
+      )
 
       // Token budget warning
       const estimatedTokens = estimatePromptTokens(apiMessages)
@@ -488,9 +549,40 @@ export class Agent {
           this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: 'Response truncated' } })
         }
 
-        const toolCalls = result.toolCalls
+        const rawToolCalls = result.toolCalls
+        const validation = validateToolCalls(rawToolCalls, availableTools)
+        for (const [id, rejected] of validation.rejected) {
+          this.emit({
+            kind: EventKind.ToolDispatch,
+            tool: { id, name: rejected.toolName || 'unknown', args: JSON.stringify(rejected.args || {}) }
+          })
+          this.emit({
+            kind: EventKind.ToolResult,
+            tool: {
+              id,
+              name: rejected.toolName || 'unknown',
+              args: JSON.stringify(rejected.args || {}),
+              output: rejected.output,
+              error: rejected.error,
+              durationMs: 0
+            }
+          })
+          this.onToolResult?.(rejected.toolName || 'unknown', id, rejected.output)
+        }
+        const toolCalls = validation.accepted
         const cleanText = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
         finalContent = cleanText || streamContent
+
+        if (rawToolCalls.length > 0 && toolCalls.length === 0) {
+          if (cleanText) messages.push({ role: 'assistant', content: cleanText })
+          messages.push({
+            role: 'user',
+            content:
+              '【系统】刚才的工具调用未执行：工具不在当前阶段白名单中，或参数不符合 Schema。' +
+              '请只使用本轮公开工具并修正参数。'
+          })
+          continue
+        }
 
         // Final answer — plan phase always ends here; execute phase may kick if idle
         if (toolCalls.length === 0) {
@@ -660,6 +752,18 @@ export class Agent {
             }
           )
           for (const [id, r] of batchResults) results.set(id, r)
+        }
+
+        // Check if model is asking a clarification question (plan or chat phase)
+        if (phase === 'plan') {
+          const submittedPlan = [...results.values()].find((r) => r.toolName === 'submit_plan' && r.ok)
+          if (submittedPlan) {
+            appendToolRoundHistory(messages, streamContent, callsWithIds, results)
+            finalContent = submittedPlan.output
+            messages.push({ role: 'assistant', content: finalContent })
+            this.finishRun(emitLifecycle)
+            return finalContent
+          }
         }
 
         // Check if model is asking a clarification question (plan or chat phase)
@@ -917,7 +1021,9 @@ export class Agent {
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number }
   }> {
     const body: Record<string, unknown> = {
-      model, messages, stream: true, max_tokens: maxTokens,
+      model,
+      messages: messages.map(({ origin: _origin, taskId: _taskId, phase: _phase, ...message }) => message),
+      stream: true, max_tokens: maxTokens,
       stream_options: { include_usage: true }
     }
     if (tools.length > 0) {
@@ -943,18 +1049,25 @@ export class Agent {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
       body: JSON.stringify(body),
       signal: timeoutController.signal
-    })
-    } finally {
+      })
+    } catch (error) {
       clearTimeout(timeoutId)
       abortSignal?.removeEventListener('abort', onUserAbort)
+      throw error
     }
     if (!response.ok) {
       const text = await response.text()
+      clearTimeout(timeoutId)
+      abortSignal?.removeEventListener('abort', onUserAbort)
       throw new Error(`API error ${response.status}: ${text}`)
     }
 
     const reader = response.body?.getReader()
-    if (!reader) throw new Error('No response body')
+    if (!reader) {
+      clearTimeout(timeoutId)
+      abortSignal?.removeEventListener('abort', onUserAbort)
+      throw new Error('No response body')
+    }
     const decoder = new TextDecoder()
     let buffer = ''
     let finishReason: string | undefined
@@ -962,13 +1075,14 @@ export class Agent {
     const collected: Array<{ index: number; id: string; name: string; args: string }> = []
     let fullText = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         const data = line.slice(6).trim()
         if (data === '[DONE]') continue
@@ -988,7 +1102,7 @@ export class Agent {
           if (!choice) continue
           const delta = choice.delta || {}
           if (choice.finish_reason) finishReason = choice.finish_reason
-          if (delta.reasoning_content) { onChunk?.('', delta.reasoning_content); continue }
+          if (delta.reasoning_content) onChunk?.('', delta.reasoning_content)
           if (delta.tool_calls) {
             for (const tc of delta.tool_calls) {
               let entry = collected.find((e) => e.index === (tc.index ?? 0))
@@ -1000,11 +1114,14 @@ export class Agent {
               if (tc.function?.name) entry.name = tc.function.name
               if (tc.function?.arguments) entry.args += tc.function.arguments
             }
-            continue
           }
           if (delta.content) { fullText += delta.content; onChunk?.(delta.content) }
         } catch { /* skip */ }
+        }
       }
+    } finally {
+      clearTimeout(timeoutId)
+      abortSignal?.removeEventListener('abort', onUserAbort)
     }
 
     const nativeCalls: ModelToolCall[] = collected.filter((tc) => tc.name).map((tc) => {

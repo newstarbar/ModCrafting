@@ -3,6 +3,7 @@ export interface ParsedPlanStep {
   description: string
   kind?: 'inspect' | 'write' | 'recipe'
   targetPath?: string
+  targetPaths?: string[]
   evidence?: string
 }
 
@@ -144,6 +145,7 @@ function tryParseJsonPlanLite(text: string): ParsedPlanStep[] {
           description?: string
           title?: string
           targetPath?: string
+          targetPaths?: string[]
           path?: string
           evidence?: string
         }
@@ -155,12 +157,16 @@ function tryParseJsonPlanLite(text: string): ParsedPlanStep[] {
           ? kindRaw
           : undefined) as ParsedPlanStep['kind']
         const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
+        const targetPaths = Array.isArray(item.targetPaths)
+          ? item.targetPaths.map(String).map((path) => path.replace(/\\/g, '/')).filter(Boolean)
+          : undefined
         const evidence = item.evidence ? String(item.evidence).trim() : undefined
         steps.push({
           id: String(i + 1),
           description,
           ...(kind ? { kind } : {}),
           ...(targetPath ? { targetPath } : {}),
+          ...(targetPaths?.length ? { targetPaths } : {}),
           ...(evidence ? { evidence } : {})
         })
       }

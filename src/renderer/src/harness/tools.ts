@@ -206,6 +206,8 @@ export interface ToolResult {
   toolName?: string
   args?: Record<string, unknown>
   artifactPath?: string
+  /** All artifacts affected by this call. artifactPath remains for v1 compatibility. */
+  artifactPaths?: string[]
   exitCode?: number | null
   errorKind?: string
   fileDiff?: FileDiff
@@ -330,6 +332,7 @@ export async function executeTool(
       outputPreview: truncated.slice(0, 100)
     })
 
+    const artifactPath = artifactPathFor(tool.name, args)
     return {
       output: cleanedOutput,
       error: inferredError ? truncateOutput(inferredError) : undefined,
@@ -337,7 +340,8 @@ export async function executeTool(
       ok: !inferredError,
       toolName: tool.name,
       args,
-      artifactPath: artifactPathFor(tool.name, args),
+      artifactPath,
+      artifactPaths: artifactPath ? [artifactPath] : [],
       exitCode,
       fileDiff,
       meta
@@ -353,6 +357,7 @@ export async function executeTool(
       errMsg = await diagnoseFileError(tool.name, ctx.projectPath, filePath, errMsg)
     }
 
+    const artifactPath = artifactPathFor(tool.name, args)
     return {
       output: errMsg,
       error: errMsg,
@@ -360,7 +365,8 @@ export async function executeTool(
       ok: false,
       toolName: tool.name,
       args,
-      artifactPath: artifactPathFor(tool.name, args),
+      artifactPath,
+      artifactPaths: artifactPath ? [artifactPath] : [],
       exitCode: null,
       errorKind: 'exception'
     }
@@ -378,65 +384,68 @@ export async function executeBatch(
 ): Promise<Map<string, ToolResult>> {
   const results = new Map<string, ToolResult>()
 
-  // Split into readOnly and writers
-  const readOnlyCalls: Array<{ name: string; args: Record<string, unknown>; id: string }> = []
-  const writerCalls: Array<{ name: string; args: Record<string, unknown>; id: string }> = []
+  type NormalizedCall = { name: string; args: Record<string, unknown>; id: string }
+  const normalized: NormalizedCall[] = calls.map((call) => ({
+    ...call,
+    id: call.id || `call_${Math.random().toString(36).slice(2, 8)}`
+  }))
+  const controlTools = new Set(['complete_step', 'ask_clarification'])
 
-  for (const call of calls) {
-    const id = call.id || `call_${Math.random().toString(36).slice(2, 8)}`
-    const tool = registry.get(call.name)
-    if (tool?.readOnly()) {
-      readOnlyCalls.push({ ...call, id })
-    } else {
-      writerCalls.push({ ...call, id })
-    }
-  }
-
-  // Execute readOnly calls in parallel
-  if (readOnlyCalls.length > 0) {
-    await Promise.all(
-      readOnlyCalls.map(async (call) => {
-        onDispatch?.(call.name, call.id, call.args)
-        const tool = registry.get(call.name)
-        if (tool) {
-          const callCtx: ToolContext = {
-            ...ctx,
-            callId: call.id,
-            onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
-          }
-          const result = await executeTool(tool, call.args, callCtx)
-          results.set(call.id, result)
-          onResult?.(call.name, call.id, result)
-        }
-      })
-    )
-  }
-
-  // Execute writer calls serially
-  for (const call of writerCalls) {
+  const executeOne = async (call: NormalizedCall): Promise<void> => {
     onDispatch?.(call.name, call.id, call.args)
     const tool = registry.get(call.name)
-    if (tool) {
-      // Check preview
-      const previewer = tool as unknown as Previewer
-      const diff = previewer.preview?.(call.args) ?? null
-      if (diff) {
-        logger.tool(`Preview: ${call.name}`, diff)
-      }
-      const callCtx: ToolContext = {
-        ...ctx,
-        callId: call.id,
-        onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
-      }
-      const result = await executeTool(tool, call.args, callCtx)
-      // Attach fileDiff from preview if execute() didn't provide one
-      if (!result.fileDiff && diff) {
-        result.fileDiff = diff
+    if (!tool) {
+      const output = `Error: unknown tool "${call.name}"`
+      const result: ToolResult = {
+        output,
+        error: output,
+        durationMs: 0,
+        ok: false,
+        toolName: call.name,
+        args: call.args,
+        exitCode: null,
+        errorKind: 'unknown_tool'
       }
       results.set(call.id, result)
       onResult?.(call.name, call.id, result)
+      return
     }
+
+    const previewer = tool as unknown as Previewer
+    const diff = tool.readOnly() ? null : (previewer.preview?.(call.args) ?? null)
+    if (diff) logger.tool(`Preview: ${call.name}`, diff)
+    const callCtx: ToolContext = {
+      ...ctx,
+      callId: call.id,
+      onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
+    }
+    const result = await executeTool(tool, call.args, callCtx)
+    if (!result.fileDiff && diff) result.fileDiff = diff
+    results.set(call.id, result)
+    onResult?.(call.name, call.id, result)
   }
+
+  // Preserve the model-declared order. Only adjacent pure reads may run in parallel;
+  // a write or control call is a barrier, so write -> read observes the new state.
+  let readGroup: NormalizedCall[] = []
+  const flushReads = async (): Promise<void> => {
+    if (readGroup.length === 0) return
+    const group = readGroup
+    readGroup = []
+    await Promise.all(group.map(executeOne))
+  }
+
+  for (const call of normalized) {
+    const tool = registry.get(call.name)
+    const parallelRead = Boolean(tool?.readOnly()) && !controlTools.has(call.name)
+    if (parallelRead) {
+      readGroup.push(call)
+      continue
+    }
+    await flushReads()
+    await executeOne(call)
+  }
+  await flushReads()
 
   return results
 }

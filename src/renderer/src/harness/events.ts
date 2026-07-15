@@ -111,7 +111,15 @@ export interface Event {
   retryMax?: number
   phase?: string
   planActionable?: boolean
-  planSteps?: Array<{ id: string; description: string; status: string }>
+  planSteps?: Array<{
+    id: string
+    description: string
+    status: string
+    kind?: 'inspect' | 'write' | 'recipe'
+    targetPath?: string
+    targetPaths?: string[]
+    evidence?: string
+  }>
   clarification?: { question: string; options?: string[] }
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
