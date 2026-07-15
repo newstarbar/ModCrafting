@@ -115,7 +115,7 @@ export interface Event {
     id: string
     description: string
     status: string
-    kind?: 'inspect' | 'write' | 'recipe'
+    kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
     targetPath?: string
     targetPaths?: string[]
     evidence?: string

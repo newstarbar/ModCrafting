@@ -7,7 +7,7 @@ import {
   type ParsedPlanStep
 } from '../utils/plan-steps.ts'
 
-export type StructuredStepKind = 'write' | 'recipe' | 'inspect'
+export type StructuredStepKind = 'write' | 'recipe' | 'mixin' | 'inspect'
 
 export interface CompiledPlanStep extends ParsedPlanStep {
   kind?: StructuredStepKind
@@ -17,7 +17,7 @@ export interface CompiledPlanStep extends ParsedPlanStep {
   evidence?: string
 }
 
-const STRUCTURED_KIND_RE = /^\[(write|recipe|inspect)\]\s*/i
+const STRUCTURED_KIND_RE = /^\[(write|recipe|mixin|inspect)\]\s*/i
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;—\-]+)(?:`)?/i
 const VAGUE_STEP_RE = /确保|测试功能|检查|验证|确认无错|输出总结/
 const KNOWLEDGE_INSPECT_RE = /mixin|网络|payload|datagen|新\s*api|access\s*widener|右键|交互|interact/i
@@ -94,7 +94,7 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
         const description = String(item.description || item.title || '').trim()
         if (!description) continue
         const kindRaw = String(item.kind || '').toLowerCase()
-        const kind = (['write', 'recipe', 'inspect'].includes(kindRaw)
+        const kind = (['write', 'recipe', 'mixin', 'inspect'].includes(kindRaw)
           ? kindRaw
           : undefined) as StructuredStepKind | undefined
         const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
@@ -140,7 +140,7 @@ export function dropVagueSteps(steps: CompiledPlanStep[]): CompiledPlanStep[] {
   return steps.filter((s) => {
     if (s.hostManaged) return true
     if (PATH_RE.test(s.description)) return true
-    if (s.kind === 'recipe' || s.kind === 'write' || s.kind === 'inspect') return true
+    if (s.kind === 'recipe' || s.kind === 'write' || s.kind === 'mixin' || s.kind === 'inspect') return true
     if (VAGUE_STEP_RE.test(s.description) && !PATH_RE.test(s.description)) return false
     return true
   })
@@ -191,7 +191,7 @@ export function needsMixinAudit(steps: CompiledPlanStep[]): boolean {
   if (steps.some((s) => s.kind === 'inspect' && MIXIN_AUDIT_DESC.includes('Mixin'))) return false
   // Any write step targeting a mixin directory or mentioning mixin
   return steps.some((s) => {
-    if (s.kind !== 'write') return false
+    if (s.kind !== 'write' && s.kind !== 'mixin') return false
     const target = (s.targetPath || '').toLowerCase()
     const desc = s.description.toLowerCase()
     return MIXIN_PATH_RE.test(target) || MIXIN_WRITE_RE.test(desc)
@@ -202,7 +202,7 @@ export function needsMixinAudit(steps: CompiledPlanStep[]): boolean {
  *  to register it in mixins.json, or host will warn. */
 export function needsMixinsJsonRegistrationStep(steps: CompiledPlanStep[]): boolean {
   const createsNewMixin = steps.some((s) => {
-    if (s.kind !== 'write') return false
+    if (s.kind !== 'write' && s.kind !== 'mixin') return false
     const target = (s.targetPath || '').toLowerCase()
     const desc = s.description.toLowerCase()
     // Target is a new mixin Java file
@@ -264,6 +264,19 @@ export function prependKnowledgeInspect(steps: CompiledPlanStep[]): CompiledPlan
 
 export function compilePlanFromText(text: string): CompiledPlanStep[] {
   let steps = parseStructuredSteps(text)
+  steps = steps.map((step) => {
+    const targets = `${step.targetPath || ''} ${(step.targetPaths || []).join(' ')}`
+    if ((step.kind === 'write' || step.kind === 'mixin') && (MIXIN_PATH_RE.test(targets) || MIXIN_WRITE_RE.test(step.description))) {
+      return {
+        ...step,
+        kind: 'mixin' as const,
+        description: /fabric_mixin_register|注册/i.test(step.description)
+          ? step.description
+          : `${step.description}；使用 fabric_mixin_register 注册并由 fabric_mixin_validate 验证`
+      }
+    }
+    return step
+  })
   steps = stripHostTerminalFromLlmSteps(steps)
   steps = dropVagueSteps(steps)
   steps = dedupeByPath(steps)
@@ -272,11 +285,6 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
   if (needsMixinAudit(steps)) {
     steps = prependMixinAuditStep(steps)
   }
-  // Missing mixins.json registration: append a reminder step
-  if (needsMixinsJsonRegistrationStep(steps)) {
-    steps = appendMixinsJsonUpdateWarning(steps)
-  }
-
   if (needsKnowledgeInspect(steps, text)) {
     steps = prependKnowledgeInspect(steps)
   }

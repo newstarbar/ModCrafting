@@ -8,7 +8,7 @@ const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/i
 const BUILD_STEP_TITLE = '构建项目（gradlew build / trigger_build build）'
 const RUN_STEP_TITLE = '启动游戏进行真实测试（runClient）'
 
-const EXPLICIT_KIND_RE = /^\[(write|recipe|inspect)\]\s*/i
+const EXPLICIT_KIND_RE = /^\[(write|recipe|mixin|inspect)\]\s*/i
 
 const WRITE_SIGNAL_RE =
   /创建|写入|生成|修改|移除|删除|迁移|物品|方块|blockentity|mixin|datagen|资源|模型|战利品|标签|工具类|快捷键|配置文件|\.json|\.java|\.gradle|\.properties|\.toml/i
@@ -17,20 +17,20 @@ const INSPECT_SIGNAL_RE =
   /查询|搜索|校验|验证|文档|javadoc|wiki|mappings|fabric_docs_search|fabric_meta_version_check|fabric_mod_json_validate/i
 
 function parseExplicitKind(description: string): {
-  kind?: 'inspect' | 'write' | 'recipe'
+  kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
   body: string
 } {
   const match = description.match(EXPLICIT_KIND_RE)
   if (!match) return { body: description }
-  const kind = match[1].toLowerCase() as 'inspect' | 'write' | 'recipe'
+  const kind = match[1].toLowerCase() as 'inspect' | 'write' | 'recipe' | 'mixin'
   return { kind, body: description.slice(match[0].length).trim() }
 }
 
 function inferKind(
   description: string,
-  explicitKind?: 'inspect' | 'write' | 'recipe'
+  explicitKind?: 'inspect' | 'write' | 'recipe' | 'mixin'
 ): StepKind {
-  if (explicitKind === 'write' || explicitKind === 'recipe' || explicitKind === 'inspect') {
+  if (explicitKind === 'write' || explicitKind === 'recipe' || explicitKind === 'mixin' || explicitKind === 'inspect') {
     return explicitKind
   }
 
@@ -41,6 +41,7 @@ function inferKind(
   if (/runclient|启动游戏|运行游戏/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
   if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
+  if (/mixin|@mixin|mixins?\.json/.test(d)) return 'mixin'
   if (
     INSPECT_SIGNAL_RE.test(parsed.body) ||
     /查询知识库|知识库|mixins?\.json|mixin\s*配置|fabric\.mod\.json/.test(d)
@@ -87,6 +88,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'fabric_recipe_generate',
         'create_recipe',
+        'fabric_recipe_validate',
         'complete_step',
         'read_file',
         'list_directory',
@@ -99,6 +101,22 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_meta_version_check',
         'fabric_mod_json_validate'
       ]
+    case 'mixin':
+      return [
+        'fabric_mixin_target_lookup',
+        'fabric_mixin_scaffold',
+        'fabric_mixin_register',
+        'fabric_mixin_validate',
+        'edit_file',
+        'read_file',
+        'list_directory',
+        'grep',
+        'complete_step',
+        'fabric_docs_search',
+        'fabric_javadoc_lookup',
+        'fabric_log_debugger',
+        'read_error_log'
+      ]
     case 'write':
       return [
         'edit_file',
@@ -108,8 +126,6 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_template_generate',
         'fabric_content_register',
         'fabric_data_assets_generate',
-        'fabric_mixin_scaffold',
-        'fabric_mixin_register',
         'fabric_recipe_generate',
         'create_recipe',
         'read_file',
@@ -158,6 +174,7 @@ function defaultAllowedTools(kind: StepKind): string[] {
 
 function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'recipe') return 4
+  if (kind === 'mixin') return 6
   if (kind === 'build') return 6
   if (kind === 'run') return 4
   if (kind === 'write') return 4
@@ -209,7 +226,9 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
     allowedTools: defaultAllowedTools(kind),
     maxAttempts: defaultMaxAttempts(kind),
     validation: kind === 'recipe'
-      ? { type: 'recipe_written', path: targetPath }
+      ? { type: 'recipe_validated', path: targetPath }
+      : kind === 'mixin'
+        ? { type: 'mixin_validated', path: targetPath }
       : kind === 'write'
         ? { type: 'file_exists', path: targetPath }
         : kind === 'build'

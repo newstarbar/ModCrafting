@@ -19,11 +19,11 @@ export function validateCompiledSteps(steps: CompiledPlanStep[]): PlanValidation
       issues.push({ stepId: step.id, field: 'description', message: '步骤描述为空' })
     }
 
-    if (step.kind === 'write' && !step.targetPath && !step.targetPaths?.length && !PATH_HINT_RE.test(step.description)) {
+    if ((step.kind === 'write' || step.kind === 'mixin') && !step.targetPath && !step.targetPaths?.length && !PATH_HINT_RE.test(step.description)) {
       issues.push({
         stepId: step.id,
         field: 'targetPath',
-        message: 'write 步骤应包含目标路径（[write] 标签或 src/data/gradle 路径）'
+        message: `${step.kind} 步骤应包含目标路径（标签或 src/data/gradle 路径）`
       })
     }
 
@@ -61,7 +61,7 @@ export function validateCompiledSteps(steps: CompiledPlanStep[]): PlanValidation
       issues.push({
         stepId: step.id,
         field: 'kind',
-        message: '建议使用 [write|recipe|inspect] 标签标注步骤类型'
+        message: '建议使用 [write|recipe|mixin|inspect] 标签标注步骤类型'
       })
     }
   }

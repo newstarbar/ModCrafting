@@ -63,7 +63,10 @@ const REPAIR_EXTRA_TOOLS = [
   'grep',
   'read_error_log',
   'fabric_log_debugger',
-  'fabric_docs_search'
+  'fabric_docs_search',
+  'fabric_mixin_target_lookup',
+  'fabric_recipe_validate',
+  'fabric_mixin_validate'
 ] as const
 
 const REPAIR_DIAG_DEDUP_TOOLS = new Set(['read_error_log', 'fabric_log_debugger'])
@@ -181,7 +184,7 @@ const MAX_FREE_KNOWLEDGE_ROUNDS = 3
 const MAX_DOC_SEARCH_PER_WRITE_STEP = 2
 
 export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
-  return step.kind === 'write' || step.kind === 'recipe'
+  return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
 }
 
 export function buildDocSearchBlockedResult(step: WorkflowStep, call: ToolCallWithId): ToolResult {
@@ -274,13 +277,15 @@ function resultCompletesStep(
   if (!result.ok || result.error) return false
   if (result.toolName === 'complete_step') {
     if (step.kind === 'build' || step.kind === 'run') return false
-    if (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe') {
+    if (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe' || step.kind === 'mixin') {
       return stepHasEvidence
     }
     return true
   }
   switch (step.kind) {
     case 'recipe':
+      return false
+    case 'mixin':
       return false
     case 'inspect':
       // Evidence tools set stepHasEvidence; advancement requires complete_step
@@ -301,13 +306,13 @@ function resultCompletesStep(
   }
 }
 
-function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
+export function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
   if (!result.ok || result.error) return false
   if (step.kind === 'recipe') {
-    return (
-      result.toolName === 'create_recipe' ||
-      result.toolName === 'fabric_recipe_generate'
-    )
+    return result.validation?.kind === 'recipe' && result.validation.valid
+  }
+  if (step.kind === 'mixin') {
+    return result.validation?.kind === 'mixin' && result.validation.valid
   }
   if (step.kind !== 'write' && step.kind !== 'inspect') return false
   const planStep = {
@@ -319,12 +324,12 @@ function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
   return canToolResultAdvanceStep(planStep, result).ok
 }
 
-function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[]): boolean {
+export function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[]): boolean {
   const successful = results.filter((result) => result.ok && !result.error)
   if (step.kind === 'inspect') {
     return successful.some((result) => recordsStepEvidence(step, result))
   }
-  if (step.kind === 'recipe') {
+  if (step.kind === 'recipe' || step.kind === 'mixin') {
     return successful.some((result) => recordsStepEvidence(step, result))
   }
   if (step.kind !== 'write') return false
@@ -381,7 +386,7 @@ export class WorkflowEngine {
     id: string
     description: string
     status: string
-    kind?: 'inspect' | 'write' | 'recipe'
+    kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
     targetPath?: string
     targetPaths?: string[]
     evidence?: string
@@ -390,7 +395,7 @@ export class WorkflowEngine {
       id: step.id,
       description: step.title,
       status: statusForPlan(step),
-      ...(step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' ? { kind: step.kind } : {}),
+      ...(step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' ? { kind: step.kind } : {}),
       ...(step.targetPath ? { targetPath: step.targetPath } : {}),
       ...(step.targetPaths?.length ? { targetPaths: [...step.targetPaths] } : {}),
       ...(step.evidence ? { evidence: step.evidence } : {})
@@ -568,6 +573,7 @@ export class WorkflowEngine {
       let completed = false
       let repairMode = false
       let repairWriteRequired = false
+      let repairValidationRequired: 'recipe' | 'mixin' | undefined
       let repairRounds = 0
       let lastFailureOutput = ''
       const seenRepairSignatures = new Set<string>()
@@ -587,7 +593,7 @@ export class WorkflowEngine {
       while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
         loopIterations++
         const policyOptions: ToolGateOptions | undefined = repairMode
-          ? { repairMode: true, repairWriteRequired }
+          ? { repairMode: true, repairWriteRequired, repairValidationRequired }
           : undefined
         const modelMessages = [...baseMessages, this.workflowPrompt(step, repairMode, repairWriteRequired)]
         const allowedTools = this.toolSchemasFor(step, repairMode)
@@ -747,7 +753,7 @@ export class WorkflowEngine {
         if (executableAllowed.length === 0) {
           const repairWriteBlockedOnly =
             repairMode &&
-            repairWriteRequired &&
+            (repairWriteRequired || repairValidationRequired) &&
             calls.length > 0 &&
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
           const rejectionHint = [
@@ -772,6 +778,16 @@ export class WorkflowEngine {
           resultsById.set(id, result)
           if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || '') && result.ok && !result.error) {
             seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`)
+          }
+          const invalidatesRecipe = step.kind === 'recipe' &&
+            (result.toolName === 'edit_file' || result.toolName === 'write_file' || result.toolName === 'delete_file')
+          const invalidatesMixin = step.kind === 'mixin' &&
+            ['edit_file', 'write_file', 'delete_file', 'fabric_mixin_scaffold', 'fabric_mixin_register'].includes(result.toolName || '')
+          if (invalidatesRecipe || invalidatesMixin) {
+            const kind = invalidatesRecipe ? 'recipe' : 'mixin'
+            for (let index = evidenceResults.length - 1; index >= 0; index--) {
+              if (evidenceResults[index].validation?.kind === kind) evidenceResults.splice(index, 1)
+            }
           }
           evidenceResults.push(result)
         }
@@ -818,6 +834,7 @@ export class WorkflowEngine {
         if (success) {
           repairMode = false
           repairWriteRequired = false
+          repairValidationRequired = undefined
           repairRounds = 0
           this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
           step.status = 'completed'
@@ -839,6 +856,7 @@ export class WorkflowEngine {
           seenRepairSignatures.add(signature)
           repairMode = true
           repairWriteRequired = true
+          repairValidationRequired = undefined
           repairRounds++
           lastFailureOutput = decisiveResult.output
           roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as 'build' | 'run')
@@ -875,6 +893,24 @@ export class WorkflowEngine {
         )
         if (repairMode && repairWrite) {
           repairWriteRequired = false
+          const changedPath = String(repairWrite.artifactPath || repairWrite.args?.path || '').replace(/\\/g, '/').toLowerCase()
+          repairValidationRequired = /\/data\/[^/]+\/recipes?\/.+\.json$/.test(changedPath)
+            ? 'recipe'
+            : (/mixins?\.json$/.test(changedPath) || (/mixin/.test(changedPath) && changedPath.endsWith('.java')))
+              ? 'mixin'
+              : undefined
+          roundInstruction = repairValidationRequired
+            ? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
+            : writeFileRetryInstruction(step.kind as 'build' | 'run')
+          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+          continue
+        }
+
+        const repairValidation = orderedResults.find((result) =>
+          repairValidationRequired && result.validation?.kind === repairValidationRequired && result.validation.valid && result.ok && !result.error
+        )
+        if (repairMode && repairValidationRequired && repairValidation) {
+          repairValidationRequired = undefined
           roundInstruction = writeFileRetryInstruction(step.kind as 'build' | 'run')
           this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
           continue

@@ -11,6 +11,7 @@
 - [networking](./networking.md): https://docs.fabricmc.net/zh_cn/develop/networking
 - [loom](./loom.md): https://docs.fabricmc.net/zh_cn/develop/loom/
 - [client-screenshot](../client-screenshot.md): 客户端截图、NativeImage、TitleScreen 背景（本地参考）
+- [reliability-1.21.4](../reliability-1.21.4.md): 配方与 Mixin 确定性生成/验收规则
 
 ## 联网-only（未 bundled，搜索时可 fetch）
 

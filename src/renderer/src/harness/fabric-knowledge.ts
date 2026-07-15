@@ -41,8 +41,13 @@ const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[]; docsPath?: string 
   },
   {
     pattern: /mixin|@inject|@accessor|spongepowered|注入/i,
-    files: ['fabric/docs/mixins-bytecode.md', 'fabric/yarn-gotchas.md'],
+    files: ['fabric/reliability-1.21.4.md', 'fabric/docs/mixins-bytecode.md', 'fabric/yarn-gotchas.md'],
     docsPath: 'mixins/bytecode'
+  },
+  {
+    pattern: /配方|recipe|crafting|smelting|blasting|stonecutting/i,
+    files: ['fabric/reliability-1.21.4.md', 'fabric/docs/items-first-item.md'],
+    docsPath: 'items/first-item'
   },
   {
     pattern: /datagen|data.?gen|provider|数据生成/i,
@@ -157,6 +162,7 @@ async function readLocalKnowledgeRoutes(): Promise<string[]> {
 }
 
 const LOCAL_SEARCH_FILES = [
+  'fabric/reliability-1.21.4.md',
   'fabric/networking-snippets.md',
   'fabric/api-aliases.md',
   'fabric/yarn-gotchas.md',

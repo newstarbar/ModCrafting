@@ -385,11 +385,14 @@ export class Controller {
       fabric_meta_version_check: '查询 Fabric 版本',
       fabric_mod_json_validate: '校验 fabric.mod.json',
       fabric_recipe_generate: '生成 Fabric 配方',
+      fabric_recipe_validate: '校验 Fabric 配方',
       fabric_template_generate: '生成模板代码',
       fabric_content_register: '生成内容注册',
       fabric_data_assets_generate: '生成资源数据',
       fabric_mixin_scaffold: '生成 Mixin 脚手架',
+      fabric_mixin_target_lookup: '精确查询 Mixin 目标',
       fabric_mixin_register: '注册 Mixin 条目',
+      fabric_mixin_validate: '校验 Mixin',
       fabric_log_debugger: '分析 Fabric 日志',
       read_error_log: '读取错误日志',
       complete_step: '完成任务步骤',
@@ -447,8 +450,8 @@ ${projectInfo}`
 
 submit_plan 参数要求：
 - 参数为 \`{"steps":[...]}\`，每个步骤包含 \`kind\`、\`description\`、\`evidence\`，并提供 \`targetPath\` 或 \`targetPaths\`。
-- **kind** 仅允许：\`write\` | \`recipe\` | \`inspect\`。
-- 示例：\`{"steps":[{"kind":"write","description":"实现二段跳 Mixin","targetPath":"src/main/java/.../JumpMixin.java","evidence":"类含 @Mixin 与注入方法"}]}\`
+- **kind** 仅允许：\`write\` | \`recipe\` | \`mixin\` | \`inspect\`。
+- 示例：\`{"steps":[{"kind":"mixin","description":"实现、注册并验证二段跳 Mixin","targetPath":"src/main/java/.../JumpMixin.java","evidence":"fabric_mixin_validate 通过"}]}\`
 
 计划必须精简：
 - **禁止写构建/运行步骤**（主机会自动追加 gradlew build 与 runClient）。
@@ -465,7 +468,7 @@ submit_plan 参数要求：
 2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
-5. Mixin 用 fabric_mixin_register 注册；配方用 create_recipe/fabric_recipe_generate；模板用 fabric_template_generate（必须传入 formFields）。
+5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
 6. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。`
 
     const extraRules = mode === 'execute'
@@ -713,7 +716,7 @@ ${projectInfo}`
                 'N. [kind] 简短标题 — 目标路径\n\n' +
                 '方式 B（JSON）：\n' +
                 '```json\n[{"kind":"write","description":"...","targetPath":"src/..."},...]\n```\n\n' +
-                '其中 kind 必须是 write、recipe 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence。最多 6 步。\n' +
+                '其中 kind 必须是 write、recipe、mixin 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence。最多 6 步。\n' +
                 '不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。'
             })
             this.onAgentStatus?.('重新生成计划...')
@@ -1104,7 +1107,7 @@ ${projectInfo}`
     id: string
     description: string
     status: string
-    kind?: 'inspect' | 'write' | 'recipe'
+    kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
     targetPath?: string
     targetPaths?: string[]
     evidence?: string

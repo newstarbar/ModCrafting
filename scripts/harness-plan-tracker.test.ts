@@ -597,7 +597,11 @@ test('workflow engine completes recipe step only after evidence-backed complete_
     readOnly: () => false,
     async execute(_ctx, args) {
       executed.push(`${args.namespace}/${args.name}`)
-      return '✅ Recipe written: src/main/resources/data/my-mod/recipes/dirt_to_diamond.json (200 bytes)'
+      return {
+        output: '✅ Recipe validated: src/main/resources/data/my-mod/recipe/dirt_to_diamond.json',
+        artifactPaths: ['src/main/resources/data/my-mod/recipe/dirt_to_diamond.json'],
+        validation: { kind: 'recipe' as const, valid: true, version: '1.21.4' as const, checkedAt: 1 }
+      }
     }
   })
   registry.add({
@@ -671,7 +675,11 @@ test('workflow engine permits mod id read during recipe step before create_recip
     readOnly: () => false,
     async execute(_ctx, args) {
       executed.push(`recipe:${args.namespace}/${args.name}`)
-      return '✅ Recipe written: src/main/resources/data/my-mod/recipes/dirt_to_diamond.json (200 bytes)'
+      return {
+        output: '✅ Recipe validated: src/main/resources/data/my-mod/recipe/dirt_to_diamond.json',
+        artifactPaths: ['src/main/resources/data/my-mod/recipe/dirt_to_diamond.json'],
+        validation: { kind: 'recipe' as const, valid: true, version: '1.21.4' as const, checkedAt: 1 }
+      }
     }
   })
 

@@ -1,10 +1,10 @@
 import type { PlanStepState } from './plan-tracker.ts'
 
-export type StepKind = 'inspect' | 'write' | 'recipe' | 'build' | 'run' | 'answer'
+export type StepKind = 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'answer'
 export type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed'
 
 export interface StepValidation {
-  type: 'file_exists' | 'recipe_written' | 'build_success' | 'run_started' | 'tool_success'
+  type: 'file_exists' | 'recipe_validated' | 'mixin_validated' | 'build_success' | 'run_started' | 'tool_success'
   path?: string
 }
 
@@ -36,7 +36,7 @@ export function workflowStepToPlanStep(step: WorkflowStep): PlanStepState {
     id: step.id,
     description: step.title,
     status: step.status === 'failed' ? 'pending' : step.status,
-    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' ? step.kind : undefined,
+    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' ? step.kind : undefined,
     targetPath: step.targetPath,
     targetPaths: step.targetPaths,
     evidence: step.evidence

@@ -13,8 +13,22 @@ export interface Tool {
   name: string
   description: string
   schema: Record<string, unknown> // JSON Schema
-  execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string>
+  execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload>
   readOnly(): boolean
+}
+
+export interface ToolValidationEvidence {
+  kind: 'recipe' | 'mixin'
+  valid: boolean
+  version: '1.21.4'
+  targetPath?: string
+  checkedAt: number
+}
+
+export interface ToolExecutionPayload {
+  output: string
+  artifactPaths?: string[]
+  validation?: ToolValidationEvidence
 }
 
 // Optional preview interface for write tools
@@ -208,6 +222,7 @@ export interface ToolResult {
   artifactPath?: string
   /** All artifacts affected by this call. artifactPath remains for v1 compatibility. */
   artifactPaths?: string[]
+  validation?: ToolValidationEvidence
   exitCode?: number | null
   errorKind?: string
   fileDiff?: FileDiff
@@ -310,7 +325,9 @@ export async function executeTool(
   logger.tool(`Executing: ${tool.name}`, args)
 
   try {
-    const output = await tool.execute(ctx, args)
+    const executed = await tool.execute(ctx, args)
+    const payload = typeof executed === 'string' ? undefined : executed
+    const output = typeof executed === 'string' ? executed : executed.output
     const duration = Date.now() - start
     const truncated = truncateOutput(output)
     const exitCode = parseExitCode(output)
@@ -332,7 +349,11 @@ export async function executeTool(
       outputPreview: truncated.slice(0, 100)
     })
 
-    const artifactPath = artifactPathFor(tool.name, args)
+    const inferredArtifactPath = artifactPathFor(tool.name, args)
+    const artifactPaths = payload?.artifactPaths?.length
+      ? [...new Set(payload.artifactPaths)]
+      : (inferredArtifactPath ? [inferredArtifactPath] : [])
+    const artifactPath = artifactPaths[0]
     return {
       output: cleanedOutput,
       error: inferredError ? truncateOutput(inferredError) : undefined,
@@ -341,7 +362,8 @@ export async function executeTool(
       toolName: tool.name,
       args,
       artifactPath,
-      artifactPaths: artifactPath ? [artifactPath] : [],
+      artifactPaths,
+      validation: payload?.validation,
       exitCode,
       fileDiff,
       meta

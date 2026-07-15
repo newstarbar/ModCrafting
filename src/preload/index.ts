@@ -23,6 +23,36 @@ export interface FabricVersions {
   gradle_version: string
 }
 
+export interface FabricSymbolLookupRequest {
+  className: string
+  memberName?: string
+  descriptor?: string
+  memberKind?: 'method' | 'field' | 'any'
+}
+
+export interface FabricMemberRecord {
+  name: string
+  descriptor: string
+  static: boolean
+}
+
+export interface FabricSymbolLookupResult {
+  ok: boolean
+  version: string
+  yarnMappings: string
+  class?: {
+    name: string
+    side: 'common' | 'client'
+    fields: FabricMemberRecord[]
+    methods: FabricMemberRecord[]
+  }
+  methods: FabricMemberRecord[]
+  fields: FabricMemberRecord[]
+  suggestions: string[]
+  ambiguous?: boolean
+  error?: string
+}
+
 export interface RecentProject {
   path: string
   name: string
@@ -65,6 +95,10 @@ const api = {
     ipcRenderer.invoke('project:detect', projectPath),
   getFabricVersions: (): Promise<FabricVersions> =>
     ipcRenderer.invoke('project:getFabricVersions'),
+  lookupFabricSymbol: (request: FabricSymbolLookupRequest): Promise<FabricSymbolLookupResult> =>
+    ipcRenderer.invoke('fabric:lookupSymbol', request),
+  verifyFabricSymbolIndex: (): Promise<{ ok: boolean; error?: string; classes?: number }> =>
+    ipcRenderer.invoke('fabric:verifySymbolIndex'),
 
   // Window
   setTitle: (title: string): Promise<void> =>

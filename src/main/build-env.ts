@@ -2176,8 +2176,9 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           for (let i = startLine + 1; i < yarnLines.length; i++) {
             const parts = yarnLines[i].split('\t')
             if (parts[0] === 'c') break // next class
-            if (parts[0] === 'f') classParts.push(`  字段: ${parts[parts.length - 1]} : ${parts[1] || ''}`)
-            else if (parts[0] === 'm') classParts.push(`  方法: ${parts[parts.length - 1]} ${parts[1] || ''}`)
+            const kindIndex = parts[0] ? 0 : 1
+            if (parts[kindIndex] === 'f') classParts.push(`  字段: ${parts[parts.length - 1]} : ${parts[kindIndex + 1] || ''}`)
+            else if (parts[kindIndex] === 'm') classParts.push(`  方法: ${parts[parts.length - 1]} ${parts[kindIndex + 1] || ''}`)
             if (classParts.length >= 30) break
           }
           const clName = classLine.split('\t').pop() || cls
@@ -2238,8 +2239,9 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           const parts = [`📦 ${simpleName} (${b.className}) — 匹配 ${matchLabel}`]
           for (const line of b.lines.slice(0, 10)) {
             const p = line.split('\t')
-            if (p[0] === 'f') parts.push(`  字段: ${p[p.length - 1]} : ${p[1] || ''}`)
-            else if (p[0] === 'm') parts.push(`  方法: ${p[p.length - 1]}${p[1] || ''}`)
+            const kindIndex = p[0] ? 0 : 1
+            if (p[kindIndex] === 'f') parts.push(`  字段: ${p[p.length - 1]} : ${p[kindIndex + 1] || ''}`)
+            else if (p[kindIndex] === 'm') parts.push(`  方法: ${p[p.length - 1]}${p[kindIndex + 1] || ''}`)
           }
           if (b.lines.length > 10) parts.push(`  ... 还有 ${b.lines.length - 10} 个匹配项`)
           return parts.join('\n')

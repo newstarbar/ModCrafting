@@ -1,11 +1,12 @@
 // ======== ModCrafting Tool Definitions ========
 // Built-in tools for the Fabric mod development environment
 
-import { type Tool, type ToolContext, type Previewer } from "./tools";
+import { type Tool, type ToolContext, type Previewer, type ToolExecutionPayload } from "./tools";
 import type { FileDiff } from "./events";
 import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
 import { waitForMcRunReady } from "../utils/mc-wait-playing";
-import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, type RecipeKind, type RecipeKey } from "./recipe-utils";
+import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, validateRecipeContent, type RecipeKind, type RecipeKey } from "./recipe-utils";
+import { minecraftItems } from "../data/items";
 import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from "./fabric-knowledge";
 import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from "./fabric-utils";
 import {
@@ -21,6 +22,7 @@ import {
 	generateModBlocksRegistrationClass,
 	generateModItemsRegistrationClass
 } from "../project/template-codegen.ts";
+import { buildMixinScaffold, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
 	if (typeof args.mcVersion === "string" && args.mcVersion.trim()) return args.mcVersion.trim();
@@ -30,6 +32,61 @@ async function resolveMcVersion(args: Record<string, unknown>): Promise<string> 
 	} catch {
 		return "1.21.4";
 	}
+}
+
+const VANILLA_ITEM_IDS = new Set(minecraftItems.map((item) => item.id));
+
+async function readProjectModId(projectPath: string): Promise<string | undefined> {
+	try {
+		const result = await window.api.readFile(`${projectPath}/src/main/resources/fabric.mod.json`);
+		if (!result.success || !result.content) return undefined;
+		const parsed = JSON.parse(result.content) as { id?: unknown };
+		return typeof parsed.id === "string" ? parsed.id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function generateValidatedRecipe(
+	ctx: ToolContext,
+	args: Record<string, unknown>,
+	forcedType?: RecipeKind
+): Promise<string | ToolExecutionPayload> {
+	if (!ctx.projectPath) return "No project open";
+	const namespace = String(args.namespace || "");
+	const name = String(args.name || "");
+	const result = String(args.result || "");
+	const type = forcedType || String(args.type || "shapeless") as RecipeKind;
+	if (!namespace || !name || !result) return "Error creating recipe: namespace, name and result are required";
+	const mcVersion = await resolveMcVersion(args);
+	if (mcVersion !== "1.21.4") return `Error: deterministic recipe generation only supports MC 1.21.4 (received ${mcVersion})`;
+	const content = buildRecipeContent({
+		type,
+		ingredients: parseRecipeIngredients(args.ingredients),
+		pattern: Array.isArray(args.pattern) ? args.pattern.map(String) : undefined,
+		keys: args.keys && typeof args.keys === "object" ? args.keys as Record<string, RecipeKey> : undefined,
+		ingredient: args.ingredient && typeof args.ingredient === "object" ? args.ingredient as RecipeKey : undefined,
+		result: { item: result, count: Number(args.count ?? 1) },
+		experience: Number(args.experience ?? 0),
+		cookingTime: Number(args.cookingTime ?? 0) || undefined,
+		mcVersion
+	});
+	const targetPath = recipePath(namespace, name, mcVersion);
+	const modId = await readProjectModId(ctx.projectPath);
+	const before = validateRecipeContent(content, { path: targetPath, modId, knownVanillaIds: VANILLA_ITEM_IDS });
+	if (!before.valid) return `Error: 配方静态校验失败\n${before.errors.map((error) => `- ${error}`).join("\n")}`;
+	const written = await guardedWriteFile(ctx, targetPath, content, { allowOverwrite: true });
+	if (!written.ok) return `Error creating recipe: ${written.message}`;
+	const readBack = await window.api.readFile(`${ctx.projectPath}/${targetPath}`);
+	if (!readBack.success || !readBack.content) return `Error: 配方写后读取失败: ${readBack.error || "empty file"}`;
+	const after = validateRecipeContent(readBack.content, { path: targetPath, modId, knownVanillaIds: VANILLA_ITEM_IDS });
+	if (!after.valid) return `Error: 配方写后校验失败\n${after.errors.map((error) => `- ${error}`).join("\n")}`;
+	logger.file(`Recipe written: ${targetPath}`, `${content.length} bytes`);
+	return {
+		output: `已生成并校验 MC 1.21.4 配方: ${targetPath}${after.warnings.length ? `\n警告:\n${after.warnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`,
+		artifactPaths: [targetPath],
+		validation: { kind: "recipe", valid: true, version: "1.21.4", targetPath, checkedAt: Date.now() }
+	};
 }
 
 async function runWithCommandStream(ctx: ToolContext, run: () => Promise<{ output: string; exitCode: number | null }>): Promise<{ output: string; exitCode: number | null }> {
@@ -55,7 +112,7 @@ export const readFileTool: Tool & Previewer = {
 		required: ["path"]
 	},
 	readOnly: () => true,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
 		const filePath = `${ctx.projectPath}/${args.path}`;
 		try {
@@ -388,27 +445,8 @@ export const createRecipeTool: Tool & Previewer = {
 		required: ["namespace", "name", "ingredients", "result"]
 	},
 	readOnly: () => false,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
-		if (!ctx.projectPath) return "No project open";
-		const namespace = String(args.namespace || "");
-		const name = String(args.name || "");
-		const ingredients = parseRecipeIngredients(args.ingredients);
-		const result = String(args.result || "");
-		const count = Number(args.count ?? 1);
-		if (!namespace || !name || ingredients.length === 0 || !result) {
-			return "Error creating recipe: namespace, name, ingredients and result are required";
-		}
-		const mcVersion = await resolveMcVersion(args);
-		const path = recipePath(namespace, name, mcVersion);
-		const content = buildShapelessRecipeContent({
-			ingredients,
-			result: { item: result, count: Number.isFinite(count) ? count : 1 },
-			mcVersion
-		});
-		const written = await guardedWriteFile(ctx, path, content, { allowOverwrite: true });
-		if (!written.ok) return `Error creating recipe: ${written.message}`;
-		logger.file(`Recipe written: ${path}`, `${content.length} bytes`);
-		return `已生成配方: ${path} (${content.length} bytes)`;
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
+		return generateValidatedRecipe(ctx, args, "shapeless");
 	},
 	preview(args: Record<string, unknown>): FileDiff | null {
 		const namespace = String(args.namespace || "");
@@ -587,30 +625,8 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
 		required: ["namespace", "name", "type", "result"]
 	},
 	readOnly: () => false,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
-		if (!ctx.projectPath) return "No project open";
-		const namespace = String(args.namespace || "");
-		const name = String(args.name || "");
-		const result = String(args.result || "");
-		const type = String(args.type || "shapeless") as RecipeKind;
-		if (!namespace || !name || !result) return "Error creating recipe: namespace, name and result are required";
-		const mcVersion = await resolveMcVersion(args);
-		const content = buildRecipeContent({
-			type,
-			ingredients: parseRecipeIngredients(args.ingredients),
-			pattern: Array.isArray(args.pattern) ? args.pattern.map(String) : undefined,
-			keys: args.keys && typeof args.keys === "object" ? (args.keys as Record<string, RecipeKey>) : undefined,
-			ingredient: args.ingredient && typeof args.ingredient === "object" ? (args.ingredient as RecipeKey) : undefined,
-			result: { item: result, count: Number(args.count ?? 1) },
-			experience: Number(args.experience ?? 0),
-			cookingTime: Number(args.cookingTime ?? 0) || undefined,
-			mcVersion
-		});
-		const path = recipePath(namespace, name, mcVersion);
-		const written = await guardedWriteFile(ctx, path, content, { allowOverwrite: true });
-		if (!written.ok) return `Error creating recipe: ${written.message}`;
-		logger.file(`Recipe written: ${path}`, `${content.length} bytes`);
-		return `已生成配方 written: ${path} (${content.length} bytes)`;
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
+		return generateValidatedRecipe(ctx, args);
 	},
 	preview(args: Record<string, unknown>): FileDiff | null {
 		const namespace = String(args.namespace || "");
@@ -627,6 +643,33 @@ export const fabricRecipeGenerateTool: Tool & Previewer = {
 			mcVersion: "1.21.4"
 		});
 		return { path: recipePath(namespace, name, "1.21.4"), added: content.split("\n").length, removed: 0, content };
+	}
+};
+
+export const fabricRecipeValidateTool: Tool = {
+	name: "fabric_recipe_validate",
+	description: "Validate an existing recipe against the deterministic Minecraft 1.21.4 recipe schema. Read-only.",
+	schema: {
+		type: "object",
+		properties: {
+			path: { type: "string", description: "Recipe path under src/main/resources/data/<namespace>/recipe/" }
+		},
+		required: ["path"]
+	},
+	readOnly: () => true,
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
+		if (!ctx.projectPath) return "No project open";
+		const targetPath = String(args.path || "").replace(/\\/g, "/");
+		const read = await window.api.readFile(`${ctx.projectPath}/${targetPath}`);
+		if (!read.success || !read.content) return `Error: 无法读取配方 ${targetPath}: ${read.error || "empty file"}`;
+		const modId = await readProjectModId(ctx.projectPath);
+		const result = validateRecipeContent(read.content, { path: targetPath, modId, knownVanillaIds: VANILLA_ITEM_IDS });
+		if (!result.valid) return `Error: MC 1.21.4 配方校验失败\n${result.errors.map((error) => `- ${error}`).join("\n")}`;
+		return {
+			output: JSON.stringify(result, null, 2),
+			artifactPaths: [targetPath],
+			validation: { kind: "recipe", valid: true, version: "1.21.4", targetPath, checkedAt: Date.now() }
+		};
 	}
 };
 
@@ -955,61 +998,111 @@ export const fabricDataAssetsGenerateTool: Tool = {
 };
 
 // ── fabric_mixin_scaffold ──
-export const fabricMixinScaffoldTool: Tool = {
-	name: "fabric_mixin_scaffold",
-	description: "Generate Fabric mixin config and a minimal mixin class. Use only when Fabric API cannot solve the task.",
+export const fabricMixinTargetLookupTool: Tool = {
+	name: "fabric_mixin_target_lookup",
+	description: "Resolve an exact Minecraft 1.21.4 Yarn class/member/descriptor, including static and side metadata. Ambiguous overloads are rejected.",
 	schema: {
 		type: "object",
 		properties: {
-			modId: { type: "string", description: "Mod id namespace" },
+			targetClass: { type: "string", description: "Fully-qualified or unique simple Yarn class name" },
+			memberName: { type: "string", description: "Target method or field name" },
+			descriptor: { type: "string", description: "Exact JVM descriptor; required for overloads" },
+			memberKind: { type: "string", enum: ["method", "field", "any"] }
+		},
+		required: ["targetClass"]
+	},
+	readOnly: () => true,
+	async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		const result = await window.api.lookupFabricSymbol({
+			className: String(args.targetClass || ""),
+			memberName: args.memberName ? String(args.memberName) : undefined,
+			descriptor: args.descriptor ? String(args.descriptor) : undefined,
+			memberKind: args.memberKind === "field" || args.memberKind === "method" ? args.memberKind : "any"
+		});
+		if (!result.ok) return `Error: ${result.error || "Fabric symbol lookup failed"}\n${JSON.stringify(result, null, 2)}`;
+		return JSON.stringify(result, null, 2);
+	}
+};
+
+export const fabricMixinScaffoldTool: Tool = {
+	name: "fabric_mixin_scaffold",
+	description: "Generate a signature-correct MC 1.21.4 Mixin source after exact Yarn lookup. Registration is handled separately by fabric_mixin_register.",
+	schema: {
+		type: "object",
+		properties: {
 			mixinPackage: { type: "string", description: "Mixin Java package" },
 			mixinClass: { type: "string", description: "Fully qualified mixin class name" },
-			targetClass: { type: "string", description: "Target Yarn class name, e.g. net.minecraft.entity.LivingEntity" }
+			targetClass: { type: "string", description: "Fully-qualified Yarn target class" },
+			selector: { type: "string", description: "Exact target method or field name" },
+			descriptor: { type: "string", description: "Exact JVM method/field descriptor" },
+			injectionType: { type: "string", enum: ["inject", "accessor", "invoker", "redirect", "modify_arg", "modify_return_value"] },
+			at: { type: "string", enum: ["HEAD", "TAIL", "RETURN", "INVOKE", "FIELD"] },
+			atTarget: { type: "string", description: "Exact Mixin target selector, e.g. Lnet/minecraft/Foo;bar()V" },
+			side: { type: "string", enum: ["common", "client", "server"] },
+			cancellable: { type: "boolean" },
+			argumentIndex: { type: "number" },
+			fieldOperation: { type: "string", enum: ["GET", "SET"] }
 		},
-		required: ["modId", "mixinPackage", "mixinClass", "targetClass"]
+		required: ["mixinPackage", "mixinClass", "targetClass", "selector", "descriptor", "injectionType", "at", "side"]
 	},
 	readOnly: () => false,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
-		const modId = String(args.modId || "");
 		const mixinPackage = String(args.mixinPackage || "");
 		const mixinClass = String(args.mixinClass || "");
 		const targetClass = String(args.targetClass || "");
-		if (!modId || !mixinPackage || !mixinClass || !targetClass) {
-			return "Error: modId, mixinPackage, mixinClass and targetClass are required";
+		const selector = String(args.selector || "");
+		const descriptor = String(args.descriptor || "");
+		const injectionType = String(args.injectionType || "") as SupportedMixinInjection;
+		const at = String(args.at || "HEAD") as MixinScaffoldMetadata["at"];
+		const side = String(args.side || "common") as MixinScaffoldMetadata["side"];
+		if (!mixinPackage || !mixinClass || !targetClass || !selector || !descriptor || !injectionType) return "Error: exact Mixin package, class, target, selector, descriptor and injectionType are required";
+		if (!mixinClass.startsWith(`${mixinPackage}.`)) return "Error: mixinClass must be inside mixinPackage";
+		const memberKind = injectionType === "accessor" ? "field" : "method";
+		const lookup = await window.api.lookupFabricSymbol({ className: targetClass, memberName: selector, descriptor, memberKind });
+		if (!lookup.ok || !lookup.class) return `Error: Mixin target lookup failed: ${lookup.error || "not found"}\n${JSON.stringify(lookup, null, 2)}`;
+		if (lookup.class.side === "client" && side !== "client") return "Error: client-only target must be registered in the client Mixin array";
+		const member = memberKind === "field" ? lookup.fields[0] : lookup.methods[0];
+		if (!member) return "Error: exact target member was not found";
+		let atTargetStatic: boolean | undefined;
+		const atTarget = args.atTarget ? String(args.atTarget) : undefined;
+		if ((at === "INVOKE" || at === "FIELD" || injectionType === "redirect" || injectionType === "modify_arg") && !atTarget) {
+			return "Error: exact atTarget is required for INVOKE/FIELD/redirect/modify_arg";
 		}
+		if (atTarget) {
+			const parsed = parseAtTarget(atTarget);
+			if (!parsed) return "Error: atTarget must use exact Lowner;method(desc)ret or Lowner;field:desc syntax";
+			if ((at === "INVOKE" && parsed.kind !== "method") || (at === "FIELD" && parsed.kind !== "field")) return "Error: at and atTarget member kind do not match";
+			const atLookup = await window.api.lookupFabricSymbol({ className: parsed.className, memberName: parsed.memberName, descriptor: parsed.descriptor, memberKind: parsed.kind });
+			if (!atLookup.ok) return `Error: @At target lookup failed: ${atLookup.error || "not found"}`;
+			atTargetStatic = (parsed.kind === "method" ? atLookup.methods[0] : atLookup.fields[0])?.static;
+		}
+		if (injectionType === "modify_return_value" && parseMethodDescriptor(descriptor).returnType === "void") return "Error: ModifyReturnValue cannot target a void method";
+		if (injectionType === "modify_arg" && (!Number.isInteger(args.argumentIndex) || Number(args.argumentIndex) < 0)) return "Error: modify_arg requires a non-negative integer argumentIndex";
 		const simpleName = mixinClass.split(".").pop() || "GeneratedMixin";
-		const configPath = `src/main/resources/${modId}.mixins.json`;
 		const classPath = `src/main/java/${javaPackagePath(mixinClass)}.java`;
-		const config =
-			JSON.stringify(
-				{
-					required: true,
-					package: mixinPackage,
-					compatibilityLevel: "JAVA_21",
-					mixins: [simpleName],
-					injectors: { defaultRequire: 1 }
-				},
-				null,
-				2
-			) + "\n";
-		const content = `package ${mixinPackage};
-
-import org.spongepowered.asm.mixin.Mixin;
-
-@Mixin(${targetClass}.class)
-public class ${simpleName} {
-    // Prefer Fabric API events when possible. Add targeted injections only after verifying Yarn signatures.
-}
-`;
-		for (const file of [
-			{ path: configPath, content: config },
-			{ path: classPath, content }
-		]) {
-			const written = await guardedWriteFile(ctx, file.path, file.content, { allowOverwrite: true });
-			if (!written.ok) return `Error writing ${file.path}: ${written.message}`;
+		const metadata: MixinScaffoldMetadata = {
+			version: 1,
+			targetClass: lookup.class.name,
+			selector,
+			descriptor,
+			injectionType,
+			at,
+			...(atTarget ? { atTarget } : {}),
+			side,
+			...(args.cancellable === true ? { cancellable: true } : {}),
+			...(args.argumentIndex !== undefined ? { argumentIndex: Number(args.argumentIndex) } : {}),
+			...(args.fieldOperation === "SET" ? { fieldOperation: "SET" as const } : {})
+		};
+		let content: string;
+		try {
+			content = buildMixinScaffold({ packageName: mixinPackage, className: simpleName, metadata, targetStatic: member.static, atTargetStatic });
+		} catch (error) {
+			return `Error: 无法生成确定性 Mixin 外壳: ${String(error)}`;
 		}
-		return `已生成: Mixin 脚手架\n- ${configPath}\n- ${classPath}\n注意: 此为模板代码，需手动填写注入逻辑。`;
+		const written = await guardedWriteFile(ctx, classPath, content, { allowOverwrite: false });
+		if (!written.ok) return `Error writing ${classPath}: ${written.message}`;
+		return { output: `已生成签名校验过的 Mixin 源码: ${classPath}\n下一步必须调用 fabric_mixin_register，再调用 fabric_mixin_validate。`, artifactPaths: [classPath] };
 	}
 };
 
@@ -1078,77 +1171,181 @@ export const completeStepTool: Tool = {
 };
 
 // ── fabric_mixin_register ──
-async function findMixinConfig(projectPath: string): Promise<{ name: string; content: string } | null> {
-	try {
-		const resDir = `${projectPath}/src/main/resources`;
-		const entries = await window.api.listDirectory(resDir);
-		for (const e of entries) {
-			if (e.name.endsWith(".mixins.json")) {
-				const result = await window.api.readFile(e.path);
-				if (result.success && result.content) {
-					return { name: e.name, content: result.content };
-				}
-			}
-		}
-	} catch {
-		/* ignore */
-	}
-	return null;
+function mixinConfigReferences(modJson: Record<string, unknown>): string[] {
+	if (!Array.isArray(modJson.mixins)) return [];
+	return modJson.mixins.map((entry) => {
+		if (typeof entry === "string") return entry;
+		if (entry && typeof entry === "object" && typeof (entry as { config?: unknown }).config === "string") return String((entry as { config: string }).config);
+		return "";
+	}).filter(Boolean);
+}
+
+function parseJavaIdentity(source: string): { packageName: string; className: string; fqn: string } | null {
+	const packageMatch = source.match(/^\s*package\s+([\w.]+)\s*;/m);
+	const classMatch = source.match(/\b(?:class|interface)\s+([A-Za-z_$][\w$]*)/);
+	if (!packageMatch || !classMatch) return null;
+	return { packageName: packageMatch[1], className: classMatch[1], fqn: `${packageMatch[1]}.${classMatch[1]}` };
+}
+
+async function readJsonFile(projectPath: string, relPath: string): Promise<Record<string, unknown> | null> {
+	const result = await window.api.readFile(`${projectPath}/${relPath}`);
+	if (!result.success || !result.content) return null;
+	try { return JSON.parse(result.content) as Record<string, unknown>; } catch { return null; }
 }
 
 export const fabricMixinRegisterTool: Tool = {
 	name: "fabric_mixin_register",
-	description: "向已有的 Mixin 配置文件中安全地追加 Mixin 类条目。自动查找 mixins.json、读取、追加指定 Mixin 条目、写回。避免手动编辑 JSON 时误删已有条目。",
+	description: "Register a Mixin source only in a config referenced by fabric.mod.json. Creates and references a config safely when none exists.",
 	schema: {
 		type: "object",
 		properties: {
-			mixinClass: {
-				type: "string",
-				description: 'Mixin 类名（简单名，非全限定名），如 "PlayerEntityMixin"'
-			},
-			target: {
+			sourcePath: { type: "string", description: "Mixin Java source path" },
+			configPath: { type: "string", description: "Explicit referenced Mixin config path; required when multiple exist" },
+			side: {
 				type: "string",
 				enum: ["common", "client", "server"],
-				description: "注册到哪个数组：common→mixins, client→client, server→server。默认 common"
+				description: "common→mixins, client→client, server→server"
 			}
 		},
-		required: ["mixinClass"]
+		required: ["sourcePath", "side"]
 	},
 	readOnly: () => false,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
-		const mixinClass = String(args.mixinClass || "").trim();
-		const target = String(args.target || "common") as "common" | "client" | "server";
-		if (!mixinClass) return "Error: mixinClass is required";
-
-		const existing = await findMixinConfig(ctx.projectPath);
-		if (!existing) {
-			return "Error: 未找到 *.mixins.json 配置文件。请先创建 Mixin 配置，或使用 fabric_mixin_scaffold 生成。";
+		const sourcePath = String(args.sourcePath || "").replace(/\\/g, "/");
+		const side = String(args.side || "common") as "common" | "client" | "server";
+		const sourceResult = await window.api.readFile(`${ctx.projectPath}/${sourcePath}`);
+		if (!sourceResult.success || !sourceResult.content) return `Error: 无法读取 Mixin 源码 ${sourcePath}`;
+		const identity = parseJavaIdentity(sourceResult.content);
+		if (!identity) return "Error: 无法从 Mixin 源码解析 package/class";
+		const metadata = readMixinMetadata(sourceResult.content);
+		if (!metadata) return "Error: 缺少 MODCRAFTING_MIXIN 元数据；请使用 fabric_mixin_scaffold 生成确定性外壳";
+		if (metadata.side !== side) return `Error: source metadata side=${metadata.side} 与注册 side=${side} 不一致`;
+		const modJsonPath = "src/main/resources/fabric.mod.json";
+		const modJson = await readJsonFile(ctx.projectPath, modJsonPath);
+		if (!modJson || typeof modJson.id !== "string") return "Error: fabric.mod.json 不存在、格式错误或缺少 id";
+		const refs = mixinConfigReferences(modJson);
+		let configName = String(args.configPath || "").replace(/\\/g, "/").replace(/^src\/main\/resources\//, "");
+		if (configName && !refs.includes(configName)) return `Error: ${configName} 未被 fabric.mod.json 的 mixins 引用`;
+		if (!configName && refs.length > 1) return `Error: fabric.mod.json 引用了多个 Mixin 配置，请明确 configPath：${refs.join(", ")}`;
+		let createdConfig = false;
+		if (!configName) configName = refs[0] || `${modJson.id}.mixins.json`;
+		const configPath = `src/main/resources/${configName}`;
+		let config = await readJsonFile(ctx.projectPath, configPath);
+		if (!config) {
+			if (refs.length > 0) return `Error: fabric.mod.json 引用的 ${configName} 不存在或 JSON 无效`;
+			config = { required: true, package: identity.packageName, compatibilityLevel: "JAVA_21", mixins: [], injectors: { defaultRequire: 1 } };
+			createdConfig = true;
 		}
-
-		let config: Record<string, unknown>;
-		try {
-			config = JSON.parse(existing.content);
-		} catch {
-			return `Error: 无法解析 ${existing.name}，请检查 JSON 格式`;
+		const basePackage = typeof config.package === "string" ? config.package : identity.packageName;
+		if (identity.packageName !== basePackage && !identity.packageName.startsWith(`${basePackage}.`)) {
+			return `Error: Mixin 源码包 ${identity.packageName} 不在配置 package ${basePackage} 下`;
 		}
-
-		const key = target === "client" ? "client" : target === "server" ? "server" : "mixins";
-		const arr: string[] = Array.isArray(config[key]) ? (config[key] as string[]) : [];
-		if (arr.includes(mixinClass)) {
-			return `${mixinClass} 已存在于 ${existing.name} 的 ${key} 数组中，无需重复注册。`;
+		config.package = basePackage;
+		const relativeClass = identity.fqn.slice(basePackage.length + 1) || identity.className;
+		const key = side === "client" ? "client" : side === "server" ? "server" : "mixins";
+		const entries = Array.isArray(config[key]) ? [...config[key] as string[]] : [];
+		if (!entries.includes(relativeClass)) entries.push(relativeClass);
+		config[key] = entries;
+		const configWrite = await guardedWriteFile(ctx, configPath, `${JSON.stringify(config, null, 2)}\n`, { allowOverwrite: true });
+		if (!configWrite.ok) return `Error: ${configWrite.message}`;
+		const artifactPaths = [sourcePath, configPath];
+		if (createdConfig) {
+			modJson.mixins = [...refs, configName];
+			const modWrite = await guardedWriteFile(ctx, modJsonPath, `${JSON.stringify(modJson, null, 2)}\n`, { allowOverwrite: true });
+			if (!modWrite.ok) return `Error: Mixin 配置已创建，但 fabric.mod.json 更新失败: ${modWrite.message}`;
+			artifactPaths.push(modJsonPath);
 		}
+		return { output: `已在 ${configName} 的 ${key} 数组注册 ${relativeClass}`, artifactPaths };
+	}
+};
 
-		arr.push(mixinClass);
-		config[key] = arr;
-
-		const newContent = JSON.stringify(config, null, 2) + "\n";
-		const configPath = `src/main/resources/${existing.name}`;
-		const written = await guardedWriteFile(ctx, configPath, newContent, { allowOverwrite: true });
-		if (!written.ok) return `Error: ${written.message}`;
-
-		const existingList = arr.length > 1 ? `，现有条目：${arr.join(", ")}` : "";
-		return `已在 ${existing.name} 的 ${key} 数组中注册 ${mixinClass}${existingList}`;
+export const fabricMixinValidateTool: Tool = {
+	name: "fabric_mixin_validate",
+	description: "Validate a generated MC 1.21.4 Mixin source, exact target selectors, side, handler shape, and fabric.mod.json-backed registration.",
+	schema: {
+		type: "object",
+		properties: { sourcePath: { type: "string" }, configPath: { type: "string" } },
+		required: ["sourcePath"]
+	},
+	readOnly: () => true,
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
+		if (!ctx.projectPath) return "No project open";
+		const sourcePath = String(args.sourcePath || "").replace(/\\/g, "/");
+		const sourceResult = await window.api.readFile(`${ctx.projectPath}/${sourcePath}`);
+		if (!sourceResult.success || !sourceResult.content) return `Error: 无法读取 ${sourcePath}`;
+		const source = sourceResult.content;
+		const identity = parseJavaIdentity(source);
+		const metadata = readMixinMetadata(source);
+		const errors: string[] = [];
+		if (!identity) errors.push("无法解析 Java package/class");
+		if (!metadata) errors.push("缺少或损坏 MODCRAFTING_MIXIN 元数据");
+		if (!metadata || !identity) return `Error: Mixin 校验失败\n${errors.map((error) => `- ${error}`).join("\n")}`;
+		const kind = metadata.injectionType === "accessor" ? "field" : "method";
+		const lookup = await window.api.lookupFabricSymbol({ className: metadata.targetClass, memberName: metadata.selector, descriptor: metadata.descriptor, memberKind: kind });
+		if (!lookup.ok || !lookup.class) errors.push(`目标 selector 无效: ${lookup.error || "not found"}`);
+		if (lookup.class?.side === "client" && metadata.side !== "client") errors.push("客户端目标不能注册为 common/server Mixin");
+		const targetSimpleName = (metadata.targetClass.split(".").pop() || metadata.targetClass).replace(/\$/g, ".");
+		if (!source.includes(`@Mixin(${targetSimpleName}.class)`)) errors.push("@Mixin 目标与确定性元数据不一致");
+		if (kind === "method" && !source.includes(`${metadata.selector}${metadata.descriptor}`)) errors.push("注解缺少精确方法 descriptor");
+		const requiredAnnotation: Record<SupportedMixinInjection, string> = {
+			inject: "@Inject", accessor: "@Accessor", invoker: "@Invoker", redirect: "@Redirect", modify_arg: "@ModifyArg", modify_return_value: "@ModifyReturnValue"
+		};
+		if (!source.includes(requiredAnnotation[metadata.injectionType])) errors.push(`缺少 ${requiredAnnotation[metadata.injectionType]} 注解`);
+		let atTargetStatic: boolean | undefined;
+		if ((metadata.at === "INVOKE" || metadata.at === "FIELD") && metadata.atTarget) {
+			if (!source.includes(`target = \"${metadata.atTarget}\"`)) errors.push("@At target 与确定性元数据不一致");
+			const parsedAt = parseAtTarget(metadata.atTarget);
+			if (!parsedAt) errors.push("@At target 语法无效");
+			else {
+				const atLookup = await window.api.lookupFabricSymbol({ className: parsedAt.className, memberName: parsedAt.memberName, descriptor: parsedAt.descriptor, memberKind: parsedAt.kind });
+				if (!atLookup.ok) errors.push(`@At target 不存在: ${atLookup.error || "not found"}`);
+				else atTargetStatic = (parsedAt.kind === "method" ? atLookup.methods[0] : atLookup.fields[0])?.static;
+			}
+		}
+		const targetMember = kind === "field" ? lookup.fields[0] : lookup.methods[0];
+		if (targetMember) {
+			try {
+				const canonical = buildMixinScaffold({ packageName: identity.packageName, className: identity.className, metadata, targetStatic: targetMember.static, atTargetStatic });
+				const signature = (text: string): string => {
+					const line = text.split("\n").find((entry) => entry.includes("modcrafting$")) || "";
+					return line.trim().replace(/\s+/g, " ").replace(/\s*\{.*$/, "").replace(/;$/, "");
+				};
+				if (!signature(source) || signature(source) !== signature(canonical)) {
+					errors.push(`handler/accessor 签名不正确；期望 ${signature(canonical)}`);
+				}
+			} catch (error) {
+				errors.push(`无法验证 handler 签名: ${String(error)}`);
+			}
+		}
+		const modJson = await readJsonFile(ctx.projectPath, "src/main/resources/fabric.mod.json");
+		const refs = modJson ? mixinConfigReferences(modJson) : [];
+		let configName = String(args.configPath || "").replace(/\\/g, "/").replace(/^src\/main\/resources\//, "");
+		if (!configName) {
+			if (refs.length === 1) configName = refs[0];
+			else if (refs.length > 1) errors.push(`存在多个配置，校验时必须指定 configPath：${refs.join(", ")}`);
+			else errors.push("fabric.mod.json 未引用 Mixin 配置");
+		}
+		if (configName) {
+			if (!refs.includes(configName)) errors.push(`${configName} 未被 fabric.mod.json 引用`);
+			const config = await readJsonFile(ctx.projectPath, `src/main/resources/${configName}`);
+			if (!config) errors.push(`${configName} 不存在或 JSON 无效`);
+			else {
+				const basePackage = typeof config.package === "string" ? config.package : "";
+				const relative = basePackage && identity.fqn.startsWith(`${basePackage}.`) ? identity.fqn.slice(basePackage.length + 1) : identity.className;
+				const key = metadata.side === "client" ? "client" : metadata.side === "server" ? "server" : "mixins";
+				if (!Array.isArray(config[key]) || !(config[key] as unknown[]).includes(relative)) errors.push(`${relative} 未注册到 ${configName} 的 ${key}`);
+			}
+		}
+		const expectedPath = `src/main/java/${identity.fqn.replace(/\./g, "/")}.java`;
+		if (sourcePath !== expectedPath) errors.push(`源码路径应为 ${expectedPath}`);
+		if (errors.length) return `Error: Mixin 校验失败\n${errors.map((error) => `- ${error}`).join("\n")}`;
+		const artifacts = [sourcePath, ...(configName ? [`src/main/resources/${configName}`] : [])];
+		return {
+			output: `Mixin 静态校验通过: ${identity.fqn} -> ${metadata.targetClass}.${metadata.selector}${metadata.descriptor}`,
+			artifactPaths: artifacts,
+			validation: { kind: "mixin", valid: true, version: "1.21.4", targetPath: sourcePath, checkedAt: Date.now() }
+		};
 	}
 };
 
@@ -1409,7 +1606,7 @@ export const submitPlanTool: Tool = {
 					type: "object",
 					additionalProperties: false,
 					properties: {
-						kind: { type: "string", enum: ["write", "recipe", "inspect"] },
+						kind: { type: "string", enum: ["write", "recipe", "mixin", "inspect"] },
 						description: { type: "string", minLength: 1 },
 						targetPath: { type: "string", minLength: 1 },
 						targetPaths: {
@@ -1488,11 +1685,14 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		fabricModJsonValidateTool,
 		createRecipeTool,
 		fabricRecipeGenerateTool,
+		fabricRecipeValidateTool,
 		fabricContentRegisterTool,
 		fabricDataAssetsGenerateTool,
+		fabricMixinTargetLookupTool,
 		fabricMixinScaffoldTool,
 		fabricLogDebuggerTool,
 		fabricMixinRegisterTool,
+		fabricMixinValidateTool,
 		listDirectoryTool,
 		runCommandTool,
 		readErrorLogTool,

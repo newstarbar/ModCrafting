@@ -494,7 +494,7 @@ export class Agent {
           availableTools = this.filterExplorationTools(availableTools)
           const kick =
             '【系统】计划阶段已探索足够。停止 list_directory/read_file，直接输出结构化实施计划：' +
-            '每行 `N. [kind] 简短标题 — 目标路径`，kind 为 write、recipe 或 inspect。'
+            '每行 `N. [kind] 简短标题 — 目标路径`，kind 为 write、recipe、mixin 或 inspect。'
           messages.push({ role: 'user', content: kick })
           apiMessages.push({ role: 'user', content: kick })
           logger.agent('KICK: plan phase exploration cap reached')

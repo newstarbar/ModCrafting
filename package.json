@@ -20,9 +20,10 @@
 		"setup:toolchain": "node scripts/setup-toolchain.mjs",
 		"prefetch:deps": "node scripts/prefetch-fabric-deps.mjs",
 		"prefetch:fabric-docs": "node --experimental-strip-types scripts/prefetch-fabric-docs.ts",
+		"generate:fabric-index": "node scripts/generate-fabric-symbol-index.mjs",
 		"verify:toolchain": "node scripts/verify-toolchain.mjs",
 		"verify:offline": "node scripts/verify-offline-build.mjs",
-		"test:harness": "node --experimental-strip-types --test scripts/harness-plan-tracker.test.ts scripts/harness-turn-intent.test.ts scripts/harness-llm-providers.test.ts scripts/harness-template-params.test.ts scripts/harness-mc-run-ready.test.ts scripts/harness-tool-explore-group.test.ts scripts/harness-opencode-phase3.test.ts scripts/harness-aci-plan-repair.test.ts scripts/harness-engine-safety.test.ts",
+		"test:harness": "node --experimental-strip-types --test scripts/harness-plan-tracker.test.ts scripts/harness-turn-intent.test.ts scripts/harness-llm-providers.test.ts scripts/harness-template-params.test.ts scripts/harness-mc-run-ready.test.ts scripts/harness-tool-explore-group.test.ts scripts/harness-opencode-phase3.test.ts scripts/harness-aci-plan-repair.test.ts scripts/harness-engine-safety.test.ts scripts/harness-fabric-reliability.test.ts",
 		"generate:items": "python scripts/generate_items.py",
 		"prefetch:mc-assets": "python scripts/ensure_minecraft_assets.py",
 		"prepare:renderer-assets": "python scripts/prepare_renderer_assets.py",
@@ -30,8 +31,8 @@
 		"extract:mc-gui": "python scripts/extract-mc-gui.py",
 		"generate:icon": "node scripts/generate-icon-ico.mjs",
 		"postinstall": "node scripts/ensure-native-deps.mjs",
-		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/setup-nsisbi.mjs && node scripts/patch-nsis-install-ui.mjs",
-		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/setup-nsisbi.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && npm run generate:fabric-index && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/setup-nsisbi.mjs && node scripts/patch-nsis-install-ui.mjs",
+		"prebuild:win:setup": "node scripts/generate-icon-ico.mjs && node scripts/generate-installer-assets.mjs && npm run prepare:renderer-assets && node scripts/setup-toolchain.mjs && node scripts/prefetch-fabric-deps.mjs && npm run generate:fabric-index && node scripts/prepare-seed-for-packaging.mjs && node scripts/archive-gradle-home-seed.mjs && node scripts/setup-nsisbi.mjs && node scripts/patch-nsis-install-ui.mjs",
 		"prebuild:win:portable": "node scripts/generate-icon-ico.mjs && node scripts/verify-portable-resources.mjs"
 	},
 	"dependencies": {
@@ -92,6 +93,10 @@
 			{
 				"from": "resources/fabric-versions.json",
 				"to": "fabric-versions.json"
+			},
+			{
+				"from": "resources/fabric-symbol-index-1.21.4.json.gz",
+				"to": "fabric-symbol-index-1.21.4.json.gz"
 			},
 			{
 				"from": "resources/agent-knowledge",

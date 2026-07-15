@@ -23,6 +23,36 @@ interface FabricVersions {
   gradle_version: string
 }
 
+interface FabricMemberRecord {
+  name: string
+  descriptor: string
+  static: boolean
+}
+
+interface FabricSymbolLookupRequest {
+  className: string
+  memberName?: string
+  descriptor?: string
+  memberKind?: 'method' | 'field' | 'any'
+}
+
+interface FabricSymbolLookupResult {
+  ok: boolean
+  version: string
+  yarnMappings: string
+  class?: {
+    name: string
+    side: 'common' | 'client'
+    fields: FabricMemberRecord[]
+    methods: FabricMemberRecord[]
+  }
+  methods: FabricMemberRecord[]
+  fields: FabricMemberRecord[]
+  suggestions: string[]
+  ambiguous?: boolean
+  error?: string
+}
+
 interface RecentProject {
   path: string
   name: string
@@ -50,6 +80,8 @@ interface ModCraftingApi {
   createDirectory: (dirPath: string) => Promise<WriteResult>
   detectProject: (projectPath: string) => Promise<ProjectInfo>
   getFabricVersions: () => Promise<FabricVersions>
+  lookupFabricSymbol: (request: FabricSymbolLookupRequest) => Promise<FabricSymbolLookupResult>
+  verifyFabricSymbolIndex: () => Promise<{ ok: boolean; error?: string; classes?: number }>
   setTitle: (title: string) => Promise<void>
   onMenuNewProject: (callback: () => void) => () => void
   onMenuOpenProject: (callback: () => void) => () => void

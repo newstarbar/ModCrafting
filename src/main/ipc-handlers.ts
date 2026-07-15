@@ -30,6 +30,7 @@ import {
   searchLocalFabricSources
 } from './build-env'
 import { checkForUpdates, openReleasePages } from './updater'
+import { lookupFabricSymbol, verifyFabricSymbolIndex, type FabricSymbolLookupRequest } from './fabric-metadata'
 import {
   listRecentProjects,
   addRecentProject,
@@ -169,6 +170,12 @@ export function setupIpcHandlers(): void {
   })
 
   ipcMain.handle('project:getFabricVersions', async () => loadFabricVersions())
+
+  ipcMain.handle('fabric:lookupSymbol', async (_event, request: FabricSymbolLookupRequest) =>
+    lookupFabricSymbol(request)
+  )
+
+  ipcMain.handle('fabric:verifySymbolIndex', async () => verifyFabricSymbolIndex())
 
   // Window: set title
   ipcMain.handle('window:setTitle', async (_event, title: string) => {

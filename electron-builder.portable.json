@@ -10,6 +10,10 @@
       "to": "fabric-versions.json"
     },
     {
+      "from": "resources/fabric-symbol-index-1.21.4.json.gz",
+      "to": "fabric-symbol-index-1.21.4.json.gz"
+    },
+    {
       "from": "resources/agent-knowledge",
       "to": "agent-knowledge",
       "filter": ["**/*.md"]

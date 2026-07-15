@@ -20,7 +20,10 @@ const READONLY_KNOWLEDGE_TOOLS = new Set([
   'fabric_javadoc_lookup',
   'vanilla_mc_wiki_query',
   'fabric_meta_version_check',
-  'fabric_mod_json_validate'
+  'fabric_mod_json_validate',
+  'fabric_mixin_target_lookup',
+  'fabric_recipe_validate',
+  'fabric_mixin_validate'
 ])
 
 /** Paths Agent may read during recipe steps: mod id + existing recipe JSON inspection. */
@@ -65,6 +68,7 @@ export function isRecipeCleanupCommand(command: string): boolean {
 export interface ToolGateOptions {
   repairMode?: boolean
   repairWriteRequired?: boolean
+  repairValidationRequired?: 'recipe' | 'mixin'
 }
 
 const REPAIR_WRITE_BLOCKED_TOOLS = new Set(['trigger_build', 'run_command'])
@@ -75,7 +79,10 @@ const REPAIR_OVERRIDE_TOOLS = new Set([
   'grep',
   'read_error_log',
   'fabric_log_debugger',
-  'fabric_docs_search'
+  'fabric_docs_search',
+  'fabric_mixin_target_lookup',
+  'fabric_recipe_validate',
+  'fabric_mixin_validate'
 ])
 
 export function isRepairWriteBlocked(
@@ -83,13 +90,13 @@ export function isRepairWriteBlocked(
   call: ToolCallWithId,
   options?: ToolGateOptions
 ): boolean {
-  if (!options?.repairMode || !options?.repairWriteRequired) return false
+  if (!options?.repairMode || (!options?.repairWriteRequired && !options?.repairValidationRequired)) return false
   if (step.kind !== 'build' && step.kind !== 'run') return false
   return REPAIR_WRITE_BLOCKED_TOOLS.has(call.name)
 }
 
 function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options?: ToolGateOptions): boolean {
-  if (READONLY_KNOWLEDGE_TOOLS.has(call.name) && (step.kind === 'write' || step.kind === 'recipe')) {
+  if (READONLY_KNOWLEDGE_TOOLS.has(call.name) && (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin')) {
     return true
   }
   if (call.name === 'read_file' && step.kind === 'recipe') {
@@ -133,6 +140,8 @@ export function isToolAllowedForStep(
   if (call.name === 'write_file' || call.name === 'edit_file') {
     if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
     if (step.kind === 'build' || step.kind === 'run') return false
+    if (step.kind === 'recipe') return false
+    if (step.kind === 'mixin') return call.name === 'edit_file'
     return true
   }
 
@@ -153,10 +162,14 @@ export function isToolAllowedForStep(
   return commandAllowedForStep(step, call, options)
 }
 
-function rejectedRepairWriteResult(step: WorkflowStep, call: ToolCallWithId): ToolResult {
+function rejectedRepairWriteResult(step: WorkflowStep, call: ToolCallWithId, options?: ToolGateOptions): ToolResult {
+  const required = options?.repairValidationRequired
+  const instruction = required
+    ? `修改涉及 ${required === 'recipe' ? '配方' : 'Mixin'}，必须先调用 fabric_${required}_validate 取得新验证证据`
+    : '必须先 read_error_log / fabric_log_debugger 分析并用 edit_file 修改代码'
   return {
     output:
-      `blocked: [repair_write_required] 当前步骤 #${step.id}（${step.title}）在修复模式下必须先 read_error_log / fabric_log_debugger 分析并用 edit_file 修改代码，再重新构建。禁止直接调用 "${call.name}"。`,
+      `blocked: [repair_write_required] 当前步骤 #${step.id}（${step.title}）在修复模式下${instruction}，再重新构建。禁止直接调用 "${call.name}"。`,
     error: `repair_write_required: ${call.name}`,
     durationMs: 0,
     ok: false,
@@ -173,7 +186,7 @@ export function createRejectedToolResult(
   options?: ToolGateOptions
 ): ToolResult {
   if (isRepairWriteBlocked(step, call, options)) {
-    return rejectedRepairWriteResult(step, call)
+    return rejectedRepairWriteResult(step, call, options)
   }
   return {
     output: `blocked: [tool_not_allowed] 当前步骤 #${step.id}（${step.title}）不允许调用 "${call.name}"。`,

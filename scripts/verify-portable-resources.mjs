@@ -8,6 +8,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'resources/gradle-wrapper.jar',
   'resources/fabric-versions.json',
+  'resources/fabric-symbol-index-1.21.4.json.gz',
   'build/appIcon.png'
 ]
 

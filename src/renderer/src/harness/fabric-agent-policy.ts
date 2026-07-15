@@ -132,8 +132,9 @@ function modeSpecificRules(mode: FabricAgentPromptMode): string[] {
   }
   return [
     '执行时优先调用产品内 Fabric 专用工具，只有工具覆盖不了时才用 write_file。',
-    '当前 write/recipe 步若 API 不确定，可在该步内调用 fabric_docs_search 或 fabric_meta_version_check。',
-    '配方使用 create_recipe / fabric_recipe_generate，路径为 data/<modid>/recipe/（1.21+ 单数目录）。',
+    '当前 write/recipe/mixin 步若 API 不确定，可在该步内调用 fabric_docs_search 或 fabric_meta_version_check。',
+    '配方只能使用 create_recipe / fabric_recipe_generate，并由 fabric_recipe_validate 或生成器写后校验证据完成；禁止手写配方 JSON。',
+    'Mixin 必须先 fabric_mixin_target_lookup 精确确认描述符与 side，再 scaffold/register/validate；禁止猜测重载或只靠编译通过。',
     '只执行当前步骤，禁止重规划；写入后通过 trigger_build / runClient 验证。',
     '遇到不确定的文件路径、包名、类名或配置选项时，使用 ask_clarification 向用户提问，不要盲目猜测。'
   ]
