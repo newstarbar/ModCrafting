@@ -1620,7 +1620,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                           )}
                         </div>
                       )}
-                      {displayOutput && !isCollapsed && (
+                      {!isCollapsed && (displayOutput || entry.status === 'running') && (
                         <div
                           className="tool-line-output"
                           ref={(el) => {
@@ -1629,7 +1629,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                           }}
                         >
                           <pre className={entry.status === 'error' ? 'is-error' : undefined}>
-                            {displayOutput}
+                            {displayOutput || '正在执行，等待实时日志…'}
                           </pre>
                         </div>
                       )}

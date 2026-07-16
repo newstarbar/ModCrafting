@@ -864,16 +864,14 @@ export const triggerBuildTool: Tool = {
 
 		try {
 			if (task === "build" && isPanelBridgeRegistered()) {
-				const res = await runBuildViaPanel();
+				const res = await runBuildViaPanel(ctx.onProgress);
 				const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "\n[退出码: 0]";
+				const log = getLastBuildLogText().trim();
+				const logBlock = log ? `\n\n--- 构建输出 ---\n${buildLogTail(log)}` : "";
 				if (res.failed) {
-					const tail = buildLogTail(getLastBuildLogText());
-					if (tail) {
-						return `构建失败。\n\n--- 构建输出（末尾）---\n${tail}${exitInfo}`;
-					}
-					return `构建失败，详情见右侧高级面板。${exitInfo}`;
+					return `构建失败。${logBlock || "\n详情见右侧高级面板。"}${exitInfo}`;
 				}
-				return `构建已在右侧高级面板完成。${exitInfo}`;
+				return `构建已完成。${logBlock}${exitInfo}`;
 			}
 
 			const res = await runWithCommandStream(ctx, () => window.api.runGradleTask(ctx.projectPath!, task));

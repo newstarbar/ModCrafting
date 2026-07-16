@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { parseAnyError, buildRepairPrompt, summarizeBuildOutput, type ParsedError } from '../utils/log-parser'
 import { logger } from '../utils/logger'
+import { emitBuildProgress } from '../utils/panel-bridge'
 
 interface BottomPanelProps {
   projectPath: string | null
@@ -36,6 +37,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     const fitAddonRef = useRef<FitAddon | null>(null)
     const logRef = useRef<HTMLDivElement>(null)
     const terminalMountedRef = useRef(false)
+    const buildLogLinesRef = useRef<string[]>([])
 
     const sendCtrlC = async (count = 1): Promise<void> => {
       if (!terminalId) return
@@ -180,6 +182,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     }, [logs])
 
     const resetBuildSession = useCallback(() => {
+      buildLogLinesRef.current = []
       setLogs([])
       setDetectedErrors([])
       setBuildLogsExpanded(true)
@@ -187,17 +190,24 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
 
     const addLog = useCallback((level: 'info' | 'warn' | 'error', message: string) => {
       const timestamp = new Date().toLocaleTimeString()
-      setLogs((prev) => [...prev, `[${timestamp}] [${level.toUpperCase()}] ${message}`])
+      const line = `[${timestamp}] [${level.toUpperCase()}] ${message}`
+      buildLogLinesRef.current = [...buildLogLinesRef.current, line]
+      setLogs(buildLogLinesRef.current)
+      emitBuildProgress(line)
     }, [])
 
     const appendBuildOutput = useCallback((text: string, level: 'info' | 'warn' | 'error' = 'info') => {
+      if (text) emitBuildProgress(text.endsWith('\n') ? text : `${text}\n`)
       for (const line of text.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean)) {
-        addLog(level, line)
+        const timestamp = new Date().toLocaleTimeString()
+        const formatted = `[${timestamp}] [${level.toUpperCase()}] ${line}`
+        buildLogLinesRef.current = [...buildLogLinesRef.current, formatted]
       }
+      setLogs(buildLogLinesRef.current)
       if (terminalExpanded && xtermRef.current && text) {
         xtermRef.current.write(text.replace(/\r?\n/g, '\r\n'))
       }
-    }, [addLog, terminalExpanded])
+    }, [terminalExpanded])
 
     const runBuild = useCallback(async (): Promise<BuildRunResult> => {
       if (!projectPath) {
@@ -214,6 +224,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       setProcessRunning(true)
       onBuildStatusChange?.({ running: true, failed: false })
       addLog('info', '开始构建…')
+      addLog('info', '正在准备构建环境与 Gradle…')
 
       const unsub = window.api.onCommandOutput((text) => appendBuildOutput(text.trimEnd()))
       let buildFailed = false
@@ -253,12 +264,12 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     useImperativeHandle(ref, () => ({
       runBuild,
       stopProcess,
-      getBuildLogText: () => logs.join('\n')
-    }), [runBuild, stopProcess, logs])
+      getBuildLogText: () => buildLogLinesRef.current.join('\n')
+    }), [runBuild, stopProcess])
 
     const autoFix = () => {
       if (detectedErrors.length === 0) return
-      onAddToChatContext(buildRepairPrompt(detectedErrors, logs.join('\n')))
+      onAddToChatContext(buildRepairPrompt(detectedErrors, buildLogLinesRef.current.join('\n')))
       addLog('info', `已将 ${detectedErrors.length} 个错误发送给 AI 分析`)
     }
 

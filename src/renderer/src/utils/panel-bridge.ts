@@ -15,6 +15,8 @@ export interface GamePanelResult {
   error?: string
 }
 
+export type BuildProgressCallback = (chunk: string) => void
+
 export interface PanelBridgeHandlers {
   runBuild: () => Promise<BuildPanelResult>
   startGameAndWait: () => Promise<GamePanelResult>
@@ -23,6 +25,7 @@ export interface PanelBridgeHandlers {
 
 let handlers: PanelBridgeHandlers | null = null
 let lastBuildLogText = ''
+let activeBuildProgress: BuildProgressCallback | null = null
 
 export function setLastBuildLogText(text: string): void {
   lastBuildLogText = text
@@ -30,6 +33,12 @@ export function setLastBuildLogText(text: string): void {
 
 export function getLastBuildLogText(): string {
   return lastBuildLogText
+}
+
+/** Forward Gradle/panel build chunks into the active chat tool card. */
+export function emitBuildProgress(chunk: string): void {
+  if (!chunk || !activeBuildProgress) return
+  activeBuildProgress(chunk.endsWith('\n') ? chunk : `${chunk}\n`)
 }
 
 function delayMs(ms: number): Promise<void> {
@@ -50,13 +59,20 @@ export function isPanelBridgeRegistered(): boolean {
   return handlers !== null
 }
 
-export async function runBuildViaPanel(): Promise<BuildPanelResult> {
+export async function runBuildViaPanel(onProgress?: BuildProgressCallback): Promise<BuildPanelResult> {
   if (!handlers) {
     return { ok: false, exitCode: 1, failed: true }
   }
+  const prev = activeBuildProgress
+  activeBuildProgress = onProgress || null
   handlers.switchTab('advanced')
   await delayMs(150)
-  return handlers.runBuild()
+  onProgress?.('开始构建…\n')
+  try {
+    return await handlers.runBuild()
+  } finally {
+    activeBuildProgress = prev
+  }
 }
 
 export async function startGameViaPanel(): Promise<GamePanelResult> {
