@@ -25,8 +25,6 @@ export interface ChatComposerProps {
 	onProviderModelChange: (selection: ProviderModelSelection) => void
 	onOpenApiSettings?: () => void
 	onQuickTemplateSelect?: (templateId: string, name: string) => void
-	openCodeInstalled?: boolean
-	onOpenInOpenCode?: () => void
 }
 
 const ChatComposer: React.FC<ChatComposerProps> = ({
@@ -49,8 +47,6 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 	onProviderModelChange,
 	onOpenApiSettings,
 	onQuickTemplateSelect,
-	openCodeInstalled = false,
-	onOpenInOpenCode,
 }) => {
 	const [goalExpanded, setGoalExpanded] = useState(false)
 
@@ -154,22 +150,6 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 						onOpenApiSettings={onOpenApiSettings}
 						disabled={disabled}
 					/>
-
-					{hasProject && onOpenInOpenCode && (
-						<button
-							type="button"
-							className="mc-btn mc-btn--ghost"
-							onClick={onOpenInOpenCode}
-							disabled={!openCodeInstalled || disabled}
-							title={
-								openCodeInstalled
-									? '在本机 OpenCode 终端中打开当前项目'
-									: '未检测到 OpenCode，请 npm i -g opencode-ai@latest'
-							}
-						>
-							OpenCode
-						</button>
-					)}
 
 					<div className="chat-input-composite__actions">
 						{isLoading ? (

@@ -52,6 +52,23 @@ function resolvePreloadScript(): string {
   return mjs
 }
 
+function setupWindowKeyboardShortcuts(win: BrowserWindow): void {
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+
+    if (input.key === 'F11') {
+      win.setFullScreen(!win.isFullScreen())
+      event.preventDefault()
+      return
+    }
+
+    if (input.key === 'Escape' && win.isFullScreen()) {
+      win.setFullScreen(false)
+      event.preventDefault()
+    }
+  })
+}
+
 function createWindow(): void {
   const iconPath = resolveAppIcon()
   mainWindow = new BrowserWindow({
@@ -69,6 +86,8 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+
+  setupWindowKeyboardShortcuts(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.maximize()
