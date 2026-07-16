@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import type { DisplayMessage } from '../types/display-message'
-import type { PlanStep } from './TaskPlan'
 import type { ChatTurn } from '../utils/chat-turns'
 import { formatMessageTime, messagePlainText, turnShareText } from '../utils/message-text'
 
@@ -22,20 +21,6 @@ async function copyText(text: string): Promise<boolean> {
   } catch {
     return false
   }
-}
-
-const statusIcon: Record<PlanStep['status'], string> = {
-  completed: '✓',
-  running: '◐',
-  error: '✕',
-  pending: '○'
-}
-
-const statusLabel: Record<PlanStep['status'], string> = {
-  completed: '完成',
-  running: '进行中',
-  error: '失败',
-  pending: '待办'
 }
 
 const MessageFooter: React.FC<MessageFooterProps> = ({
@@ -91,19 +76,11 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
     <div className="bubble-ft">
       {hasPlan && (
         <>
-          <div className="bubble-ft__task-status">
+          <div className="bubble-ft__task-status bubble-ft__task-status--summary">
             <div className="bubble-ft__task-header">
               <span className="bubble-ft__task-title">任务进度</span>
               <span className="bubble-ft__task-count">{doneCount}/{totalCount} 已完成</span>
             </div>
-            {plan!.map((step) => (
-              <div key={step.id} className={`bubble-ft__step bubble-ft__step--${step.status}`}>
-                <span className="bubble-ft__step-id">{step.id}</span>
-                <span className="bubble-ft__step-icon">{statusIcon[step.status]}</span>
-                <span className="bubble-ft__step-desc">{step.description}</span>
-                <span className="bubble-ft__step-status">{statusLabel[step.status]}</span>
-              </div>
-            ))}
           </div>
           <div className="bubble-ft__separator" />
         </>

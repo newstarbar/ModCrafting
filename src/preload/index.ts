@@ -374,7 +374,12 @@ const api = {
     ipcRenderer.invoke('knowledge:searchLocalSources', keyword, maxResults),
 
   // Session export
-  sessionExport: (payload: string, suggestedName?: string): Promise<{ success: boolean; path: string; name: string }> =>
+  sessionExport: (payload: string, suggestedName?: string): Promise<{
+    success: boolean
+    cancelled?: boolean
+    path: string
+    name: string
+  }> =>
     ipcRenderer.invoke('session:export', payload, suggestedName),
 
   // OpenCode bridge (optional local install)

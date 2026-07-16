@@ -1058,51 +1058,50 @@ ${projectInfo}`
     logger.agent('Session cleared')
   }
 
-  /** Export current session messages to a JSON file on desktop. */
+  /** Export current session messages to a Markdown file via Save dialog. */
   async exportSession(): Promise<string> {
-    const toolContentLimit = 2500
-    const assistantContentLimit = 1000
-    const systemContentLimit = 500
+    const lines: string[] = [
+      '# ModCrafting 会话导出',
+      '',
+      `- 导出时间：${new Date().toISOString()}`,
+      `- 会话目标：${this.sessionGoal || '（未设定）'}`,
+      `- 阶段：${this._phase}`,
+      `- 模型：${this.apiConfig.model}`,
+      `- 消息数：${this.messages.length}`,
+      '',
+      '---',
+      '',
+    ]
 
-    const trimmed = this.messages.map((m) => {
-      if (m.role === 'tool' && m.content && m.content.length > toolContentLimit) {
-        return {
-          ...m,
-          content: m.content.slice(0, toolContentLimit) +
-            `\n\n... [截断：原始 ${m.content.length} 字符]`
-        }
+    let turn = 0
+    for (const m of this.messages) {
+      if (m.role === 'system') continue
+      if (m.role === 'user') {
+        turn += 1
+        lines.push(`## 第 ${turn} 轮 · 用户`, '', (m.content || '').trim() || '_（无内容）_', '')
+        continue
       }
-      if (m.role === 'assistant' && m.content && m.content.length > assistantContentLimit) {
-        return {
-          ...m,
-          content: m.content.slice(0, assistantContentLimit) +
-            `\n\n... [截断：原始 ${m.content.length} 字符]`
-        }
+      if (m.role === 'assistant') {
+        if (turn === 0) turn = 1
+        const content = (m.content || '').trim()
+        const clipped =
+          content.length > 4000 ? `${content.slice(0, 4000)}\n\n... [截断]` : content
+        lines.push(`## 第 ${turn} 轮 · 助手`, '', clipped || '_（无内容）_', '')
+        continue
       }
-      if (m.role === 'system' && m.content && m.content.length > systemContentLimit) {
-        return {
-          ...m,
-          content: m.content.slice(0, systemContentLimit) +
-            `\n\n... [完整提示词已在工程源码中，此处省略]`
-        }
+      if (m.role === 'tool') {
+        const name = m.name || 'tool'
+        const out = (m.content || '').trim()
+        const clipped = out.length > 800 ? `${out.slice(0, 800)}…` : out
+        lines.push(`- \`${name}\`${clipped ? `: ${clipped}` : ''}`, '')
       }
-      return m
-    })
-
-    const exportObj = {
-      exportedAt: new Date().toISOString(),
-      sessionGoal: this.sessionGoal || '(未设定)',
-      phase: this._phase,
-      model: this.apiConfig.model,
-      endpoint: this.apiConfig.endpoint.replace(/\/\/.*@/, '//***@'), // strip credentials
-      messageCount: this.messages.length,
-      messages: trimmed
     }
 
-    const result = await window.api.sessionExport(
-      JSON.stringify(exportObj, null, 2),
-      'mc-session'
-    )
+    const md = lines.join('\n').replace(/\n{3,}/g, '\n\n')
+    const result = await window.api.sessionExport(md, 'mc-session')
+    if (result.cancelled) {
+      throw new Error('用户取消导出')
+    }
     if (result.success) {
       logger.agent('Session exported', result.path)
       return result.path

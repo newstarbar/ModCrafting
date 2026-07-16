@@ -431,15 +431,30 @@ export function setupIpcHandlers(): void {
     searchLocalFabricSources(keyword, maxResults ?? 5)
   )
 
-  // Session export — write chat history to a timestamped JSON file
-  ipcMain.handle('session:export', async (_event, payload: string, suggestedName?: string) => {
+  // Session export — save Markdown via system Save dialog
+  ipcMain.handle('session:export', async (event, payload: string, suggestedName?: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
     const now = new Date()
-    const ts = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
-    const base = (suggestedName || 'session').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
-    const fileName = `${base}-${ts}.json`
+    const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+    const base = (suggestedName || 'mc-session').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\.md$/i, '')
+    const defaultName = `${base}-${ts}.md`
     const desktopDir = app.getPath('desktop')
-    const filePath = path.join(desktopDir, fileName)
+    const saveOpts: Electron.SaveDialogOptions = {
+      title: '导出会话',
+      defaultPath: path.join(desktopDir, defaultName),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, saveOpts)
+      : await dialog.showSaveDialog(saveOpts)
+    if (result.canceled || !result.filePath) {
+      return { success: false, cancelled: true, path: '', name: '' }
+    }
+    let filePath = result.filePath
+    if (!/\.md$/i.test(filePath)) {
+      filePath = `${filePath}.md`
+    }
     fs.writeFileSync(filePath, payload, 'utf-8')
-    return { success: true, path: filePath, name: fileName }
+    return { success: true, cancelled: false, path: filePath, name: path.basename(filePath) }
   })
 }

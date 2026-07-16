@@ -10,6 +10,8 @@ import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
 import { parsePlanSteps, isActionablePlanText } from '../utils/plan-steps'
 import { resolveTurnDoneStatus } from '../utils/turn-status'
+import { ensureClosingSummaryEntry, type ClosingReason } from '../utils/turn-closing-summary'
+import { buildSessionMarkdown } from '../utils/session-export-md'
 import { buildPreTurnSnapshot, enrichUserSnapshotAfterTurnDone, type TurnFileChange } from '../utils/rollback-snapshot'
 import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, normalizeSessionUsage, type UsageStats } from '../utils/usage'
 import type { ChatSession, PersistedMessage } from '../types/chat'
@@ -214,6 +216,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const composerModeRef = useRef<ComposerMode>('agent')
   composerModeRef.current = composerMode
   const [sessionGoal, setSessionGoal] = useState('')
+  const sessionGoalRef = useRef(sessionGoal)
+  sessionGoalRef.current = sessionGoal
   const [planReady, setPlanReady] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState('')
@@ -857,6 +861,14 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           phase: event.phase
         })
 
+        const closingReason: ClosingReason = turnStatus
+        t.entries = ensureClosingSummaryEntry(t.entries, {
+          reason: closingReason,
+          steps: finalSteps,
+          sessionGoal: sessionGoalRef.current,
+          error: event.error,
+        })
+
         setIsLoading(false)
         setAgentStatus('')
         onRunningChangeRef.current?.(false)
@@ -1233,13 +1245,20 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     t.streamDone = true
     t.entries = finalizeRunningTools(t.entries, true)
     const planSnapshot = activePlanRef.current
+    const finalSteps = planSnapshot?.steps
+
+    t.entries = ensureClosingSummaryEntry(t.entries, {
+      reason: 'cancelled',
+      steps: finalSteps,
+      sessionGoal: sessionGoalRef.current,
+      error: 'Cancelled',
+    })
 
     setIsLoading(false)
     setAgentStatus('')
     onRunningChangeRef.current?.(false)
 
     const anchorId = planSnapshot?.anchorMsgId || t.msgId
-    const finalSteps = planSnapshot?.steps
 
     setDisplayMessages((prev) => {
       const next = prev.map((m) => {
@@ -1692,33 +1711,33 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         <div className="chat-header-right">
           <button
             className="chat-header-export-btn"
-            title="导出完整会话历史到桌面 JSON 文件"
+            title="导出为 Markdown…"
             onClick={async () => {
               try {
-                const displayPayload = JSON.stringify({
-                  exportedAt: new Date().toISOString(),
-                  source: 'display-messages',
-                  sessionGoal: activePlan?.steps?.length ? activePlan.steps.map(s => s.description).join('; ') : '(未设定)',
-                  messageCount: displayMessages.length,
+                const goal =
+                  sessionGoalRef.current.trim() ||
+                  (activePlan?.steps?.length
+                    ? activePlan.steps.map((s) => s.description).join('；')
+                    : '')
+                const md = buildSessionMarkdown({
                   messages: displayMessages,
-                }, null, 2)
-                const result = await window.api.sessionExport(displayPayload, 'mc-session-display')
+                  sessionGoal: goal,
+                })
+                const result = await window.api.sessionExport(md, 'mc-session')
+                if (result.cancelled) return
                 if (result.success) {
-                  // Also try to dump controller messages if available
-                  try {
-                    const ctrlPayload = JSON.stringify({
-                      exportedAt: new Date().toISOString(),
-                      source: 'controller-api',
-                      messages: controllerRef.current?.getSnapshot() || []
-                    }, null, 2)
-                    await window.api.sessionExport(ctrlPayload, 'mc-session-api')
-                  } catch { /* controller may not have messages */ }
                   setCompletionFlash(`已导出: ${result.name}`)
-                  setTimeout(() => setCompletionFlash(null), 3000)
+                  if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+                  completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+                } else {
+                  setCompletionFlash('导出失败')
+                  if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+                  completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
                 }
               } catch {
                 setCompletionFlash('导出失败')
-                setTimeout(() => setCompletionFlash(null), 3000)
+                if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+                completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
               }
             }}
           >导出</button>

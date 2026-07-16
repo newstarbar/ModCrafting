@@ -2788,6 +2788,15 @@ body,
 	flex-direction: column;
 }
 
+.task-plan--summary {
+	max-height: none;
+	padding: 8px 12px;
+}
+
+.task-plan-header--summary {
+	margin-bottom: 0;
+}
+
 .task-plan--anchored {
 	margin: 0 0 10px;
 	max-height: none;

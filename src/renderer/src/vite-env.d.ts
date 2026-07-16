@@ -175,7 +175,12 @@ interface ModCraftingApi {
     truncated?: boolean
     error?: string
   }>
-  sessionExport: (payload: string, suggestedName?: string) => Promise<{ success: boolean; path: string; name: string }>
+  sessionExport: (payload: string, suggestedName?: string) => Promise<{
+    success: boolean
+    cancelled?: boolean
+    path: string
+    name: string
+  }>
   opencodeDetect: () => Promise<{ installed: boolean; version?: string; command?: string; error?: string }>
   opencodeOpenProject: (projectPath: string) => Promise<{ success: boolean; error?: string }>
   opencodeServerStart: (projectPath: string, config?: Record<string, unknown>) => Promise<{

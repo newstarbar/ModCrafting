@@ -5,6 +5,7 @@ import McRuntimePanel, { type McRuntimePanelHandle } from "./components/McRuntim
 import DevLogPanel from "./components/DevLogPanel";
 import PreviewPanel from "./components/PreviewPanel";
 import SessionSidebar from "./components/SessionSidebar";
+import DeleteSessionPanel from "./components/DeleteSessionPanel";
 import StatusBar from "./components/StatusBar";
 import ProjectHub from "./components/ProjectHub";
 import AppChrome, { type AppView } from "./components/AppChrome";
@@ -81,6 +82,7 @@ const App: React.FC = () => {
 		fileTreeRefreshKey: 0
 	});
 	const [sessions, setSessions] = useState<ChatSession[]>([]);
+	const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
 	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 	const sessionsHydratedRef = useRef(false);
 	const projectPathForSessionsRef = useRef<string | null | undefined>(undefined);
@@ -591,7 +593,12 @@ const App: React.FC = () => {
 		setSessions((p) => p.filter((s) => s.id !== id));
 		setCurrentSessionId((cur) => (cur === id ? null : cur));
 		localStorage.removeItem(`modcrafting-changelog-${id}`);
+		setPendingDeleteSessionId(null);
 	}, []);
+
+	const pendingDeleteSession = pendingDeleteSessionId
+		? sessions.find((s) => s.id === pendingDeleteSessionId) ?? null
+		: null;
 
 	const handleNewSessionFromChat = useCallback((firstMessage?: string) => {
 		const id = `session-${Date.now()}`;
@@ -686,7 +693,7 @@ const App: React.FC = () => {
 							currentSessionId={currentSessionId}
 							onOpenSession={handleOpenSession}
 							onNewSession={handleNewSession}
-							onDeleteSession={handleDeleteSession}
+							onDeleteSession={(id) => setPendingDeleteSessionId(id)}
 							onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 							fileChanges={fileChanges}
 							apiConfig={apiConfig}
@@ -830,6 +837,13 @@ const App: React.FC = () => {
 						</div>
 				</div>
 			</div>
+			{pendingDeleteSession && (
+				<DeleteSessionPanel
+					sessionName={pendingDeleteSession.name}
+					onConfirm={() => handleDeleteSession(pendingDeleteSession.id)}
+					onCancel={() => setPendingDeleteSessionId(null)}
+				/>
+			)}
 			<NewProjectWizard open={projectDialog === "new"} onClose={() => setProjectDialog("none")} onCreated={(dir) => void loadProjectDir(dir)} />
 			<OpenProjectDialog
 				open={projectDialog === "open"}
