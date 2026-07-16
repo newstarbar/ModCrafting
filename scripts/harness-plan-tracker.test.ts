@@ -7,7 +7,7 @@ import { canToolResultAdvanceStep, inferStepKind } from '../src/renderer/src/har
 import { buildShapelessRecipeContent, recipePath } from '../src/renderer/src/harness/recipe-utils.ts'
 import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
 import { filterToolCallsForStep, isRecipeCleanupCommand, isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import { WorkflowEngine, isTerminalFailure, buildDocSearchBlockedResult, buildEmptyToolCallInstruction, detectExistingHandlerHint } from '../src/renderer/src/harness/workflow-engine.ts'
+import { WorkflowEngine, isTerminalFailure, buildDocSearchBlockedResult, buildEmptyToolCallInstruction, buildWriteForceInstruction, detectExistingHandlerHint, isDocSearchOnlyRejectionRound, isKnowledgeOnlyRejectionRound, isNonBurningRejectionRound, isPureExploreRound } from '../src/renderer/src/harness/workflow-engine.ts'
 import { Registry } from '../src/renderer/src/harness/tools.ts'
 import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
 import { buildFabricAgentPolicyPrompt, FABRIC_KNOWLEDGE_SOURCES } from '../src/renderer/src/harness/fabric-agent-policy.ts'
@@ -943,7 +943,7 @@ test('write workflow step allows more attempts after search-heavy flows', () => 
   const steps = normalizeWorkflowSteps([
     { id: '1', description: 'src/main/java/com/example/Foo.java — 写入处理类', status: 'running' }
   ])
-  assert.equal(steps[0].maxAttempts, 4)
+  assert.equal(steps[0].maxAttempts, 6)
 })
 
 test('doc search block message appears after write-step search limit', () => {
@@ -955,16 +955,32 @@ test('doc search block message appears after write-step search limit', () => {
   assert.match(blocked.output, /edit_file/)
 })
 
+test('doc-search-only rejection round is detected for attempt budget', () => {
+  const step = normalizeWorkflowSteps([
+    { id: '1', description: 'src/main/java/com/example/Foo.java — 写入处理类', status: 'running' }
+  ])[0]
+  const blocked = buildDocSearchBlockedResult(step, { name: 'fabric_docs_search', args: { keyword: 'x' } })
+  assert.equal(isDocSearchOnlyRejectionRound([blocked, blocked]), true)
+  assert.equal(isDocSearchOnlyRejectionRound([{ ...blocked, errorKind: 'tool_not_offered' }]), false)
+  assert.equal(
+    isKnowledgeOnlyRejectionRound([
+      { output: 'x', ok: false, toolName: 'fabric_docs_search', durationMs: 0 },
+      { output: 'y', ok: false, toolName: 'vanilla_mc_wiki_query', durationMs: 0 }
+    ]),
+    true
+  )
+})
+
 test('empty tool call instruction names write_file target path', () => {
   const step = normalizeWorkflowSteps([
     { id: '1', description: 'src/main/java/com/example/network/Payload.java — 定义载荷', status: 'running' }
   ])[0]
   const instruction = buildEmptyToolCallInstruction(step)
-  assert.match(instruction, /edit_file\("src\/main\/java\/com\/example\/network\/Payload\.java"/)
+  assert.match(instruction, /write_file\("src\/main\/java\/com\/example\/network\/Payload\.java"/)
   assert.match(instruction, /complete_step/)
 })
 
-test('detectExistingHandlerHint triggers when reading unrelated handler source', () => {
+test('detectExistingHandlerHint does not nudge complete_step on write steps', () => {
   const step = normalizeWorkflowSteps([
     { id: '1', description: 'src/main/java/com/example/network/Payload.java — 定义载荷', status: 'running' }
   ])[0]
@@ -975,8 +991,35 @@ test('detectExistingHandlerHint triggers when reading unrelated handler source',
     args: { path: 'src/main/java/com/example/my_mod/EggThrowHandler.java' },
     durationMs: 1
   })
-  assert.match(hint || '', /已有实现/)
-  assert.match(hint || '', /complete_step/)
+  assert.equal(hint, undefined)
+})
+
+test('pure explore round and non-burning rejection helpers', () => {
+  assert.equal(
+    isPureExploreRound([
+      { toolName: 'read_file', ok: true, output: 'x', durationMs: 1 },
+      { toolName: 'grep', ok: true, output: 'y', durationMs: 1 }
+    ]),
+    true
+  )
+  assert.equal(
+    isPureExploreRound([
+      { toolName: 'read_file', ok: true, output: 'x', durationMs: 1 },
+      { toolName: 'edit_file', ok: true, output: 'edited', durationMs: 1 }
+    ]),
+    false
+  )
+  assert.equal(
+    isNonBurningRejectionRound([
+      { toolName: 'fabric_javadoc_lookup', ok: false, errorKind: 'tool_not_offered', output: 'blocked', durationMs: 0 }
+    ]),
+    true
+  )
+  const step = normalizeWorkflowSteps([
+    { id: '3', description: 'src/client/java/com/example/ScreenshotHandler.java — 截图', status: 'running' }
+  ])[0]
+  assert.match(buildWriteForceInstruction(step), /强制写入/)
+  assert.match(buildWriteForceInstruction(step), /ScreenshotHandler/)
 })
 
 test('needsKnowledgeInspect includes player interaction keywords', () => {

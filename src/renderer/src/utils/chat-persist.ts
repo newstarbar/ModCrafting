@@ -133,13 +133,19 @@ export function buildRestoredCollapseState(
   return { toolIds, reasoningKeys, exploreGroupKeys }
 }
 
+/** Turn statuses that still leave an incomplete plan worth resuming. */
+const RESUMABLE_TURN_STATUSES = new Set(['partial', 'error', 'cancelled', 'planned'])
+
 export function restoreActivePlan(
   display: SerializableDisplayMessage[],
   persisted: PersistedMessage[]
 ): ActivePlanSnapshot | null {
   for (let i = persisted.length - 1; i >= 0; i--) {
     const p = persisted[i]
-    if (p.role !== 'assistant' || !p.embeddedPlan?.length || p.turnStatus) continue
+    if (p.role !== 'assistant' || !p.embeddedPlan?.length) continue
+    // Streaming/in-progress (no turnStatus) OR partial/error after a stop — both are resumable.
+    // Skip completed/answered so finished turns do not resurrect a dead plan.
+    if (p.turnStatus && !RESUMABLE_TURN_STATUSES.has(p.turnStatus)) continue
     const hasIncomplete = p.embeddedPlan.some((s) => s.status !== 'completed')
     if (!hasIncomplete) continue
     const displayId = p.displayId

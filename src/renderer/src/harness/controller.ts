@@ -48,6 +48,8 @@ export class Controller {
   private composerMode: ComposerMode = 'agent'
   private sessionGoal = ''
   private planReadyAwaitingExecute = false
+  /** Last plan text that had parseable steps (even if hard-validation failed). Used by 继续. */
+  private lastPlanCandidate: string | null = null
   private lastTurnMode: 'chat' | 'develop' | 'plan_only' | 'resume' = 'chat'
   private useOpenCodeDelegate = false
   private openCodeModel = 'opencode/deepseek-v4-flash-free'
@@ -181,16 +183,33 @@ export class Controller {
       phase: this._phase,
       planTracker: this.planTracker,
       hasProject: Boolean(this._projectPath),
-      composerMode: this.composerMode
+      composerMode: this.composerMode,
+      hasPlanCandidate: Boolean(this.lastPlanCandidate)
     }
   }
 
-  /** Skip execute when plan has no concrete steps */
+  private rememberPlanCandidate(planText: string): void {
+    if (planHasActionableSteps(planText) || isActionablePlanText(planText)) {
+      this.lastPlanCandidate = planText
+    }
+  }
+
+  private adoptPlanCandidateIfNeeded(): boolean {
+    if (this.planTracker) return true
+    if (!this.lastPlanCandidate || !this.isActionablePlan(this.lastPlanCandidate)) return false
+    this.planTracker = PlanTracker.fromPlanText(this.lastPlanCandidate)
+    this.emitPlanState(this.planTracker)
+    return true
+  }
+
+  /** Skip execute when plan has no concrete steps.
+   *  Missing evidence is advisory only (see emitPlanValidationNotice); the compiler
+   *  fills defaults. Hard-blocking on evidence left sessions stuck at plan_failed. */
   private isActionablePlan(planText: string): boolean {
     if (!isActionablePlanText(planText)) return false
     return !PlanTracker.validationIssuesFromText(planText).some((issue) =>
       issue.field === 'description' || issue.field === 'kind' ||
-      issue.field === 'targetPath' || issue.field === 'evidence'
+      issue.field === 'targetPath'
     )
   }
 
@@ -237,6 +256,7 @@ export class Controller {
     const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
     const visiblePlanText = selectVisiblePlanText(planStreamText, planResult)
     const actionable = this.isActionablePlan(fullPlanText)
+    this.rememberPlanCandidate(fullPlanText)
     logger.agent('Plan merged', {
       steps: parsePlanSteps(fullPlanText).length,
       visibleSteps: parsePlanSteps(visiblePlanText).length,
@@ -577,11 +597,13 @@ ${projectInfo}`
   }
 
   private async beginExecuteFromTracker(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+    this.adoptPlanCandidateIfNeeded()
     if (!this.planTracker || this.planTracker.steps.length === 0) {
       this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: '没有可执行的计划' } })
       this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready' })
       return ''
     }
+    this.lastPlanCandidate = null
     this.messages.push({
       role: 'user',
       content: this.buildExecuteConfirmMessage(this.planTracker),
@@ -623,14 +645,20 @@ ${projectInfo}`
       }
 
       if (intent === 'resume') {
+        this.adoptPlanCandidateIfNeeded()
         if (!this.planTracker) {
           this.onAgentStatus?.('')
+          const missing =
+            '没有可恢复的计划。请重新描述需求，或确认会话中仍有未完成的任务进度后再发送「继续」。'
+          this.messages.push({ role: 'assistant', content: missing, origin: 'assistant', taskId: this.taskId })
+          this.emitEvent({ kind: EventKind.TurnStarted, turnMode: 'resume', composerMode: this.composerMode })
+          this.emitEvent({ kind: EventKind.Text, text: missing })
           this.emitEvent({
             kind: EventKind.Notice,
-            notice: { level: 'warn', text: '没有可恢复的计划，请先描述功能或生成计划。' }
+            notice: { level: 'warn', text: missing }
           })
-          this.emitEvent({ kind: EventKind.TurnDone, phase: 'resume_missing_plan' })
-          return ''
+          this.emitEvent({ kind: EventKind.TurnDone, phase: 'resume_missing_plan', turnMode: 'resume', composerMode: this.composerMode })
+          return missing
         }
         const result = await this.beginExecuteFromTracker(streamCb)
         this.onAgentStatus?.('')
@@ -661,6 +689,7 @@ ${projectInfo}`
         if (isNewRequest) {
           this.retainCurrentUserAsNewTask()
           this.planTracker = null
+          this.lastPlanCandidate = null
           this._phase = 'plan'
           this.planReadyAwaitingExecute = false
           this.emitEvent({ kind: EventKind.Notice, notice: { level: 'info', text: '检测到新需求，已清除旧计划。正在重新规划...' } })
@@ -680,6 +709,7 @@ ${projectInfo}`
         if (intent === 'plan_only') {
           this._phase = 'plan'
           this.planTracker = null
+          this.lastPlanCandidate = null
           this.planReadyAwaitingExecute = false
         }
 
@@ -830,6 +860,7 @@ ${projectInfo}`
 
   async startExecuteFromPlan(): Promise<string> {
     if (this._running) return ''
+    this.adoptPlanCandidateIfNeeded()
     if (!this.planTracker || this.planTracker.steps.length === 0) {
       this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: '没有可执行的计划' } })
       return ''
@@ -1116,24 +1147,16 @@ ${projectInfo}`
       this.planTracker = null
       return
     }
+    // Map UI/error statuses back to tracker statuses. Failed steps become pending
+    // so「继续」retries them instead of skipping to the next pending step.
     this.planTracker = PlanTracker.fromSteps(steps.map((step) => ({
       ...step,
-      status: step.status === 'completed' || step.status === 'running' ? step.status : 'pending'
+      status:
+        step.status === 'completed' ? 'completed' as const
+          : step.status === 'running' ? 'running' as const
+            : 'pending' as const
     })))
     if (this.planTracker) {
-      // Restore step statuses
-      for (const step of steps) {
-        const trackerStep = this.planTracker.steps.find((ts) => ts.id === step.id)
-        if (trackerStep) {
-          if (step.status === 'completed') {
-            trackerStep.status = 'completed'
-          } else if (step.status === 'running' && trackerStep.status === 'pending') {
-            trackerStep.status = 'running'
-          } else if (step.status === 'error') {
-            trackerStep.status = 'error'
-          }
-        }
-      }
       this._phase = 'execute'
     }
   }

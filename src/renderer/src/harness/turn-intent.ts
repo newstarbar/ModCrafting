@@ -9,9 +9,11 @@ export interface TurnIntentContext {
   planTracker: PlanTracker | null
   hasProject: boolean
   composerMode: ComposerMode
+  /** Plan text accepted/parsed but not yet attached as planTracker (e.g. after plan_failed). */
+  hasPlanCandidate?: boolean
 }
 
-const RESUME_PATTERN = /^(继续|接着|往下|continue|执行计划|开始执行|执行)$/i
+const RESUME_PATTERN = /^(继续|接着|往下|continue|执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i
 const GREETING_PATTERN = /^(你好|您好|嗨|hello|hi|hey|在吗|谢谢|感谢|好的|ok|okay|再见|拜拜)[\s!！。.?？~，,]*$/i
 const QA_PATTERN = /^(什么是|为什么|怎么|如何|能否|是否|解释|说明|什么意思|这段|请问)/i
 const DEV_PATTERN = /创建|实现|开发|添加|修改|修复|删除|重构|构建|写一个|制作|帮我.{0,8}(做|改|修|加)|生成.{0,8}(模组|mod|类|文件|物品|功能)|\b(create|implement|add|modify|fix|delete|refactor|build)\b/i
@@ -61,8 +63,9 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
 
   const hasIncompletePlan = Boolean(ctx.planTracker && !ctx.planTracker.allDone())
   const hasReadyPlan = Boolean(ctx.planTracker && ctx.planTracker.steps.length > 0 && !ctx.planTracker.allDone())
+  const canResumePlan = hasIncompletePlan || Boolean(ctx.hasPlanCandidate)
 
-  if (isResumeInput(trimmed) && (ctx.phase === 'execute' || hasIncompletePlan)) {
+  if (isResumeInput(trimmed) && (ctx.phase === 'execute' || canResumePlan)) {
     return 'resume'
   }
 
@@ -81,7 +84,7 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
 
   if (ctx.composerMode === 'agent') {
     // Only resume if user explicitly says "continue" or similar
-    if (hasIncompletePlan && isResumeInput(trimmed)) {
+    if (canResumePlan && isResumeInput(trimmed)) {
       return 'resume'
     }
     // Agent mode is capable of acting, but questions/explanations remain read-only.

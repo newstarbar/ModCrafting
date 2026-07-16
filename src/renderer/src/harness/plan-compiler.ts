@@ -33,6 +33,54 @@ const MIXIN_AUDIT_DESC =
 const MIXIN_PATH_RE = /mixin/i
 const MIXIN_WRITE_RE = /mixin|@Mixin|Mixin\s*(类|class)/i
 const NEW_MIXIN_RE = /新建.*[Mm]ixin|创建.*[Mm]ixin|新增.*[Mm]ixin|新.*[Mm]ixin|scaffold.*[Mm]ixin/i
+const MIXIN_JAVA_PATH_RE = /(?:^|\/)mixin\/|Mixin\.java$/i
+
+function normalizePlanPath(path: string): string {
+  return path.replace(/\\/g, '/').trim()
+}
+
+function stepTargetPaths(step: CompiledPlanStep): string[] {
+  const paths = [
+    ...(step.targetPath ? [step.targetPath] : []),
+    ...(step.targetPaths || [])
+  ]
+  return paths.map(normalizePlanPath).filter(Boolean)
+}
+
+/**
+ * Only use kind=mixin when every Java target is a Mixin class.
+ * Hybrid write steps (Screen/Client/Mod + mixins.json) must stay `write`,
+ * otherwise write_file is gated off and long tasks stall mid-plan.
+ */
+export function shouldForceMixinKind(step: CompiledPlanStep): boolean {
+  const paths = stepTargetPaths(step)
+  const javaPaths = paths.filter((path) => path.endsWith('.java'))
+  if (javaPaths.length > 0) {
+    return javaPaths.every((path) => MIXIN_JAVA_PATH_RE.test(path))
+  }
+
+  if (step.kind === 'mixin') return true
+
+  // No java targets: only force mixin when description is clearly mixin-class work,
+  // not when mixins.json is merely one of several resource updates.
+  if (MIXIN_WRITE_RE.test(step.description) && /@Mixin|Mixin\s*(类|class)|注入/.test(step.description)) {
+    return !/\.java/i.test(step.description) || MIXIN_JAVA_PATH_RE.test(step.description)
+  }
+  return false
+}
+
+/** Hybrid steps labeled mixin by the model must be demoted to write. */
+export function resolveCompiledStepKind(step: CompiledPlanStep): StructuredStepKind | undefined {
+  const paths = stepTargetPaths(step)
+  const javaPaths = paths.filter((path) => path.endsWith('.java'))
+  if (javaPaths.length > 0) {
+    if (javaPaths.every((path) => MIXIN_JAVA_PATH_RE.test(path))) return 'mixin'
+    if (step.kind === 'recipe' || step.kind === 'inspect') return step.kind
+    return 'write'
+  }
+  if (shouldForceMixinKind(step)) return 'mixin'
+  return step.kind
+}
 
 function renumber(steps: CompiledPlanStep[]): CompiledPlanStep[] {
   return steps.map((s, i) => ({ ...s, id: String(i + 1) }))
@@ -265,17 +313,17 @@ export function prependKnowledgeInspect(steps: CompiledPlanStep[]): CompiledPlan
 export function compilePlanFromText(text: string): CompiledPlanStep[] {
   let steps = parseStructuredSteps(text)
   steps = steps.map((step) => {
-    const targets = `${step.targetPath || ''} ${(step.targetPaths || []).join(' ')}`
-    if ((step.kind === 'write' || step.kind === 'mixin') && (MIXIN_PATH_RE.test(targets) || MIXIN_WRITE_RE.test(step.description))) {
-      return {
-        ...step,
-        kind: 'mixin' as const,
-        description: /fabric_mixin_register|注册/i.test(step.description)
-          ? step.description
-          : `${step.description}；使用 fabric_mixin_register 注册并由 fabric_mixin_validate 验证`
-      }
+    const kind = resolveCompiledStepKind(step)
+    if (kind !== 'mixin') {
+      return kind && kind !== step.kind ? { ...step, kind } : step
     }
-    return step
+    return {
+      ...step,
+      kind: 'mixin' as const,
+      description: /fabric_mixin_register|注册/i.test(step.description)
+        ? step.description
+        : `${step.description}；使用 fabric_mixin_register 注册并由 fabric_mixin_validate 验证`
+    }
   })
   steps = stripHostTerminalFromLlmSteps(steps)
   steps = dropVagueSteps(steps)
@@ -289,7 +337,27 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
     steps = prependKnowledgeInspect(steps)
   }
   steps = appendHostTerminalSteps(steps)
+  steps = steps.map((step) => {
+    if (step.hostManaged || step.evidence?.trim()) return step
+    const evidence = defaultEvidenceForKind(step.kind)
+    return evidence ? { ...step, evidence } : step
+  })
   return steps
+}
+
+function defaultEvidenceForKind(kind: StructuredStepKind | undefined): string | undefined {
+  switch (kind) {
+    case 'mixin':
+      return 'fabric_mixin_validate 通过'
+    case 'recipe':
+      return 'fabric_recipe_validate 通过'
+    case 'write':
+      return '目标文件已写入且内容正确'
+    case 'inspect':
+      return '已完成勘察确认'
+    default:
+      return undefined
+  }
 }
 
 export function compiledStepsToParsed(steps: CompiledPlanStep[]): ParsedPlanStep[] {

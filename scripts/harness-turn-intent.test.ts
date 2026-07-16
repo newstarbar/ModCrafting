@@ -43,6 +43,17 @@ test('resolveTurnIntent: continue with incomplete plan → resume', () => {
   assert.equal(resolveTurnIntent('继续', intentCtx({ phase: 'execute', planTracker: tracker })), 'resume')
 })
 
+test('resolveTurnIntent: continue with plan candidate after plan_failed → resume', () => {
+  assert.equal(
+    resolveTurnIntent('继续', intentCtx({ phase: 'plan', planTracker: null, hasPlanCandidate: true })),
+    'resume'
+  )
+  assert.equal(
+    resolveTurnIntent('继续', intentCtx({ phase: 'plan', planTracker: null, hasPlanCandidate: false })),
+    'chat'
+  )
+})
+
 test('resolveTurnIntent: plan mode → plan_only', () => {
   assert.equal(resolveTurnIntent('添加二段跳', intentCtx({ composerMode: 'plan' })), 'plan_only')
 })

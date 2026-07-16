@@ -128,6 +128,10 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_data_assets_generate',
         'fabric_recipe_generate',
         'create_recipe',
+        // Hybrid write steps often also register mixins.json / update fabric.mod.json
+        'fabric_mixin_register',
+        'fabric_mixin_validate',
+        'fabric_mixin_scaffold',
         'read_file',
         'list_directory',
         'grep',
@@ -177,7 +181,8 @@ function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'mixin') return 6
   if (kind === 'build') return 6
   if (kind === 'run') return 4
-  if (kind === 'write') return 4
+  // write often needs a few docs lookups before the first write_file
+  if (kind === 'write') return 6
   if (kind === 'inspect') return 2
   return 2
 }

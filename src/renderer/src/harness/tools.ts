@@ -66,11 +66,19 @@ function parseExitCode(output: string): number | null {
   return Number(match[1] ?? match[2])
 }
 
-function inferToolError(toolName: string, output: string, exitCode: number | null): string | undefined {
+export function inferToolError(toolName: string, output: string, exitCode: number | null): string | undefined {
   if (/^(Error|No project open)/i.test(output)) return output
+  if (/^blocked:/i.test(output)) return output
   if (/环境准备失败/.test(output)) return output
   if (exitCode !== null && exitCode !== 0) return output
   if (toolName === 'trigger_build' && /BUILD FAILED/i.test(output)) return output
+  // edit_file soft-failures previously returned ok:true and falsely satisfied write evidence
+  if (
+    toolName === 'edit_file' &&
+    /未找到\s*old_string|未找到目标文本|old_string 匹配了多处|aci_read_gate|edit_gate/i.test(output)
+  ) {
+    return output
+  }
   return undefined
 }
 

@@ -298,9 +298,9 @@ export const editFileTool: Tool & Previewer = {
 				}
 			}
 			if (contextLines.length > 0) {
-				return `未找到 old_string。文件 ${relPath}（${lines.length} 行）中相关区域:\n${contextLines.join("\n")}\n\n请调整 old_string 精确匹配实际文件内容。注意缩进和空格必须完全一致。`;
+				return `Error: 未找到 old_string。文件 ${relPath}（${lines.length} 行）中相关区域:\n${contextLines.join("\n")}\n\n请调整 old_string 精确匹配实际文件内容。注意缩进和空格必须完全一致。`;
 			}
-			return `未找到 old_string。文件 ${relPath} 共 ${lines.length} 行。请用 read_file 查看后重试。`;
+			return `Error: 未找到 old_string。文件 ${relPath} 共 ${lines.length} 行。请用 read_file 查看后重试。`;
 		}
 
 		const matchCount = countOccurrences(content, oldStr);
@@ -308,7 +308,7 @@ export const editFileTool: Tool & Previewer = {
 			const lineNum = content.substring(0, idx).split("\n").length;
 			const lineNum2 = content.substring(0, content.indexOf(oldStr, idx + 1)).split("\n").length;
 			return (
-				`old_string 匹配了多处（至少第 ${lineNum} 行和第 ${lineNum2} 行，共 ${matchCount} 处）。` +
+				`Error: old_string 匹配了多处（至少第 ${lineNum} 行和第 ${lineNum2} 行，共 ${matchCount} 处）。` +
 				`请提供更多上下文使匹配唯一，或设置 replace_all=true 替换全部。`
 			);
 		}

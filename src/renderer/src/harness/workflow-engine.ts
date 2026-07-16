@@ -182,8 +182,15 @@ const KNOWLEDGE_TOOLS = new Set([
 
 const MAX_FREE_KNOWLEDGE_ROUNDS = 3
 const MAX_DOC_SEARCH_PER_WRITE_STEP = 2
+/** Pure read/list/grep rounds before first write evidence — do not burn attempt. */
+const MAX_FREE_EXPLORE_ROUNDS = 4
+const EXPLORE_TOOLS = new Set(['read_file', 'list_directory', 'grep'])
 
 export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
+  return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
+}
+
+export function isExploreLimitedStep(step: WorkflowStep): boolean {
   return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
 }
 
@@ -202,7 +209,41 @@ export function buildDocSearchBlockedResult(step: WorkflowStep, call: ToolCallWi
   }
 }
 
+export function isDocSearchOnlyRejectionRound(results: Iterable<ToolResult>): boolean {
+  const list = [...results]
+  return list.length > 0 && list.every((result) => result.errorKind === 'doc_search_limit')
+}
+
+export function isKnowledgeOnlyRejectionRound(results: Iterable<ToolResult>): boolean {
+  const list = [...results]
+  return list.length > 0 && list.every((result) => KNOWLEDGE_TOOLS.has(result.toolName || ''))
+}
+
+/** Rejected-only rounds (whitelist / doc limit) must not burn write-step attempt. */
+export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boolean {
+  const list = [...results]
+  if (list.length === 0) return false
+  return list.every((result) =>
+    result.errorKind === 'doc_search_limit' ||
+    result.errorKind === 'tool_not_offered' ||
+    result.errorKind === 'tool_call_limit' ||
+    result.errorKind === 'after_control_barrier'
+  )
+}
+
+export function isPureExploreRound(results: ToolResult[]): boolean {
+  return results.length > 0 && results.every((result) =>
+    EXPLORE_TOOLS.has(result.toolName || '') && result.ok && !result.error
+  )
+}
+
+/**
+ * Do not nudge complete_step when reading an unrelated Java file on write/mixin/recipe
+ * steps — that caused false "already done" stops (e.g. Frame_coverClient while creating
+ * ScreenshotHandler).
+ */
 export function detectExistingHandlerHint(step: WorkflowStep, result: ToolResult): string | undefined {
+  if (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin') return undefined
   if (result.toolName !== 'read_file' || !result.ok || result.error) return undefined
   const path = String(result.args?.path || '').replace(/\\/g, '/')
   const output = String(result.output || '')
@@ -213,18 +254,28 @@ export function detectExistingHandlerHint(step: WorkflowStep, result: ToolResult
     return undefined
   }
   return (
-    `【已有实现】读取到 ${path} 似乎已包含相关交互/注册逻辑。` +
-    `若已满足当前需求请 complete_step()；若要重构方案请先 ask_clarification 向用户确认。`
+    `【参考实现】读取到 ${path} 含注册/交互逻辑，可作参考。` +
+    `当前步骤尚未完成时请继续执行允许的工具，不要仅因此 complete_step。`
   )
 }
 
 export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
   const targetHint = step.targetPath
-    ? `edit_file("${step.targetPath}", ...)`
-    : 'edit_file(<目标路径>, ...) 或 write_file(<新文件路径>, ...)'
+    ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)`
+    : 'write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)'
   return (
     `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
-    `请立即调用 ${targetHint}（修改已有文件优先 edit_file）或 complete_step()，不要只输出旁白。`
+    `请立即调用 ${targetHint} 写入目标文件，或 complete_step()，不要只输出旁白或继续无目标探索。`
+  )
+}
+
+export function buildWriteForceInstruction(step: WorkflowStep): string {
+  const target = step.targetPath
+    ? `目标文件：${step.targetPath}`
+    : '请按步骤描述确定目标路径'
+  return (
+    `【强制写入】探索轮次已用尽。禁止再 read_file/list_directory/grep/文档查询。` +
+    `${target}。本轮必须 write_file 或 edit_file 写出代码。`
   )
 }
 
@@ -345,14 +396,78 @@ export function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[])
       ? result.artifactPaths
       : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
     return artifacts.some((artifactPath) => {
+      // Check one required path at a time — do not keep sibling targetPaths
+      // or a single-file write would satisfy every entry in the list.
       const planStep = {
         ...workflowStepToPlanStep(step),
         kind: 'write' as const,
-        targetPath
+        targetPath,
+        targetPaths: undefined
       }
       return canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok
     })
   }))
+}
+
+export type DiskProbe = {
+  exists: (absPath: string) => Promise<boolean>
+  listDirectory: (absPath: string) => Promise<Array<{ name: string; isDirectory: boolean }>>
+}
+
+function isDirectoryTarget(target: string): boolean {
+  const withSlash = target.replace(/\\/g, '/')
+  if (withSlash.endsWith('/')) return true
+  const base = withSlash.replace(/\/+$/, '').split('/').pop() || ''
+  return !base.includes('.')
+}
+
+/** Prefill write evidence from files already on disk (resume / 继续 after partial stop). */
+export async function collectDiskWriteEvidence(
+  projectPath: string,
+  step: WorkflowStep,
+  probe: DiskProbe
+): Promise<ToolResult[]> {
+  if (step.kind !== 'write') return []
+  const targets = step.targetPaths?.length
+    ? step.targetPaths
+    : (step.targetPath ? [step.targetPath] : [])
+  if (targets.length === 0) return []
+
+  const found: string[] = []
+  for (const target of targets) {
+    const rel = target.replace(/\\/g, '/').replace(/\/+$/, '')
+    const abs = `${projectPath}/${rel}`
+    if (isDirectoryTarget(target)) {
+      try {
+        const entries = await probe.listDirectory(abs)
+        for (const entry of entries) {
+          if (!entry.isDirectory) {
+            found.push(`${rel}/${entry.name}`)
+          }
+        }
+      } catch {
+        // directory missing or unreadable
+      }
+      continue
+    }
+    try {
+      if (await probe.exists(abs)) found.push(rel)
+    } catch {
+      // ignore
+    }
+  }
+
+  if (found.length === 0) return []
+  return [{
+    output: `磁盘已存在目标文件：${found.join(', ')}`,
+    durationMs: 0,
+    ok: true,
+    toolName: 'write_file',
+    args: { path: found[0] },
+    artifactPath: found[0],
+    artifactPaths: found,
+    exitCode: 0
+  }]
 }
 
 export class WorkflowEngine {
@@ -408,17 +523,49 @@ export class WorkflowEngine {
 
   private currentStep(): WorkflowStep | null {
     return this.steps.find((step) => step.status === 'running')
+      ?? this.steps.find((step) => step.status === 'failed')
       ?? this.steps.find((step) => step.status === 'pending')
       ?? null
   }
 
-  private toolSchemasFor(step: WorkflowStep, repairMode: boolean): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-    const names = repairMode ? repairExtraTools(step) : step.allowedTools
+  private toolSchemasFor(
+    step: WorkflowStep,
+    repairMode: boolean,
+    limits?: {
+      fabricDocsSearchCount?: number
+      knowledgeQueries?: number
+      exploreRounds?: number
+      stepHasEvidence?: boolean
+    }
+  ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+    let names = repairMode ? repairExtraTools(step) : [...step.allowedTools]
+    if (isDocSearchLimitedStep(step)) {
+      if ((limits?.fabricDocsSearchCount ?? 0) >= MAX_DOC_SEARCH_PER_WRITE_STEP) {
+        names = names.filter((name) => name !== 'fabric_docs_search')
+      }
+      // After free knowledge rounds, hide knowledge tools so the model must write.
+      if ((limits?.knowledgeQueries ?? 0) >= MAX_FREE_KNOWLEDGE_ROUNDS) {
+        names = names.filter((name) => !KNOWLEDGE_TOOLS.has(name))
+      }
+    }
+    // After free explore rounds with no write evidence, strip read/list/grep so the model must write.
+    if (
+      isExploreLimitedStep(step) &&
+      !limits?.stepHasEvidence &&
+      (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS
+    ) {
+      names = names.filter((name) => !EXPLORE_TOOLS.has(name) && !KNOWLEDGE_TOOLS.has(name))
+    }
     return this.registry.schemas().filter((tool) => names.includes(tool.name))
   }
 
-  private workflowPrompt(step: WorkflowStep, repairMode: boolean, repairWriteRequired: boolean): ChatMessage {
-    const tools = repairMode ? repairExtraTools(step) : step.allowedTools
+  private workflowPrompt(
+    step: WorkflowStep,
+    repairMode: boolean,
+    repairWriteRequired: boolean,
+    offeredToolNames?: string[]
+  ): ChatMessage {
+    const tools = offeredToolNames ?? (repairMode ? repairExtraTools(step) : step.allowedTools)
     const prefix = repairMode ? '【修复模式】' : '【工作流步骤】'
     const repairGate =
       repairMode && repairWriteRequired
@@ -430,12 +577,20 @@ export class WorkflowEngine {
     const evidenceHint = step.evidence
       ? `验收标准: ${step.evidence}\n`
       : ''
+    const exploreClosed =
+      isExploreLimitedStep(step) &&
+      !tools.some((name) => EXPLORE_TOOLS.has(name) || KNOWLEDGE_TOOLS.has(name))
+    const writeForce = exploreClosed
+      ? '探索与文档查询已关闭。本轮必须 write_file / edit_file 写入目标文件，禁止只输出旁白。\n'
+      : isDocSearchLimitedStep(step) && !tools.some((name) => KNOWLEDGE_TOOLS.has(name))
+        ? '文档查询已关闭。本轮必须 write_file / edit_file 写入目标文件，禁止只输出旁白。\n'
+        : ''
     return {
       role: 'user',
       content:
-        `${prefix}${repairGate}${clarifyHint}只执行当前步骤，不要重复已完成操作。\n` +
+        `${prefix}${repairGate}${clarifyHint}${writeForce}只执行当前步骤，不要重复已完成操作。\n` +
         `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(', ') || '无'}\n` +
-        `修改已有文件优先 edit_file（须先 read_file）。工具成功且满足验收证据后主机会推进。`
+        `新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）。工具成功且满足验收证据后主机会推进。`
     }
   }
 
@@ -514,7 +669,7 @@ export class WorkflowEngine {
     while (!this.abortSignal?.aborted) {
       const step = this.currentStep()
       if (!step) break
-      if (step.status === 'pending') step.status = 'running'
+      if (step.status === 'pending' || step.status === 'failed') step.status = 'running'
       this.emitPlanState()
       const delegatedEvidence: ToolResult[] = []
 
@@ -570,6 +725,32 @@ export class WorkflowEngine {
         })
       }
 
+      const diskEvidence: ToolResult[] = []
+      if (step.kind === 'write' && this.projectPath) {
+        try {
+          const existing = await collectDiskWriteEvidence(this.projectPath, step, {
+            exists: (p) => window.api.exists(p),
+            listDirectory: (p) => window.api.listDirectory(p)
+          })
+          if (existing.length > 0) {
+            diskEvidence.push(...existing)
+            const paths = existing.flatMap((result) =>
+              result.artifactPaths?.length
+                ? result.artifactPaths
+                : (result.artifactPath ? [result.artifactPath] : [])
+            )
+            baseMessages.push({
+              role: 'system',
+              content:
+                `【已有文件证据】目标路径已存在于磁盘：${paths.join(', ')}。` +
+                `若内容已满足验收标准，请直接 complete_step；不要重复写入。`
+            })
+          }
+        } catch {
+          // Probe failures must not block the step
+        }
+      }
+
       let completed = false
       let repairMode = false
       let repairWriteRequired = false
@@ -578,8 +759,10 @@ export class WorkflowEngine {
       let lastFailureOutput = ''
       const seenRepairSignatures = new Set<string>()
       const seenDiagSignatures = new Set<string>()
-      const evidenceResults: ToolResult[] = [...delegatedEvidence]
+      const evidenceResults: ToolResult[] = [...diskEvidence, ...delegatedEvidence]
       let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
+      let evidenceIdleRounds = 0
+      let exploreRounds = 0
       let debuggerPrefetched = false
       let attempt = 0
       let loopIterations = 0
@@ -595,8 +778,17 @@ export class WorkflowEngine {
         const policyOptions: ToolGateOptions | undefined = repairMode
           ? { repairMode: true, repairWriteRequired, repairValidationRequired }
           : undefined
-        const modelMessages = [...baseMessages, this.workflowPrompt(step, repairMode, repairWriteRequired)]
-        const allowedTools = this.toolSchemasFor(step, repairMode)
+        const allowedTools = this.toolSchemasFor(step, repairMode, {
+          fabricDocsSearchCount,
+          knowledgeQueries,
+          exploreRounds,
+          stepHasEvidence
+        })
+        const offeredNames = allowedTools.map((tool) => tool.name)
+        const modelMessages = [
+          ...baseMessages,
+          this.workflowPrompt(step, repairMode, repairWriteRequired, offeredNames)
+        ]
         let streamText = ''
         let streamReasoning = ''
         let modelResult: WorkflowModelResult
@@ -662,14 +854,17 @@ export class WorkflowEngine {
         }
         const calls = validation.accepted
         if (calls.length === 0) {
+          const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values())
           this.appendToolRound(
             baseMessages,
             modelResult.text || streamText,
             allCalls,
             validation.rejected,
-            '所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。'
+            onlyKnowledgeRejected
+              ? buildEmptyToolCallInstruction(step)
+              : '所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。'
           )
-          attempt++
+          if (!onlyKnowledgeRejected) attempt++
           continue
         }
 
@@ -756,11 +951,15 @@ export class WorkflowEngine {
             (repairWriteRequired || repairValidationRequired) &&
             calls.length > 0 &&
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
+          const docSearchBlockedOnly = isDocSearchOnlyRejectionRound(resultsById.values())
+          const nonBurningRejection = isNonBurningRejectionRound(resultsById.values())
           const rejectionHint = [
             [...resultsById.values()].map((r) => r.output).filter(Boolean).join('\n'),
             repairWriteBlockedOnly
               ? '修复模式下必须先 edit_file 修改代码，再重新构建。'
-              : `本步骤允许的工具：${(repairMode ? repairExtraTools(step) : step.allowedTools).join(', ') || '无'}。请改用其中之一完成当前步骤。`
+              : docSearchBlockedOnly || nonBurningRejection
+                ? buildEmptyToolCallInstruction(step)
+                : `本步骤允许的工具：${offeredNames.join(', ') || '无'}。请改用其中之一完成当前步骤。`
           ].join('\n\n')
           this.appendToolRound(
             baseMessages,
@@ -769,7 +968,8 @@ export class WorkflowEngine {
             resultsById,
             rejectionHint
           )
-          if (!repairWriteBlockedOnly) attempt++
+          // Pure whitelist/doc-search spam after the limit must not burn the step budget.
+          if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) attempt++
           continue
         }
 
@@ -842,6 +1042,36 @@ export class WorkflowEngine {
           completed = true
           this.emitPlanState()
           break
+        }
+
+        // Write/inspect: once evidence exists, stop burning budget on re-reads and
+        // auto-complete if the model keeps stalling without complete_step.
+        if (
+          stepHasEvidence &&
+          (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe' || step.kind === 'mixin')
+        ) {
+          evidenceIdleRounds++
+          roundInstruction = [
+            roundInstruction,
+            `【验收证据已满足】请立即调用 complete_step({"stepId":"${step.id}"}) 推进下一步，禁止继续重复 read_file/edit_file。`
+          ].filter(Boolean).join('\n\n')
+          if (evidenceIdleRounds >= 2) {
+            this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+            step.status = 'completed'
+            this.planTracker.advanceCurrent('auto_complete_after_evidence')
+            completed = true
+            this.emitPlanState()
+            this.emit({
+              kind: EventKind.Notice,
+              notice: {
+                level: 'info',
+                text: `步骤 #${step.id} 验收证据已满足，已自动推进（模型未及时 complete_step）。`
+              }
+            })
+            break
+          }
+        } else {
+          evidenceIdleRounds = 0
         }
 
         if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
@@ -937,6 +1167,17 @@ export class WorkflowEngine {
           }
         }
 
+        const pureExplore = isPureExploreRound(orderedResults)
+        if (pureExplore && isExploreLimitedStep(step) && !stepHasEvidence) {
+          exploreRounds++
+          if (exploreRounds >= MAX_FREE_EXPLORE_ROUNDS) {
+            roundInstruction = [
+              roundInstruction,
+              buildWriteForceInstruction(step)
+            ].filter(Boolean).join('\n\n')
+          }
+        }
+
         const requestedCompletion = orderedResults.some((result) => result.toolName === 'complete_step' && result.ok)
         if (requestedCompletion && !success) {
           roundInstruction = [
@@ -951,7 +1192,20 @@ export class WorkflowEngine {
           orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode))
         const freeKnowledgeRound = successfulKnowledge.length === orderedResults.length &&
           knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS
-        if (!repairDiagnosticRound && !freeKnowledgeRound) {
+        const freeExploreRound =
+          pureExplore &&
+          isExploreLimitedStep(step) &&
+          !stepHasEvidence &&
+          exploreRounds <= MAX_FREE_EXPLORE_ROUNDS
+        const readOnlyAfterEvidence =
+          stepHasEvidence &&
+          orderedResults.length > 0 &&
+          orderedResults.every((result) =>
+            result.toolName === 'read_file' ||
+            result.toolName === 'list_directory' ||
+            result.toolName === 'grep'
+          )
+        if (!repairDiagnosticRound && !freeKnowledgeRound && !freeExploreRound && !readOnlyAfterEvidence) {
           attempt++
         }
       }

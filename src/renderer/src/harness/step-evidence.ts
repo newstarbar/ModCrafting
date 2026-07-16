@@ -30,7 +30,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function extractPaths(description: string): string[] {
+function extractPaths(description: string | undefined): string[] {
+  if (!description) return []
   const paths: string[] = []
   for (const match of description.matchAll(PATH_RE)) {
     paths.push(normalizedPath(match[1]))
@@ -38,30 +39,44 @@ function extractPaths(description: string): string[] {
   return paths
 }
 
-function patternMatchesPath(pattern: string, actualPath: string): boolean {
-  const normalizedPattern = normalizedPath(pattern)
+/** Match an artifact path against a step target pattern.
+ *  Directory targets (trailing `/`, or a path prefix) match any file underneath. */
+export function patternMatchesPath(pattern: string, actualPath: string): boolean {
+  const normalizedPattern = normalizedPath(pattern).replace(/\/+$/, '')
   const normalizedActual = normalizedPath(actualPath)
   if (!normalizedPattern) return false
   if (!normalizedPattern.includes('<')) {
-    return normalizedActual.endsWith(normalizedPattern) || normalizedActual.includes(`/${normalizedPattern}`)
+    if (normalizedActual === normalizedPattern) return true
+    // Exact file / suffix match (existing behavior)
+    if (normalizedActual.endsWith(normalizedPattern) || normalizedActual.endsWith(`/${normalizedPattern}`)) {
+      return true
+    }
+    // Directory target: artifact lives under the pattern directory
+    if (normalizedActual.startsWith(`${normalizedPattern}/`)) return true
+    if (normalizedActual.includes(`/${normalizedPattern}/`)) return true
+    return false
   }
   const regexSource = escapeRegExp(normalizedPattern)
     .replace(/\\<[^>]+\\>/g, '[^/]+')
     .replace(/<[^>]+>/g, '[^/]+')
   return new RegExp(`(^|/)${regexSource}$`).test(normalizedActual)
-    || new RegExp(`(^|/)${regexSource}`).test(normalizedActual)
+    || new RegExp(`(^|/)${regexSource}(/|$)`).test(normalizedActual)
 }
 
 function writePathMatchesStep(step: PlanStepState, artifactPath: string | undefined): boolean {
   if (!artifactPath) return false
-  if (step.targetPath) {
-    if (patternMatchesPath(step.targetPath, artifactPath)) return true
+  const explicit = [
+    ...(step.targetPath ? [step.targetPath] : []),
+    ...(step.targetPaths || [])
+  ]
+  if (explicit.length > 0) {
+    return explicit.some((p) => patternMatchesPath(p, artifactPath))
   }
   const paths = extractPaths(step.description)
   if (paths.length > 0) {
     return paths.some((p) => patternMatchesPath(p, artifactPath))
   }
-  const d = step.description.toLowerCase()
+  const d = (step.description || '').toLowerCase()
   const actual = normalizedPath(artifactPath).toLowerCase()
   if (/recipe|配方|recipes/.test(d)) return /(^|\/)recipes\/.+\.json$/.test(actual)
   if (/\.json/.test(d)) return actual.endsWith('.json')
@@ -109,7 +124,10 @@ export function canToolResultAdvanceStep(
       toolName === 'fabric_mixin_scaffold' ||
       toolName === 'fabric_mixin_register'
     if (!isWriteTool) return { ok: false, reason: 'write_tool_mismatch' }
-    const hasExplicitPath = Boolean(step.targetPath) || extractPaths(step.description).length > 0
+    const hasExplicitPath =
+      Boolean(step.targetPath) ||
+      Boolean(step.targetPaths?.length) ||
+      extractPaths(step.description).length > 0
     const ok = hasExplicitPath
       ? writePathMatchesStep(step, artifactPath)
       : Boolean(artifactPath)

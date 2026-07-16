@@ -930,11 +930,16 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             })
           }
 
-          flushPersist(next, turnStatus === 'planned' ? planSnapshot : null)
+          flushPersist(
+            next,
+            turnStatus === 'planned' || turnStatus === 'partial' ? planSnapshot : null
+          )
           return next
         })
 
-        setActivePlan(turnStatus === 'planned' ? planSnapshot : null)
+        setActivePlan(
+          turnStatus === 'planned' || turnStatus === 'partial' ? planSnapshot : null
+        )
         t.msgId = ''
         break
       }
@@ -992,6 +997,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       return
     }
 
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    // Prevent phantom turns: ClarificationNeeded clears isLoading while controller
+    // may still be _running; sending then queues mid-turn and never emits TurnDone.
+    if (ctrl.running) {
+      setAgentStatus('上一轮仍在执行，请稍候或先停止')
+      return
+    }
+
     const resolvedKey = ensureApiKey
       ? await ensureApiKey()
       : apiConfig.apiKey.trim()
@@ -1000,15 +1014,28 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       return
     }
     if (resolvedKey !== apiConfig.apiKey) {
-      controllerRef.current?.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
+      ctrl.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
     }
 
     const userMsg = input.trim()
+    const resumeLike = /^(继续|接着|往下|continue|执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i.test(userMsg)
+    const planForTurn = resumeLike
+      ? (activePlanRef.current || restoreActivePlan(displayMessagesRef.current, serializeDisplayMessages(displayMessagesRef.current, activePlanRef.current)))
+      : null
+    if (resumeLike && planForTurn?.steps?.length) {
+      ctrl.restorePlanTracker(planForTurn.steps)
+      activePlanRef.current = planForTurn
+      setActivePlan(planForTurn)
+    }
+
     setInput('')
     setIsLoading(true)
     setAgentStatus('思考中...')
-    setActivePlan(null)
-    setPlanReady(false)
+    // Keep pinned plan when resuming; clearing it made「继续」lose tracker after reload.
+    if (!resumeLike) {
+      setActivePlan(null)
+      setPlanReady(false)
+    }
     setCompletionFlash('')
 
     if (!currentSessionId) {
@@ -1016,41 +1043,52 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       currentSessionIdRef.current = newId
       const preSnapshot = buildPreTurnSnapshot({
         messageIndex: 0,
-        controller: controllerRef.current,
+        controller: ctrl,
         composerMode,
         sessionGoal,
         activePlan: activePlanRef.current,
       })
       setDisplayMessages([{ id: uid(), role: 'user', content: userMsg, timestamp: Date.now(), stateSnapshot: preSnapshot }])
-      controllerRef.current?.clearSession()
-      controllerRef.current?.setComposerMode(composerMode)
-      controllerRef.current?.setSessionGoal(sessionGoal)
+      ctrl.clearSession()
+      ctrl.setComposerMode(composerMode)
+      ctrl.setSessionGoal(sessionGoal)
       persistComposerMeta({ composerMode, sessionGoal })
     } else {
       maybeRenameSessionForFirstMessage(currentSessionId, userMsg)
       setDisplayMessages((prev) => {
         const preSnapshot = buildPreTurnSnapshot({
           messageIndex: prev.length,
-          controller: controllerRef.current,
+          controller: ctrl,
           composerMode,
           sessionGoal,
           activePlan: activePlanRef.current,
         })
         const next = [...prev, { id: uid(), role: 'user' as const, content: userMsg, timestamp: Date.now(), stateSnapshot: preSnapshot }]
-        flushPersist(next, null)
+        flushPersist(next, resumeLike ? activePlanRef.current : null)
         return next
       })
     }
 
-    const ctrl = controllerRef.current
-    if (!ctrl) return
     ctrl.setComposerMode(composerMode)
     ctrl.setSessionGoal(sessionGoal)
-    try { await ctrl.send(userMsg) }
-    catch {
+    try {
+      await ctrl.send(userMsg)
+    } catch {
       setIsLoading(false)
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
+    } finally {
+      // Mid-turn queue / missing TurnDone must not leave the composer locked.
+      if (!ctrl.running) {
+        setIsLoading((prev) => {
+          if (prev) {
+            setAgentStatus('')
+            onRunningChangeRef.current?.(false)
+            return false
+          }
+          return prev
+        })
+      }
     }
   }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending])
 
