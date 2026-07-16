@@ -539,6 +539,10 @@ export class WorkflowEngine {
     }
   ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
     let names = repairMode ? repairExtraTools(step) : [...step.allowedTools]
+    // Persisted plans may still list edit/write on build/run; never offer them until repair.
+    if ((step.kind === 'build' || step.kind === 'run') && !repairMode) {
+      names = names.filter((name) => name !== 'edit_file' && name !== 'write_file')
+    }
     if (isDocSearchLimitedStep(step)) {
       if ((limits?.fabricDocsSearchCount ?? 0) >= MAX_DOC_SEARCH_PER_WRITE_STEP) {
         names = names.filter((name) => name !== 'fabric_docs_search')
@@ -585,10 +589,16 @@ export class WorkflowEngine {
       : isDocSearchLimitedStep(step) && !tools.some((name) => KNOWLEDGE_TOOLS.has(name))
         ? '文档查询已关闭。本轮必须 write_file / edit_file 写入目标文件，禁止只输出旁白。\n'
         : ''
+    const buildFirst =
+      (step.kind === 'build' || step.kind === 'run') && !repairMode
+        ? step.kind === 'build'
+          ? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
+          : '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n'
+        : ''
     return {
       role: 'user',
       content:
-        `${prefix}${repairGate}${clarifyHint}${writeForce}只执行当前步骤，不要重复已完成操作。\n` +
+        `${prefix}${repairGate}${clarifyHint}${writeForce}${buildFirst}只执行当前步骤，不要重复已完成操作。\n` +
         `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(', ') || '无'}\n` +
         `新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）。工具成功且满足验收证据后主机会推进。`
     }
@@ -763,6 +773,8 @@ export class WorkflowEngine {
       let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
       let evidenceIdleRounds = 0
       let exploreRounds = 0
+      let consecutiveIdenticalRejections = 0
+      let lastRejectionSignature = ''
       let debuggerPrefetched = false
       let attempt = 0
       let loopIterations = 0
@@ -953,10 +965,31 @@ export class WorkflowEngine {
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
           const docSearchBlockedOnly = isDocSearchOnlyRejectionRound(resultsById.values())
           const nonBurningRejection = isNonBurningRejectionRound(resultsById.values())
+          const rejectionSig = [...resultsById.values()]
+            .map((r) => `${r.toolName}:${r.errorKind || r.error || ''}`)
+            .sort()
+            .join('|')
+          if (rejectionSig && rejectionSig === lastRejectionSignature) {
+            consecutiveIdenticalRejections++
+          } else {
+            consecutiveIdenticalRejections = 1
+            lastRejectionSignature = rejectionSig
+          }
+          const buildEditLoop =
+            (step.kind === 'build' || step.kind === 'run') &&
+            !repairMode &&
+            [...resultsById.values()].every((r) =>
+              r.errorKind === 'tool_not_allowed' &&
+              (r.toolName === 'edit_file' || r.toolName === 'write_file')
+            )
           const rejectionHint = [
             [...resultsById.values()].map((r) => r.output).filter(Boolean).join('\n'),
             repairWriteBlockedOnly
               ? '修复模式下必须先 edit_file 修改代码，再重新构建。'
+              : buildEditLoop
+                ? (step.kind === 'build'
+                  ? '【禁止循环改文件】构建步骤当前不允许 edit_file。请立即 trigger_build({"task":"build"})；失败后才进入修复模式。'
+                  : '【禁止循环改文件】运行步骤当前不允许 edit_file。请立即 trigger_build({"task":"runClient"})；失败后才进入修复模式。')
               : docSearchBlockedOnly || nonBurningRejection
                 ? buildEmptyToolCallInstruction(step)
                 : `本步骤允许的工具：${offeredNames.join(', ') || '无'}。请改用其中之一完成当前步骤。`
@@ -968,10 +1001,16 @@ export class WorkflowEngine {
             resultsById,
             rejectionHint
           )
-          // Pure whitelist/doc-search spam after the limit must not burn the step budget.
-          if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) attempt++
+          // Identical rejection spam (e.g. edit_file on build) burns budget faster to escape loops.
+          if (consecutiveIdenticalRejections >= 2) {
+            attempt += 2
+          } else if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) {
+            attempt++
+          }
           continue
         }
+        consecutiveIdenticalRejections = 0
+        lastRejectionSignature = ''
 
         const executed = await this.executeAllowedCalls(step, executableAllowed)
         for (const [id, result] of executed) {

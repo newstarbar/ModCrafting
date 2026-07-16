@@ -148,8 +148,8 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'trigger_build',
         'run_command',
-        'edit_file',
-        'write_file',
+        // edit/write only after build fails (repair mode). Offering them here caused
+        // schema/policy mismatch loops: model keeps calling edit_file → tool_not_allowed.
         'read_file',
         'list_directory',
         'grep',
@@ -162,8 +162,6 @@ function defaultAllowedTools(kind: StepKind): string[] {
       return [
         'trigger_build',
         'run_command',
-        'edit_file',
-        'write_file',
         'read_file',
         'list_directory',
         'grep',

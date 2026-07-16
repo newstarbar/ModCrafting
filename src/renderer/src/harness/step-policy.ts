@@ -188,8 +188,19 @@ export function createRejectedToolResult(
   if (isRepairWriteBlocked(step, call, options)) {
     return rejectedRepairWriteResult(step, call, options)
   }
+  let output = `blocked: [tool_not_allowed] 当前步骤 #${step.id}（${step.title}）不允许调用 "${call.name}"。`
+  if (
+    (step.kind === 'build' || step.kind === 'run') &&
+    !options?.repairMode &&
+    (call.name === 'edit_file' || call.name === 'write_file')
+  ) {
+    output +=
+      step.kind === 'build'
+        ? ' 请先调用 trigger_build({"task":"build"})；构建失败后会自动进入修复模式，那时才允许 edit_file。'
+        : ' 请先调用 trigger_build({"task":"runClient"})；运行失败后会自动进入修复模式，那时才允许 edit_file。'
+  }
   return {
-    output: `blocked: [tool_not_allowed] 当前步骤 #${step.id}（${step.title}）不允许调用 "${call.name}"。`,
+    output,
     error: `tool_not_allowed: ${call.name}`,
     durationMs: 0,
     ok: false,

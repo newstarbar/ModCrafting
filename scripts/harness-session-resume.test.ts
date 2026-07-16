@@ -152,6 +152,33 @@ test('persisted kind=mixin hybrid step is demoted to write on normalize (resume)
   )
 })
 
+test('build step does not offer edit_file until repair (prevents edit loops)', async () => {
+  const { normalizeWorkflowSteps } = await import('../src/renderer/src/harness/plan-normalizer.ts')
+  const { isToolAllowedForStep, createRejectedToolResult } = await import('../src/renderer/src/harness/step-policy.ts')
+  const [build] = normalizeWorkflowSteps([{
+    id: '6',
+    description: '构建项目（gradlew build）',
+    status: 'running'
+  }])
+  assert.equal(build.kind, 'build')
+  assert.equal(build.allowedTools.includes('edit_file'), false)
+  assert.equal(build.allowedTools.includes('trigger_build'), true)
+  assert.equal(
+    isToolAllowedForStep(build, { name: 'edit_file', args: { path: 'src/A.java' } }),
+    false
+  )
+  const rejected = createRejectedToolResult(build, { name: 'edit_file', args: { path: 'src/A.java' } })
+  assert.match(rejected.output, /trigger_build/)
+  assert.equal(
+    isToolAllowedForStep(
+      build,
+      { name: 'edit_file', args: { path: 'src/A.java' } },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    true
+  )
+})
+
 test('pure Mixin java target still compiles as mixin', async () => {
   const { compilePlanFromText } = await import('../src/renderer/src/harness/plan-compiler.ts')
   const compiled = compilePlanFromText(JSON.stringify([
