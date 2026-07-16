@@ -34,17 +34,40 @@ const MIXIN_PATH_RE = /mixin/i
 const MIXIN_WRITE_RE = /mixin|@Mixin|Mixin\s*(类|class)/i
 const NEW_MIXIN_RE = /新建.*[Mm]ixin|创建.*[Mm]ixin|新增.*[Mm]ixin|新.*[Mm]ixin|scaffold.*[Mm]ixin/i
 const MIXIN_JAVA_PATH_RE = /(?:^|\/)mixin\/|Mixin\.java$/i
+const JAVA_NAME_RE = /([A-Za-z_][\w]*\.java)/g
 
 function normalizePlanPath(path: string): string {
   return path.replace(/\\/g, '/').trim()
 }
 
-function stepTargetPaths(step: CompiledPlanStep): string[] {
+function stepTargetPaths(step: {
+  targetPath?: string
+  targetPaths?: string[]
+  description?: string
+}): string[] {
   const paths = [
     ...(step.targetPath ? [step.targetPath] : []),
     ...(step.targetPaths || [])
   ]
   return paths.map(normalizePlanPath).filter(Boolean)
+}
+
+/** Prefer explicit target paths; fall back to Foo.java names in the description. */
+export function collectJavaTargets(step: {
+  targetPath?: string
+  targetPaths?: string[]
+  description?: string
+}): string[] {
+  const fromTargets = stepTargetPaths(step).filter((path) => path.endsWith('.java'))
+  if (fromTargets.length > 0) return fromTargets
+  const desc = step.description || ''
+  const names = [...desc.matchAll(JAVA_NAME_RE)].map((match) => match[1])
+  return [...new Set(names)]
+}
+
+function isMixinJavaTarget(pathOrName: string): boolean {
+  const normalized = normalizePlanPath(pathOrName)
+  return MIXIN_JAVA_PATH_RE.test(normalized)
 }
 
 /**
@@ -53,10 +76,9 @@ function stepTargetPaths(step: CompiledPlanStep): string[] {
  * otherwise write_file is gated off and long tasks stall mid-plan.
  */
 export function shouldForceMixinKind(step: CompiledPlanStep): boolean {
-  const paths = stepTargetPaths(step)
-  const javaPaths = paths.filter((path) => path.endsWith('.java'))
+  const javaPaths = collectJavaTargets(step)
   if (javaPaths.length > 0) {
-    return javaPaths.every((path) => MIXIN_JAVA_PATH_RE.test(path))
+    return javaPaths.every((path) => isMixinJavaTarget(path))
   }
 
   if (step.kind === 'mixin') return true
@@ -69,16 +91,20 @@ export function shouldForceMixinKind(step: CompiledPlanStep): boolean {
   return false
 }
 
-/** Hybrid steps labeled mixin by the model must be demoted to write. */
-export function resolveCompiledStepKind(step: CompiledPlanStep): StructuredStepKind | undefined {
-  const paths = stepTargetPaths(step)
-  const javaPaths = paths.filter((path) => path.endsWith('.java'))
+/** Hybrid steps labeled mixin by the model/persisted plan must be demoted to write. */
+export function resolveCompiledStepKind(step: {
+  kind?: StructuredStepKind
+  description: string
+  targetPath?: string
+  targetPaths?: string[]
+}): StructuredStepKind | undefined {
+  const javaPaths = collectJavaTargets(step)
   if (javaPaths.length > 0) {
-    if (javaPaths.every((path) => MIXIN_JAVA_PATH_RE.test(path))) return 'mixin'
+    if (javaPaths.every((path) => isMixinJavaTarget(path))) return 'mixin'
     if (step.kind === 'recipe' || step.kind === 'inspect') return step.kind
     return 'write'
   }
-  if (shouldForceMixinKind(step)) return 'mixin'
+  if (shouldForceMixinKind(step as CompiledPlanStep)) return 'mixin'
   return step.kind
 }
 

@@ -125,6 +125,33 @@ test('hybrid write+mixins.json step stays write and keeps write_file', async () 
   )
 })
 
+test('persisted kind=mixin hybrid step is demoted to write on normalize (resume)', async () => {
+  const { normalizeWorkflowSteps } = await import('../src/renderer/src/harness/plan-normalizer.ts')
+  const { isToolAllowedForStep } = await import('../src/renderer/src/harness/step-policy.ts')
+  const [wf] = normalizeWorkflowSteps([{
+    id: '7',
+    description:
+      '写入配置页面 ModConfigScreen.java；更新 Frame_coverClient.java 注册按键；创建 frame-cover.mixins.json；更新 fabric.mod.json',
+    status: 'error',
+    kind: 'mixin',
+    targetPaths: [
+      'src/client/java/com/example/frame_cover/config/ModConfigScreen.java',
+      'src/client/java/com/example/frame_cover/Frame_coverClient.java',
+      'src/main/resources/frame-cover.mixins.json'
+    ]
+  }])
+  assert.equal(wf.kind, 'write')
+  assert.equal(wf.allowedTools.includes('write_file'), true)
+  assert.equal(wf.allowedTools.includes('delete_file'), true)
+  assert.equal(
+    isToolAllowedForStep(wf, {
+      name: 'write_file',
+      args: { path: 'src/client/java/com/example/frame_cover/config/ModConfigScreen.java', content: 'class X {}' }
+    }),
+    true
+  )
+})
+
 test('pure Mixin java target still compiles as mixin', async () => {
   const { compilePlanFromText } = await import('../src/renderer/src/harness/plan-compiler.ts')
   const compiled = compilePlanFromText(JSON.stringify([

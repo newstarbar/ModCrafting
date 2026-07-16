@@ -2,6 +2,7 @@ import type { PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
 import { isCombinedBuildRunDescription } from '../utils/plan-steps.ts'
 import type { StepKind, WorkflowStep, WorkflowStatus } from './workflow-types.ts'
+import { resolveCompiledStepKind } from './plan-compiler.ts'
 
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/i
 
@@ -216,7 +217,21 @@ export function expandCombinedTerminalSteps(steps: PlanStepState[]): PlanStepSta
 }
 
 function normalizeStep(step: PlanStepState): WorkflowStep {
-  const kind = inferKind(step.description, step.kind)
+  const inferred = inferKind(step.description, step.kind)
+  // Persisted/resume plans may still carry kind=mixin from the old compiler.
+  // Re-resolve so hybrid Screen/Client + mixins.json steps get write_file back.
+  const resolved = resolveCompiledStepKind({
+    kind: inferred === 'write' || inferred === 'recipe' || inferred === 'mixin' || inferred === 'inspect'
+      ? inferred
+      : step.kind,
+    description: step.description,
+    targetPath: step.targetPath,
+    targetPaths: step.targetPaths
+  })
+  const kind: StepKind =
+    resolved === 'write' || resolved === 'recipe' || resolved === 'mixin' || resolved === 'inspect'
+      ? resolved
+      : inferred
   const explicitPath = step.targetPath || targetPathFromDescription(step.description)
   const targetPath = explicitPath || (kind === 'recipe' ? recipePath('<modid>', 'generated_recipe') : undefined)
   const targetPaths = step.targetPaths?.length ? [...step.targetPaths] : (targetPath ? [targetPath] : undefined)
