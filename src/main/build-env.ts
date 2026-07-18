@@ -10,6 +10,12 @@ import {
   isCompleteGradleDist
 } from './toolchain-download'
 import { ensureGradleHomeOnline } from './portable-prefetch'
+import {
+  collectParamNames,
+  formatYarnField,
+  formatYarnMethod,
+  getYarnOfficialToNamedMap
+} from './yarn-descriptor'
 
 export { getAppEdition, isPortableEdition, isFullEdition } from './edition'
 
@@ -2153,12 +2159,16 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
 
   const results: string[] = []
 
+  // Official→named class map for remapping obfuscated JVM descriptors (Lflk; → MinecraftClient).
+  const yarnPath = yarnMappingsPath()
+  const officialToNamed = fs.existsSync(yarnPath) ? getYarnOfficialToNamedMap(yarnPath) : new Map<string, string>()
+
   // 0. Exact class name lookup — when keyword contains a CamelCase name,
   //   find the matching class in Yarn and return its full API surface.
   const classNames = keyword.split(/[\s.,()#]+/).filter((t) => /^[A-Z][a-zA-Z0-9_]+$/.test(t))
-  if (classNames.length > 0 && fs.existsSync(yarnMappingsPath())) {
+  if (classNames.length > 0 && fs.existsSync(yarnPath)) {
     try {
-      const yarnLines = fs.readFileSync(yarnMappingsPath(), 'utf-8').split('\n')
+      const yarnLines = fs.readFileSync(yarnPath, 'utf-8').split('\n')
       for (const cls of classNames) {
         const lowerCls = cls.toLowerCase()
         let startLine = -1
@@ -2170,15 +2180,25 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           }
         }
         if (startLine >= 0) {
-          // Collect all fields/methods of this class
+          // Collect all fields/methods of this class (with remapped descriptors + param names)
           const classLine = yarnLines[startLine]
           const classParts: string[] = []
-          for (let i = startLine + 1; i < yarnLines.length; i++) {
+          for (let i = startLine + 1; i < yarnLines.length; ) {
             const parts = yarnLines[i].split('\t')
             if (parts[0] === 'c') break // next class
             const kindIndex = parts[0] ? 0 : 1
-            if (parts[kindIndex] === 'f') classParts.push(`  字段: ${parts[parts.length - 1]} : ${parts[kindIndex + 1] || ''}`)
-            else if (parts[kindIndex] === 'm') classParts.push(`  方法: ${parts[parts.length - 1]} ${parts[kindIndex + 1] || ''}`)
+            if (parts[kindIndex] === 'f') {
+              classParts.push(formatYarnField(parts[parts.length - 1], parts[kindIndex + 1] || '', officialToNamed))
+              i++
+            } else if (parts[kindIndex] === 'm') {
+              const desc = parts[kindIndex + 1] || ''
+              const name = parts[parts.length - 1]
+              const { names: paramNames, nextLine } = collectParamNames(yarnLines, i + 1)
+              classParts.push(formatYarnMethod(name, desc, officialToNamed, paramNames))
+              i = nextLine
+            } else {
+              i++ // skip p / other rows already consumed, or unknown kinds
+            }
             if (classParts.length >= 30) break
           }
           const clName = classLine.split('\t').pop() || cls
@@ -2193,7 +2213,6 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
 
   // 1. Search Yarn mappings — use OR matching (each line has only one concept),
   //   then group by class and score by unique tokens matched within the class.
-  const yarnPath = yarnMappingsPath()
   if (fs.existsSync(yarnPath)) {
     try {
       const yarnLines = fs.readFileSync(yarnPath, 'utf-8').split('\n')
@@ -2240,8 +2259,11 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
           for (const line of b.lines.slice(0, 10)) {
             const p = line.split('\t')
             const kindIndex = p[0] ? 0 : 1
-            if (p[kindIndex] === 'f') parts.push(`  字段: ${p[p.length - 1]} : ${p[kindIndex + 1] || ''}`)
-            else if (p[kindIndex] === 'm') parts.push(`  方法: ${p[p.length - 1]}${p[kindIndex + 1] || ''}`)
+            if (p[kindIndex] === 'f') {
+              parts.push(formatYarnField(p[p.length - 1], p[kindIndex + 1] || '', officialToNamed))
+            } else if (p[kindIndex] === 'm') {
+              parts.push(formatYarnMethod(p[p.length - 1], p[kindIndex + 1] || '', officialToNamed))
+            }
           }
           if (b.lines.length > 10) parts.push(`  ... 还有 ${b.lines.length - 10} 个匹配项`)
           return parts.join('\n')
