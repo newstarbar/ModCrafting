@@ -90,11 +90,11 @@ const StatusBar: React.FC<StatusBarProps> = ({
   const sessionCost = usage.cost
   const displayProjectCost = Math.max(projectCost, sessionCost)
   const projectCostTitle = displayProjectCost > 0
-    ? `当前项目累计花费约 ￥${displayProjectCost.toFixed(4)}（API token × 官网单价估算）`
-    : '当前项目累计花费（API token × 官网单价估算）'
+    ? `当前项目累计花费约 ￥${displayProjectCost.toFixed(4)}（API token × 中文官网人民币单价）`
+    : '当前项目累计花费（API token × 中文官网人民币单价）'
   const sessionCostTitle = sessionCost > 0
-    ? `当前会话花费约 ￥${sessionCost.toFixed(4)}（API token × 官网单价估算）`
-    : '当前会话花费（API token × 官网单价估算）'
+    ? `当前会话花费约 ￥${sessionCost.toFixed(4)}（API token × 中文官网人民币单价）`
+    : '当前会话花费（API token × 中文官网人民币单价）'
 
   const versionsText = projectVersions ? formatProjectVersions(projectVersions) : null
 

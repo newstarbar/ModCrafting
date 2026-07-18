@@ -235,39 +235,27 @@ export function getModelContextWindow(modelId: string, providerId?: string): num
 	return undefined;
 }
 
-/** Rough CNY per-million-tokens pricing for cost estimates. */
+/** Per-million-token list prices in CNY (元) for cost estimates. */
 export interface ProviderPricing {
 	inputMiss: number;
 	inputHit: number;
 	output: number;
 }
 
-/** Official DeepSeek API list prices are USD / 1M tokens; balance UI is usually CNY. */
-export const USD_TO_CNY = 7.25;
-
-function usdPerMillionToCny(p: ProviderPricing): ProviderPricing {
-	return {
-		inputMiss: p.inputMiss * USD_TO_CNY,
-		inputHit: p.inputHit * USD_TO_CNY,
-		output: p.output * USD_TO_CNY
-	};
-}
-
-/** DeepSeek official USD rates (api-docs.deepseek.com/quick_start/pricing). */
-const DEEPSEEK_USD_BY_MODEL: Record<string, ProviderPricing> = {
-	"deepseek-v4-flash": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 },
-	"deepseek-v4-pro": { inputHit: 0.003625, inputMiss: 0.435, output: 0.87 },
+/**
+ * DeepSeek 中文官网人民币标价（元 / 百万 tokens）。
+ * https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+ */
+const DEEPSEEK_CNY_BY_MODEL: Record<string, ProviderPricing> = {
+	"deepseek-v4-flash": { inputHit: 0.02, inputMiss: 1, output: 2 },
+	"deepseek-v4-pro": { inputHit: 0.025, inputMiss: 3, output: 6 },
 	// Legacy aliases → V4 Flash pricing
-	"deepseek-chat": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 },
-	"deepseek-reasoner": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 },
-	"deepseek-v3.2": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 }
+	"deepseek-chat": { inputHit: 0.02, inputMiss: 1, output: 2 },
+	"deepseek-reasoner": { inputHit: 0.02, inputMiss: 1, output: 2 },
+	"deepseek-v3.2": { inputHit: 0.02, inputMiss: 1, output: 2 }
 };
 
-const DEFAULT_PRICING: ProviderPricing = usdPerMillionToCny({
-	inputHit: 0.0028,
-	inputMiss: 0.14,
-	output: 0.28
-});
+const DEFAULT_PRICING: ProviderPricing = DEEPSEEK_CNY_BY_MODEL["deepseek-v4-flash"];
 
 const PROVIDER_PRICING: Record<string, ProviderPricing> = {
 	deepseek: DEFAULT_PRICING,
@@ -293,17 +281,17 @@ export function getModelPricing(providerId?: string, modelId?: string): Provider
 	const model = (modelId || "").toLowerCase().trim();
 	if (providerId === "deepseek" || (!providerId && model.startsWith("deepseek"))) {
 		if (model.includes("v4-pro") || model.includes("v4_pro")) {
-			return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-pro"]);
+			return DEEPSEEK_CNY_BY_MODEL["deepseek-v4-pro"];
 		}
-		const exact = DEEPSEEK_USD_BY_MODEL[model];
-		if (exact) return usdPerMillionToCny(exact);
+		const exact = DEEPSEEK_CNY_BY_MODEL[model];
+		if (exact) return exact;
 		if (model.includes("v4-flash") || model.includes("v4_flash") || model.includes("flash")) {
-			return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-flash"]);
+			return DEEPSEEK_CNY_BY_MODEL["deepseek-v4-flash"];
 		}
 		if (model.includes("pro")) {
-			return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-pro"]);
+			return DEEPSEEK_CNY_BY_MODEL["deepseek-v4-pro"];
 		}
-		return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-flash"]);
+		return DEEPSEEK_CNY_BY_MODEL["deepseek-v4-flash"];
 	}
 	return getProviderPricing(providerId);
 }

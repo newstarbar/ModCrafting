@@ -552,7 +552,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     </div>
                   )}
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
-                    费用按 API 返回的 token × 官网单价估算（Flash/Pro 分价，USD→CNY≈7.25）。与账单一致依据是官方 usage，不是本地 tokenizer。
+                    费用按 API token × 中文官网人民币单价估算（Flash/Pro 分价）。余额按接口返回币种显示。
                   </div>
                 </div>
               )}
