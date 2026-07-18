@@ -7,20 +7,33 @@
 //   system prompt    micro-placeholders    last RECENT_WINDOW messages
 //                    or LLM summary
 
-import type { ChatMessage } from './chat-message'
+import type { ChatMessage, ChatToolCall } from './chat-message'
 
 // ── Thresholds ──
 
 /** Messages within this window are never compacted. */
-const RECENT_WINDOW = 8
+export const RECENT_WINDOW = 6
 
 /** Tool results older than this many assistant turns are eligible for micro-compaction. */
 const MICRO_COMPACT_AGE = 3
 
-/** Trigger auto-compaction when estimated prompt tokens exceed this fraction of a 128K window. */
-const COMPACT_FRACTION = 0.7
+/** Soft floor: tool outputs below this estimated size stay raw. */
+const MICRO_TOOL_MIN_TOKENS = 120
 
-const DEFAULT_CONTEXT_WINDOW = 128_000
+/** Soft floor: tool_call arguments below this stay raw. */
+const MICRO_ARGS_MIN_CHARS = 400
+
+/**
+ * Auto-compact trigger as a fraction of the *effective* working window
+ * (capped at DEFAULT_CONTEXT_WINDOW so 1M models still compact early).
+ */
+export const COMPACT_FRACTION = 0.5
+
+/** Cap used for compaction triggers regardless of vendor 1M marketing windows. */
+export const DEFAULT_CONTEXT_WINDOW = 128_000
+
+/** Warn UI when estimated tokens exceed this fraction of the effective window. */
+export const WARN_FRACTION = 0.8
 
 // ── Token estimation ──
 // Rough heuristic for context compaction triggers only — NOT for billing.
@@ -44,6 +57,22 @@ export function estimatePromptTokens(messages: ChatMessage[]): number {
   return total
 }
 
+/** Working window for compaction: min(model claim, 128k). */
+export function effectiveContextWindow(modelContextWindow?: number): number {
+  const claimed = modelContextWindow && modelContextWindow > 0
+    ? modelContextWindow
+    : DEFAULT_CONTEXT_WINDOW
+  return Math.min(claimed, DEFAULT_CONTEXT_WINDOW)
+}
+
+export function compactThreshold(modelContextWindow?: number, fraction = COMPACT_FRACTION): number {
+  return Math.floor(effectiveContextWindow(modelContextWindow) * fraction)
+}
+
+export function warnTokenThreshold(modelContextWindow?: number): number {
+  return Math.floor(effectiveContextWindow(modelContextWindow) * WARN_FRACTION)
+}
+
 // ── Micro-compaction ──
 
 /**
@@ -52,7 +81,7 @@ export function estimatePromptTokens(messages: ChatMessage[]): number {
  */
 function compactToolResult(name: string, output: string): string {
   const size = estimateTokens(output)
-  if (size < 200) return output // too small to bother
+  if (size < MICRO_TOOL_MIN_TOKENS) return output // too small to bother
 
   const lines = output.trim().split('\n')
   const lastLine = lines[lines.length - 1]?.trim() || ''
@@ -77,6 +106,9 @@ function compactToolResult(name: string, output: string): string {
   } else if (name === 'list_directory') {
     const count = lines.filter((l) => l.trim()).length
     summary = `${count} 个条目`
+  } else if (name === 'grep') {
+    const firstLine = lines.find((l) => l.trim().length > 0)?.trim().slice(0, 80) || ''
+    summary = firstLine || '搜索完成'
   } else {
     const firstLine = lines.find((l) => l.trim().length > 0)?.trim().slice(0, 60) || ''
     summary = firstLine || output.trim().slice(0, 60)
@@ -85,9 +117,45 @@ function compactToolResult(name: string, output: string): string {
   return `[已压缩: ${name} — ${summary} — 原始 ${size} tokens]`
 }
 
+function pathHintFromArgs(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as { path?: unknown; targetPath?: unknown }
+    const path = typeof parsed.path === 'string'
+      ? parsed.path
+      : typeof parsed.targetPath === 'string'
+        ? parsed.targetPath
+        : ''
+    return path ? ` path=${path}` : ''
+  } catch {
+    const m = raw.match(/"path"\s*:\s*"([^"]{1,120})"/)
+    return m ? ` path=${m[1]}` : ''
+  }
+}
+
+/** Shrink oversized tool_call arguments (write_file / edit_file payloads). */
+export function compactToolCallArguments(call: ChatToolCall): ChatToolCall {
+  const raw = call.function?.arguments || ''
+  if (raw.length < MICRO_ARGS_MIN_CHARS) return call
+  const name = call.function?.name || 'unknown'
+  const hint = pathHintFromArgs(raw)
+  const placeholder = JSON.stringify({
+    _compacted: true,
+    tool: name,
+    note: `arguments truncated (${raw.length} chars)${hint}`
+  })
+  return {
+    ...call,
+    function: {
+      name,
+      arguments: placeholder
+    }
+  }
+}
+
 /**
  * Replace tool results older than MICRO_COMPACT_AGE assistant turns with
- * compact placeholders. Never touches the most recent RECENT_WINDOW messages.
+ * compact placeholders. Also shrink aged assistant tool_call arguments.
+ * Never touches the most recent RECENT_WINDOW messages.
  */
 export function microCompact(
   messages: ChatMessage[],
@@ -107,6 +175,13 @@ export function microCompact(
     }
 
     if (messages[i].role === 'assistant') {
+      const age = assistantTurnsSeen
+      if (age >= MICRO_COMPACT_AGE && messages[i].tool_calls?.length) {
+        compacted[i] = {
+          ...messages[i],
+          tool_calls: messages[i].tool_calls!.map(compactToolCallArguments)
+        }
+      }
       assistantTurnsSeen++
       continue
     }
@@ -116,11 +191,12 @@ export function microCompact(
       // reset between turns and previously made old session results immortal.
       const age = assistantTurnsSeen
       if (age >= MICRO_COMPACT_AGE) {
-        const name = (messages[i] as any).name || 'unknown'
+        const name = messages[i].name || 'unknown'
         compacted[i] = {
           role: 'tool',
           content: compactToolResult(name, messages[i].content || ''),
-          tool_call_id: messages[i].tool_call_id
+          tool_call_id: messages[i].tool_call_id,
+          name
         }
       }
     }
@@ -173,7 +249,6 @@ const SUMMARIZE_SYSTEM_PROMPT = `你是一个上下文压缩器。你需要将�
  */
 function buildSummarizeMessages(messages: ChatMessage[]): ChatMessage[] {
   // Find the system message to extract the original task context
-  const sysMsg = messages.find((m) => m.role === 'system')
   const userMsgs = messages.filter((m) => m.role === 'user')
   const firstUserMsg = userMsgs.length > 0 ? userMsgs[0].content : '(无)'
 
@@ -181,7 +256,7 @@ function buildSummarizeMessages(messages: ChatMessage[]): ChatMessage[] {
     { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT },
     { role: 'user', content: `原始任务: ${firstUserMsg.slice(0, 200)}\n\n请将以下对话历史压缩为结构化摘要:\n\n${messages.map((m) => {
       if (m.role === 'tool') {
-        const name = (m as any).name || 'tool'
+        const name = m.name || 'tool'
         return `[${name}]: ${(m.content || '').slice(0, 300)}`
       }
       if (m.role === 'assistant' && m.tool_calls) {
@@ -223,7 +298,7 @@ export async function autoCompact(
   const recent = messages.slice(-RECENT_WINDOW)
   const sysMsg = messages.find((m) => m.role === 'system')
   const after = estimatePromptTokens([
-    sysMsg!,
+    ...(sysMsg ? [sysMsg] : []),
     { role: 'system', content: `## 对话历史摘要\n${summary}` },
     ...recent
   ])
@@ -253,11 +328,10 @@ export async function prepareMessages(
   modelCall: (msgs: ChatMessage[], tools: any[], onChunk: (t: string) => void) => Promise<{ text: string }>,
   onCompact?: (result: CompactionResult) => void
 ): Promise<{ messages: ChatMessage[]; compacted: boolean }> {
-  const window = config.contextWindow || DEFAULT_CONTEXT_WINDOW
-  const threshold = Math.floor(window * (config.compactFraction || COMPACT_FRACTION))
+  const threshold = compactThreshold(config.contextWindow, config.compactFraction || COMPACT_FRACTION)
 
   // Step 1: Always apply micro-compaction
-  let prepared = microCompact(messages, assistantTurnCount)
+  const prepared = microCompact(messages, assistantTurnCount)
 
   // Step 2: Check if auto-compaction is needed
   const estimated = estimatePromptTokens(prepared)
@@ -280,7 +354,12 @@ export async function prepareMessages(
   const sysMsg = prepared.find((m) => m.role === 'system')
   const compacted: ChatMessage[] = []
   if (sysMsg) compacted.push(sysMsg)
-  compacted.push({ role: 'system', content: `## 上下文摘要\n${result.summary}\n\n（完整对话已保存，共 ${result.tokenCount.before} tokens → ${result.tokenCount.after} tokens）` })
+  compacted.push({
+    role: 'system',
+    content:
+      `## 上下文摘要\n${result.summary}\n\n` +
+      `（完整对话已保存，共 ${result.tokenCount.before} tokens → ${result.tokenCount.after} tokens）`
+  })
   compacted.push(...recent)
 
   return { messages: compacted, compacted: true }

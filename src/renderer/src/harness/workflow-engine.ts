@@ -29,6 +29,8 @@ export interface WorkflowModelResult {
     cacheHitTokens?: number
     cacheMissTokens?: number
   }
+  /** When set, replace engine baseMessages with this compacted history. */
+  replaceBaseMessages?: ChatMessage[]
 }
 
 export type WorkflowModelCall = (
@@ -809,6 +811,10 @@ export class WorkflowEngine {
             if (text) streamText = text
             if (reasoning) streamReasoning = reasoning
           })
+          if (modelResult.replaceBaseMessages) {
+            baseMessages.length = 0
+            baseMessages.push(...modelResult.replaceBaseMessages)
+          }
           modelNetworkRetries = 0
         } catch (err: unknown) {
           if (this.abortSignal?.aborted) break

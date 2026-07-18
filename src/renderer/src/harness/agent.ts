@@ -12,7 +12,7 @@ import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
 import { isRepeatGuardedToolCall } from './repeat-guard.ts'
-import { prepareMessages, estimatePromptTokens, type CompactionResult } from './context-compact'
+import { prepareMessages, estimatePromptTokens, warnTokenThreshold, RECENT_WINDOW, type CompactionResult } from './context-compact'
 import {
   appendToolRoundHistory,
   type ChatMessage,
@@ -197,7 +197,7 @@ export class Agent {
     apiKey: string,
     model: string,
     abortSignal?: AbortSignal
-  ): Promise<ChatMessage[]> {
+  ): Promise<{ messages: ChatMessage[]; compacted: boolean }> {
     const prepared = await prepareMessages(
       messages,
       this.assistantTurnCount,
@@ -218,17 +218,19 @@ export class Agent {
       },
       (result) => {
         this.compactionTranscripts.push(result)
+        const afterMsgs =
+          2 + Math.min(RECENT_WINDOW, result.savedTranscript.length) // sys + summary + recent approx
         this.emit({
           kind: EventKind.CompactionDone,
           compaction: {
             trigger: 'context_budget',
             messagesBefore: result.savedTranscript.length,
-            messagesAfter: 10
+            messagesAfter: afterMsgs
           }
         })
       }
     )
-    return prepared.messages
+    return prepared
   }
 
   private finishRun(emitLifecycle: boolean, error?: string, phase?: string): void {
@@ -267,13 +269,23 @@ export class Agent {
       openCodeDelegate,
       fileSession: this.fileSession,
       modelCall: async (workflowMessages, tools, onChunk) => {
-        const compactedMessages = await this.prepareApiMessages(
-          workflowMessages,
+        // Last message is the per-step workflow prompt; compact/persist history only.
+        const stepPromptMsg = workflowMessages[workflowMessages.length - 1]
+        const history = workflowMessages.slice(0, -1)
+        const prepared = await this.prepareApiMessages(
+          history,
           apiEndpoint,
           apiKey,
           apiModel,
           abortSignal
         )
+        if (prepared.compacted) {
+          messages.length = 0
+          messages.push(...prepared.messages)
+        }
+        const apiMessages = stepPromptMsg
+          ? [...prepared.messages, stepPromptMsg]
+          : prepared.messages
         this.assistantTurnCount++
         let text = ''
         let reasoningText = ''
@@ -281,7 +293,7 @@ export class Agent {
           apiEndpoint,
           apiKey,
           apiModel,
-          compactedMessages,
+          apiMessages,
           tools,
           abortSignal,
           (chunk, reasoning) => {
@@ -318,7 +330,8 @@ export class Agent {
           toolCalls: result.toolCalls,
           text,
           reasoning: reasoningText,
-          usage: result.usage
+          usage: result.usage,
+          replaceBaseMessages: prepared.compacted ? prepared.messages : undefined
         }
       }
     })
@@ -467,23 +480,28 @@ export class Agent {
         ? [{ ...messages[systemIdx] }, ...messages.slice(systemIdx + 1)]
         : [...messages]
 
-      // Micro-compact: replace tool results older than 3 turns with placeholders
-      const apiMessages = await this.prepareApiMessages(
+      const prepared = await this.prepareApiMessages(
         rawApiMessages,
         apiEndpoint,
         apiKey,
         apiModel,
         abortSignal
       )
+      if (prepared.compacted) {
+        messages.length = 0
+        messages.push(...prepared.messages)
+      }
+      const apiMessages = [...prepared.messages]
 
-      // Token budget warning
+      // Token budget warning (effective working window, not vendor 1M claim)
       const estimatedTokens = estimatePromptTokens(apiMessages)
-      if (estimatedTokens > 90_000) {
+      const warnAt = warnTokenThreshold(getModelContextWindow(apiModel) ?? 128_000)
+      if (estimatedTokens > warnAt) {
         this.emit({
           kind: EventKind.Notice,
           notice: {
             level: 'warn',
-            text: `上下文已累积约 ${Math.round(estimatedTokens / 1000)}K tokens，接近上限。建议开启新会话或等待自动压缩。`
+            text: `上下文已累积约 ${Math.round(estimatedTokens / 1000)}K tokens，接近工作上限。建议开启新会话或等待自动压缩。`
           }
         })
       }

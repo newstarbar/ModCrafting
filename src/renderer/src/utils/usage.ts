@@ -68,6 +68,10 @@ export function formatContextLimit(limit: number): string {
   return String(limit)
 }
 
+/**
+ * Context-bar fill for the *current* API prompt (latest step), not a turn sum.
+ * Passing accumulated multi-step promptTokens will overstate fill toward 100%.
+ */
 export function contextPercentFromPrompt(
   promptTokens: number,
   model?: string,

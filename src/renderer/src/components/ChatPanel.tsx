@@ -797,12 +797,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           const hit = u.cacheHitTokens || 0
           const miss = u.cacheMissTokens || 0
           const stepTokens = u.totalTokens || (pT + cT)
+          // Accumulate turn totals for billing; context % uses latest step prompt only.
           turnUsageRef.current = {
             promptTokens: turnUsageRef.current.promptTokens + pT,
             completionTokens: turnUsageRef.current.completionTokens + cT
           }
           setUsageAccum((prev) => {
-            const promptTotal = turnUsageRef.current.promptTokens
             const costDelta = estimateCostDelta(pT, cT, hit, miss, {
               model: apiConfigRef.current.model,
               providerId: apiConfigRef.current.providerId,
@@ -815,9 +815,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               cacheMissTokens: prev.cacheMissTokens + miss,
               turnCacheHitTokens: prev.turnCacheHitTokens + hit,
               turnCacheMissTokens: prev.turnCacheMissTokens + miss,
-              lastPromptTokens: promptTotal,
+              lastPromptTokens: pT,
               contextPercent: contextPercentFromPrompt(
-                promptTotal,
+                pT,
                 apiConfigRef.current.model,
                 apiConfigRef.current.providerId
               ),
