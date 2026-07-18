@@ -46,6 +46,11 @@ import {
   saveKnowledgeFile
 } from './knowledge-service'
 import { openExternalWithFallback } from './external-url'
+import {
+  loadProjectSessions,
+  saveProjectSessions,
+  saveCurrentSessionIdDisk
+} from './session-store'
 
 // Track active watchers
 const watchers = new Map<string, fs.FSWatcher>()
@@ -429,6 +434,28 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('knowledge:searchLocalSources', async (_event, keyword: string, maxResults?: number) =>
     searchLocalFabricSources(keyword, maxResults ?? 5)
+  )
+
+  // Chat sessions — persisted under userData (survives Vite port / origin changes)
+  ipcMain.handle('sessions:load', async (_event, projectPath: string | null) =>
+    loadProjectSessions(projectPath)
+  )
+
+  ipcMain.handle(
+    'sessions:save',
+    async (
+      _event,
+      projectPath: string | null,
+      sessions: unknown[],
+      currentSessionId?: string | null,
+      options?: { allowEmptyOverwrite?: boolean }
+    ) => saveProjectSessions(projectPath, sessions as never, currentSessionId ?? null, options)
+  )
+
+  ipcMain.handle(
+    'sessions:saveCurrent',
+    async (_event, projectPath: string | null, currentSessionId: string | null) =>
+      saveCurrentSessionIdDisk(projectPath, currentSessionId)
   )
 
   // Session export — save Markdown via system Save dialog

@@ -10,6 +10,19 @@ export interface PersistedChronoEntry {
   output?: string
   durationMs?: number
   done?: boolean
+  startMs?: number
+  displayName?: string
+  args?: Record<string, unknown>
+  fileDiff?: {
+    path: string
+    added: number
+    removed: number
+    content?: string
+    firstAdded?: string
+    firstRemoved?: string
+    oldContent?: string
+    action?: 'create' | 'update' | 'delete'
+  }
 }
 
 export interface PersistedMessage {

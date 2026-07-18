@@ -382,6 +382,26 @@ const api = {
   }> =>
     ipcRenderer.invoke('session:export', payload, suggestedName),
 
+  sessionsLoad: (projectPath: string | null): Promise<{
+    projectPath: string
+    sessions: unknown[]
+    currentSessionId: string | null
+  }> => ipcRenderer.invoke('sessions:load', projectPath),
+
+  sessionsSave: (
+    projectPath: string | null,
+    sessions: unknown[],
+    currentSessionId?: string | null,
+    options?: { allowEmptyOverwrite?: boolean }
+  ): Promise<{ success: boolean; error?: string; projectPath: string; skipped?: boolean }> =>
+    ipcRenderer.invoke('sessions:save', projectPath, sessions, currentSessionId ?? null, options),
+
+  sessionsSaveCurrent: (
+    projectPath: string | null,
+    currentSessionId: string | null
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('sessions:saveCurrent', projectPath, currentSessionId),
+
   // OpenCode bridge (optional local install)
   opencodeDetect: (): Promise<{ installed: boolean; version?: string; command?: string; error?: string }> =>
     ipcRenderer.invoke('opencode:detect'),

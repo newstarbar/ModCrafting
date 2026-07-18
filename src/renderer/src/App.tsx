@@ -29,9 +29,8 @@ import {
 } from "./types/dev-status";
 import type { ChatSession, PersistedMessage } from "./types/chat";
 import {
-	loadSessions,
+	loadSessionsWithMeta,
 	saveSessions,
-	loadCurrentSessionId,
 	saveCurrentSessionId
 } from "./utils/session-storage";
 import { getMostRecentSessionId, sortSessionsByUpdatedAt } from "./utils/session-sort";
@@ -86,6 +85,8 @@ const App: React.FC = () => {
 	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 	const sessionsHydratedRef = useRef(false);
 	const projectPathForSessionsRef = useRef<string | null | undefined>(undefined);
+	const sessionsLoadTokenRef = useRef<symbol | null>(null);
+	const hadNonEmptySessionsRef = useRef(false);
 	const sessionsRef = useRef(sessions);
 	const currentSessionIdRef = useRef(currentSessionId);
 	sessionsRef.current = sessions;
@@ -133,36 +134,68 @@ const App: React.FC = () => {
 
 	useEffect(() => {
 		const path = state.projectPath;
-		if (projectPathForSessionsRef.current === path) return;
+		if (projectPathForSessionsRef.current === path && sessionsHydratedRef.current) return;
 
-		if (projectPathForSessionsRef.current !== undefined && sessionsHydratedRef.current) {
-			saveSessions(projectPathForSessionsRef.current, sessionsRef.current);
-			saveCurrentSessionId(projectPathForSessionsRef.current, currentSessionIdRef.current);
-		}
+		let cancelled = false;
+		const loadToken = Symbol('sessions-load');
+		sessionsLoadTokenRef.current = loadToken;
+		sessionsHydratedRef.current = false;
 
-		projectPathForSessionsRef.current = path;
-		const loaded = loadSessions(path);
-		const loadedSessionId = loadCurrentSessionId(path);
-		const sorted = sortSessionsByUpdatedAt(loaded);
-		const validSessionId = loadedSessionId && loaded.some((s) => s.id === loadedSessionId)
-			? loadedSessionId
-			: getMostRecentSessionId(sorted);
+		const run = async () => {
+			const previousPath = projectPathForSessionsRef.current;
+			// Only persist previous project when we actually had hydrated data.
+			if (
+				previousPath !== undefined &&
+				previousPath !== path &&
+				sessionsRef.current.length > 0
+			) {
+				await saveSessions(
+					previousPath,
+					sessionsRef.current,
+					currentSessionIdRef.current
+				);
+			}
 
-		setSessions(sorted);
-		setCurrentSessionId(validSessionId);
-		const activeSession = validSessionId ? loaded.find((s) => s.id === validSessionId) : null;
-		setUsage(normalizeSessionUsage(activeSession?.usage));
-		sessionsHydratedRef.current = true;
+			projectPathForSessionsRef.current = path;
+			const { sessions: loaded, currentSessionId: loadedSessionId } =
+				await loadSessionsWithMeta(path);
+			if (cancelled || sessionsLoadTokenRef.current !== loadToken) return;
+
+			const sorted = sortSessionsByUpdatedAt(loaded);
+			const validSessionId = loadedSessionId && loaded.some((s) => s.id === loadedSessionId)
+				? loadedSessionId
+				: getMostRecentSessionId(sorted);
+
+			setSessions(sorted);
+			setCurrentSessionId(validSessionId);
+			hadNonEmptySessionsRef.current = sorted.length > 0;
+			const activeSession = validSessionId ? loaded.find((s) => s.id === validSessionId) : null;
+			setUsage(normalizeSessionUsage(activeSession?.usage));
+			sessionsHydratedRef.current = true;
+		};
+
+		void run();
+		return () => {
+			cancelled = true;
+		};
 	}, [state.projectPath]);
 
 	useEffect(() => {
 		if (!sessionsHydratedRef.current) return;
-		saveSessions(state.projectPath, sessions);
-	}, [sessions, state.projectPath]);
+		if (projectPathForSessionsRef.current !== state.projectPath) return;
+		if (sessions.length > 0) hadNonEmptySessionsRef.current = true;
+		// Skip accidental empty saves right after a failed/partial hydrate.
+		// Allow empty only after this project once had sessions (user deleted them all).
+		if (sessions.length === 0 && !hadNonEmptySessionsRef.current) return;
+		void saveSessions(state.projectPath, sessions, currentSessionId, {
+			allowEmptyOverwrite: hadNonEmptySessionsRef.current && sessions.length === 0
+		});
+	}, [sessions, state.projectPath, currentSessionId]);
 
 	useEffect(() => {
 		if (!sessionsHydratedRef.current) return;
-		saveCurrentSessionId(state.projectPath, currentSessionId);
+		if (projectPathForSessionsRef.current !== state.projectPath) return;
+		void saveCurrentSessionId(state.projectPath, currentSessionId);
 	}, [currentSessionId, state.projectPath]);
 	useEffect(() => {
 		if (!currentSessionId) {

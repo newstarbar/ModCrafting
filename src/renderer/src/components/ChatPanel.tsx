@@ -1711,7 +1711,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         <div className="chat-header-right">
           <button
             className="chat-header-export-btn"
-            title="导出为 Markdown…"
+            title="导出诊断用 Markdown（含工具参数/输出/计划步骤）"
             onClick={async () => {
               try {
                 const goal =
@@ -1719,11 +1719,26 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                   (activePlan?.steps?.length
                     ? activePlan.steps.map((s) => s.description).join('；')
                     : '')
+                const ctrl = controllerRef.current
+                const latestEmbeddedPlan = [...displayMessages]
+                  .reverse()
+                  .find((m) => m.role === 'assistant' && m.embeddedPlan && m.embeddedPlan.length > 0)
+                  ?.embeddedPlan
                 const md = buildSessionMarkdown({
                   messages: displayMessages,
                   sessionGoal: goal,
+                  projectPath,
+                  model: apiConfig.model,
+                  endpoint: apiConfig.endpoint,
+                  providerId: apiConfig.providerId,
+                  composerMode,
+                  phase: ctrl?.phase,
+                  activePlanSteps: activePlan?.steps?.length
+                    ? activePlan.steps
+                    : latestEmbeddedPlan,
+                  controllerMessages: ctrl?.getSnapshot(),
                 })
-                const result = await window.api.sessionExport(md, 'mc-session')
+                const result = await window.api.sessionExport(md, 'mc-session-diag')
                 if (result.cancelled) return
                 if (result.success) {
                   setCompletionFlash(`已导出: ${result.name}`)

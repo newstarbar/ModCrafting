@@ -181,6 +181,21 @@ interface ModCraftingApi {
     path: string
     name: string
   }>
+  sessionsLoad: (projectPath: string | null) => Promise<{
+    projectPath: string
+    sessions: import('./types/chat').ChatSession[]
+    currentSessionId: string | null
+  }>
+  sessionsSave: (
+    projectPath: string | null,
+    sessions: import('./types/chat').ChatSession[],
+    currentSessionId?: string | null,
+    options?: { allowEmptyOverwrite?: boolean }
+  ) => Promise<{ success: boolean; error?: string; projectPath: string; skipped?: boolean }>
+  sessionsSaveCurrent: (
+    projectPath: string | null,
+    currentSessionId: string | null
+  ) => Promise<{ success: boolean; error?: string }>
   opencodeDetect: () => Promise<{ installed: boolean; version?: string; command?: string; error?: string }>
   opencodeOpenProject: (projectPath: string) => Promise<{ success: boolean; error?: string }>
   opencodeServerStart: (projectPath: string, config?: Record<string, unknown>) => Promise<{

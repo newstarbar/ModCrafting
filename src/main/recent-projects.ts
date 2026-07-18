@@ -63,16 +63,29 @@ export function listRecentProjects(): RecentProject[] {
   return valid
 }
 
+function normalizeRecentPath(projectPath: string): string {
+  let p = projectPath.trim().replace(/\\/g, '/')
+  while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1)
+  if (/^[A-Za-z]:\//.test(p)) {
+    p = p[0].toLowerCase() + p.slice(1)
+  }
+  // Keep OS-native separators in stored path for fs.existsSync on Windows
+  return process.platform === 'win32' ? p.replace(/\//g, '\\') : p
+}
+
 export function addRecentProject(projectPath: string): RecentProject[] {
+  const normalized = normalizeRecentPath(projectPath)
   const settings = readSettings()
-  const existing = migrateLegacy(settings).filter((p) => p.path !== projectPath)
+  const existing = migrateLegacy(settings).filter(
+    (p) => normalizeRecentPath(p.path) !== normalized
+  )
   const entry: RecentProject = {
-    path: projectPath,
-    name: path.basename(projectPath),
+    path: normalized,
+    name: path.basename(normalized),
     openedAt: new Date().toISOString()
   }
   const recentProjects = [entry, ...existing].slice(0, MAX_RECENT)
-  writeSettings({ ...settings, recentProjects, lastProjectPath: projectPath })
+  writeSettings({ ...settings, recentProjects, lastProjectPath: normalized })
   return recentProjects
 }
 

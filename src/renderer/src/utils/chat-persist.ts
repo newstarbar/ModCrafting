@@ -14,6 +14,18 @@ export interface SerializableChronoEntry {
   durationMs?: number
   done?: boolean
   startMs?: number
+  displayName?: string
+  args?: Record<string, unknown>
+  fileDiff?: {
+    path: string
+    added: number
+    removed: number
+    content?: string
+    firstAdded?: string
+    firstRemoved?: string
+    oldContent?: string
+    action?: 'create' | 'update' | 'delete'
+  }
 }
 
 export interface SerializableDisplayMessage {
@@ -60,13 +72,42 @@ export function serializeDisplayMessages(
       persisted.entries = m.entries.map((e): PersistedChronoEntry => {
         if (e.kind === 'tool') {
           const status = e.status === 'running' ? 'done' : e.status
+          const fileDiff = e.fileDiff
+            ? {
+                path: e.fileDiff.path,
+                added: e.fileDiff.added,
+                removed: e.fileDiff.removed,
+                action: e.fileDiff.action,
+                firstAdded: e.fileDiff.firstAdded,
+                firstRemoved: e.fileDiff.firstRemoved,
+                // Keep enough for diagnostics after reload; clip huge payloads
+                content: e.fileDiff.content
+                  ? e.fileDiff.content.length > 24_000
+                    ? `${e.fileDiff.content.slice(0, 24_000)}\n… [截断]`
+                    : e.fileDiff.content
+                  : undefined,
+                oldContent: e.fileDiff.oldContent
+                  ? e.fileDiff.oldContent.length > 12_000
+                    ? `${e.fileDiff.oldContent.slice(0, 12_000)}\n… [截断]`
+                    : e.fileDiff.oldContent
+                  : undefined,
+              }
+            : undefined
+          const outputRaw = e.output || e.liveOutput
+          const output = outputRaw && outputRaw.length > 48_000
+            ? `${outputRaw.slice(0, 48_000)}\n… [截断：原始 ${outputRaw.length} 字符]`
+            : outputRaw
           return {
             kind: 'tool',
             id: e.id,
             name: e.name,
             status,
-            output: e.output || e.liveOutput,
-            durationMs: e.durationMs
+            output,
+            durationMs: e.durationMs,
+            startMs: e.startMs,
+            displayName: e.displayName,
+            args: e.args,
+            fileDiff,
           }
         }
         if (e.kind === 'reasoning') {
