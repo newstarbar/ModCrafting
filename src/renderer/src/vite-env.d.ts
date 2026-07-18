@@ -185,12 +185,13 @@ interface ModCraftingApi {
     projectPath: string
     sessions: import('./types/chat').ChatSession[]
     currentSessionId: string | null
+    projectCost: number
   }>
   sessionsSave: (
     projectPath: string | null,
     sessions: import('./types/chat').ChatSession[],
     currentSessionId?: string | null,
-    options?: { allowEmptyOverwrite?: boolean }
+    options?: { allowEmptyOverwrite?: boolean; projectCost?: number }
   ) => Promise<{ success: boolean; error?: string; projectPath: string; skipped?: boolean }>
   sessionsSaveCurrent: (
     projectPath: string | null,

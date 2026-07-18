@@ -386,13 +386,14 @@ const api = {
     projectPath: string
     sessions: unknown[]
     currentSessionId: string | null
+    projectCost: number
   }> => ipcRenderer.invoke('sessions:load', projectPath),
 
   sessionsSave: (
     projectPath: string | null,
     sessions: unknown[],
     currentSessionId?: string | null,
-    options?: { allowEmptyOverwrite?: boolean }
+    options?: { allowEmptyOverwrite?: boolean; projectCost?: number }
   ): Promise<{ success: boolean; error?: string; projectPath: string; skipped?: boolean }> =>
     ipcRenderer.invoke('sessions:save', projectPath, sessions, currentSessionId ?? null, options),
 

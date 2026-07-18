@@ -4,6 +4,7 @@ import {
   contextWindowLimit,
   effectiveCacheHitRate,
   formatContextLimit,
+  formatCostCny,
   formatTokensK,
   type UsageStats
 } from '../utils/usage'
@@ -13,6 +14,8 @@ import { formatProjectVersions } from '../utils/project-versions'
 
 interface StatusBarProps {
   usage: UsageStats
+  /** Lifetime spend for the current project (CNY). */
+  projectCost?: number
   running: boolean
   providerLabel?: string
   modelId?: string
@@ -32,6 +35,7 @@ function contextLevelClass(percent: number): string {
 
 const StatusBar: React.FC<StatusBarProps> = ({
   usage,
+  projectCost = 0,
   running,
   providerLabel,
   modelId,
@@ -42,8 +46,6 @@ const StatusBar: React.FC<StatusBarProps> = ({
   projectVersions,
   mcRuntime
 }) => {
-  const formatCost = (n: number): string => (n > 0 ? `￥${n.toFixed(4)}` : '—')
-
   const envReady = toolchain
     && toolchain.jdk === 'ready'
     && toolchain.gradle === 'ready'
@@ -82,6 +84,15 @@ const StatusBar: React.FC<StatusBarProps> = ({
     ? `会话累计 ${usage.sessionTokens.toLocaleString()} tokens`
     : '会话累计 Token'
 
+  const sessionCost = usage.cost
+  const displayProjectCost = Math.max(projectCost, sessionCost)
+  const projectCostTitle = displayProjectCost > 0
+    ? `当前项目累计花费约 ￥${displayProjectCost.toFixed(4)}（删除会话不回退）`
+    : '当前项目累计花费'
+  const sessionCostTitle = sessionCost > 0
+    ? `当前会话花费约 ￥${sessionCost.toFixed(4)}`
+    : '当前会话花费'
+
   const versionsText = projectVersions ? formatProjectVersions(projectVersions) : null
 
   return (
@@ -101,8 +112,15 @@ const StatusBar: React.FC<StatusBarProps> = ({
       </span>
 
       <span className="stat-sep">|</span>
-      <span className="statusbar-metrics stat" title="费用估算（人民币）">
-        <span className="stat-value">{formatCost(usage.cost)}</span>
+      <span className="statusbar-metrics stat" title={projectCostTitle}>
+        <span className="stat-label">项目</span>
+        <span className="stat-value">{formatCostCny(displayProjectCost)}</span>
+      </span>
+
+      <span className="stat-sep">|</span>
+      <span className="statusbar-metrics stat" title={sessionCostTitle}>
+        <span className="stat-label">本会话</span>
+        <span className="stat-value">{formatCostCny(sessionCost)}</span>
       </span>
 
       <span className="stat-sep">|</span>

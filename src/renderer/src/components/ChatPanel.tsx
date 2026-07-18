@@ -52,7 +52,7 @@ interface ChatPanelProps {
   selectedFile: { path: string; name: string } | null
   apiConfig: { endpoint: string; apiKey: string; model: string; providerId: string }
   ensureApiKey?: () => Promise<string | null>
-  onUsageChange?: (usage: UsageStats) => void
+  onUsageChange?: (usage: UsageStats, meta?: { costDelta?: number }) => void
   onRunningChange?: (running: boolean) => void
   currentSessionId: string | null
   sessions: ChatSession[]
@@ -803,6 +803,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           }
           setUsageAccum((prev) => {
             const promptTotal = turnUsageRef.current.promptTokens
+            const costDelta = estimateCostDelta(pT, cT, hit, miss, {
+              model: apiConfigRef.current.model,
+              providerId: apiConfigRef.current.providerId,
+            })
             const next = {
               ...prev,
               sessionTokens: prev.sessionTokens + stepTokens,
@@ -817,12 +821,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                 apiConfigRef.current.model,
                 apiConfigRef.current.providerId
               ),
-              cost: prev.cost + estimateCostDelta(pT, cT, hit, miss, {
-                model: apiConfigRef.current.model,
-                providerId: apiConfigRef.current.providerId,
-              })
+              cost: prev.cost + costDelta
             }
-            onUsageChangeRef.current?.(next)
+            onUsageChangeRef.current?.(next, costDelta > 0 ? { costDelta } : undefined)
             return next
           })
         }

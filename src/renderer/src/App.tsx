@@ -18,7 +18,7 @@ import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./compon
 import PanelExpandRail from "./components/PanelExpandRail";
 import PanelResizeHandle from "./components/PanelResizeHandle";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
-import { EMPTY_USAGE, normalizeSessionUsage, type UsageStats } from "./utils/usage";
+import { EMPTY_USAGE, normalizeSessionUsage, sumSessionsCost, type UsageStats } from "./utils/usage";
 import { loadProjectVersions, type ProjectVersions } from "./utils/project-versions";
 import {
 	pickMcRuntimeSlot,
@@ -97,6 +97,9 @@ const App: React.FC = () => {
 	const [savedProviderIds, setSavedProviderIds] = useState<string[]>([]);
 	const [encryptionAvailable, setEncryptionAvailable] = useState(true);
 	const [usage, setUsage] = useState<UsageData>(EMPTY_USAGE);
+	const [projectCost, setProjectCost] = useState(0);
+	const projectCostRef = useRef(0);
+	projectCostRef.current = projectCost;
 	const [isRunning, setIsRunning] = useState(false);
 	const workspaceLayout = useWorkspaceLayout();
 	const [projectVersions, setProjectVersions] = useState<ProjectVersions | null>(null);
@@ -152,12 +155,13 @@ const App: React.FC = () => {
 				await saveSessions(
 					previousPath,
 					sessionsRef.current,
-					currentSessionIdRef.current
+					currentSessionIdRef.current,
+					{ projectCost: projectCostRef.current }
 				);
 			}
 
 			projectPathForSessionsRef.current = path;
-			const { sessions: loaded, currentSessionId: loadedSessionId } =
+			const { sessions: loaded, currentSessionId: loadedSessionId, projectCost: loadedProjectCost } =
 				await loadSessionsWithMeta(path);
 			if (cancelled || sessionsLoadTokenRef.current !== loadToken) return;
 
@@ -171,6 +175,7 @@ const App: React.FC = () => {
 			hadNonEmptySessionsRef.current = sorted.length > 0;
 			const activeSession = validSessionId ? loaded.find((s) => s.id === validSessionId) : null;
 			setUsage(normalizeSessionUsage(activeSession?.usage));
+			setProjectCost(Math.max(0, loadedProjectCost || sumSessionsCost(sorted)));
 			sessionsHydratedRef.current = true;
 		};
 
@@ -188,9 +193,10 @@ const App: React.FC = () => {
 		// Allow empty only after this project once had sessions (user deleted them all).
 		if (sessions.length === 0 && !hadNonEmptySessionsRef.current) return;
 		void saveSessions(state.projectPath, sessions, currentSessionId, {
-			allowEmptyOverwrite: hadNonEmptySessionsRef.current && sessions.length === 0
+			allowEmptyOverwrite: hadNonEmptySessionsRef.current && sessions.length === 0,
+			projectCost: projectCostRef.current
 		});
-	}, [sessions, state.projectPath, currentSessionId]);
+	}, [sessions, state.projectPath, currentSessionId, projectCost]);
 
 	useEffect(() => {
 		if (!sessionsHydratedRef.current) return;
@@ -602,8 +608,11 @@ const App: React.FC = () => {
 		)));
 	}, []);
 
-	const handleUsageChange = useCallback((nextUsage: UsageStats) => {
+	const handleUsageChange = useCallback((nextUsage: UsageStats, meta?: { costDelta?: number }) => {
 		setUsage(nextUsage);
+		if (meta?.costDelta && meta.costDelta > 0) {
+			setProjectCost((c) => c + meta.costDelta!);
+		}
 		const sid = currentSessionIdRef.current;
 		if (!sid) return;
 		setSessions((prev) => prev.map((s) => (
@@ -893,6 +902,7 @@ const App: React.FC = () => {
 			{appView === "workspace" && (
 				<StatusBar
 					usage={usage}
+					projectCost={projectCost}
 					running={isRunning}
 					providerLabel={providerDisplayLabel(apiConfig.providerId, apiConfig.endpoint)}
 					modelId={apiConfig.model}

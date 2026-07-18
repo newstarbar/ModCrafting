@@ -1,5 +1,5 @@
 import type { ChatSession, PersistedMessage } from '../types/chat'
-import { normalizeSessionUsage, type UsageStats } from './usage.ts'
+import { normalizeSessionUsage, sumSessionsCost, type UsageStats } from './usage.ts'
 
 const NO_PROJECT = '__no_project__'
 const LEGACY_SESSIONS_KEY = 'modcrafting-sessions'
@@ -143,6 +143,7 @@ export async function loadSessions(projectPath: string | null): Promise<ChatSess
 export async function loadSessionsWithMeta(projectPath: string | null): Promise<{
   sessions: ChatSession[]
   currentSessionId: string | null
+  projectCost: number
 }> {
   try {
     if (typeof window !== 'undefined' && window.api?.sessionsLoad) {
@@ -150,32 +151,43 @@ export async function loadSessionsWithMeta(projectPath: string | null): Promise<
       const diskSessions = (disk.sessions || [])
         .map(normalizeSession)
         .filter((s): s is ChatSession => s !== null)
+      const diskCost = typeof disk.projectCost === 'number' && Number.isFinite(disk.projectCost)
+        ? Math.max(0, disk.projectCost)
+        : 0
 
       if (diskSessions.length > 0) {
         return {
           sessions: diskSessions,
-          currentSessionId: disk.currentSessionId
+          currentSessionId: disk.currentSessionId,
+          projectCost: Math.max(diskCost, sumSessionsCost(diskSessions))
         }
       }
 
       // One-time migrate from renderer localStorage (old port / origin buckets)
       const legacy = loadSessionsFromLocalStorage(projectPath)
       if (legacy.sessions.length > 0) {
+        const migratedCost = Math.max(diskCost, sumSessionsCost(legacy.sessions))
         const saveResult = await window.api.sessionsSave(
           projectPath,
           legacy.sessions,
-          legacy.currentSessionId
+          legacy.currentSessionId,
+          { projectCost: migratedCost }
         )
         if (saveResult.success) {
           clearMigratedLocalStorage(projectPath, legacy.sourceKey)
         }
         return {
           sessions: legacy.sessions,
-          currentSessionId: legacy.currentSessionId
+          currentSessionId: legacy.currentSessionId,
+          projectCost: migratedCost
         }
       }
 
-      return { sessions: [], currentSessionId: disk.currentSessionId }
+      return {
+        sessions: [],
+        currentSessionId: disk.currentSessionId,
+        projectCost: diskCost
+      }
     }
   } catch {
     /* fall through to localStorage */
@@ -184,7 +196,8 @@ export async function loadSessionsWithMeta(projectPath: string | null): Promise<
   const legacy = loadSessionsFromLocalStorage(projectPath)
   return {
     sessions: legacy.sessions,
-    currentSessionId: legacy.currentSessionId
+    currentSessionId: legacy.currentSessionId,
+    projectCost: sumSessionsCost(legacy.sessions)
   }
 }
 
@@ -192,7 +205,7 @@ export async function saveSessions(
   projectPath: string | null,
   sessions: ChatSession[],
   currentSessionId?: string | null,
-  options?: { allowEmptyOverwrite?: boolean }
+  options?: { allowEmptyOverwrite?: boolean; projectCost?: number }
 ): Promise<void> {
   try {
     if (typeof window !== 'undefined' && window.api?.sessionsSave) {
@@ -214,6 +227,12 @@ export async function saveSessions(
   // Fallback: localStorage (dev without preload)
   try {
     localStorage.setItem(sessionsKey(projectPath), JSON.stringify(sessions))
+    if (options?.projectCost !== undefined) {
+      localStorage.setItem(
+        `modcrafting-project-cost::${projectKey(projectPath)}`,
+        String(options.projectCost)
+      )
+    }
   } catch {
     /* ignore quota errors */
   }

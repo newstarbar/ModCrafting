@@ -18,7 +18,31 @@ interface ProjectSessionFile {
   projectPath: string
   currentSessionId: string | null
   sessions: StoredChatSession[]
+  /** Lifetime project spend (CNY); survives session deletion. */
+  projectCost?: number
   updatedAt: string
+}
+
+function coerceCost(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
+function sumSessionCosts(sessions: StoredChatSession[]): number {
+  let total = 0
+  for (const s of sessions) {
+    if (!s.usage || typeof s.usage !== 'object') continue
+    const cost = (s.usage as { cost?: unknown }).cost
+    total += coerceCost(cost)
+  }
+  return total
+}
+
+/** Prefer stored lifetime total; bootstrap from session sum when missing. */
+function resolveProjectCost(stored: unknown, sessions: StoredChatSession[]): number {
+  const fromSessions = sumSessionCosts(sessions)
+  if (stored === undefined || stored === null) return fromSessions
+  return Math.max(coerceCost(stored), fromSessions)
 }
 
 interface SessionIndex {
@@ -88,6 +112,7 @@ function readProjectFile(filePath: string): ProjectSessionFile | null {
       projectPath: typeof raw.projectPath === 'string' ? raw.projectPath : '',
       currentSessionId: raw.currentSessionId ?? null,
       sessions: raw.sessions,
+      projectCost: resolveProjectCost(raw.projectCost, raw.sessions),
       updatedAt: raw.updatedAt || new Date().toISOString()
     }
   } catch {
@@ -126,6 +151,7 @@ export function loadProjectSessions(projectPath: string | null): {
   projectPath: string
   sessions: StoredChatSession[]
   currentSessionId: string | null
+  projectCost: number
 } {
   const key = normalizeProjectPathKey(projectPath)
   const index = readIndex()
@@ -138,11 +164,14 @@ export function loadProjectSessions(projectPath: string | null): {
       data = readProjectFile(alt)
       if (data?.sessions.length) {
         // Re-key under canonical path
-        saveProjectSessions(projectPath, data.sessions, data.currentSessionId)
+        saveProjectSessions(projectPath, data.sessions, data.currentSessionId, {
+          projectCost: data.projectCost
+        })
         return {
           projectPath: key,
           sessions: data.sessions,
-          currentSessionId: data.currentSessionId
+          currentSessionId: data.currentSessionId,
+          projectCost: data.projectCost ?? 0
         }
       }
     }
@@ -151,7 +180,8 @@ export function loadProjectSessions(projectPath: string | null): {
   return {
     projectPath: key,
     sessions: data?.sessions ?? [],
-    currentSessionId: data?.currentSessionId ?? null
+    currentSessionId: data?.currentSessionId ?? null,
+    projectCost: data?.projectCost ?? 0
   }
 }
 
@@ -159,24 +189,33 @@ export function saveProjectSessions(
   projectPath: string | null,
   sessions: StoredChatSession[],
   currentSessionId: string | null = null,
-  options?: { allowEmptyOverwrite?: boolean }
+  options?: { allowEmptyOverwrite?: boolean; projectCost?: number }
 ): { success: boolean; error?: string; projectPath: string; skipped?: boolean } {
   try {
     const key = normalizeProjectPathKey(projectPath)
     ensureStoreDir()
     const index = readIndex()
     const fp = filePathForKey(key, index)
+    const existing = readProjectFile(fp)
+    const nextProjectCost = options?.projectCost !== undefined
+      ? Math.max(coerceCost(options.projectCost), sumSessionCosts(sessions))
+      : resolveProjectCost(existing?.projectCost, sessions)
 
     // Guard: never clobber non-empty disk data with an empty in-memory list
     // (common during StrictMode remount / path flicker races).
     if (!options?.allowEmptyOverwrite && sessions.length === 0) {
-      const existing = readProjectFile(fp)
       if (existing && existing.sessions.length > 0) {
-        // Still update currentSessionId if provided and file exists
-        if (currentSessionId !== existing.currentSessionId && currentSessionId != null) {
+        // Still update currentSessionId / projectCost if provided and file exists
+        const shouldUpdateCurrent =
+          currentSessionId !== existing.currentSessionId && currentSessionId != null
+        const shouldUpdateCost =
+          options?.projectCost !== undefined &&
+          Math.abs(nextProjectCost - (existing.projectCost ?? 0)) > 1e-12
+        if (shouldUpdateCurrent || shouldUpdateCost) {
           const payload: ProjectSessionFile = {
             ...existing,
-            currentSessionId,
+            currentSessionId: shouldUpdateCurrent ? currentSessionId : existing.currentSessionId,
+            projectCost: nextProjectCost,
             updatedAt: new Date().toISOString()
           }
           fs.writeFileSync(fp, JSON.stringify(payload), 'utf-8')
@@ -189,6 +228,7 @@ export function saveProjectSessions(
       projectPath: key,
       currentSessionId,
       sessions,
+      projectCost: nextProjectCost,
       updatedAt: new Date().toISOString()
     }
     fs.writeFileSync(fp, JSON.stringify(payload), 'utf-8')

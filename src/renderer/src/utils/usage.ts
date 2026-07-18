@@ -85,6 +85,20 @@ export function formatTokensK(n: number): string {
   return k >= 10 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`
 }
 
+/** Format CNY cost estimate for status bar. */
+export function formatCostCny(n: number): string {
+  return n > 0 ? `￥${n.toFixed(4)}` : '—'
+}
+
+/** Sum persisted session costs (used to bootstrap project totals). */
+export function sumSessionsCost(sessions: Array<{ usage?: Partial<UsageStats> | null | undefined }>): number {
+  let total = 0
+  for (const s of sessions) {
+    total += coerceUsageNumber(s.usage?.cost)
+  }
+  return total
+}
+
 export function cacheHitRate(hit: number, miss: number): number | null {
   const total = hit + miss
   if (total <= 0) return null

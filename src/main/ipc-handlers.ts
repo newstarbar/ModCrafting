@@ -448,7 +448,7 @@ export function setupIpcHandlers(): void {
       projectPath: string | null,
       sessions: unknown[],
       currentSessionId?: string | null,
-      options?: { allowEmptyOverwrite?: boolean }
+      options?: { allowEmptyOverwrite?: boolean; projectCost?: number }
     ) => saveProjectSessions(projectPath, sessions as never, currentSessionId ?? null, options)
   )
 
