@@ -16,6 +16,7 @@ import { canToolResultAdvanceStep } from './step-evidence.ts'
 import { FileSession } from './file-session.ts'
 import { workflowStepToPlanStep } from './workflow-types.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
+import { MAX_EXECUTE_CLARIFICATIONS } from './clarify-validation.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -52,6 +53,8 @@ export interface WorkflowEngineOptions {
   openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
   /** Shared ACI read session for this run; created if omitted */
   fileSession?: FileSession
+  /** Shared with Agent — execute-phase ask_clarification cap. */
+  clarificationGate?: { count: number }
 }
 
 let workflowToolId = 0
@@ -484,6 +487,7 @@ export class WorkflowEngine {
   private modelCall: WorkflowModelCall
   private openCodeDelegate?: WorkflowEngineOptions['openCodeDelegate']
   private fileSession: FileSession
+  private clarificationGate?: { count: number }
 
   constructor(options: WorkflowEngineOptions) {
     this.steps = options.steps
@@ -497,6 +501,7 @@ export class WorkflowEngine {
     this.modelCall = options.modelCall
     this.openCodeDelegate = options.openCodeDelegate
     this.fileSession = options.fileSession || new FileSession()
+    this.clarificationGate = options.clarificationGate
   }
 
   private planState(): Array<{
@@ -578,7 +583,7 @@ export class WorkflowEngine {
         ? '必须先 edit_file（优先）修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
         : ''
     const clarifyHint = tools.includes('ask_clarification')
-      ? '如果对文件路径、类名、配置项等细节不确定，先用 ask_clarification / grep 向用户确认或搜索，不要猜。\n'
+      ? '标识符/路径/类名先用 read_file/grep 从项目推断；仅用户偏好或需求歧义才 ask_clarification（短问题+短选项）。禁止把 API 命名或实现清单丢给用户选。\n'
       : ''
     const evidenceHint = step.evidence
       ? `验收标准: ${step.evidence}\n`
@@ -1052,6 +1057,19 @@ export class WorkflowEngine {
           result.toolName === 'ask_clarification' && result.ok && !result.error
         )
         if (clarificationResult) {
+          const used = this.clarificationGate?.count ?? 0
+          if (used >= MAX_EXECUTE_CLARIFICATIONS) {
+            this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
+            baseMessages.push({
+              role: 'user',
+              content:
+                `【系统】澄清次数已达上限（${MAX_EXECUTE_CLARIFICATIONS} 次）。` +
+                '请自行选择最简一致方案并继续执行当前步骤，禁止再次 ask_clarification。'
+            })
+            attempt++
+            continue
+          }
+          if (this.clarificationGate) this.clarificationGate.count++
           const question = String(clarificationResult.args?.question || '')
           const options = Array.isArray(clarificationResult.args?.options)
             ? (clarificationResult.args.options as string[]).map(String)
@@ -1123,7 +1141,7 @@ export class WorkflowEngine {
           const signature = repairErrorSignature(decisiveResult.output, step.kind as 'build' | 'run')
           if (seenRepairSignatures.has(signature)) {
             roundInstruction =
-              '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 edit_file 做不同修改，或 ask_clarification 向用户确认。'
+              '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 edit_file 做不同修改；仅用户偏好不明时才 ask_clarification。'
             this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
             attempt++
             continue

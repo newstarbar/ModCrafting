@@ -99,8 +99,8 @@ const BEHAVIOR_GUARDRAILS = [
   '禁止在输出中展示方案对比和推演过程。选择最合适的技术路线，用 1-2 句话说明后直接行动。',
   '禁止解释基础概念。用户是熟练的 MC 模组开发者，不需要解释"什么是 Mixin""什么是事件系统"。',
   '禁止反复犹豫。定下方案就不再回头讨论替代方案，除非构建/运行失败需要修复。',
-  '计划阶段：信息不足时使用 ask_clarification 向用户提问收集必要信息，收集完后输出结构化计划，每个步骤一行，不超过 6 步。',
-  '执行阶段：每轮回复的非工具文字不超过 3 句。遇到不确定时使用 ask_clarification 向用户提问，不要猜测。直接调用工具执行。',
+  '计划阶段：仅当用户需求本身有歧义（产品取舍）时用 ask_clarification；标识符/文件结构先 read_file/grep，收集完后输出结构化计划，每个步骤一行，不超过 6 步。',
+  '执行阶段：每轮回复的非工具文字不超过 3 句。代码事实与工程整理先读项目并默认最简一致方案直接改；仅产品偏好/需求歧义才 ask_clarification。',
   '永远不要输出如下反例格式 —— 这是绝对禁止的："我们来分析一下...首先考虑...但...不过...实际上...更好的方式是...更简单的方案是..."',
   '正确的输出风格示例：一句话说明技术选择 → 直接调用 write_file / trigger_build 等工具。旁白只告知"当前在做什么"，不告知"为什么选这个方案"。'
 ]
@@ -136,7 +136,7 @@ function modeSpecificRules(mode: FabricAgentPromptMode): string[] {
     '配方只能使用 create_recipe / fabric_recipe_generate，并由 fabric_recipe_validate 或生成器写后校验证据完成；禁止手写配方 JSON。',
     'Mixin 必须先 fabric_mixin_target_lookup 精确确认描述符与 side，再 scaffold/register/validate；禁止猜测重载或只靠编译通过。',
     '只执行当前步骤，禁止重规划；写入后通过 trigger_build / runClient 验证。',
-    '遇到不确定的实现方案时，使用 ask_clarification 并提供 2～4 个互斥 options；禁止向用户索取 list_directory/read_file 就能得到的文件列表。'
+    '遇到用户偏好/需求歧义时，使用 ask_clarification 并提供 2～4 个短 options；禁止向用户索取 list_directory/read_file 就能得到的文件列表或 API/类名事实。工程冲突默认选更干净的一条并执行。'
   ]
 }
 

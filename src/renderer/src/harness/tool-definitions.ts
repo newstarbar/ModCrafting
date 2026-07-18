@@ -17,6 +17,7 @@ import { executeTemplateGenerate, resolveProjectConfig } from "../project/templa
 import { validateFileEditGate } from "./edit-gate.ts";
 import { guardedWriteFile } from "./guarded-write.ts";
 import { grepInProject } from "./grep-search.ts";
+import { formatClarificationOutput, validateClarificationArgs } from "./clarify-validation.ts";
 import {
 	generateModBlockEntitiesRegistrationClass,
 	generateModBlocksRegistrationClass,
@@ -1637,38 +1638,34 @@ export const submitPlanTool: Tool = {
 export const askClarificationTool: Tool = {
 	name: "ask_clarification",
 	description:
-		"向用户提问以澄清需求。当你遇到以下情况时必须使用，禁止猜测：\n" +
-		"1. 不确定包名、类名、mod id、版本号等标识符（且无法从项目文件可靠推断）\n" +
-		"2. 需要从多个可行方案中选择（如用 @Inject 还是 @ModifyVariable）\n" +
-		"3. 用户需求有歧义，允许多种实现方式\n" +
-		"禁止：用本工具向用户索取 list_directory/read_file/grep 就能得到的文件列表或源码内容。\n" +
-		"必须提供 2～4 个互斥的 options 供用户点选；不要只抛开放式问题。\n" +
-		"调用后自动暂停执行，等待用户确认后继续。",
+		"向用户澄清【产品偏好 / 需求歧义】。仅在用户取舍无法从项目推断时使用。\n" +
+		"允许：玩法要不要某功能、两种产品体验选哪个、需求原文互相矛盾。\n" +
+		"禁止：API/方法名不一致、空类怎么写、Mixin 注册整理、文件列表/源码内容、" +
+		"把多步实现方案塞进 options。这些请先 read_file/grep/docs，默认选更干净一致的方案直接改。\n" +
+		"question ≤160 字；options 2～4 个互斥短标签，每个 ≤48 字、禁止换行。\n" +
+		"调用后暂停等待用户确认。",
 	schema: {
 		type: "object",
 		properties: {
-			question: { type: "string", description: "要问用户的问题，用中文，说明为什么需要确认" },
+			question: {
+				type: "string",
+				description: "一句短问题（≤160 字），只问用户偏好/需求歧义，不要贴代码诊断长文"
+			},
 			options: {
 				type: "array",
 				items: { type: "string" },
 				minItems: 2,
 				maxItems: 4,
-				description: "必填：2～4 个互斥答案选项，供用户点选确认"
+				description: "2～4 个互斥短标签（每个 ≤48 字），例如「保留模糊效果」「关闭模糊」"
 			}
 		},
 		required: ["question", "options"]
 	},
 	readOnly: () => true,
 	async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
-		const question = String(args.question || "").trim()
-		const rawOptions = Array.isArray(args.options) ? (args.options as unknown[]) : []
-		const options = rawOptions.map((o) => String(o || "").trim()).filter(Boolean).slice(0, 4)
-		if (!question) return "Error: question 不能为空"
-		if (options.length < 2) {
-			return "Error: ask_clarification 必须提供至少 2 个 options；禁止无选项的开放式提问。请改用 list_directory/read_file 自行勘察，或给出明确互斥选项后再问。"
-		}
-		const optionsText = "\n\n选项：\n" + options.map((o, i) => `${i + 1}. ${o}`).join("\n")
-		return `[CLARIFICATION_NEEDED]\n问题：${question}${optionsText}`
+		const validated = validateClarificationArgs(args.question, args.options)
+		if (!validated.ok) return validated.error
+		return formatClarificationOutput(validated.question, validated.options)
 	}
 }
 

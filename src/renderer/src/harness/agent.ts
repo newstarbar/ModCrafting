@@ -13,6 +13,7 @@ import { finalizeTerminalSteps } from './finalize-terminal'
 import { logger } from '../utils/logger'
 import { isRepeatGuardedToolCall } from './repeat-guard.ts'
 import { prepareMessages, estimatePromptTokens, warnTokenThreshold, RECENT_WINDOW, type CompactionResult } from './context-compact'
+import { MAX_EXECUTE_CLARIFICATIONS } from './clarify-validation.ts'
 import {
   appendToolRoundHistory,
   type ChatMessage,
@@ -112,6 +113,8 @@ export class Agent {
   private finalReadinessBlocks = 0
   private graceRound = false
   clarificationPending = false
+  /** Successful ask_clarification pauses this run (execute capped). */
+  private clarificationCount = 0
   // Rounds where every tool call was rejected by the loop guard (no progress)
   private consecutiveBlockedRounds = 0
   // Rounds where the model only called complete_step without any real work
@@ -257,6 +260,7 @@ export class Agent {
     onStream?: (text: string, reasoning?: string) => void,
     openCodeDelegate?: RunOptions['openCodeDelegate']
   ): Promise<string> {
+    const clarificationGate = { count: this.clarificationCount }
     const engine = new WorkflowEngine({
       steps: normalizeWorkflowSteps(planTracker.steps),
       planTracker,
@@ -268,6 +272,7 @@ export class Agent {
       onToolResult: this.onToolResult,
       openCodeDelegate,
       fileSession: this.fileSession,
+      clarificationGate,
       modelCall: async (workflowMessages, tools, onChunk) => {
         // Last message is the per-step workflow prompt; compact/persist history only.
         const stepPromptMsg = workflowMessages[workflowMessages.length - 1]
@@ -337,6 +342,7 @@ export class Agent {
     })
     try {
       const result = await engine.run(messages)
+      this.clarificationCount = clarificationGate.count
 
       if (result.needsClarification) {
         this.clarificationPending = true

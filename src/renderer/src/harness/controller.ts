@@ -475,8 +475,8 @@ ${projectInfo}`
 - 禁止方案对比推演。选定技术路线后不再回头讨论替代方案。
 - 不要解释概念或写分析段落。
 
-**重要：在制定计划前，如果信息不足，必须使用 ask_clarification 工具向用户询问必要的信息。**
-工具调用格式：\`<tool_call>{"name": "ask_clarification", "args": {"question": "你的问题"}}<\/tool_call>\`
+**重要：仅当用户需求本身有歧义（产品取舍）时使用 ask_clarification；包名/类名/文件结构先用工具勘察，禁止用澄清代替读文件。**
+工具调用格式：\`<tool_call>{"name": "ask_clarification", "args": {"question": "短问题", "options": ["选项A", "选项B"]}}<\/tool_call>\`
 收集完所有信息后，调用 submit_plan 提交结构化实施计划。若模型不支持原生工具调用，可使用 XML fallback。
 
 submit_plan 参数要求：
@@ -489,13 +489,13 @@ submit_plan 参数要求：
 - **禁止空泛步骤**（确保无错、测试功能、输出总结）。
 - **每步只做一件事**；最多 6 步。
 - **禁止重复步骤。**
-- **不确定路径/类名时先 ask_clarification 或 grep，禁止方案对比长文。**
+- **不确定路径/类名时先 grep/read_file，禁止用 ask_clarification 代替勘察，禁止方案对比长文。**
 - **用户已通过模板表单提交完整需求时，禁止先探索项目；直接输出计划。**
 - **用户消息含【结构化参数 JSON】时，执行阶段须调用 \`fabric_template_generate\` 并传入完整 \`formFields\`（勿省略硬度、饱食度等表单参数）。**`
       : `## 🔧 第二阶段：执行计划
 
 规则（优先级从高到低）：
-1. 只执行当前步骤。不确定路径/类名/包名时用 ask_clarification 确认，禁止猜。
+1. 只执行当前步骤。不确定路径/类名/包名时先 read_file/grep；仅用户偏好才 ask_clarification，禁止猜需求。
 2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
@@ -504,7 +504,7 @@ submit_plan 参数要求：
 
     const extraRules = mode === 'execute'
       ? ''
-      : '\n- **信息不足时可以使用 ask_clarification 工具提问，收集完信息后再输出计划。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。'
+      : '\n- **仅需求歧义时可用 ask_clarification（短问题+短选项）；代码事实先勘察。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。'
 
     return `# ModCrafting AI 助手
 ${phaseHeader}
@@ -514,7 +514,7 @@ ${phaseHeader}
 ## 可用工具
 ${toolDescs}
 
-${mode === 'plan' ? '## 当前：输出计划阶段\n信息不足时可以使用 ask_clarification / grep 工具提问或勘察，收集完信息后调用 submit_plan。' : '## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。'}
+${mode === 'plan' ? '## 当前：输出计划阶段\n需求歧义时可用 ask_clarification（短选项）；标识符用 grep/read_file 勘察，收集完后调用 submit_plan。' : '## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。工程冲突默认选更干净一致的方案，不要把实现细节丢给用户选。'}
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**

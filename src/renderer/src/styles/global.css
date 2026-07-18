@@ -3302,7 +3302,14 @@ body,
 	font-weight: 600;
 	font-size: 13px;
 	color: var(--accent);
-	margin-bottom: 8px;
+	margin-bottom: 4px;
+}
+
+.clarification-overlay__hint-top {
+	margin: 0 0 8px;
+	font-size: 11px;
+	color: var(--text-muted);
+	line-height: 1.4;
 }
 
 .clarification-overlay__icon {
@@ -3323,7 +3330,23 @@ body,
 	color: var(--text-primary);
 	line-height: 1.55;
 	white-space: pre-wrap;
-	margin-bottom: 10px;
+	word-break: break-word;
+	margin-bottom: 4px;
+}
+
+.clarification-overlay__expand {
+	display: inline-block;
+	margin: 0 0 10px;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--accent);
+	font-size: 11px;
+	cursor: pointer;
+}
+
+.clarification-overlay__expand:hover:not(:disabled) {
+	text-decoration: underline;
 }
 
 .clarification-overlay__options {
@@ -3335,7 +3358,7 @@ body,
 
 .clarification-overlay__option {
 	display: flex;
-	align-items: flex-start;
+	align-items: center;
 	gap: 10px;
 	width: 100%;
 	text-align: left;
@@ -3347,6 +3370,7 @@ body,
 	color: var(--text);
 	cursor: pointer;
 	transition: border-color 0.15s, background 0.15s;
+	min-height: 40px;
 }
 
 .clarification-overlay__option:hover:not(:disabled) {
@@ -3370,8 +3394,11 @@ body,
 
 .clarification-overlay__option-text {
 	flex: 1;
+	min-width: 0;
 	line-height: 1.45;
-	white-space: pre-wrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .clarification-overlay__textarea {

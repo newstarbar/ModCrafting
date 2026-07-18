@@ -9,6 +9,7 @@ export interface ClarificationOverlayProps {
 }
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+const QUESTION_COLLAPSE_CHARS = 160
 
 /**
  * Covers the chat composer while clarification is pending.
@@ -25,6 +26,13 @@ const ClarificationOverlay: React.FC<ClarificationOverlayProps> = ({
 		options.length > 0 ? 0 : -1
 	)
 	const [otherText, setOtherText] = useState('')
+	const [questionExpanded, setQuestionExpanded] = useState(false)
+
+	const questionNeedsCollapse = question.trim().length > QUESTION_COLLAPSE_CHARS
+	const questionShown =
+		questionNeedsCollapse && !questionExpanded
+			? `${question.trim().slice(0, QUESTION_COLLAPSE_CHARS)}…`
+			: question
 
 	const answer = useMemo(() => {
 		if (selectedIndex === null) return ''
@@ -34,19 +42,46 @@ const ClarificationOverlay: React.FC<ClarificationOverlayProps> = ({
 
 	const canConfirm = Boolean(answer) && !disabled
 
-	const handleConfirm = () => {
-		if (!canConfirm) return
-		onConfirm(answer)
+	const handleConfirm = (override?: string) => {
+		const finalAnswer = (override ?? answer).trim()
+		if (!finalAnswer || disabled) return
+		onConfirm(finalAnswer)
 	}
 
 	return (
-		<div className="clarification-overlay" role="dialog" aria-label="AI 需要你的确认">
+		<div
+			className="clarification-overlay"
+			role="dialog"
+			aria-label="AI 需要你的确认"
+			tabIndex={-1}
+			onKeyDown={(e) => {
+				if (e.key === 'Enter' && !e.shiftKey && selectedIndex !== -1 && canConfirm) {
+					e.preventDefault()
+					handleConfirm()
+				}
+			}}
+		>
 			<div className="clarification-overlay__panel">
 				<div className="clarification-overlay__hd">
 					<span className="clarification-overlay__icon">?</span>
 					<span>AI 需要你的确认</span>
 				</div>
-				<div className="clarification-overlay__question">{question}</div>
+				<p className="clarification-overlay__hint-top">
+					仅需你做偏好选择；实现细节由 AI 自行处理
+				</p>
+				<div className="clarification-overlay__question" title={question}>
+					{questionShown}
+				</div>
+				{questionNeedsCollapse && (
+					<button
+						type="button"
+						className="clarification-overlay__expand"
+						disabled={disabled}
+						onClick={() => setQuestionExpanded((v) => !v)}
+					>
+						{questionExpanded ? '收起' : '展开全文'}
+					</button>
+				)}
 
 				{options.length > 0 ? (
 					<div className="clarification-overlay__options">
@@ -56,7 +91,9 @@ const ClarificationOverlay: React.FC<ClarificationOverlayProps> = ({
 								type="button"
 								className={`clarification-overlay__option${selectedIndex === i ? ' is-selected' : ''}`}
 								disabled={disabled}
+								title={opt}
 								onClick={() => setSelectedIndex(i)}
+								onDoubleClick={() => handleConfirm(opt)}
 							>
 								<span className="clarification-overlay__letter">{LETTERS[i] || String(i + 1)}</span>
 								<span className="clarification-overlay__option-text">{opt}</span>
@@ -105,13 +142,21 @@ const ClarificationOverlay: React.FC<ClarificationOverlayProps> = ({
 							稍后
 						</button>
 					) : (
-						<span className="clarification-overlay__hint">选择或填写后确认，将直接继续对话</span>
+						<span className="clarification-overlay__hint">
+							双击选项或选中后按 Enter 可直接继续
+						</span>
 					)}
 					<button
 						type="button"
 						className="clarification-overlay__btn clarification-overlay__btn--confirm"
 						disabled={!canConfirm}
-						onClick={handleConfirm}
+						onClick={() => handleConfirm()}
+						onKeyDown={(e) => {
+							if (e.key === 'Enter') {
+								e.preventDefault()
+								handleConfirm()
+							}
+						}}
 					>
 						确认并继续
 					</button>
