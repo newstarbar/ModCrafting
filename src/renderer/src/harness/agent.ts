@@ -57,11 +57,13 @@ export interface RunOptions {
 }
 
 const MAX_READONLY_ROUNDS = 3
+const MAX_PLAN_OFFERED_REJECT_ROUNDS = 2
 const REPEAT_SUCCESS_THRESHOLD = 2
 const MAX_FINAL_READINESS_BLOCKS = 3
 const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'grep', 'read_error_log', 'run_command']
 const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES
 const CONTROL_TOOL_NAMES = ['complete_step']
+const PLAN_POST_LOCK_TOOL_NAMES = new Set(['submit_plan', 'ask_clarification'])
 const PLAN_READONLY_TOOL_NAMES = new Set([
   'read_file',
   'list_directory',
@@ -97,6 +99,11 @@ export class Agent {
   onToolResult?: (name: string, id: string, output: string) => void
   // Once locked, readonly tools stay removed for the entire run
   private readonlyLocked = false
+  /** Plan phase: exploration tools stripped after readonly round cap. */
+  private planExplorationLocked = false
+  /** Plan phase: escalate to submit_plan-only after repeated tool_not_offered. */
+  private planOfferedRejectRounds = 0
+  private planForceSubmitOnly = false
 
   // Track written files to detect duplicate writes
   private writtenFiles = new Map<string, string>()
@@ -134,6 +141,9 @@ export class Agent {
 
   resetRunState(): void {
     this.readonlyLocked = false
+    this.planExplorationLocked = false
+    this.planOfferedRejectRounds = 0
+    this.planForceSubmitOnly = false
     this.writtenFiles.clear()
     this.consecutiveWriteOnlyRounds = 0
     this.repeatSuccessCounts.clear()
@@ -490,14 +500,20 @@ export class Agent {
       if (this.graceRound) {
         availableTools = []
       } else if (phase === 'plan') {
-        if (readonlyRounds >= MAX_READONLY_ROUNDS) {
-          availableTools = this.filterExplorationTools(availableTools)
+        if (readonlyRounds >= MAX_READONLY_ROUNDS && !this.planExplorationLocked) {
+          this.planExplorationLocked = true
           const kick =
-            '【系统】计划阶段已探索足够。停止 list_directory/read_file，直接输出结构化实施计划：' +
-            '每行 `N. [kind] 简短标题 — 目标路径`，kind 为 write、recipe、mixin 或 inspect。'
+            '【系统】计划阶段已探索足够。list_directory/read_file/grep 已锁定。' +
+            '请立即调用 submit_plan 提交结构化计划；信息仍不足时用 ask_clarification（须带 options）。' +
+            '不要再尝试列出目录或搜索源码。'
           messages.push({ role: 'user', content: kick })
           apiMessages.push({ role: 'user', content: kick })
           logger.agent('KICK: plan phase exploration cap reached')
+        }
+        if (this.planForceSubmitOnly) {
+          availableTools = availableTools.filter((t) => PLAN_POST_LOCK_TOOL_NAMES.has(t.name))
+        } else if (this.planExplorationLocked) {
+          availableTools = this.filterExplorationTools(availableTools)
         }
       } else if (phase === 'execute') {
         if (this.readonlyLocked) {
@@ -575,13 +591,48 @@ export class Agent {
 
         if (rawToolCalls.length > 0 && toolCalls.length === 0) {
           if (cleanText) messages.push({ role: 'assistant', content: cleanText })
-          messages.push({
-            role: 'user',
-            content:
-              '【系统】刚才的工具调用未执行：工具不在当前阶段白名单中，或参数不符合 Schema。' +
-              '请只使用本轮公开工具并修正参数。'
-          })
+          if (phase === 'plan' && this.planExplorationLocked) {
+            this.planOfferedRejectRounds++
+            const rejectedNames = [...new Set(
+              [...validation.rejected.values()].map((r) => r.toolName || 'unknown')
+            )].join(', ')
+            if (
+              !this.planForceSubmitOnly &&
+              this.planOfferedRejectRounds >= MAX_PLAN_OFFERED_REJECT_ROUNDS
+            ) {
+              this.planForceSubmitOnly = true
+              messages.push({
+                role: 'user',
+                content:
+                  `【系统】连续 ${this.planOfferedRejectRounds} 轮工具均被拒绝（曾尝试：${rejectedNames}）。` +
+                  '本轮起仅允许 submit_plan 与 ask_clarification。' +
+                  '请立即 submit_plan；不要再调用 list_directory/read_file/grep。'
+              })
+              logger.agent('KICK: plan phase force submit_plan after offered rejects', {
+                rounds: this.planOfferedRejectRounds
+              })
+            } else {
+              messages.push({
+                role: 'user',
+                content:
+                  `【系统】工具未执行（${rejectedNames}）：探索工具已锁定或不在白名单。` +
+                  '请调用 submit_plan 提交计划，或用 ask_clarification 提问（须带 options）。'
+              })
+            }
+          } else {
+            this.planOfferedRejectRounds = 0
+            messages.push({
+              role: 'user',
+              content:
+                '【系统】刚才的工具调用未执行：工具不在当前阶段白名单中，或参数不符合 Schema。' +
+                '请只使用本轮公开工具并修正参数。'
+            })
+          }
           continue
+        }
+
+        if (toolCalls.length > 0) {
+          this.planOfferedRejectRounds = 0
         }
 
         // Final answer — plan phase always ends here; execute phase may kick if idle

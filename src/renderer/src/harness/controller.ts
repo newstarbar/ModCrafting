@@ -19,6 +19,12 @@ import {
 import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
 import { OpenCodeAdapter } from './opencode-adapter.ts'
 import type { WorkflowStep } from './workflow-types.ts'
+import {
+  formatGradleSummary,
+  formatJavaFileList,
+  parseGradleProperties,
+  scanJavaSourceTree
+} from './project-info.ts'
 
 export interface ControllerOptions {
   registry: Registry
@@ -290,53 +296,66 @@ export class Controller {
     let projectInfo = ''
     if (!this._projectPath) return projectInfo
 
-    projectInfo = `## 项目信息\n项目路径：${this._projectPath}\n`
+    const projectPath = this._projectPath
+    const listDirectory = (absPath: string) => window.api.listDirectory(absPath)
+    projectInfo = `## 项目信息\n项目路径：${projectPath}\n`
 
-    // 1. Scan Java packages
+    // 1. Scan main Java packages + file inventory
     try {
-      const mainJava = `${this._projectPath}/src/main/java`
-      const entries = await window.api.listDirectory(mainJava)
-      if (entries.length > 0) {
-        const packages: string[] = []
-        const walkDir = async (dir: string, prefix: string) => {
-          const sub = await window.api.listDirectory(dir)
-          for (const e of sub) {
-            if (e.isDirectory) {
-              const pkg = prefix ? `${prefix}.${e.name}` : e.name
-              packages.push(pkg)
-              await walkDir(e.path, pkg)
-            }
-          }
-        }
-        for (const e of entries) {
-          if (e.isDirectory) await walkDir(e.path, e.name)
-        }
-        if (packages.length > 0) {
-          projectInfo += `源码包路径：${packages.join(', ')}\n`
-        }
+      const mainJava = `${projectPath}/src/main/java`
+      const { packages, javaFiles } = await scanJavaSourceTree(mainJava, projectPath, listDirectory)
+      if (packages.length > 0) {
+        projectInfo += `源码包路径：${packages.join(', ')}\n`
       }
+      projectInfo += formatJavaFileList(javaFiles, '主源码 Java 文件')
     } catch { /* ignore scan errors */ }
 
-    // 2. Read fabric.mod.json (mod id, entrypoints, mixin ref)
+    // 2. Scan client Java packages + file inventory
     try {
-      const modJsonPath = `${this._projectPath}/src/main/resources/fabric.mod.json`
-      const content = await window.api.readFile(modJsonPath)
-      const parsed = JSON.parse(content)
-      const modId = parsed.id || ''
-      if (modId) {
-        projectInfo += `Mod ID：${modId}\n`
-        if (parsed.entrypoints?.main?.length) {
-          projectInfo += `入口点：${parsed.entrypoints.main.join(', ')}\n`
+      const clientJava = `${projectPath}/src/client/java`
+      const { packages, javaFiles } = await scanJavaSourceTree(clientJava, projectPath, listDirectory)
+      if (packages.length > 0 || javaFiles.length > 0) {
+        projectInfo += `客户端源码目录：src/client/java\n`
+        if (packages.length > 0) {
+          projectInfo += `客户端包路径：${packages.join(', ')}\n`
         }
-        if (parsed.mixins?.length) {
-          projectInfo += `Mixin 配置：${parsed.mixins.join(', ')}\n`
+        projectInfo += formatJavaFileList(javaFiles, '客户端 Java 文件')
+      }
+    } catch { /* ignore */ }
+
+    // 3. Gradle properties summary
+    try {
+      const gradleProps = await window.api.readFile(`${projectPath}/gradle.properties`)
+      if (gradleProps.success && gradleProps.content) {
+        projectInfo += formatGradleSummary(parseGradleProperties(gradleProps.content))
+      }
+    } catch { /* ignore */ }
+
+    // 4. Read fabric.mod.json (mod id, entrypoints, mixin ref)
+    try {
+      const modJsonPath = `${projectPath}/src/main/resources/fabric.mod.json`
+      const modJson = await window.api.readFile(modJsonPath)
+      if (modJson.success && modJson.content) {
+        const parsed = JSON.parse(modJson.content)
+        const modId = parsed.id || ''
+        if (modId) {
+          projectInfo += `Mod ID：${modId}\n`
+          if (parsed.entrypoints?.main?.length) {
+            projectInfo += `入口点：${parsed.entrypoints.main.join(', ')}\n`
+          }
+          if (parsed.entrypoints?.client?.length) {
+            projectInfo += `客户端入口：${parsed.entrypoints.client.join(', ')}\n`
+          }
+          if (parsed.mixins?.length) {
+            projectInfo += `Mixin 配置：${parsed.mixins.join(', ')}\n`
+          }
         }
       }
     } catch { /* file may not exist */ }
 
-    // 3. List resources directory (assets, data, actual mixin config filename)
+    // 5. List resources directory (assets, data, actual mixin config filename)
     try {
-      const resourcesDir = `${this._projectPath}/src/main/resources`
+      const resourcesDir = `${projectPath}/src/main/resources`
       const resEntries = await window.api.listDirectory(resourcesDir)
       const topItems = resEntries.map((e) => e.name).join(', ')
       if (topItems) {
@@ -344,16 +363,17 @@ export class Controller {
       }
     } catch { /* ignore */ }
 
-    // 4. Read mixin configs for existing entries
+    // 6. Read mixin configs for existing entries
     try {
-      const resourcesDir = `${this._projectPath}/src/main/resources`
+      const resourcesDir = `${projectPath}/src/main/resources`
       const resEntries = await window.api.listDirectory(resourcesDir)
       for (const e of resEntries) {
         if (e.name.endsWith('.mixins.json')) {
           try {
-            const mixinPath = `${this._projectPath}/src/main/resources/${e.name}`
-            const content = await window.api.readFile(mixinPath)
-            const parsed = JSON.parse(content)
+            const mixinPath = `${projectPath}/src/main/resources/${e.name}`
+            const mixinFile = await window.api.readFile(mixinPath)
+            if (!mixinFile.success || !mixinFile.content) continue
+            const parsed = JSON.parse(mixinFile.content)
             const pkg = parsed.package || ''
             const mixins = parsed.mixins || []
             const client = parsed.client || []
@@ -367,21 +387,12 @@ export class Controller {
       }
     } catch { /* ignore */ }
 
-    // 5. List resource subdirectories
+    // 7. List resource subdirectories
     try {
-      const assetsDir = `${this._projectPath}/src/main/resources/assets`
+      const assetsDir = `${projectPath}/src/main/resources/assets`
       const assets = await window.api.listDirectory(assetsDir)
       if (assets.length > 0) {
         projectInfo += `资源命名空间：${assets.map((e) => e.name).join(', ')}\n`
-      }
-    } catch { /* ignore */ }
-
-    // 6. Client source directory
-    try {
-      const clientJava = `${this._projectPath}/src/client/java`
-      const clientEntries = await window.api.listDirectory(clientJava)
-      if (clientEntries.length > 0) {
-        projectInfo += `客户端源码目录：src/client/java\n`
       }
     } catch { /* ignore */ }
 
