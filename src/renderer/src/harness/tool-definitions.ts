@@ -24,6 +24,15 @@ import {
 	generateModItemsRegistrationClass
 } from "../project/template-codegen.ts";
 import { buildMixinScaffold, expectedMixinSourcePaths, isValidMixinSourcePath, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
+import {
+	assertRegisterableMixin,
+	inferSideFromSourcePath,
+	parseJavaIdentity,
+	relativeMixinClassName,
+	sideToConfigKey,
+	validateHandwrittenMixin,
+	type MixinSide
+} from "./mixin-registration.ts";
 import { listDirectoryEmptyFileMessage, pathBasenameLooksLikeFile } from "./list-directory-guard.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
@@ -1234,13 +1243,6 @@ function mixinConfigReferences(modJson: Record<string, unknown>): string[] {
 	}).filter(Boolean);
 }
 
-function parseJavaIdentity(source: string): { packageName: string; className: string; fqn: string } | null {
-	const packageMatch = source.match(/^\s*package\s+([\w.]+)\s*;/m);
-	const classMatch = source.match(/\b(?:class|interface)\s+([A-Za-z_$][\w$]*)/);
-	if (!packageMatch || !classMatch) return null;
-	return { packageName: packageMatch[1], className: classMatch[1], fqn: `${packageMatch[1]}.${classMatch[1]}` };
-}
-
 async function readJsonFile(projectPath: string, relPath: string): Promise<Record<string, unknown> | null> {
 	const result = await window.api.readFile(`${projectPath}/${relPath}`);
 	if (!result.success || !result.content) return null;
@@ -1249,7 +1251,7 @@ async function readJsonFile(projectPath: string, relPath: string): Promise<Recor
 
 export const fabricMixinRegisterTool: Tool = {
 	name: "fabric_mixin_register",
-	description: "Register a Mixin source only in a config referenced by fabric.mod.json. Creates and references a config safely when none exists.",
+	description: "Register a Mixin source only in a config referenced by fabric.mod.json. Creates and references a config safely when none exists. Works for scaffolded Mixins (MODCRAFTING_MIXIN metadata) and handwritten Mixins (must contain @Mixin).",
 	schema: {
 		type: "object",
 		properties: {
@@ -1267,14 +1269,17 @@ export const fabricMixinRegisterTool: Tool = {
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
 		const sourcePath = String(args.sourcePath || "").replace(/\\/g, "/");
-		const side = String(args.side || "common") as "common" | "client" | "server";
+		const side = String(args.side || "common") as MixinSide;
 		const sourceResult = await window.api.readFile(`${ctx.projectPath}/${sourcePath}`);
 		if (!sourceResult.success || !sourceResult.content) return `Error: 无法读取 Mixin 源码 ${sourcePath}`;
 		const identity = parseJavaIdentity(sourceResult.content);
 		if (!identity) return "Error: 无法从 Mixin 源码解析 package/class";
 		const metadata = readMixinMetadata(sourceResult.content);
-		if (!metadata) return "Error: 缺少 MODCRAFTING_MIXIN 元数据；请使用 fabric_mixin_scaffold 生成确定性外壳";
-		if (metadata.side !== side) return `Error: source metadata side=${metadata.side} 与注册 side=${side} 不一致`;
+		const gate = assertRegisterableMixin(sourceResult.content, Boolean(metadata));
+		if (gate) return gate;
+		if (metadata && metadata.side !== side) {
+			return `Error: source metadata side=${metadata.side} 与注册 side=${side} 不一致`;
+		}
 		const modJsonPath = "src/main/resources/fabric.mod.json";
 		const modJson = await readJsonFile(ctx.projectPath, modJsonPath);
 		if (!modJson || typeof modJson.id !== "string") return "Error: fabric.mod.json 不存在、格式错误或缺少 id";
@@ -1296,8 +1301,8 @@ export const fabricMixinRegisterTool: Tool = {
 			return `Error: Mixin 源码包 ${identity.packageName} 不在配置 package ${basePackage} 下`;
 		}
 		config.package = basePackage;
-		const relativeClass = identity.fqn.slice(basePackage.length + 1) || identity.className;
-		const key = side === "client" ? "client" : side === "server" ? "server" : "mixins";
+		const relativeClass = relativeMixinClassName(identity, basePackage);
+		const key = sideToConfigKey(side);
 		const entries = Array.isArray(config[key]) ? [...config[key] as string[]] : [];
 		if (!entries.includes(relativeClass)) entries.push(relativeClass);
 		config[key] = entries;
@@ -1316,7 +1321,7 @@ export const fabricMixinRegisterTool: Tool = {
 
 export const fabricMixinValidateTool: Tool = {
 	name: "fabric_mixin_validate",
-	description: "Validate a generated MC 1.21.4 Mixin source, exact target selectors, side, handler shape, and fabric.mod.json-backed registration.",
+	description: "Validate a Mixin source and fabric.mod.json-backed registration. Scaffolded Mixins get deep selector/signature checks; handwritten Mixins (no MODCRAFTING_MIXIN) get lightweight @Mixin + registration checks.",
 	schema: {
 		type: "object",
 		properties: { sourcePath: { type: "string" }, configPath: { type: "string" } },
@@ -1331,10 +1336,42 @@ export const fabricMixinValidateTool: Tool = {
 		const source = sourceResult.content;
 		const identity = parseJavaIdentity(source);
 		const metadata = readMixinMetadata(source);
+		if (!identity) {
+			return "Error: Mixin 校验失败\n- 无法解析 Java package/class";
+		}
+
+		const modJson = await readJsonFile(ctx.projectPath, "src/main/resources/fabric.mod.json");
+		const refs = modJson ? mixinConfigReferences(modJson) : [];
+		let configName = String(args.configPath || "").replace(/\\/g, "/").replace(/^src\/main\/resources\//, "");
+		if (!configName && refs.length === 1) configName = refs[0];
+		const config = configName
+			? await readJsonFile(ctx.projectPath, `src/main/resources/${configName}`)
+			: null;
+
+		// Handwritten Mixin path: no MODCRAFTING_MIXIN metadata — lightweight checks only.
+		if (!metadata) {
+			const preferredSide = inferSideFromSourcePath(sourcePath);
+			const result = validateHandwrittenMixin({
+				source,
+				sourcePath,
+				identity,
+				config,
+				configName: configName || null,
+				refs,
+				preferredSide
+			});
+			if (!result.ok) {
+				return `Error: Mixin 校验失败\n${result.errors.map((error) => `- ${error}`).join("\n")}`;
+			}
+			const artifacts = [sourcePath, ...(configName ? [`src/main/resources/${configName}`] : [])];
+			return {
+				output: `Mixin 轻量校验通过（手写 Mixin，已跳过 selector/签名深度校验）: ${identity.fqn}`,
+				artifactPaths: artifacts,
+				validation: { kind: "mixin", valid: true, version: "1.21.4", targetPath: sourcePath, checkedAt: Date.now() }
+			};
+		}
+
 		const errors: string[] = [];
-		if (!identity) errors.push("无法解析 Java package/class");
-		if (!metadata) errors.push("缺少或损坏 MODCRAFTING_MIXIN 元数据");
-		if (!metadata || !identity) return `Error: Mixin 校验失败\n${errors.map((error) => `- ${error}`).join("\n")}`;
 		const kind = metadata.injectionType === "accessor" ? "field" : "method";
 		const lookup = await window.api.lookupFabricSymbol({ className: metadata.targetClass, memberName: metadata.selector, descriptor: metadata.descriptor, memberKind: kind });
 		if (!lookup.ok || !lookup.class) errors.push(`目标 selector 无效: ${lookup.error || "not found"}`);
@@ -1372,27 +1409,24 @@ export const fabricMixinValidateTool: Tool = {
 				errors.push(`无法验证 handler 签名: ${String(error)}`);
 			}
 		}
-		const modJson = await readJsonFile(ctx.projectPath, "src/main/resources/fabric.mod.json");
-		const refs = modJson ? mixinConfigReferences(modJson) : [];
-		let configName = String(args.configPath || "").replace(/\\/g, "/").replace(/^src\/main\/resources\//, "");
 		if (!configName) {
-			if (refs.length === 1) configName = refs[0];
-			else if (refs.length > 1) errors.push(`存在多个配置，校验时必须指定 configPath：${refs.join(", ")}`);
-			else errors.push("fabric.mod.json 未引用 Mixin 配置");
+			if (refs.length > 1) errors.push(`存在多个配置，校验时必须指定 configPath：${refs.join(", ")}`);
+			else if (refs.length === 0) errors.push("fabric.mod.json 未引用 Mixin 配置");
 		}
 		if (configName) {
 			if (!refs.includes(configName)) errors.push(`${configName} 未被 fabric.mod.json 引用`);
-			const config = await readJsonFile(ctx.projectPath, `src/main/resources/${configName}`);
 			if (!config) errors.push(`${configName} 不存在或 JSON 无效`);
 			else {
 				const basePackage = typeof config.package === "string" ? config.package : "";
-				const relative = basePackage && identity.fqn.startsWith(`${basePackage}.`) ? identity.fqn.slice(basePackage.length + 1) : identity.className;
-				const key = metadata.side === "client" ? "client" : metadata.side === "server" ? "server" : "mixins";
-				if (!Array.isArray(config[key]) || !(config[key] as unknown[]).includes(relative)) errors.push(`${relative} 未注册到 ${configName} 的 ${key}`);
+				const relative = relativeMixinClassName(identity, basePackage);
+				const key = sideToConfigKey(metadata.side);
+				if (!Array.isArray(config[key]) || !(config[key] as unknown[]).includes(relative)) {
+					errors.push(`${relative} 未注册到 ${configName} 的 ${key}`);
+				}
 			}
 		}
-		if (identity && !isValidMixinSourcePath(sourcePath, identity.fqn, metadata?.side)) {
-			errors.push(`源码路径应为 ${expectedMixinSourcePaths(identity.fqn, metadata?.side).join(" 或 ")}`)
+		if (!isValidMixinSourcePath(sourcePath, identity.fqn, metadata.side)) {
+			errors.push(`源码路径应为 ${expectedMixinSourcePaths(identity.fqn, metadata.side).join(" 或 ")}`);
 		}
 		if (errors.length) return `Error: Mixin 校验失败\n${errors.map((error) => `- ${error}`).join("\n")}`;
 		const artifacts = [sourcePath, ...(configName ? [`src/main/resources/${configName}`] : [])];
