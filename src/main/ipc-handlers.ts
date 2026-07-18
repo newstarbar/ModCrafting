@@ -79,6 +79,19 @@ export function setupIpcHandlers(): void {
   // File system: list directory contents
   ipcMain.handle('fs:listDirectory', async (_event, dirPath: string) => {
     try {
+      // Agent often passes a file path by mistake; avoid ENOTDIR stack spam.
+      try {
+        const st = fs.statSync(dirPath)
+        if (!st.isDirectory()) return []
+      } catch (statErr) {
+        const statCode =
+          statErr && typeof statErr === 'object' && 'code' in statErr
+            ? String((statErr as NodeJS.ErrnoException).code)
+            : ''
+        if (statCode === 'ENOENT') return []
+        // Fall through to readdir for other stat failures
+      }
+
       const entries = fs.readdirSync(dirPath, { withFileTypes: true })
       return entries
         .filter((entry) => !entry.name.startsWith('.')) // hide hidden files
@@ -95,7 +108,8 @@ export function setupIpcHandlers(): void {
         })
     } catch (err) {
       const code = err && typeof err === 'object' && 'code' in err ? String((err as NodeJS.ErrnoException).code) : ''
-      if (code !== 'ENOENT') {
+      // ENOENT / ENOTDIR are expected when path is missing or is a file
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
         console.error('fs:listDirectory error:', err)
       }
       return []

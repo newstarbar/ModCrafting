@@ -24,6 +24,7 @@ import {
 	generateModItemsRegistrationClass
 } from "../project/template-codegen.ts";
 import { buildMixinScaffold, expectedMixinSourcePaths, isValidMixinSourcePath, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
+import { listDirectoryEmptyFileMessage, pathBasenameLooksLikeFile } from "./list-directory-guard.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
 	if (typeof args.mcVersion === "string" && args.mcVersion.trim()) return args.mcVersion.trim();
@@ -687,9 +688,16 @@ export const listDirectoryTool: Tool = {
 	readOnly: () => true,
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
 		if (!ctx.projectPath) return "No project open";
-		const dirPath = args.path ? `${ctx.projectPath}/${args.path}` : ctx.projectPath;
+		const relPath = typeof args.path === "string" ? args.path : "";
+		const dirPath = relPath ? `${ctx.projectPath}/${relPath}` : ctx.projectPath;
 		try {
 			const entries = await window.api.listDirectory(dirPath);
+			if (entries.length === 0 && relPath) {
+				const exists = await window.api.exists(dirPath);
+				if (exists && pathBasenameLooksLikeFile(relPath)) {
+					return listDirectoryEmptyFileMessage(relPath);
+				}
+			}
 			const lines = entries.map((e: { name: string; isDirectory: boolean }) => (e.isDirectory ? `${e.name}/` : e.name));
 			return lines.join("\n") || "(empty directory)";
 		} catch (err) {
