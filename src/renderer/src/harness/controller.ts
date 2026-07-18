@@ -14,7 +14,8 @@ import { isRetryableFetchError } from './fetch-retry'
 import {
   type ComposerMode,
   resolveTurnIntent,
-  buildSessionGoalBlock
+  buildSessionGoalBlock,
+  isErrorReportInput
 } from './turn-intent'
 import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
 import { OpenCodeAdapter } from './opencode-adapter.ts'
@@ -59,6 +60,8 @@ export class Controller {
   /** Last plan text that had parseable steps (even if hard-validation failed). Used by 继续. */
   private lastPlanCandidate: string | null = null
   private lastTurnMode: 'chat' | 'develop' | 'plan_only' | 'resume' = 'chat'
+  /** Last mode written into messages[0]; skip rewrite when unchanged (prompt-cache). */
+  private lastSystemMode: 'chat' | 'plan' | 'execute' | null = null
   private useOpenCodeDelegate = false
   private openCodeModel = 'opencode/deepseek-v4-flash-free'
   private openCodeAdapter: OpenCodeAdapter | null = null
@@ -540,13 +543,21 @@ ${projectInfo}`
   }
 
   private async updateSystemPrompt(mode: 'chat' | 'plan' | 'execute'): Promise<void> {
+    const sysIdx = this.messages.findIndex((m) => m.role === 'system' && m.origin === 'harness')
+    if (this.lastSystemMode === mode && sysIdx >= 0) {
+      // Same mode: keep messages[0] stable for prompt cache; still refresh project scan for execute entry.
+      if (mode === 'execute') {
+        this.lastProjectInfo = await this.buildProjectInfo()
+      }
+      return
+    }
     const prompt = await this.buildSystemPrompt(mode)
-    const sysIdx = this.messages.findIndex((m) => m.role === 'system')
     if (sysIdx >= 0) {
       this.messages[sysIdx] = { role: 'system', content: prompt, origin: 'harness' }
     } else {
       this.messages.unshift({ role: 'system', content: prompt, origin: 'harness' })
     }
+    this.lastSystemMode = mode
   }
 
   private trimTrailingAssistants(): void {
@@ -661,13 +672,27 @@ ${projectInfo}`
     }
 
     try {
-      if (intent === 'chat') {
+      // Guard: crash/error dumps must not steal into chat while execute is still active —
+      // that would overwrite messages[0] with "对话模式 / 不要调用任何工具".
+      let effectiveIntent = intent
+      if (
+        intent === 'chat' &&
+        this._phase === 'execute' &&
+        this.planTracker &&
+        !this.planTracker.allDone() &&
+        isErrorReportInput(input)
+      ) {
+        effectiveIntent = 'resume'
+        this.lastTurnMode = 'resume'
+      }
+
+      if (effectiveIntent === 'chat') {
         const result = await this.runChatTurn(streamCb)
         this.onAgentStatus?.('')
         return result
       }
 
-      if (intent === 'resume') {
+      if (effectiveIntent === 'resume') {
         this.adoptPlanCandidateIfNeeded()
         if (!this.planTracker) {
           this.onAgentStatus?.('')
@@ -1023,7 +1048,8 @@ ${projectInfo}`
         return execResult || planResult
       }
 
-      // Resume execute phase
+      // Resume execute phase — rebuild execute system prompt (may have been overwritten by a chat turn).
+      await this.updateSystemPrompt('execute')
       const result = await this.agent.run(
         this.apiConfig.endpoint,
         this.apiConfig.apiKey,
@@ -1076,6 +1102,7 @@ ${projectInfo}`
     this._phase = 'plan'
     this.planTracker = null
     this.planReadyAwaitingExecute = false
+    this.lastSystemMode = null
     this.agent.resetRunState()
     this.agent.clarificationPending = false
     logger.agent('Session cleared')
@@ -1151,7 +1178,12 @@ ${projectInfo}`
       )
     }))
     this._phase = messages.some((m) => m.role === 'user' || m.role === 'assistant') ? 'execute' : 'plan'
+    this.lastSystemMode = null
     this.agent.resetRunState()
+    // Rebuild system prompt so reload does not keep a stale "对话模式" prefix.
+    if (this._phase === 'execute') {
+      void this.updateSystemPrompt('execute')
+    }
   }
 
   /** Rebuild the plan tracker from persisted plan steps, so the workflow
@@ -1180,6 +1212,8 @@ ${projectInfo}`
     })))
     if (this.planTracker) {
       this._phase = 'execute'
+      this.lastSystemMode = null
+      void this.updateSystemPrompt('execute')
     }
   }
 }

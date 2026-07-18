@@ -106,7 +106,9 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
     return isRecipeInspectionPath(String(call.args.path || ''))
   }
   if (call.name === 'delete_file') {
-    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
+    // Build/run steps often need to delete misplaced main copies (duplicate class /
+    // splitEnvironment migration) before or during repair — allow without waiting for repairMode.
+    if (step.kind === 'build' || step.kind === 'run') return true
     return step.kind === 'write'
   }
   if (call.name === 'run_command') {
@@ -135,7 +137,10 @@ export function isToolAllowedForStep(
 
   const explicitlyAllowed = step.allowedTools.includes(call.name)
   const repairOverride = Boolean(options?.repairMode && REPAIR_OVERRIDE_TOOLS.has(call.name))
-  if (!explicitlyAllowed && !repairOverride) return false
+  // Build/run may delete misplaced files (duplicate class) before repairMode flips on.
+  const buildRunDelete =
+    call.name === 'delete_file' && (step.kind === 'build' || step.kind === 'run')
+  if (!explicitlyAllowed && !repairOverride && !buildRunDelete) return false
 
   if (call.name === 'list_directory') return true
   if (call.name === 'grep') return true
@@ -151,7 +156,7 @@ export function isToolAllowedForStep(
   }
 
   if (call.name === 'delete_file') {
-    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
+    if (step.kind === 'build' || step.kind === 'run') return true
     return step.kind === 'write' || step.kind === 'mixin'
   }
 

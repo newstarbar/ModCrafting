@@ -1001,11 +1001,41 @@ export class WorkflowEngine {
         }
 
         const validation = validateToolCalls(allCalls, allowedTools)
+        // execute 阶段误调 submit_plan → 无害提示，避免 0ms 失败噪音与死循环
         for (const [id, rejected] of validation.rejected) {
+          if (
+            rejected.toolName === 'submit_plan' ||
+            (rejected.errorKind === 'tool_not_offered' && /submit_plan/.test(rejected.output || ''))
+          ) {
+            const soft: ToolResult = {
+              output: '执行阶段无需 submit_plan。请按当前步骤直接调用工具（read_file/edit_file/write_file/trigger_build 等）。',
+              durationMs: 0,
+              ok: true,
+              toolName: 'submit_plan',
+              args: rejected.args,
+              exitCode: null
+            }
+            validation.rejected.set(id, soft)
+            this.emitRejected(id, soft)
+            continue
+          }
           this.emitRejected(id, rejected)
         }
         const calls = validation.accepted
         if (calls.length === 0) {
+          const onlySoftSubmit =
+            [...validation.rejected.values()].every((r) => r.toolName === 'submit_plan' && r.ok)
+          if (onlySoftSubmit) {
+            pendingEphemeralInstruction = this.appendToolRound(
+              baseMessages,
+              modelResult.text || streamText,
+              allCalls,
+              validation.rejected,
+              '执行阶段无需 submit_plan。请按当前步骤直接调用工具。'
+            )
+            attempt++
+            continue
+          }
           const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values())
           pendingEphemeralInstruction = this.appendToolRound(
             baseMessages,

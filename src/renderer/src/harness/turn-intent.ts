@@ -20,12 +20,29 @@ const DEV_PATTERN = /创建|实现|开发|添加|修改|修复|删除|重构|构
 const FEATURE_PATTERN = /可以进行|能够|支持|二段跳|配方|物品|方块|mixin|功能|效果|技能/i
 const PLAN_ADJUST_PATTERN = /调整计划|修改计划|重新计划|重做计划/i
 
+/** Crash reports, Gradle failures, stack traces — should drive repair, not chat. */
+const ERROR_REPORT_PATTERN =
+  /Crash Report|----\s*Minecraft Crash Report\s*----|Exception in thread|java\.lang\.\w*Exception|at\s+knot\/\/|BUILD FAILED|Compilation failed|\.java:\d+|error:\s|Caused by:|什么都没改|崩溃报告|编译错误|构建失败/i
+
 export function isResumeInput(input: string): boolean {
   return RESUME_PATTERN.test(input.trim())
 }
 
 export function isPlanAdjustInput(input: string): boolean {
   return PLAN_ADJUST_PATTERN.test(input.trim())
+}
+
+export function isErrorReportInput(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed) return false
+  if (ERROR_REPORT_PATTERN.test(trimmed)) return true
+  // Multi-line stack-ish dumps without the exact Crash Report header
+  const lines = trimmed.split(/\r?\n/).filter((l) => l.trim())
+  if (lines.length >= 4) {
+    const stackish = lines.filter((l) => /^\s*at\s+\S+/.test(l) || /Exception|Error/.test(l)).length
+    if (stackish >= 2) return true
+  }
+  return false
 }
 
 function heuristicChat(input: string): boolean {
@@ -69,6 +86,12 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
     return 'resume'
   }
 
+  // Error/crash dumps should resume or re-enter develop, never silent chat.
+  if (isErrorReportInput(trimmed)) {
+    if (ctx.phase === 'execute' || canResumePlan) return 'resume'
+    return 'develop'
+  }
+
   if (ctx.composerMode === 'plan') {
     if (hasReadyPlan && !isPlanAdjustInput(trimmed) && !isResumeInput(trimmed)) {
       return 'plan_only'
@@ -90,8 +113,8 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
     // Agent mode is capable of acting, but questions/explanations remain read-only.
     // Only an explicit mutation signal enters the plan -> execute workflow.
     if (heuristicChat(trimmed)) return 'chat'
-    if (heuristicDevelop(trimmed, false)) return 'develop'
-    return 'chat'
+    if (heuristicDevelop(trimmed, ctx.hasProject)) return 'develop'
+    return ctx.hasProject ? 'develop' : 'chat'
   }
 
   if (heuristicChat(trimmed)) return 'chat'

@@ -1,7 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
-import { resolveTurnIntent, buildSessionGoalBlock, isCodeExplainInput } from '../src/renderer/src/harness/turn-intent.ts'
+import {
+  resolveTurnIntent,
+  buildSessionGoalBlock,
+  isCodeExplainInput,
+  isErrorReportInput
+} from '../src/renderer/src/harness/turn-intent.ts'
 import {
   compilePlanFromText,
   dropVagueSteps,
@@ -9,6 +14,8 @@ import {
   needsKnowledgeInspect,
   parseStructuredSteps
 } from '../src/renderer/src/harness/plan-compiler.ts'
+import { isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
+import type { WorkflowStep } from '../src/renderer/src/harness/workflow-types.ts'
 
 function intentCtx(overrides: Partial<Parameters<typeof resolveTurnIntent>[1]> = {}) {
   return {
@@ -48,9 +55,10 @@ test('resolveTurnIntent: continue with plan candidate after plan_failed → resu
     resolveTurnIntent('继续', intentCtx({ phase: 'plan', planTracker: null, hasPlanCandidate: true })),
     'resume'
   )
+  // No plan to resume: with a project open, prefer develop over silent chat.
   assert.equal(
     resolveTurnIntent('继续', intentCtx({ phase: 'plan', planTracker: null, hasPlanCandidate: false })),
-    'chat'
+    'develop'
   )
 })
 
@@ -113,4 +121,77 @@ test('PlanTracker uses compiler terminal steps', () => {
   const tracker = PlanTracker.fromPlanText('1. [write] src/main/java/Foo.java — 主类')
   assert.ok(tracker.steps.length >= 3)
   assert.ok(tracker.steps.some((s) => /build/i.test(s.description)))
+})
+
+test('isErrorReportInput detects crash and build failures', () => {
+  assert.ok(isErrorReportInput('--- 崩溃报告 ---\n---- Minecraft Crash Report ----\njava.lang.IllegalStateException'))
+  assert.ok(isErrorReportInput('BUILD FAILED\nCompilation failed\nFoo.java:12: error: cannot find symbol'))
+  assert.ok(isErrorReportInput('at knot//net.minecraft.client.gui.screen.Screen.render(Screen.java:1)'))
+  assert.equal(isErrorReportInput('你好'), false)
+  assert.equal(isErrorReportInput('为什么这个 Mixin 不生效？'), false)
+})
+
+test('resolveTurnIntent: crash report during execute → resume', () => {
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '写文件', status: 'completed' },
+    { id: '2', description: '构建项目（gradlew build）', status: 'failed' },
+    { id: '3', description: '启动游戏', status: 'pending' }
+  ])
+  const crash = `--- 崩溃报告 ---
+---- Minecraft Crash Report ----
+java.lang.IllegalStateException: setScreen on the wrong thread
+	at knot//net.minecraft.client.gui.screen.Screen.ensureEventsAreInitialized(Screen.java:1347)`
+  assert.equal(
+    resolveTurnIntent(crash, intentCtx({ phase: 'execute', planTracker: tracker, composerMode: 'agent' })),
+    'resume'
+  )
+})
+
+test('resolveTurnIntent: BUILD FAILED with project and no plan → develop', () => {
+  assert.equal(
+    resolveTurnIntent(
+      'BUILD FAILED\nsrc/main/java/Foo.java:10: error: cannot find symbol',
+      intentCtx({ phase: 'plan', planTracker: null, hasProject: true })
+    ),
+    'develop'
+  )
+})
+
+test('resolveTurnIntent: short greeting stays chat even with project', () => {
+  assert.equal(resolveTurnIntent('谢谢', intentCtx({ hasProject: true })), 'chat')
+  assert.equal(resolveTurnIntent('你好', intentCtx({ hasProject: true })), 'chat')
+})
+
+test('resolveTurnIntent: plain bug note with project → develop (not silent chat)', () => {
+  assert.equal(
+    resolveTurnIntent('F6后鼠标被强制做到屏幕中心，无法操作截图设置', intentCtx({ hasProject: true })),
+    'develop'
+  )
+})
+
+test('isToolAllowedForStep: delete_file allowed on build without repairMode', () => {
+  const buildStep: WorkflowStep = {
+    id: '6',
+    title: '构建项目（gradlew build）',
+    kind: 'build',
+    status: 'pending',
+    allowedTools: ['trigger_build', 'read_error_log'],
+    maxAttempts: 3
+  }
+  assert.equal(
+    isToolAllowedForStep(buildStep, {
+      id: 'c1',
+      name: 'delete_file',
+      args: { path: 'src/main/java/com/example/frame_cover/mixin/TitleScreenBgInjector.java' }
+    }),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(buildStep, {
+      id: 'c2',
+      name: 'delete_file',
+      args: { path: 'src/main/java/com/example/frame_cover/mixin/TitleScreenBgInjector.java' }
+    }, { repairMode: false }),
+    true
+  )
 })

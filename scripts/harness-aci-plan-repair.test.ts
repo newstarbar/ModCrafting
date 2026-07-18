@@ -105,9 +105,10 @@ test('repair mode allows delete_file and mixin scaffold for main→client migrat
     allowedTools: ['trigger_build', 'read_error_log', 'read_file'],
     maxAttempts: 6
   }
+  // delete_file is allowed on build/run even before repairMode (duplicate-class cleanup).
   assert.equal(
     isToolAllowedForStep(step, { name: 'delete_file', args: { path: 'src/main/java/com/example/mixin/A.java' } }),
-    false
+    true
   )
   assert.equal(
     isToolAllowedForStep(step, { name: 'fabric_mixin_scaffold', args: { targetClass: 'net.minecraft.client.gui.screen.TitleScreen' } }),
