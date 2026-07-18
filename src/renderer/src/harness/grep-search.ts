@@ -47,6 +47,25 @@ async function walkFiles(
   }
 }
 
+/**
+ * Locate files under `src/` whose basename matches `basename` (case-insensitive).
+ * Used by read_file's ENOENT fallback so a wrong package path (or main/client mix-up)
+ * still resolves to the real file instead of failing with raw ENOENT.
+ */
+export async function findFilesByBasename(
+  projectPath: string,
+  basename: string,
+  limit = 8
+): Promise<string[]> {
+  if (!projectPath || !basename) return []
+  const target = basename.replace(/\\/g, '/').split('/').pop() || basename
+  const targetLower = target.toLowerCase()
+  const files: string[] = []
+  await walkFiles(projectPath, 'src', files, 0)
+  const matches = files.filter((f) => (f.split('/').pop() || '').toLowerCase() === targetLower)
+  return matches.slice(0, limit)
+}
+
 export async function grepInProject(
   ctx: ToolContext,
   pattern: string,

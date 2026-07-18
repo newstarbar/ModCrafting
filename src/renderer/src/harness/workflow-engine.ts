@@ -286,7 +286,35 @@ const MAX_FREE_KNOWLEDGE_ROUNDS = 3
 const MAX_DOC_SEARCH_PER_WRITE_STEP = 2
 /** Pure read/list/grep rounds before first write evidence — do not burn attempt. */
 export const MAX_FREE_EXPLORE_ROUNDS = 4
+/** Fix 5: after this many consecutive identical rejections, force-stop the stuck step. */
+export const MAX_IDENTICAL_REJECTIONS = 4
 const EXPLORE_TOOLS = new Set(['read_file', 'list_directory', 'grep'])
+/** Tools whose successful execution constitutes a real file mutation this run (Fix 3 guard). */
+const RUN_WRITE_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'delete_file',
+  'create_recipe',
+  'fabric_recipe_generate',
+  'fabric_template_generate',
+  'fabric_content_register',
+  'fabric_data_assets_generate',
+  'fabric_mixin_scaffold',
+  'fabric_mixin_register'
+])
+
+/**
+ * Fix 3: detect a "no-op" build — Gradle reports BUILD SUCCESSFUL but every task is
+ * UP-TO-DATE / NO-SOURCE, meaning no source actually compiled. Combined with a run that
+ * produced zero writes, this is the "silent false success" signature.
+ */
+export function isNoOpBuildResult(output: string | undefined): boolean {
+  const text = String(output || '')
+  if (!/BUILD SUCCESSFUL|构建完成|构建已完成/i.test(text)) return false
+  const taskLines = text.split('\n').filter((line) => /^\s*(?:\[[^\]]*\]\s*)?>?\s*Task\s+:/i.test(line))
+  if (taskLines.length === 0) return false
+  return taskLines.every((line) => /UP-TO-DATE|NO-SOURCE|SKIPPED|FROM-CACHE/i.test(line))
+}
 /** After explore budget: strip roam tools only — keep read_file so edit_file aci_read_gate still works. */
 const EXPLORE_ROAM_TOOLS = new Set(['list_directory', 'grep'])
 
@@ -791,11 +819,22 @@ export class WorkflowEngine {
 
   async run(baseMessages: ChatMessage[]): Promise<WorkflowRunResult> {
     let finalContent = ''
+    // Fix 3: run-level guard — did any real write happen anywhere this run?
+    // Used to detect no-op builds (all UP-TO-DATE + zero writes) → surface instead of silent success.
+    let anyWriteThisRun = false
+    const planHasWriteSteps = this.steps.some(
+      (s) => s.kind === 'write' || s.kind === 'recipe' || s.kind === 'mixin'
+    )
     this.emitPlanState()
 
     while (!this.abortSignal?.aborted) {
       const step = this.currentStep()
       if (!step) break
+      // Fix 2: only a genuinely resumed step (persisted 'running') may treat pre-existing
+      // files on disk as write evidence. A fresh 'pending' step reached this run must
+      // produce a real write_file/edit_file — pre-existing target files (i.e. every
+      // "modify existing file" step) must NOT auto-satisfy evidence.
+      const wasResumedRun = step.status === 'running'
       if (step.status === 'pending' || step.status === 'failed') step.status = 'running'
       this.emitPlanState()
       const delegatedEvidence: ToolResult[] = []
@@ -853,7 +892,7 @@ export class WorkflowEngine {
       }
 
       const diskEvidence: ToolResult[] = []
-      if (step.kind === 'write' && this.projectPath) {
+      if (step.kind === 'write' && this.projectPath && wasResumedRun) {
         try {
           const existing = await collectDiskWriteEvidence(this.projectPath, step, {
             exists: (p) => window.api.exists(p),
@@ -1173,8 +1212,13 @@ export class WorkflowEngine {
             resultsById,
             rejectionHint
           )
-          // Identical rejection spam (e.g. edit_file on build) burns budget faster to escape loops.
-          if (consecutiveIdenticalRejections >= 2) {
+          // Fix 5: identical dead-end loop guard. Spam burns budget faster; a persistent
+          // identical wall (model keeps hitting the same rejection with no new evidence)
+          // is force-stopped so the step fails fast with an actionable message instead of
+          // spinning silently until maxIterations.
+          if (consecutiveIdenticalRejections >= MAX_IDENTICAL_REJECTIONS) {
+            attempt = maxIterations
+          } else if (consecutiveIdenticalRejections >= 2) {
             attempt += 2
           } else if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) {
             attempt++
@@ -1187,6 +1231,9 @@ export class WorkflowEngine {
         const executed = await this.executeAllowedCalls(step, executableAllowed)
         for (const [id, result] of executed) {
           resultsById.set(id, result)
+          if (result.ok && !result.error && RUN_WRITE_TOOLS.has(result.toolName || '')) {
+            anyWriteThisRun = true
+          }
           if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || '') && result.ok && !result.error) {
             seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`)
           }
@@ -1256,6 +1303,21 @@ export class WorkflowEngine {
         let roundInstruction: string | undefined
 
         if (success) {
+          // Fix 3: a green build that compiled nothing (all UP-TO-DATE) while the run made
+          // zero writes, on a plan that had write/recipe/mixin work, is the silent
+          // "false success" signature. Do not report it as a clean pass — surface it loudly.
+          if (
+            step.kind === 'build' &&
+            planHasWriteSteps &&
+            !anyWriteThisRun &&
+            isNoOpBuildResult(decisiveResult!.output)
+          ) {
+            const warning =
+              '⚠️ 构建为 UP-TO-DATE：本轮未检测到任何文件改动（无 write_file/edit_file 等写入）。' +
+              '这通常意味着预期的代码修改并未真正落盘，请核对上述写码步骤是否被跳过或误判完成。'
+            this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: warning } })
+            finalContent = [finalContent.trim(), warning].filter(Boolean).join('\n\n')
+          }
           repairMode = false
           repairWriteRequired = false
           repairValidationRequired = undefined

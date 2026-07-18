@@ -16,7 +16,7 @@ import {
 import { executeTemplateGenerate, resolveProjectConfig } from "../project/template-runner.ts";
 import { validateFileEditGate } from "./edit-gate.ts";
 import { guardedWriteFile } from "./guarded-write.ts";
-import { grepInProject } from "./grep-search.ts";
+import { grepInProject, findFilesByBasename } from "./grep-search.ts";
 import { formatClarificationOutput, validateClarificationArgs } from "./clarify-validation.ts";
 import {
 	generateModBlockEntitiesRegistrationClass,
@@ -116,13 +116,11 @@ export const readFileTool: Tool & Previewer = {
 	readOnly: () => true,
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
-		const filePath = `${ctx.projectPath}/${args.path}`;
-		try {
-			const res = await window.api.readFile(filePath);
-			if (!res.success) return `Error: ${res.error}`;
-			const content = res.content || "";
-			if (!content) return "(空文件)";
+		const projectPath = ctx.projectPath;
+		const requestedRel = String(args.path || "").replace(/\\/g, "/");
 
+		const renderContent = (relPath: string, content: string, note?: string): string => {
+			if (!content) return note ? `${note}\n(空文件)` : "(空文件)";
 			const lines = content.split("\n");
 			const total = lines.length;
 			const offset = Math.max(1, Number(args.offset) || 1);
@@ -130,15 +128,64 @@ export const readFileTool: Tool & Previewer = {
 			const effectiveLimit = limit === 0 ? total : Math.min(limit, total);
 			const end = Math.min(offset + effectiveLimit - 1, total);
 			const page = lines.slice(offset - 1, end);
-
 			const numbered = page.map((line, i) => `${offset + i} | ${line}`).join("\n");
-			const header = `文件: ${args.path}（共 ${total} 行，显示 ${offset}-${end} 行）`;
+			const header = `文件: ${relPath}（共 ${total} 行，显示 ${offset}-${end} 行）`;
 			const footer = end < total ? `\n（剩余 ${total - end} 行。用 offset=${end + 1} 继续读取）` : "";
-			ctx.fileSession?.markRead(String(args.path || ""));
-			return `${header}\n${numbered}${footer}`;
-		} catch (err) {
-			return `Error reading file: ${err}`;
+			ctx.fileSession?.markRead(relPath);
+			return `${note ? note + "\n" : ""}${header}\n${numbered}${footer}`;
+		};
+
+		const tryRead = async (relPath: string): Promise<{ ok: boolean; content?: string }> => {
+			try {
+				const res = await window.api.readFile(`${projectPath}/${relPath}`);
+				if (res.success) return { ok: true, content: res.content || "" };
+			} catch {
+				// fall through to caller-level fallback
+			}
+			return { ok: false };
+		};
+
+		const primary = await tryRead(requestedRel);
+		if (primary.ok) return renderContent(requestedRel, primary.content || "");
+
+		// Fix 4: ENOENT fallback — a wrong package path or src/main ↔ src/client mix-up
+		// should still resolve instead of failing with raw ENOENT.
+		// 1) swap main/client source roots.
+		const swapped = requestedRel.includes("src/main/")
+			? requestedRel.replace("src/main/", "src/client/")
+			: requestedRel.includes("src/client/")
+				? requestedRel.replace("src/client/", "src/main/")
+				: null;
+		if (swapped && swapped !== requestedRel) {
+			const alt = await tryRead(swapped);
+			if (alt.ok) {
+				return renderContent(swapped, alt.content || "", `（原路径 ${requestedRel} 不存在，已定位到 ${swapped}）`);
+			}
 		}
+
+		// 2) glob by basename across src/.
+		const base = requestedRel.split("/").pop() || requestedRel;
+		if (base && /\.[a-z0-9]+$/i.test(base)) {
+			try {
+				const matches = await findFilesByBasename(projectPath, base);
+				const distinct = matches.filter((m) => m !== requestedRel);
+				if (distinct.length === 1) {
+					const only = await tryRead(distinct[0]);
+					if (only.ok) {
+						return renderContent(distinct[0], only.content || "", `（原路径 ${requestedRel} 不存在，已定位到 ${distinct[0]}）`);
+					}
+				} else if (distinct.length > 1) {
+					return (
+						`Error: 未找到 ${requestedRel}。项目内存在同名文件多处，请用准确路径重试：\n` +
+						distinct.map((m) => `- ${m}`).join("\n")
+					);
+				}
+			} catch {
+				// ignore glob failures — fall through to generic error
+			}
+		}
+
+		return `Error: 未找到文件 ${requestedRel}（已尝试 main/client 源集互换与按文件名全局检索）。请用 grep 或 list_directory 确认真实路径。`;
 	},
 	preview: () => null
 };
