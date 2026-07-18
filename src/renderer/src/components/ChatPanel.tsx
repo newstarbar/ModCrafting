@@ -44,6 +44,11 @@ import { shouldShowPinnedPlan } from '../utils/plan-visibility'
 import ToolExploreGroup from './ToolExploreGroup'
 import { groupExploreToolRuns, collectExploreGroupKeys, isExploreTool } from '../utils/tool-explore-group'
 import { extractPreview } from '../utils/tool-output-preview'
+import {
+  shouldApplyTurnEvent,
+  shouldCancelTurnOnSessionLeave,
+  shouldForceRestoreSnapshot
+} from '../utils/session-switch-guard'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -265,21 +270,39 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     onUpdateSessionMetaRef.current?.(sid, meta)
   }, [])
 
+  const flushPersistTo = useCallback((
+    sessionId: string | null,
+    messages: DisplayMessage[],
+    plan: ActivePlan | null,
+    options?: { appendSystem?: PersistedMessage[]; resetSystem?: boolean }
+  ) => {
+    if (!sessionId) return
+    const serialized = serializeDisplayMessages(messages, plan)
+    let systemMsgs = options?.resetSystem
+      ? []
+      : (sessionsRef.current.find((s) => s.id === sessionId)?.messages.filter((m) => m.role === 'system') ?? [])
+    if (options?.appendSystem?.length) {
+      systemMsgs = [...systemMsgs, ...options.appendSystem]
+    }
+    onPersistSessionRef.current(sessionId, [...serialized, ...systemMsgs])
+  }, [])
+
   const flushPersist = useCallback((
     messages: DisplayMessage[],
     plan: ActivePlan | null,
     options?: { appendSystem?: PersistedMessage[]; resetSystem?: boolean }
   ) => {
-    const sid = currentSessionIdRef.current
-    if (!sid) return
-    const serialized = serializeDisplayMessages(messages, plan)
-    let systemMsgs = options?.resetSystem
-      ? []
-      : (sessionsRef.current.find((s) => s.id === sid)?.messages.filter((m) => m.role === 'system') ?? [])
-    if (options?.appendSystem?.length) {
-      systemMsgs = [...systemMsgs, ...options.appendSystem]
-    }
-    onPersistSessionRef.current(sid, [...serialized, ...systemMsgs])
+    flushPersistTo(currentSessionIdRef.current, messages, plan, options)
+  }, [flushPersistTo])
+
+  /** Invalidate in-flight turn events after cancel / session switch. */
+  const turnGenerationRef = useRef(0)
+  const activeTurnGenerationRef = useRef(0)
+  const bumpTurnGeneration = useCallback(() => {
+    turnGenerationRef.current += 1
+  }, [])
+  const bindActiveTurnGeneration = useCallback(() => {
+    activeTurnGenerationRef.current = turnGenerationRef.current
   }, [])
 
   const onRunningChangeRef = useRef(onRunningChange)
@@ -350,6 +373,17 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     streamDone: false
   })
 
+  const resetTurnUiState = useCallback(() => {
+    turnRef.current = { msgId: '', entries: [], streamDone: false }
+    setIsLoading(false)
+    setClarificationPending(false)
+    setClarificationQuestion('')
+    setClarificationOptions([])
+    setAgentStatus('')
+    setPlanReady(false)
+    onRunningChangeRef.current?.(false)
+  }, [])
+
   const isUserScrolledUpRef = useRef(false)
   const chatMessagesRef = useRef<HTMLDivElement>(null)
   const handleScroll = useCallback(() => {
@@ -402,11 +436,24 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   // Restore UI + controller when switching sessions; wait until session payload is available
   const restoredSessionIdRef = useRef<string | null>(null)
   useEffect(() => {
+    const previousSessionId = restoredSessionIdRef.current
+
+    // Leaving a session (switch away or clear): flush that session, cancel in-flight turn.
+    if (shouldCancelTurnOnSessionLeave(previousSessionId, currentSessionId)) {
+      flushPersistTo(previousSessionId, displayMessagesRef.current, activePlanRef.current)
+      if (controllerRef.current?.running) {
+        controllerRef.current.cancel()
+      }
+      bumpTurnGeneration()
+      resetTurnUiState()
+    }
+
     if (!currentSessionId) {
       restoredSessionIdRef.current = null
       setDisplayMessages([])
       setActivePlan(null)
       setCollapsedToolIds(new Set())
+      setCollapsedExploreGroupKeys(new Set())
       setCollapsedReasoningKeys(new Set())
       turnRef.current = { msgId: '', entries: [], streamDone: false }
       setUsageAccum(EMPTY_USAGE)
@@ -415,7 +462,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       return
     }
 
-    if (restoredSessionIdRef.current === currentSessionId) return
+    // Same session (e.g. persist cycle updated `sessions`) — do not re-restore.
+    if (previousSessionId === currentSessionId) return
 
     const session = sessionsRef.current.find((s) => s.id === currentSessionId)
     if (!session) return
@@ -442,19 +490,24 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     )
     setUsageAccum(restoredUsage)
     onUsageChangeRef.current?.(restoredUsage)
-    // Only restore controller snapshot if it does NOT already have more messages
-    // than the persisted session. This prevents the persistence cycle from
-    // overwriting in-memory messages accumulated during an active turn.
-    const currentCtrlMsgs = controllerRef.current?.getSnapshot() ?? []
+
     const persistedMsgs = toControllerMessages(session.messages)
-    if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
+    const forceRestore = shouldForceRestoreSnapshot(previousSessionId, currentSessionId)
+    if (forceRestore) {
       controllerRef.current?.restoreSnapshot(persistedMsgs)
+    } else {
+      // Same-session path (should not hit due to early return) — keep length guard.
+      const currentCtrlMsgs = controllerRef.current?.getSnapshot() ?? []
+      if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
+        controllerRef.current?.restoreSnapshot(persistedMsgs)
+      }
     }
-    // Restore plan tracker so workflow engine can resume execution
     if (restoredPlan?.steps && restoredPlan.steps.length > 0) {
       controllerRef.current?.restorePlanTracker(restoredPlan.steps)
+    } else {
+      controllerRef.current?.restorePlanTracker([])
     }
-  }, [currentSessionId, sessions])
+  }, [currentSessionId, sessions, flushPersistTo, bumpTurnGeneration, resetTurnUiState])
 
   useEffect(() => {
     return () => {
@@ -500,6 +553,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   // ======== EVENT HANDLER ========
   const handleEvent = useCallback((event: Event) => {
+    // Drop late events from a cancelled / switched-away turn.
+    if (!shouldApplyTurnEvent(activeTurnGenerationRef.current, turnGenerationRef.current)) {
+      return
+    }
     const t = turnRef.current
 
     switch (event.kind) {
@@ -1017,6 +1074,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
 
     setInput('')
+    bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
     // Keep pinned plan when resuming; clearing it made「继续」lose tracker after reload.
@@ -1029,6 +1087,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!currentSessionId) {
       const newId = onNewSession(userMsg)
       currentSessionIdRef.current = newId
+      // Claim session before App re-renders so restore effect does not wipe this turn.
+      restoredSessionIdRef.current = newId
       const preSnapshot = buildPreTurnSnapshot({
         messageIndex: 0,
         controller: ctrl,
@@ -1078,7 +1138,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         })
       }
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending])
+  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending, bindActiveTurnGeneration, persistComposerMeta])
 
   const handleClarificationConfirm = useCallback(async (answer: string) => {
     const trimmed = answer.trim()
@@ -1087,6 +1147,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setClarificationQuestion('')
     setClarificationOptions([])
     setInput('')
+    bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
     onRunningChangeRef.current?.(true)
@@ -1100,12 +1161,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         onRunningChangeRef.current?.(false)
       }
     }
-  }, [isLoading, clarificationPending])
+  }, [isLoading, clarificationPending, bindActiveTurnGeneration])
 
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
     const ctrl = controllerRef.current
     if (!ctrl) return
+    bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('执行中...')
     setPlanReady(false)
@@ -1116,7 +1178,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     }
-  }, [isLoading, toolchainReady])
+  }, [isLoading, toolchainReady, bindActiveTurnGeneration])
 
   const handleTemplateSelect = useCallback((templateId: string, name: string) => {
     if (isLoading || clarificationPending) {
@@ -1179,6 +1241,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!currentSessionId) {
       const newId = onNewSession(prompt)
       currentSessionIdRef.current = newId
+      restoredSessionIdRef.current = newId
       const preSnapshot = buildPreTurnSnapshot({
         messageIndex: 0,
         controller: controllerRef.current,
@@ -1207,6 +1270,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!ctrl) return
     ctrl.setComposerMode(composerMode)
     ctrl.setSessionGoal(nextSessionGoal)
+    bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
     ctrl.send(prompt).catch(() => {
@@ -1214,7 +1278,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     })
-  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextFiles, projectPath])
+  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextFiles, projectPath, bindActiveTurnGeneration, persistComposerMeta])
 
   const handleTemplateFormCancel = useCallback(() => {
     setShowTemplateForm(false)
@@ -1238,6 +1302,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   }, [persistComposerMeta])
 
   const handleCancel = useCallback(() => {
+    bumpTurnGeneration()
     controllerRef.current?.cancel()
     const t = turnRef.current
     t.streamDone = true
@@ -1280,7 +1345,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     setActivePlan(null)
     t.msgId = ''
-  }, [flushPersist])
+  }, [flushPersist, bumpTurnGeneration])
 
   const handleRetryTurn = useCallback(async (turnId: string) => {
     if (isLoading) return
@@ -1301,6 +1366,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     const truncated = displayMessages.slice(0, turnIndex + 1)
 
+    bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
     setActivePlan(null)
@@ -1323,7 +1389,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     }
-  }, [isLoading, apiConfig, ensureApiKey, displayMessages, flushPersist])
+  }, [isLoading, apiConfig, ensureApiKey, displayMessages, flushPersist, bindActiveTurnGeneration])
 
   const handleRollback = useCallback((msgId: string) => {
     if (isLoading) return
