@@ -76,6 +76,7 @@ interface ModCraftingApi {
   listDirectory: (dirPath: string) => Promise<FileEntry[]>
   readFile: (filePath: string) => Promise<FileResult>
   writeFile: (filePath: string, content: string) => Promise<WriteResult>
+  deleteFile: (filePath: string) => Promise<WriteResult>
   exists: (filePath: string) => Promise<boolean>
   createDirectory: (dirPath: string) => Promise<WriteResult>
   detectProject: (projectPath: string) => Promise<ProjectInfo>

@@ -188,8 +188,26 @@ const KNOWLEDGE_TOOLS = new Set([
 const MAX_FREE_KNOWLEDGE_ROUNDS = 3
 const MAX_DOC_SEARCH_PER_WRITE_STEP = 2
 /** Pure read/list/grep rounds before first write evidence — do not burn attempt. */
-const MAX_FREE_EXPLORE_ROUNDS = 4
+export const MAX_FREE_EXPLORE_ROUNDS = 4
 const EXPLORE_TOOLS = new Set(['read_file', 'list_directory', 'grep'])
+/** After explore budget: strip roam tools only — keep read_file so edit_file aci_read_gate still works. */
+const EXPLORE_ROAM_TOOLS = new Set(['list_directory', 'grep'])
+
+/**
+ * When explore rounds are exhausted, drop list/grep (+ knowledge) but keep read_file
+ * so the model can still satisfy edit_file's read-before-edit gate.
+ */
+export function applyExploreToolLimit(
+  names: string[],
+  options: { exploreExhausted: boolean; stripKnowledge?: boolean }
+): string[] {
+  if (!options.exploreExhausted) return names
+  return names.filter((name) => {
+    if (EXPLORE_ROAM_TOOLS.has(name)) return false
+    if (options.stripKnowledge && KNOWLEDGE_TOOLS.has(name)) return false
+    return true
+  })
+}
 
 export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
   return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
@@ -279,8 +297,8 @@ export function buildWriteForceInstruction(step: WorkflowStep): string {
     ? `目标文件：${step.targetPath}`
     : '请按步骤描述确定目标路径'
   return (
-    `【强制写入】探索轮次已用尽。禁止再 read_file/list_directory/grep/文档查询。` +
-    `${target}。本轮必须 write_file 或 edit_file 写出代码。`
+    `【强制写入】探索轮次已用尽。禁止 list_directory/grep/文档查询漫游。` +
+    `${target}。可对目标路径 read_file 一次后 edit_file；或 write_file / fabric_mixin_scaffold 写出代码。`
   )
 }
 
@@ -559,13 +577,13 @@ export class WorkflowEngine {
         names = names.filter((name) => !KNOWLEDGE_TOOLS.has(name))
       }
     }
-    // After free explore rounds with no write evidence, strip read/list/grep so the model must write.
+    // After free explore rounds: strip roam (list/grep) + knowledge; keep read_file for edit_file gate.
     if (
       isExploreLimitedStep(step) &&
       !limits?.stepHasEvidence &&
       (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS
     ) {
-      names = names.filter((name) => !EXPLORE_TOOLS.has(name) && !KNOWLEDGE_TOOLS.has(name))
+      names = applyExploreToolLimit(names, { exploreExhausted: true, stripKnowledge: true })
     }
     return this.registry.schemas().filter((tool) => names.includes(tool.name))
   }
@@ -588,14 +606,17 @@ export class WorkflowEngine {
     const evidenceHint = step.evidence
       ? `验收标准: ${step.evidence}\n`
       : ''
-    const exploreClosed =
+    const roamClosed =
       isExploreLimitedStep(step) &&
-      !tools.some((name) => EXPLORE_TOOLS.has(name) || KNOWLEDGE_TOOLS.has(name))
-    const writeForce = exploreClosed
-      ? '探索与文档查询已关闭。本轮必须 write_file / edit_file 写入目标文件，禁止只输出旁白。\n'
+      !tools.some((name) => EXPLORE_ROAM_TOOLS.has(name))
+    const writeForce = roamClosed
+      ? '漫游探索（list_directory/grep）与文档查询已关闭。可对目标文件 read_file 后 edit_file，或 write_file / fabric_mixin_scaffold；禁止只输出旁白。\n'
       : isDocSearchLimitedStep(step) && !tools.some((name) => KNOWLEDGE_TOOLS.has(name))
         ? '文档查询已关闭。本轮必须 write_file / edit_file 写入目标文件，禁止只输出旁白。\n'
         : ''
+    const editHint = tools.includes('read_file')
+      ? '新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）。'
+      : '新建文件用 write_file；修改已有文件用 edit_file 或 fabric_mixin_scaffold。'
     const buildFirst =
       (step.kind === 'build' || step.kind === 'run') && !repairMode
         ? step.kind === 'build'
@@ -607,7 +628,7 @@ export class WorkflowEngine {
       content:
         `${prefix}${repairGate}${clarifyHint}${writeForce}${buildFirst}只执行当前步骤，不要重复已完成操作。\n` +
         `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(', ') || '无'}\n` +
-        `新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）。工具成功且满足验收证据后主机会推进。`
+        `${editHint}工具成功且满足验收证据后主机会推进。`
     }
   }
 

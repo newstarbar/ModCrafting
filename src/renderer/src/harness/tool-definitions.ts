@@ -1099,7 +1099,7 @@ export const fabricMixinScaffoldTool: Tool = {
 		} catch (error) {
 			return `Error: 无法生成确定性 Mixin 外壳: ${String(error)}`;
 		}
-		const written = await guardedWriteFile(ctx, classPath, content, { allowOverwrite: false });
+		const written = await guardedWriteFile(ctx, classPath, content, { allowOverwrite: true });
 		if (!written.ok) return `Error writing ${classPath}: ${written.message}`;
 		return { output: `已生成签名校验过的 Mixin 源码: ${classPath}\n下一步必须调用 fabric_mixin_register，再调用 fabric_mixin_validate。`, artifactPaths: [classPath] };
 	}

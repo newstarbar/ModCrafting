@@ -85,6 +85,8 @@ const api = {
     ipcRenderer.invoke('fs:readFile', filePath),
   writeFile: (filePath: string, content: string): Promise<WriteResult> =>
     ipcRenderer.invoke('fs:writeFile', filePath, content),
+  deleteFile: (filePath: string): Promise<WriteResult> =>
+    ipcRenderer.invoke('fs:deleteFile', filePath),
   exists: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('fs:exists', filePath),
   createDirectory: (dirPath: string): Promise<WriteResult> =>
