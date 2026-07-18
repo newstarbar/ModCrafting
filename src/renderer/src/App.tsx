@@ -100,6 +100,7 @@ const App: React.FC = () => {
 	const [projectCost, setProjectCost] = useState(0);
 	const projectCostRef = useRef(0);
 	projectCostRef.current = projectCost;
+	const [deepseekBalanceLabel, setDeepseekBalanceLabel] = useState<string | null>(null);
 	const [isRunning, setIsRunning] = useState(false);
 	const workspaceLayout = useWorkspaceLayout();
 	const [projectVersions, setProjectVersions] = useState<ProjectVersions | null>(null);
@@ -307,6 +308,30 @@ const App: React.FC = () => {
 	const openApiSettings = useCallback(() => {
 		window.dispatchEvent(new CustomEvent("modcrafting:open-settings"));
 	}, []);
+
+	useEffect(() => {
+		if (apiConfig.providerId !== "deepseek" || !hasSavedApiKey) {
+			setDeepseekBalanceLabel(null);
+			return;
+		}
+		let cancelled = false;
+		const run = async () => {
+			const result = await window.api.fetchDeepSeekBalance();
+			if (cancelled) return;
+			if (!result.success || !result.displayTotal) {
+				setDeepseekBalanceLabel(null);
+				return;
+			}
+			const symbol = result.displayCurrency === "USD" ? "$" : "￥";
+			setDeepseekBalanceLabel(`${symbol}${result.displayTotal}`);
+		};
+		void run();
+		const timer = window.setInterval(() => { void run(); }, 5 * 60_000);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+		};
+	}, [apiConfig.providerId, hasSavedApiKey, apiConfig.apiKey]);
 
 	const handleApiKeySave = useCallback(async (key: string) => {
 		const trimmed = key.trim();
@@ -903,6 +928,7 @@ const App: React.FC = () => {
 				<StatusBar
 					usage={usage}
 					projectCost={projectCost}
+					deepseekBalanceLabel={deepseekBalanceLabel}
 					running={isRunning}
 					providerLabel={providerDisplayLabel(apiConfig.providerId, apiConfig.endpoint)}
 					modelId={apiConfig.model}

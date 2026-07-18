@@ -408,6 +408,11 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('secrets:clearApiKey', async (_event, providerId?: string) => clearApiKey(providerId))
 
+  ipcMain.handle('deepseek:balance', async (_event, apiKey?: string) => {
+    const { fetchDeepSeekBalance } = await import('./deepseek-balance')
+    return fetchDeepSeekBalance(typeof apiKey === 'string' ? apiKey : undefined)
+  })
+
   ipcMain.handle('shell:openExternal', async (_event, url: string) => openExternalWithFallback(url))
 
   // Agent config (knowledge sources, tool toggles, MCP placeholders)

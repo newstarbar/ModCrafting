@@ -57,3 +57,14 @@ test('MODEL_PRESETS is non-empty and includes DeepSeek defaults', () => {
   assert.ok(MODEL_PRESETS.length > 0)
   assert.ok(MODEL_PRESETS.some((p) => p.id === 'deepseek-v4-flash' && p.providerId === 'deepseek'))
 })
+
+test('getModelPricing distinguishes DeepSeek Flash vs Pro', async () => {
+  const { getModelPricing, USD_TO_CNY } = await import('../src/shared/llm-providers.ts')
+  const flash = getModelPricing('deepseek', 'deepseek-v4-flash')
+  const pro = getModelPricing('deepseek', 'deepseek-v4-pro')
+  assert.ok(Math.abs(flash.inputMiss - 0.14 * USD_TO_CNY) < 1e-9)
+  assert.ok(Math.abs(flash.output - 0.28 * USD_TO_CNY) < 1e-9)
+  assert.ok(Math.abs(pro.inputMiss - 0.435 * USD_TO_CNY) < 1e-9)
+  assert.ok(pro.inputMiss > flash.inputMiss)
+  assert.ok(pro.output > flash.output)
+})

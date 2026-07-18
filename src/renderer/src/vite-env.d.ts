@@ -150,6 +150,19 @@ interface ModCraftingApi {
   saveApiKey: (key: string, providerId?: string) => Promise<{ success: boolean; error?: string }>
   getApiKey: (providerId?: string) => Promise<{ success: boolean; apiKey?: string; error?: string }>
   clearApiKey: (providerId?: string) => Promise<{ success: boolean; error?: string }>
+  fetchDeepSeekBalance: (apiKey?: string) => Promise<{
+    success: boolean
+    isAvailable?: boolean
+    balances?: Array<{
+      currency: string
+      totalBalance: string
+      grantedBalance: string
+      toppedUpBalance: string
+    }>
+    displayCurrency?: string
+    displayTotal?: string
+    error?: string
+  }>
   openExternalUrl: (url: string) => Promise<{ success: boolean; usedFallback?: boolean; error?: string }>
   loadAgentConfig: () => Promise<{
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>

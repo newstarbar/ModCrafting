@@ -1,6 +1,6 @@
 import {
   getModelContextWindow,
-  getProviderPricing,
+  getModelPricing,
 } from '../../../shared/llm-providers.ts'
 
 export interface UsageStats {
@@ -42,7 +42,7 @@ export function estimateCostDelta(
   cacheMiss: number,
   pricingCtx?: UsagePricingContext
 ): number {
-  const pricing = getProviderPricing(pricingCtx?.providerId)
+  const pricing = getModelPricing(pricingCtx?.providerId, pricingCtx?.model)
   const hit = cacheHit
   const miss = cacheMiss > 0 ? cacheMiss : Math.max(0, promptTokens - hit)
   const inputCost = (miss * pricing.inputMiss + hit * pricing.inputHit) / 1_000_000

@@ -16,6 +16,8 @@ interface StatusBarProps {
   usage: UsageStats
   /** Lifetime spend for the current project (CNY). */
   projectCost?: number
+  /** DeepSeek account balance label, e.g. ￥110.00 */
+  deepseekBalanceLabel?: string | null
   running: boolean
   providerLabel?: string
   modelId?: string
@@ -36,6 +38,7 @@ function contextLevelClass(percent: number): string {
 const StatusBar: React.FC<StatusBarProps> = ({
   usage,
   projectCost = 0,
+  deepseekBalanceLabel,
   running,
   providerLabel,
   modelId,
@@ -81,17 +84,17 @@ const StatusBar: React.FC<StatusBarProps> = ({
     : '缓存命中率（暂无 API 数据）'
 
   const sessionTitle = usage.sessionTokens > 0
-    ? `会话累计 ${usage.sessionTokens.toLocaleString()} tokens`
+    ? `会话累计 ${usage.sessionTokens.toLocaleString()} tokens（API usage）`
     : '会话累计 Token'
 
   const sessionCost = usage.cost
   const displayProjectCost = Math.max(projectCost, sessionCost)
   const projectCostTitle = displayProjectCost > 0
-    ? `当前项目累计花费约 ￥${displayProjectCost.toFixed(4)}（删除会话不回退）`
-    : '当前项目累计花费'
+    ? `当前项目累计花费约 ￥${displayProjectCost.toFixed(4)}（API token × 官网单价估算）`
+    : '当前项目累计花费（API token × 官网单价估算）'
   const sessionCostTitle = sessionCost > 0
-    ? `当前会话花费约 ￥${sessionCost.toFixed(4)}`
-    : '当前会话花费'
+    ? `当前会话花费约 ￥${sessionCost.toFixed(4)}（API token × 官网单价估算）`
+    : '当前会话花费（API token × 官网单价估算）'
 
   const versionsText = projectVersions ? formatProjectVersions(projectVersions) : null
 
@@ -104,6 +107,16 @@ const StatusBar: React.FC<StatusBarProps> = ({
 
       <span className="stat-sep">|</span>
       <span className="statusbar-model stat mc-dim">{providerLabel || 'ModCrafting'}</span>
+
+      {deepseekBalanceLabel && (
+        <>
+          <span className="stat-sep">|</span>
+          <span className="statusbar-metrics stat" title="DeepSeek 账户余额（GET /user/balance）">
+            <span className="stat-label">余额</span>
+            <span className="stat-value">{deepseekBalanceLabel}</span>
+          </span>
+        </>
+      )}
 
       <span className="stat-sep">|</span>
       <span className="statusbar-metrics stat" title={sessionTitle}>

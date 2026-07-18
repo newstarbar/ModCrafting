@@ -23,6 +23,9 @@ const COMPACT_FRACTION = 0.7
 const DEFAULT_CONTEXT_WINDOW = 128_000
 
 // ── Token estimation ──
+// Rough heuristic for context compaction triggers only — NOT for billing.
+// Cost uses API-reported usage tokens × model pricing. DeepSeek offline
+// tokenizer (transformers + tokenizer.json) is for pre-flight local counts.
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)

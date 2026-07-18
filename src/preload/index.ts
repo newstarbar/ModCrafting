@@ -334,6 +334,19 @@ const api = {
     ipcRenderer.invoke('secrets:getApiKey', providerId),
   clearApiKey: (providerId?: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('secrets:clearApiKey', providerId),
+  fetchDeepSeekBalance: (apiKey?: string): Promise<{
+    success: boolean
+    isAvailable?: boolean
+    balances?: Array<{
+      currency: string
+      totalBalance: string
+      grantedBalance: string
+      toppedUpBalance: string
+    }>
+    displayCurrency?: string
+    displayTotal?: string
+    error?: string
+  }> => ipcRenderer.invoke('deepseek:balance', apiKey),
   openExternalUrl: (url: string): Promise<{ success: boolean; usedFallback?: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openExternal', url),
 

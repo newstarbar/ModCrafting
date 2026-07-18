@@ -89,6 +89,12 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const [expandedChanges, setExpandedChanges] = useState(false)
   const [apiKeyDraft, setApiKeyDraft] = useState('')
   const [keySaveHint, setKeySaveHint] = useState('')
+  const [deepseekBalance, setDeepseekBalance] = useState<{
+    loading: boolean
+    text: string
+    detail?: string
+    error?: string
+  } | null>(null)
   const activeSessionItemRef = useRef<HTMLDivElement | null>(null)
 
   const sortedSessions = sortSessionsByUpdatedAt(sessions)
@@ -110,7 +116,49 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   useEffect(() => {
     setApiKeyDraft('')
     setKeySaveHint('')
+    setDeepseekBalance(null)
   }, [apiConfig.providerId])
+
+  const refreshDeepSeekBalance = useCallback(async (opts?: { useDraftKey?: boolean }) => {
+    if (apiConfig.providerId !== 'deepseek') return
+    setDeepseekBalance({ loading: true, text: '查询中…' })
+    try {
+      const draft = opts?.useDraftKey ? apiKeyDraft.trim() : ''
+      const result = await window.api.fetchDeepSeekBalance(draft || undefined)
+      if (!result.success) {
+        setDeepseekBalance({ loading: false, text: '—', error: result.error || '查询失败' })
+        return
+      }
+      const preferred = result.balances?.find((b) => b.currency === result.displayCurrency)
+        ?? result.balances?.[0]
+      const symbol = result.displayCurrency === 'USD' ? '$' : '￥'
+      const total = result.displayTotal ?? preferred?.totalBalance ?? '0'
+      const detail = preferred
+        ? `赠送 ${symbol}${preferred.grantedBalance} · 充值 ${symbol}${preferred.toppedUpBalance}`
+          + (result.isAvailable === false ? ' · 余额暂不可用于 API' : '')
+        : undefined
+      setDeepseekBalance({
+        loading: false,
+        text: `${symbol}${total}`,
+        detail
+      })
+    } catch (err) {
+      setDeepseekBalance({
+        loading: false,
+        text: '—',
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }, [apiConfig.providerId, apiKeyDraft])
+
+  useEffect(() => {
+    if (activeTab !== 'settings' || apiConfig.providerId !== 'deepseek') return
+    if (!hasSavedApiKey) {
+      setDeepseekBalance({ loading: false, text: '—', error: '请先保存 API Key' })
+      return
+    }
+    void refreshDeepSeekBalance()
+  }, [activeTab, apiConfig.providerId, hasSavedApiKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStartRename = useCallback((id: string, currentName: string) => {
     setRenamingId(id)
@@ -141,7 +189,10 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     setApiKeyDraft('')
     setKeySaveHint('密钥已保存')
     window.setTimeout(() => setKeySaveHint(''), 2000)
-  }, [apiKeyDraft, onApiKeySave])
+    if (apiConfig.providerId === 'deepseek') {
+      window.setTimeout(() => { void refreshDeepSeekBalance() }, 100)
+    }
+  }, [apiKeyDraft, onApiKeySave, apiConfig.providerId, refreshDeepSeekBalance])
 
   const handleOpenDocsUrl = useCallback(async (url: string) => {
     const result = await window.api.openExternalUrl(url)
@@ -466,6 +517,44 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               </button>
               {keySaveHint && (
                 <div style={{ fontSize: '11px', color: 'var(--success)' }}>{keySaveHint}</div>
+              )}
+              {apiConfig.providerId === 'deepseek' && (
+                <div style={{
+                  marginTop: '4px',
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  background: 'var(--bg-elevated, rgba(255,255,255,0.04))',
+                  border: '1px solid var(--border-color, rgba(255,255,255,0.08))'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>账户余额</div>
+                    <button
+                      type="button"
+                      className="mc-btn"
+                      style={{ padding: '2px 8px', fontSize: '10px' }}
+                      disabled={deepseekBalance?.loading}
+                      onClick={() => void refreshDeepSeekBalance({ useDraftKey: true })}
+                    >
+                      {deepseekBalance?.loading ? '查询中…' : '刷新'}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '16px', fontWeight: 600, marginTop: '4px', color: 'var(--text-primary)' }}>
+                    {deepseekBalance?.text ?? '—'}
+                  </div>
+                  {deepseekBalance?.detail && (
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.4 }}>
+                      {deepseekBalance.detail}
+                    </div>
+                  )}
+                  {deepseekBalance?.error && (
+                    <div style={{ fontSize: '10px', color: 'var(--error)', marginTop: '2px', lineHeight: 1.4 }}>
+                      {deepseekBalance.error}
+                    </div>
+                  )}
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
+                    费用按 API 返回的 token × 官网单价估算（Flash/Pro 分价，USD→CNY≈7.25）。与账单一致依据是官方 usage，不是本地 tokenizer。
+                  </div>
+                </div>
               )}
               {!encryptionAvailable && (
                 <div style={{ fontSize: '11px', color: 'var(--error)', lineHeight: 1.5 }}>

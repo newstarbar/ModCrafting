@@ -242,7 +242,32 @@ export interface ProviderPricing {
 	output: number;
 }
 
-const DEFAULT_PRICING: ProviderPricing = { inputMiss: 0.27, inputHit: 0.07, output: 1.1 };
+/** Official DeepSeek API list prices are USD / 1M tokens; balance UI is usually CNY. */
+export const USD_TO_CNY = 7.25;
+
+function usdPerMillionToCny(p: ProviderPricing): ProviderPricing {
+	return {
+		inputMiss: p.inputMiss * USD_TO_CNY,
+		inputHit: p.inputHit * USD_TO_CNY,
+		output: p.output * USD_TO_CNY
+	};
+}
+
+/** DeepSeek official USD rates (api-docs.deepseek.com/quick_start/pricing). */
+const DEEPSEEK_USD_BY_MODEL: Record<string, ProviderPricing> = {
+	"deepseek-v4-flash": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 },
+	"deepseek-v4-pro": { inputHit: 0.003625, inputMiss: 0.435, output: 0.87 },
+	// Legacy aliases → V4 Flash pricing
+	"deepseek-chat": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 },
+	"deepseek-reasoner": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 },
+	"deepseek-v3.2": { inputHit: 0.0028, inputMiss: 0.14, output: 0.28 }
+};
+
+const DEFAULT_PRICING: ProviderPricing = usdPerMillionToCny({
+	inputHit: 0.0028,
+	inputMiss: 0.14,
+	output: 0.28
+});
 
 const PROVIDER_PRICING: Record<string, ProviderPricing> = {
 	deepseek: DEFAULT_PRICING,
@@ -261,4 +286,24 @@ const PROVIDER_PRICING: Record<string, ProviderPricing> = {
 export function getProviderPricing(providerId?: string): ProviderPricing {
 	if (!providerId || providerId === CUSTOM_PROVIDER_ID) return DEFAULT_PRICING;
 	return PROVIDER_PRICING[providerId] ?? DEFAULT_PRICING;
+}
+
+/** Prefer model-specific rates (DeepSeek Flash vs Pro); fall back to provider defaults. */
+export function getModelPricing(providerId?: string, modelId?: string): ProviderPricing {
+	const model = (modelId || "").toLowerCase().trim();
+	if (providerId === "deepseek" || (!providerId && model.startsWith("deepseek"))) {
+		if (model.includes("v4-pro") || model.includes("v4_pro")) {
+			return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-pro"]);
+		}
+		const exact = DEEPSEEK_USD_BY_MODEL[model];
+		if (exact) return usdPerMillionToCny(exact);
+		if (model.includes("v4-flash") || model.includes("v4_flash") || model.includes("flash")) {
+			return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-flash"]);
+		}
+		if (model.includes("pro")) {
+			return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-pro"]);
+		}
+		return usdPerMillionToCny(DEEPSEEK_USD_BY_MODEL["deepseek-v4-flash"]);
+	}
+	return getProviderPricing(providerId);
 }
