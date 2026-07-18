@@ -81,10 +81,11 @@ export function validateToolCalls(
         continue
       }
     } catch {
-      rejected.set(
-        call.id,
-        rejectedResult(call, 'invalid_tool_arguments', 'arguments 不是合法 JSON')
-      )
+      const hint =
+        call.name === 'write_file'
+          ? 'arguments 不是合法 JSON（大文件易截断）。请改用 write_file 写骨架（短内容）+ 多次 edit_file 分段填充。'
+          : 'arguments 不是合法 JSON'
+      rejected.set(call.id, rejectedResult(call, 'invalid_tool_arguments', hint))
       continue
     }
 

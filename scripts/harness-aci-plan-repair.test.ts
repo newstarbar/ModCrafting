@@ -96,6 +96,60 @@ test('repair mode allows edit_file on build steps', () => {
   )
 })
 
+test('repair mode allows delete_file and mixin scaffold for main→client migration', () => {
+  const step: WorkflowStep = {
+    id: '5',
+    title: '构建项目（gradlew build）',
+    kind: 'build',
+    status: 'running',
+    allowedTools: ['trigger_build', 'read_error_log', 'read_file'],
+    maxAttempts: 6
+  }
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'delete_file', args: { path: 'src/main/java/com/example/mixin/A.java' } }),
+    false
+  )
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'fabric_mixin_scaffold', args: { targetClass: 'net.minecraft.client.gui.screen.TitleScreen' } }),
+    false
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      step,
+      { name: 'delete_file', args: { path: 'src/main/java/com/example/mixin/A.java' } },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      step,
+      { name: 'fabric_mixin_scaffold', args: { targetClass: 'net.minecraft.client.gui.screen.TitleScreen' } },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    true
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      step,
+      { name: 'fabric_mixin_register', args: { className: 'TitleScreenBgInjector' } },
+      { repairMode: true }
+    ),
+    true
+  )
+})
+
+test('repairErrorSignature stays stable for gradle compile failures', () => {
+  const log = [
+    'BUILD FAILED',
+    'src/main/java/com/example/ConfigScreen.java:12: 错误: 程序包net.minecraft.client.gui.widget不存在'
+  ].join('\n')
+  const a = repairErrorSignature(log, 'build')
+  const b = repairErrorSignature(log, 'build')
+  assert.equal(a, b)
+  assert.match(a, /gradle/)
+})
+
 test('inspect evidence accepts grep and fabric_docs_search', () => {
   const step = {
     id: '1',

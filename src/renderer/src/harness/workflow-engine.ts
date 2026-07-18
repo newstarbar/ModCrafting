@@ -60,16 +60,22 @@ export interface WorkflowEngineOptions {
 let workflowToolId = 0
 
 const MAX_REPAIR_ROUNDS = 3
+const MAX_REPAIR_ROUNDS_CAP = 10
+/** Free repair-diagnostic rounds (read_error_log / fabric_log_debugger only). */
+export const MAX_FREE_REPAIR_DIAG_ROUNDS = 2
 const MAX_MODEL_NETWORK_RETRIES = 2
 const REPAIR_EXTRA_TOOLS = [
   'edit_file',
   'write_file',
+  'delete_file',
   'read_file',
   'grep',
   'read_error_log',
   'fabric_log_debugger',
   'fabric_docs_search',
   'fabric_mixin_target_lookup',
+  'fabric_mixin_scaffold',
+  'fabric_mixin_register',
   'fabric_recipe_validate',
   'fabric_mixin_validate'
 ] as const
@@ -107,19 +113,104 @@ export function repairErrorSignature(output: string, kind: 'build' | 'run'): str
   return `${classified.kind}|${frame || gradleSig.slice(0, 200)}`
 }
 
-function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
+/** Count distinct gradle/compiler error entries (for progress tracking). */
+export function countGradleErrorEntries(output: string): number {
+  return parseGradleErrors(output, 200).length
+}
+
+/** Unique source files referenced by gradle errors. */
+export function uniqueGradleErrorFiles(output: string): string[] {
+  const files = new Set<string>()
+  for (const entry of parseGradleErrors(output, 200)) {
+    if (!entry.file) continue
+    files.add(entry.file.replace(/\\/g, '/'))
+  }
+  return [...files]
+}
+
+/**
+ * Dynamic repair budget from failure output.
+ * n unique error files → max(3, n+2), capped at MAX_REPAIR_ROUNDS_CAP.
+ */
+export function computeRepairBudget(failureOutput: string): number {
+  const n = uniqueGradleErrorFiles(failureOutput).length
+  if (n <= 0) return MAX_REPAIR_ROUNDS
+  return Math.min(MAX_REPAIR_ROUNDS_CAP, Math.max(MAX_REPAIR_ROUNDS, n + 2))
+}
+
+const CLIENT_PACKAGE_ERROR_RE = /程序包\s*net\.minecraft\.client|package\s+net\.minecraft\.client/i
+
+/** main-source files that fail because they import client-only packages. */
+export function extractClientInMainMigrations(output: string): string[] {
+  const mains = new Set<string>()
+  for (const entry of parseGradleErrors(output, 200)) {
+    if (!entry.file) continue
+    const file = entry.file.replace(/\\/g, '/')
+    if (!file.includes('src/main/java/')) continue
+    if (!CLIENT_PACKAGE_ERROR_RE.test(entry.message) && !CLIENT_PACKAGE_ERROR_RE.test(output)) {
+      // Still include main java files when the build log overall shows client-package isolation
+      // and this file is among the error set.
+      if (!/net\.minecraft\.client/.test(output)) continue
+    }
+    if (CLIENT_PACKAGE_ERROR_RE.test(entry.message) || /net\.minecraft\.client/.test(entry.message)) {
+      mains.add(file)
+    }
+  }
+  // Fallback: if log mentions client package isolation, take all main java error files
+  if (mains.size === 0 && /net\.minecraft\.client/.test(output)) {
+    for (const file of uniqueGradleErrorFiles(output)) {
+      if (file.includes('src/main/java/')) mains.add(file)
+    }
+  }
+  return [...mains]
+}
+
+export function mainToClientPath(mainPath: string): string {
+  return mainPath.replace(/\\/g, '/').replace('src/main/java/', 'src/client/java/')
+}
+
+function formatMigrationChecklist(pendingMainDeletes: Set<string>): string {
+  if (pendingMainDeletes.size === 0) return ''
+  const lines = [...pendingMainDeletes].slice(0, 8).map((main) => {
+    const client = mainToClientPath(main)
+    const largeHint = '（若文件 >200 行：先 write_file 写骨架，再用多次 edit_file 分段填充）'
+    return `- write_file("${client}", ...) ${largeHint}\n  delete_file("${main}")`
+  })
+  return (
+    `\n【splitEnvironment 批量迁移】以下文件仍在 src/main/java 却引用 client 包。` +
+    `必须全部迁完（write 新路径 + delete 旧路径）后才能 trigger_build：\n` +
+    `${lines.join('\n')}\n`
+  )
+}
+
+export function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
   const gradleEntries = parseGradleErrors(output, 8)
   const structuredGradle = formatGradleErrorsForPrompt(output)
   const classified = classifyFabricLog(output)
   const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
+  const migrations = extractClientInMainMigrations(output)
   const fabricBlock =
     gradleEntries.length === 0 || kind === 'run'
       ? `\n--- Fabric/MC 分类 ---\n[${classified.kind}] ${classified.title}\n建议：${classified.advice}\n`
       : `\n--- Fabric/MC 补充 ---\n[${classified.kind}] ${classified.title}：${classified.advice}\n`
+  if (migrations.length > 0) {
+    const pending = new Set(migrations)
+    return (
+      `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
+      `根因：splitEnvironmentSourceSets 隔离 — client 类不能留在 src/main/java。\n` +
+      `流程（强制顺序）：write_file 到 src/client/java → delete_file 删除旧 main 路径 → 全部迁完后再 ${retry}。\n` +
+      `禁止在迁移未完成时 trigger_build；禁止用 edit_file 原地改 main 路径里的 client 引用。\n` +
+      `大文件（>200 行）请 write_file 写骨架后用 edit_file 分段填充，避免参数截断。\n` +
+      formatMigrationChecklist(pending) +
+      `\n--- 错误摘要 ---\n${structuredGradle}` +
+      fabricBlock
+    )
+  }
   return (
     `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
-    `流程：观察（read_error_log / fabric_log_debugger）→ 最小补丁（edit_file 优先）→ 再验证（${retry}）。\n` +
-    `在成功 edit_file/write_file 之前禁止直接调用 ${retry}。\n\n` +
+    `流程：观察（read_error_log / fabric_log_debugger，限 ${MAX_FREE_REPAIR_DIAG_ROUNDS} 轮）→ ` +
+    `write_file / edit_file / delete_file 修改代码 → 再验证（${retry}）。\n` +
+    `在成功 write_file/edit_file/delete_file 之前禁止直接调用 ${retry}。\n\n` +
     `--- 错误摘要 ---\n${structuredGradle}` +
     fabricBlock
   )
@@ -160,8 +251,8 @@ function writeFileRetryInstruction(kind: 'build' | 'run'): string {
 const REPAIR_DIAGNOSTIC_TOOLS = new Set([
   'read_error_log',
   'fabric_log_debugger',
-  'read_file',
-  'list_directory',
+  // read_file / list_directory intentionally excluded — unlimited free reads caused
+  // explore thrashing in repair mode (see session diag 20260718).
   'fabric_docs_search',
   'fabric_javadoc_lookup',
   'vanilla_mc_wiki_query',
@@ -173,6 +264,12 @@ function isRepairDiagnosticResult(step: WorkflowStep, result: ToolResult, repair
   if (!repairMode || !result.ok || result.error) return false
   if (step.kind !== 'build' && step.kind !== 'run') return false
   return REPAIR_DIAGNOSTIC_TOOLS.has(result.toolName || '')
+}
+
+/** Pure read/list/grep during repair — subject to MAX_FREE_REPAIR_DIAG_ROUNDS via explore counter. */
+function isRepairExploreResult(result: ToolResult): boolean {
+  if (!result.ok || result.error) return false
+  return result.toolName === 'read_file' || result.toolName === 'list_directory' || result.toolName === 'grep'
 }
 
 /** Knowledge queries that should not consume attempt budget for non-terminal steps.
@@ -213,7 +310,8 @@ export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
   return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
 }
 
-export function isExploreLimitedStep(step: WorkflowStep): boolean {
+export function isExploreLimitedStep(step: WorkflowStep, repairMode = false): boolean {
+  if (repairMode && (step.kind === 'build' || step.kind === 'run')) return true
   return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
 }
 
@@ -556,34 +654,23 @@ export class WorkflowEngine {
   private toolSchemasFor(
     step: WorkflowStep,
     repairMode: boolean,
-    limits?: {
+    _limits?: {
       fabricDocsSearchCount?: number
       knowledgeQueries?: number
       exploreRounds?: number
       stepHasEvidence?: boolean
     }
   ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-    let names = repairMode ? repairExtraTools(step) : [...step.allowedTools]
-    // Persisted plans may still list edit/write on build/run; never offer them until repair.
-    if ((step.kind === 'build' || step.kind === 'run') && !repairMode) {
-      names = names.filter((name) => name !== 'edit_file' && name !== 'write_file')
-    }
-    if (isDocSearchLimitedStep(step)) {
-      if ((limits?.fabricDocsSearchCount ?? 0) >= MAX_DOC_SEARCH_PER_WRITE_STEP) {
-        names = names.filter((name) => name !== 'fabric_docs_search')
-      }
-      // After free knowledge rounds, hide knowledge tools so the model must write.
-      if ((limits?.knowledgeQueries ?? 0) >= MAX_FREE_KNOWLEDGE_ROUNDS) {
-        names = names.filter((name) => !KNOWLEDGE_TOOLS.has(name))
-      }
-    }
-    // After free explore rounds: strip roam (list/grep) + knowledge; keep read_file for edit_file gate.
-    if (
-      isExploreLimitedStep(step) &&
-      !limits?.stepHasEvidence &&
-      (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS
-    ) {
-      names = applyExploreToolLimit(names, { exploreExhausted: true, stripKnowledge: true })
+    // Stable tools set within a step: always offer the repair superset for build/run
+    // so entering repairMode does not change the tools array (prompt-cache friendly).
+    // Runtime gates (filterToolCallsForStep / isToolAllowedForStep) still block
+    // edit/write until repair, and reject over-limit doc/explore calls.
+    let names: string[]
+    if (step.kind === 'build' || step.kind === 'run') {
+      names = repairExtraTools(step)
+    } else {
+      names = [...step.allowedTools]
+      if (repairMode) names = repairExtraTools(step)
     }
     return this.registry.schemas().filter((tool) => names.includes(tool.name))
   }
@@ -592,13 +679,18 @@ export class WorkflowEngine {
     step: WorkflowStep,
     repairMode: boolean,
     repairWriteRequired: boolean,
-    offeredToolNames?: string[]
+    offeredToolNames?: string[],
+    ephemeralInstruction?: string,
+    pendingMigration?: Set<string>
   ): ChatMessage {
     const tools = offeredToolNames ?? (repairMode ? repairExtraTools(step) : step.allowedTools)
     const prefix = repairMode ? '【修复模式】' : '【工作流步骤】'
+    const migrationPending = Boolean(pendingMigration && pendingMigration.size > 0)
     const repairGate =
-      repairMode && repairWriteRequired
-        ? '必须先 edit_file（优先）修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
+      repairMode && (repairWriteRequired || migrationPending)
+        ? migrationPending
+          ? '必须先完成 splitEnvironment 批量迁移（write_file 到 client + delete_file 删 main）后才能 trigger_build。\n'
+          : '必须先 write_file / edit_file / delete_file 修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
         : ''
     const clarifyHint = tools.includes('ask_clarification')
       ? '标识符/路径/类名先用 read_file/grep 从项目推断；仅用户偏好或需求歧义才 ask_clarification（短问题+短选项）。禁止把 API 命名或实现清单丢给用户选。\n'
@@ -606,27 +698,24 @@ export class WorkflowEngine {
     const evidenceHint = step.evidence
       ? `验收标准: ${step.evidence}\n`
       : ''
-    const roamClosed =
-      isExploreLimitedStep(step) &&
-      !tools.some((name) => EXPLORE_ROAM_TOOLS.has(name))
-    const writeForce = roamClosed
-      ? '漫游探索（list_directory/grep）与文档查询已关闭。可对目标文件 read_file 后 edit_file，或 write_file / fabric_mixin_scaffold；禁止只输出旁白。\n'
-      : isDocSearchLimitedStep(step) && !tools.some((name) => KNOWLEDGE_TOOLS.has(name))
-        ? '文档查询已关闭。本轮必须 write_file / edit_file 写入目标文件，禁止只输出旁白。\n'
-        : ''
-    const editHint = tools.includes('read_file')
-      ? '新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）。'
-      : '新建文件用 write_file；修改已有文件用 edit_file 或 fabric_mixin_scaffold。'
+    const editHint =
+      '新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）；迁移用 write_file 新路径 + delete_file 旧路径。'
     const buildFirst =
       (step.kind === 'build' || step.kind === 'run') && !repairMode
         ? step.kind === 'build'
           ? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
           : '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n'
         : ''
+    const migrationHint = migrationPending && pendingMigration
+      ? formatMigrationChecklist(pendingMigration)
+      : ''
+    const ephemeral = ephemeralInstruction?.trim()
+      ? `\n${ephemeralInstruction.trim()}\n`
+      : ''
     return {
       role: 'user',
       content:
-        `${prefix}${repairGate}${clarifyHint}${writeForce}${buildFirst}只执行当前步骤，不要重复已完成操作。\n` +
+        `${prefix}${repairGate}${clarifyHint}${buildFirst}${migrationHint}${ephemeral}只执行当前步骤，不要重复已完成操作。\n` +
         `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(', ') || '无'}\n` +
         `${editHint}工具成功且满足验收证据后主机会推进。`
     }
@@ -689,15 +778,15 @@ export class WorkflowEngine {
     calls: ModelToolCall[],
     resultsById: Map<string, ToolResult>,
     instruction?: string
-  ): void {
+  ): string | undefined {
     baseMessages.push(assistantToolCallMessage(streamContent, calls))
     for (const call of calls) {
       const result = resultsById.get(call.id)
       baseMessages.push(toolResultMessage(call, result?.output ?? ''))
     }
-    if (instruction?.trim()) {
-      baseMessages.push({ role: 'system', content: instruction.trim() })
-    }
+    // Do NOT persist instruction as role:system in baseMessages — that breaks
+    // prompt-cache prefixes. Return it for the next ephemeral workflowPrompt instead.
+    return instruction?.trim() || undefined
   }
 
   async run(baseMessages: ChatMessage[]): Promise<WorkflowRunResult> {
@@ -794,9 +883,14 @@ export class WorkflowEngine {
       let repairWriteRequired = false
       let repairValidationRequired: 'recipe' | 'mixin' | undefined
       let repairRounds = 0
+      let effectiveMaxRepairRounds = MAX_REPAIR_ROUNDS
+      let lastErrorCount = 0
       let lastFailureOutput = ''
       const seenRepairSignatures = new Set<string>()
       const seenDiagSignatures = new Set<string>()
+      const pendingMigration = new Set<string>()
+      let pendingEphemeralInstruction: string | undefined
+      let repairDiagRounds = 0
       const evidenceResults: ToolResult[] = [...diskEvidence, ...delegatedEvidence]
       let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
       let evidenceIdleRounds = 0
@@ -810,13 +904,18 @@ export class WorkflowEngine {
       let knowledgeQueries = 0
       let fabricDocsSearchCount = 0
       let lastToolName = ''
-      const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS
-      const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS * 8
+      const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS_CAP
+      const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS_CAP * 8
 
       while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
         loopIterations++
+        const migrationPending = pendingMigration.size > 0
         const policyOptions: ToolGateOptions | undefined = repairMode
-          ? { repairMode: true, repairWriteRequired, repairValidationRequired }
+          ? {
+              repairMode: true,
+              repairWriteRequired: repairWriteRequired || migrationPending,
+              repairValidationRequired
+            }
           : undefined
         const allowedTools = this.toolSchemasFor(step, repairMode, {
           fabricDocsSearchCount,
@@ -825,9 +924,18 @@ export class WorkflowEngine {
           stepHasEvidence
         })
         const offeredNames = allowedTools.map((tool) => tool.name)
+        const ephemeral = pendingEphemeralInstruction
+        pendingEphemeralInstruction = undefined
         const modelMessages = [
           ...baseMessages,
-          this.workflowPrompt(step, repairMode, repairWriteRequired, offeredNames)
+          this.workflowPrompt(
+            step,
+            repairMode,
+            repairWriteRequired || migrationPending,
+            offeredNames,
+            ephemeral,
+            pendingMigration
+          )
         ]
         let streamText = ''
         let streamReasoning = ''
@@ -899,7 +1007,7 @@ export class WorkflowEngine {
         const calls = validation.accepted
         if (calls.length === 0) {
           const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values())
-          this.appendToolRound(
+          pendingEphemeralInstruction = this.appendToolRound(
             baseMessages,
             modelResult.text || streamText,
             allCalls,
@@ -992,7 +1100,7 @@ export class WorkflowEngine {
         if (executableAllowed.length === 0) {
           const repairWriteBlockedOnly =
             repairMode &&
-            (repairWriteRequired || repairValidationRequired) &&
+            (repairWriteRequired || repairValidationRequired || pendingMigration.size > 0) &&
             calls.length > 0 &&
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
           const docSearchBlockedOnly = isDocSearchOnlyRejectionRound(resultsById.values())
@@ -1017,7 +1125,9 @@ export class WorkflowEngine {
           const rejectionHint = [
             [...resultsById.values()].map((r) => r.output).filter(Boolean).join('\n'),
             repairWriteBlockedOnly
-              ? '修复模式下必须先 edit_file 修改代码，再重新构建。'
+              ? pendingMigration.size > 0
+                ? '修复模式下必须先完成 client 迁移（write_file + delete_file），再重新构建。'
+                : '修复模式下必须先 write_file / edit_file / delete_file 修改代码，再重新构建。'
               : buildEditLoop
                 ? (step.kind === 'build'
                   ? '【禁止循环改文件】构建步骤当前不允许 edit_file。请立即 trigger_build({"task":"build"})；失败后才进入修复模式。'
@@ -1026,7 +1136,7 @@ export class WorkflowEngine {
                 ? buildEmptyToolCallInstruction(step)
                 : `本步骤允许的工具：${offeredNames.join(', ') || '无'}。请改用其中之一完成当前步骤。`
           ].join('\n\n')
-          this.appendToolRound(
+          pendingEphemeralInstruction = this.appendToolRound(
             baseMessages,
             modelResult.text || streamText,
             allCalls,
@@ -1080,7 +1190,7 @@ export class WorkflowEngine {
         if (clarificationResult) {
           const used = this.clarificationGate?.count ?? 0
           if (used >= MAX_EXECUTE_CLARIFICATIONS) {
-            this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
+            pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
             baseMessages.push({
               role: 'user',
               content:
@@ -1095,7 +1205,7 @@ export class WorkflowEngine {
           const options = Array.isArray(clarificationResult.args?.options)
             ? (clarificationResult.args.options as string[]).map(String)
             : undefined
-          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
+          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
           return {
             finalContent: clarificationResult.output,
             allDone: false,
@@ -1120,7 +1230,8 @@ export class WorkflowEngine {
           repairWriteRequired = false
           repairValidationRequired = undefined
           repairRounds = 0
-          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
+          pendingMigration.clear()
+          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
           step.status = 'completed'
           this.planTracker.advanceCurrent(decisiveResult!.toolName || 'workflow evidence')
           completed = true
@@ -1140,7 +1251,7 @@ export class WorkflowEngine {
             `【验收证据已满足】请立即调用 complete_step({"stepId":"${step.id}"}) 推进下一步，禁止继续重复 read_file/edit_file。`
           ].filter(Boolean).join('\n\n')
           if (evidenceIdleRounds >= 2) {
-            this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+            pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
             step.status = 'completed'
             this.planTracker.advanceCurrent('auto_complete_after_evidence')
             completed = true
@@ -1160,10 +1271,11 @@ export class WorkflowEngine {
 
         if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
           const signature = repairErrorSignature(decisiveResult.output, step.kind as 'build' | 'run')
+          const errorCount = countGradleErrorEntries(decisiveResult.output)
           if (seenRepairSignatures.has(signature)) {
             roundInstruction =
-              '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 edit_file 做不同修改；仅用户偏好不明时才 ask_clarification。'
-            this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+              '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 write_file/edit_file/delete_file 做不同修改；仅用户偏好不明时才 ask_clarification。'
+            pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
             attempt++
             continue
           }
@@ -1171,9 +1283,19 @@ export class WorkflowEngine {
           repairMode = true
           repairWriteRequired = true
           repairValidationRequired = undefined
-          repairRounds++
           lastFailureOutput = decisiveResult.output
+          effectiveMaxRepairRounds = Math.max(effectiveMaxRepairRounds, computeRepairBudget(lastFailureOutput))
+          // Progressive: error count decreased → do not burn a repairRound.
+          const progressed = lastErrorCount > 0 && errorCount > 0 && errorCount < lastErrorCount
+          if (!progressed) repairRounds++
+          lastErrorCount = errorCount || lastErrorCount
+          for (const main of extractClientInMainMigrations(lastFailureOutput)) {
+            pendingMigration.add(main.replace(/\\/g, '/'))
+          }
           roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as 'build' | 'run')
+          if (pendingMigration.size > 0) {
+            roundInstruction += formatMigrationChecklist(pendingMigration)
+          }
           if (!debuggerPrefetched) {
             debuggerPrefetched = true
             const dbg = this.registry.get('fabric_log_debugger')
@@ -1194,29 +1316,56 @@ export class WorkflowEngine {
               }
             }
           }
-          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
-          if (repairRounds > MAX_REPAIR_ROUNDS) {
+          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+          if (repairRounds > effectiveMaxRepairRounds) {
             attempt = maxIterations
             break
           }
           continue
         }
 
+        // Track splitEnvironment migrations: delete_file removes pending main paths.
+        for (const result of orderedResults) {
+          if (!result.ok || result.error) continue
+          if (result.toolName !== 'delete_file') continue
+          const path = String(result.artifactPath || result.args?.path || '').replace(/\\/g, '/')
+          if (path && pendingMigration.has(path)) pendingMigration.delete(path)
+        }
+
         const repairWrite = orderedResults.find((result) =>
-          (result.toolName === 'write_file' || result.toolName === 'edit_file') && result.ok && !result.error
+          (result.toolName === 'write_file' || result.toolName === 'edit_file' || result.toolName === 'delete_file') &&
+          result.ok &&
+          !result.error
         )
         if (repairMode && repairWrite) {
-          repairWriteRequired = false
-          const changedPath = String(repairWrite.artifactPath || repairWrite.args?.path || '').replace(/\\/g, '/').toLowerCase()
-          repairValidationRequired = /\/data\/[^/]+\/recipes?\/.+\.json$/.test(changedPath)
-            ? 'recipe'
-            : (/mixins?\.json$/.test(changedPath) || (/mixin/.test(changedPath) && changedPath.endsWith('.java')))
-              ? 'mixin'
-              : undefined
-          roundInstruction = repairValidationRequired
-            ? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
-            : writeFileRetryInstruction(step.kind as 'build' | 'run')
-          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+          const changedPath = String(repairWrite.artifactPath || repairWrite.args?.path || '').replace(/\\/g, '/')
+          const changedLower = changedPath.toLowerCase()
+          if (repairWrite.toolName === 'delete_file' && pendingMigration.has(changedPath)) {
+            pendingMigration.delete(changedPath)
+          }
+          // Batch migration: keep repairWriteRequired until pendingMigration is empty.
+          if (pendingMigration.size > 0) {
+            repairWriteRequired = true
+            roundInstruction =
+              `【SYSTEM: 迁移未完成】还剩 ${pendingMigration.size} 个 main 文件待 delete_file。` +
+              `禁止 trigger_build。\n` +
+              formatMigrationChecklist(pendingMigration)
+            // Skip mixin validate gate during bulk migration — finish moves first.
+            repairValidationRequired = undefined
+          } else {
+            repairWriteRequired = false
+            repairValidationRequired = repairWrite.toolName === 'delete_file'
+              ? undefined
+              : /\/data\/[^/]+\/recipes?\/.+\.json$/.test(changedLower)
+                ? 'recipe'
+                : (/mixins?\.json$/.test(changedLower) || (/mixin/.test(changedLower) && changedLower.endsWith('.java')))
+                  ? 'mixin'
+                  : undefined
+            roundInstruction = repairValidationRequired
+              ? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
+              : writeFileRetryInstruction(step.kind as 'build' | 'run')
+          }
+          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
           continue
         }
 
@@ -1226,7 +1375,7 @@ export class WorkflowEngine {
         if (repairMode && repairValidationRequired && repairValidation) {
           repairValidationRequired = undefined
           roundInstruction = writeFileRetryInstruction(step.kind as 'build' | 'run')
-          this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
           continue
         }
 
@@ -1252,12 +1401,26 @@ export class WorkflowEngine {
         }
 
         const pureExplore = isPureExploreRound(orderedResults)
-        if (pureExplore && isExploreLimitedStep(step) && !stepHasEvidence) {
+        const repairExploreOnly =
+          repairMode &&
+          orderedResults.length > 0 &&
+          orderedResults.every((result) => isRepairExploreResult(result) || isRepairDiagnosticResult(step, result, repairMode))
+        if (pureExplore && isExploreLimitedStep(step, repairMode) && !stepHasEvidence) {
           exploreRounds++
           if (exploreRounds >= MAX_FREE_EXPLORE_ROUNDS) {
             roundInstruction = [
               roundInstruction,
               buildWriteForceInstruction(step)
+            ].filter(Boolean).join('\n\n')
+          }
+        }
+        if (repairExploreOnly) {
+          repairDiagRounds++
+          if (repairDiagRounds > MAX_FREE_REPAIR_DIAG_ROUNDS) {
+            roundInstruction = [
+              roundInstruction,
+              `【修复只读轮次已用尽】已进行 ${repairDiagRounds} 轮诊断/勘察（上限 ${MAX_FREE_REPAIR_DIAG_ROUNDS}）。` +
+                `必须立即 write_file / edit_file / delete_file 开始修复，禁止继续只读。`
             ].filter(Boolean).join('\n\n')
           }
         }
@@ -1270,17 +1433,20 @@ export class WorkflowEngine {
           ].filter(Boolean).join('\n\n')
         }
 
-        this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+        pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
 
         const repairDiagnosticRound = repairMode && orderedResults.length > 0 &&
-          orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode))
+          orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode)) &&
+          repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS
         const freeKnowledgeRound = successfulKnowledge.length === orderedResults.length &&
           knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS
         const freeExploreRound =
           pureExplore &&
-          isExploreLimitedStep(step) &&
+          isExploreLimitedStep(step, repairMode) &&
           !stepHasEvidence &&
           exploreRounds <= MAX_FREE_EXPLORE_ROUNDS
+        const freeRepairExplore =
+          repairExploreOnly && repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS
         const readOnlyAfterEvidence =
           stepHasEvidence &&
           orderedResults.length > 0 &&
@@ -1289,7 +1455,7 @@ export class WorkflowEngine {
             result.toolName === 'list_directory' ||
             result.toolName === 'grep'
           )
-        if (!repairDiagnosticRound && !freeKnowledgeRound && !freeExploreRound && !readOnlyAfterEvidence) {
+        if (!repairDiagnosticRound && !freeKnowledgeRound && !freeExploreRound && !freeRepairExplore && !readOnlyAfterEvidence) {
           attempt++
         }
       }
@@ -1302,8 +1468,8 @@ export class WorkflowEngine {
           .map((s) => `#${s.id} ${s.title}`)
           .join('\n')
         const repairNote =
-          repairRounds > MAX_REPAIR_ROUNDS
-            ? `已尝试 ${MAX_REPAIR_ROUNDS} 轮自动修复仍未成功。\n\n最后错误：\n${lastFailureOutput.trim().split('\n').slice(-40).join('\n')}\n\n`
+          repairRounds > effectiveMaxRepairRounds
+            ? `已尝试 ${repairRounds}/${effectiveMaxRepairRounds} 轮自动修复仍未成功。\n\n最后错误：\n${lastFailureOutput.trim().split('\n').slice(-40).join('\n')}\n\n`
             : ''
         return {
           finalContent:

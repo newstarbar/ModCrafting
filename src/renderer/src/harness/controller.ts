@@ -53,6 +53,8 @@ export class Controller {
   private pendingApproval: { id: string; resolve: (allow: boolean) => void } | null = null
   private composerMode: ComposerMode = 'agent'
   private sessionGoal = ''
+  /** Cached project scan for execute-entry user message (kept out of system prompt). */
+  private lastProjectInfo = ''
   private planReadyAwaitingExecute = false
   /** Last plan text that had parseable steps (even if hard-validation failed). Used by 继续. */
   private lastPlanCandidate: string | null = null
@@ -231,6 +233,9 @@ export class Controller {
       tracker.toContextBlock()
     if (tracker.isOpsOnly()) {
       content += '\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。'
+    }
+    if (this.lastProjectInfo.trim()) {
+      content += `\n\n${this.lastProjectInfo.trim()}`
     }
     return content
   }
@@ -441,9 +446,16 @@ export class Controller {
       return t ? `- **${cn}** (\`${t.name}\`): ${t.description} ${kind}` : ''
     }).join('\n')
 
-    const projectInfo = await this.buildProjectInfo()
     const fabricPolicy = buildFabricAgentPolicyPrompt(mode)
     const goalBlock = buildSessionGoalBlock(this.sessionGoal)
+    // projectInfo is injected into the execute-entry user message (not system)
+    // so writing files / phase switches do not invalidate the system prompt cache prefix.
+    const projectInfo = mode === 'execute' ? '' : await this.buildProjectInfo()
+    if (mode === 'execute') {
+      this.lastProjectInfo = await this.buildProjectInfo()
+    } else {
+      this.lastProjectInfo = projectInfo
+    }
 
     if (mode === 'chat') {
       return `# ModCrafting AI 助手

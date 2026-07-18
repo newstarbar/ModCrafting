@@ -1172,17 +1172,17 @@ test('appendToolRoundHistory writes paired assistant.tool_calls and role:tool me
   }]
   const results = new Map([['call_abc', { output: 'src/main/java\nsrc/main/resources' }]])
 
-  appendToolRoundHistory(messages as never, '', calls, results, '[SYSTEM: 继续下一步]')
+  const instruction = appendToolRoundHistory(messages as never, '', calls, results, '[SYSTEM: 继续下一步]')
 
-  assert.equal(messages.length, 3)
+  assert.equal(messages.length, 2)
   assert.equal(messages[0].role, 'assistant')
   assert.deepEqual((messages[0].tool_calls as Array<{ id: string }>).map((tc) => tc.id), ['call_abc'])
   assert.equal(messages[1].role, 'tool')
   assert.equal(messages[1].tool_call_id, 'call_abc')
   assert.equal(messages[1].name, 'list_directory')
   assert.match(String(messages[1].content), /src\/main\/java/)
-  assert.equal(messages[2].role, 'system')
-  assert.match(String(messages[2].content), /继续下一步/)
+  // Instruction is returned for ephemeral use — not persisted as role:system
+  assert.equal(instruction, '[SYSTEM: 继续下一步]')
 })
 
 test('isRetryableFetchError detects transient network failures', async () => {

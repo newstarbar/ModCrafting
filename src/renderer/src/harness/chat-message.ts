@@ -60,14 +60,15 @@ export function appendToolRoundHistory(
   calls: ModelToolCall[],
   results: Map<string, { output: string }>,
   instruction?: string
-): void {
-  if (calls.length === 0) return
+): string | undefined {
+  if (calls.length === 0) return instruction?.trim() || undefined
   messages.push(assistantToolCallMessage(streamContent, calls))
   for (const call of calls) {
     const result = results.get(call.id)
     messages.push(toolResultMessage(call, result?.output ?? ''))
   }
-  if (instruction?.trim()) {
-    messages.push({ role: 'system', content: instruction.trim() })
-  }
+  // Instruction is returned for the caller to attach ephemerally (e.g. next
+  // user/workflow prompt). Do not push role:system into history — that breaks
+  // prompt-cache prefixes.
+  return instruction?.trim() || undefined
 }

@@ -23,7 +23,7 @@ import {
 	generateModBlocksRegistrationClass,
 	generateModItemsRegistrationClass
 } from "../project/template-codegen.ts";
-import { buildMixinScaffold, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
+import { buildMixinScaffold, expectedMixinSourcePaths, isValidMixinSourcePath, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
 	if (typeof args.mcVersion === "string" && args.mcVersion.trim()) return args.mcVersion.trim();
@@ -1336,8 +1336,9 @@ export const fabricMixinValidateTool: Tool = {
 				if (!Array.isArray(config[key]) || !(config[key] as unknown[]).includes(relative)) errors.push(`${relative} 未注册到 ${configName} 的 ${key}`);
 			}
 		}
-		const expectedPath = `src/main/java/${identity.fqn.replace(/\./g, "/")}.java`;
-		if (sourcePath !== expectedPath) errors.push(`源码路径应为 ${expectedPath}`);
+		if (identity && !isValidMixinSourcePath(sourcePath, identity.fqn, metadata?.side)) {
+			errors.push(`源码路径应为 ${expectedMixinSourcePaths(identity.fqn, metadata?.side).join(" 或 ")}`)
+		}
 		if (errors.length) return `Error: Mixin 校验失败\n${errors.map((error) => `- ${error}`).join("\n")}`;
 		const artifacts = [sourcePath, ...(configName ? [`src/main/resources/${configName}`] : [])];
 		return {

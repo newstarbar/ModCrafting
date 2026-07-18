@@ -98,7 +98,8 @@ export function buildRepairPrompt(errors: ParsedError[], buildOutput: string): s
   const trimmed = summarizeBuildOutput(buildOutput)
   prompt += trimmed
   prompt += '\n```\n\n'
-  prompt += '请分析以上错误并给出修复方案。对于每个需要修改的文件，请以注释形式指明文件路径，并给出完整的修正代码。'
+  prompt += '请用 read_error_log 定位错误后，用 edit_file / write_file / delete_file 逐文件修复，最后 trigger_build 验证。' +
+    '禁止只在聊天中贴完整修正代码。若 splitEnvironment 导致 client 类在 src/main/java：先 write_file 到 src/client/java，再 delete_file 删除旧 main 路径。'
 
   return prompt
 }

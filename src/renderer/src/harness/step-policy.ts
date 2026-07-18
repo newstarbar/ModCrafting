@@ -75,12 +75,15 @@ const REPAIR_WRITE_BLOCKED_TOOLS = new Set(['trigger_build', 'run_command'])
 const REPAIR_OVERRIDE_TOOLS = new Set([
   'edit_file',
   'write_file',
+  'delete_file',
   'read_file',
   'grep',
   'read_error_log',
   'fabric_log_debugger',
   'fabric_docs_search',
   'fabric_mixin_target_lookup',
+  'fabric_mixin_scaffold',
+  'fabric_mixin_register',
   'fabric_recipe_validate',
   'fabric_mixin_validate'
 ])
@@ -103,6 +106,7 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
     return isRecipeInspectionPath(String(call.args.path || ''))
   }
   if (call.name === 'delete_file') {
+    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
     return step.kind === 'write'
   }
   if (call.name === 'run_command') {
@@ -147,6 +151,7 @@ export function isToolAllowedForStep(
   }
 
   if (call.name === 'delete_file') {
+    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
     return step.kind === 'write' || step.kind === 'mixin'
   }
 

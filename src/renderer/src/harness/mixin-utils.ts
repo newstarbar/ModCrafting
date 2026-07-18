@@ -208,3 +208,24 @@ export function readMixinMetadata(source: string): MixinScaffoldMetadata | null 
     return null
   }
 }
+
+/** Canonical source path(s) for a Mixin FQN under Loom split/common source sets. */
+export function expectedMixinSourcePaths(
+  fqn: string,
+  side: MixinScaffoldMetadata['side'] | undefined
+): string[] {
+  const relative = `${fqn.replace(/\./g, '/')}.java`
+  const mainPath = `src/main/java/${relative}`
+  const clientPath = `src/client/java/${relative}`
+  if (side === 'client') return [clientPath, mainPath]
+  return [mainPath]
+}
+
+export function isValidMixinSourcePath(
+  sourcePath: string,
+  fqn: string,
+  side: MixinScaffoldMetadata['side'] | undefined
+): boolean {
+  const normalized = sourcePath.replace(/\\/g, '/')
+  return expectedMixinSourcePaths(fqn, side).includes(normalized)
+}

@@ -915,7 +915,10 @@ export class Agent {
           }
 
           const pushRoundHistory = (instruction: string): void => {
-            appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction)
+            const ephemeral = appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction)
+            if (ephemeral) {
+              messages.push({ role: 'user', content: ephemeral })
+            }
             this.assistantTurnCount++
           }
 

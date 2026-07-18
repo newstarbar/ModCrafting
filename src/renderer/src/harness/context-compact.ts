@@ -114,7 +114,7 @@ function compactToolResult(name: string, output: string): string {
     summary = firstLine || output.trim().slice(0, 60)
   }
 
-  return `[已压缩: ${name} — ${summary} — 原始 ${size} tokens]`
+  return `[已压缩: ${name} — ${summary}]`
 }
 
 function pathHintFromArgs(raw: string): string {
@@ -135,13 +135,14 @@ function pathHintFromArgs(raw: string): string {
 /** Shrink oversized tool_call arguments (write_file / edit_file payloads). */
 export function compactToolCallArguments(call: ChatToolCall): ChatToolCall {
   const raw = call.function?.arguments || ''
+  if (raw.includes('"_compacted"')) return call // already stable
   if (raw.length < MICRO_ARGS_MIN_CHARS) return call
   const name = call.function?.name || 'unknown'
   const hint = pathHintFromArgs(raw)
   const placeholder = JSON.stringify({
     _compacted: true,
     tool: name,
-    note: `arguments truncated (${raw.length} chars)${hint}`
+    note: `arguments truncated${hint}`
   })
   return {
     ...call,
@@ -191,10 +192,13 @@ export function microCompact(
       // reset between turns and previously made old session results immortal.
       const age = assistantTurnsSeen
       if (age >= MICRO_COMPACT_AGE) {
+        const existing = messages[i].content || ''
+        // Already compacted — leave stable so prompt-cache prefixes don't thrash.
+        if (existing.startsWith('[已压缩:')) continue
         const name = messages[i].name || 'unknown'
         compacted[i] = {
           role: 'tool',
-          content: compactToolResult(name, messages[i].content || ''),
+          content: compactToolResult(name, existing),
           tool_call_id: messages[i].tool_call_id,
           name
         }
