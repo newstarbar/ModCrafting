@@ -37,6 +37,7 @@ import { executeTemplateGenerate, resolveProjectConfig } from '../project/templa
 import { isCodeExplainInput } from '../harness/turn-intent'
 import RollbackWarningPanel from './RollbackWarningPanel'
 import DeleteMessagePanel from './DeleteMessagePanel'
+import ClarificationOverlay from './ClarificationOverlay'
 import { removeMessageFromDisplay } from '../utils/message-delete'
 import { messagePlainText } from '../utils/message-text'
 import { shouldShowPinnedPlan } from '../utils/plan-visibility'
@@ -246,8 +247,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationPending, setClarificationPending] = useState(false)
   const [clarificationQuestion, setClarificationQuestion] = useState('')
   const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
-  const [clarificationOtherInput, setClarificationOtherInput] = useState('')
-  const [clarificationSelectedIndex, setClarificationSelectedIndex] = useState<number | null>(null)
   const [showTemplateForm, setShowTemplateForm] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
@@ -583,8 +582,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           setClarificationPending(true)
           setClarificationQuestion(event.clarification.question)
           setClarificationOptions(event.clarification.options || [])
-          setClarificationOtherInput('')
-          setClarificationSelectedIndex(null)
           setIsLoading(false)
           setAgentStatus('')
           onRunningChangeRef.current?.(false)
@@ -983,31 +980,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   // Session helpers — delegated to App (single source of truth)
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading || !toolchainReady) return
-
-    if (clarificationPending) {
-      let answer = input.trim()
-      if (!answer && clarificationOtherInput.trim()) {
-        answer = clarificationOtherInput.trim()
-      }
-      setInput('')
-      setClarificationPending(false)
-      setClarificationQuestion('')
-      setClarificationOptions([])
-      setClarificationOtherInput('')
-      setClarificationSelectedIndex(null)
-      setIsLoading(true)
-      setAgentStatus('思考中...')
-      const ctrl = controllerRef.current
-      if (ctrl) {
-        try { await ctrl.answerClarification(answer) }
-        catch {
-          setIsLoading(false)
-          setAgentStatus('')
-          onRunningChangeRef.current?.(false)
-        }
-      }
-      return
-    }
+    // Clarification answers go through ClarificationOverlay confirm — not the composer.
+    if (clarificationPending) return
 
     const ctrl = controllerRef.current
     if (!ctrl) return
@@ -1103,6 +1077,28 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       }
     }
   }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending])
+
+  const handleClarificationConfirm = useCallback(async (answer: string) => {
+    const trimmed = answer.trim()
+    if (!trimmed || isLoading || !clarificationPending) return
+    setClarificationPending(false)
+    setClarificationQuestion('')
+    setClarificationOptions([])
+    setInput('')
+    setIsLoading(true)
+    setAgentStatus('思考中...')
+    onRunningChangeRef.current?.(true)
+    const ctrl = controllerRef.current
+    if (ctrl) {
+      try {
+        await ctrl.answerClarification(trimmed)
+      } catch {
+        setIsLoading(false)
+        setAgentStatus('')
+        onRunningChangeRef.current?.(false)
+      }
+    }
+  }, [isLoading, clarificationPending])
 
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
@@ -1788,80 +1784,36 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             构建环境初始化中，AI 开发与构建功能暂时锁定，请等待进度条完成。
           </div>
         )}
-        {clarificationPending && (
-          <div className="clarification-banner">
-            <div className="clarification-banner-hd">
-              <span className="clarification-banner-icon">?</span>
-              <span>AI 需要你的确认</span>
-            </div>
-            <div className="clarification-banner-question">{clarificationQuestion}</div>
-            {clarificationOptions.length > 0 ? (
-              <div className="clarification-banner-options">
-                {clarificationOptions.map((opt, i) => {
-                  const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
-                  const letter = letters[i] || String(i + 1)
-                  return (
-                    <button
-                      key={i}
-                      className={`clarification-option-btn ${clarificationSelectedIndex === i ? 'selected' : ''}`}
-                      onClick={() => {
-                        setClarificationSelectedIndex(i)
-                        setInput(opt)
-                        setClarificationOtherInput('')
-                      }}
-                    >
-                      <span className="clarification-option-letter">{letter}</span>
-                      <span className="clarification-option-text">{opt}</span>
-                    </button>
-                  )
-                })}
-                <button
-                  className={`clarification-option-btn ${clarificationSelectedIndex === -1 ? 'selected' : ''}`}
-                  onClick={() => {
-                    setClarificationSelectedIndex(-1)
-                  }}
-                >
-                  <span className="clarification-option-letter">其他</span>
-                  <span className="clarification-option-text">
-                    <input
-                      type="text"
-                      className="clarification-other-input"
-                      placeholder="请输入其他选项..."
-                      value={clarificationOtherInput}
-                      onChange={(e) => {
-                        setClarificationOtherInput(e.target.value)
-                        setInput(e.target.value)
-                      }}
-                    />
-                  </span>
-                </button>
-              </div>
-            ) : (
-              <div className="clarification-banner-hint">请在下方输入你的回答，然后发送</div>
-            )}
-          </div>
+        {clarificationPending ? (
+          <ClarificationOverlay
+            question={clarificationQuestion}
+            options={clarificationOptions}
+            disabled={isLoading}
+            onConfirm={(answer) => { void handleClarificationConfirm(answer) }}
+          />
+        ) : (
+          <ChatComposer
+            input={input}
+            onInputChange={setInput}
+            onSend={handleSend}
+            onCancel={handleCancel}
+            isLoading={isLoading}
+            disabled={!projectPath || isLoading || !toolchainReady}
+            composerMode={composerMode}
+            onComposerModeChange={handleComposerModeChange}
+            sessionGoal={sessionGoal}
+            onSessionGoalChange={handleSessionGoalChange}
+            planReady={planReady}
+            onExecutePlan={handleExecutePlan}
+            toolchainReady={toolchainReady}
+            hasProject={Boolean(projectPath)}
+            providerId={apiConfig.providerId}
+            modelId={apiConfig.model}
+            onProviderModelChange={onProviderModelChange ?? (() => {})}
+            onOpenApiSettings={onOpenApiSettings}
+            onQuickTemplateSelect={handleTemplateSelect}
+          />
         )}
-        <ChatComposer
-          input={input}
-          onInputChange={setInput}
-          onSend={handleSend}
-          onCancel={handleCancel}
-          isLoading={isLoading}
-          disabled={!projectPath || isLoading || !toolchainReady}
-          composerMode={composerMode}
-          onComposerModeChange={handleComposerModeChange}
-          sessionGoal={sessionGoal}
-          onSessionGoalChange={handleSessionGoalChange}
-          planReady={planReady}
-          onExecutePlan={handleExecutePlan}
-          toolchainReady={toolchainReady}
-          hasProject={Boolean(projectPath)}
-          providerId={apiConfig.providerId}
-          modelId={apiConfig.model}
-          onProviderModelChange={onProviderModelChange ?? (() => {})}
-          onOpenApiSettings={onOpenApiSettings}
-          onQuickTemplateSelect={handleTemplateSelect}
-        />
       </div>
 
       {showTemplateForm && (

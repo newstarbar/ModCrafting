@@ -3280,6 +3280,164 @@ body,
 	border-radius: 6px;
 }
 
+.clarification-overlay {
+	width: 100%;
+	position: relative;
+	z-index: 5;
+}
+
+.clarification-overlay__panel {
+	width: 100%;
+	padding: 14px 16px 12px;
+	background: var(--bg-raised);
+	border: 1px solid var(--accent);
+	border-radius: 10px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.clarification-overlay__hd {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	font-size: 13px;
+	color: var(--accent);
+	margin-bottom: 8px;
+}
+
+.clarification-overlay__icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 50%;
+	background: var(--accent);
+	color: #fff;
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.clarification-overlay__question {
+	font-size: 13px;
+	color: var(--text-primary);
+	line-height: 1.55;
+	white-space: pre-wrap;
+	margin-bottom: 10px;
+}
+
+.clarification-overlay__options {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.clarification-overlay__option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	width: 100%;
+	text-align: left;
+	font-size: 13px;
+	padding: 10px 12px;
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	background: var(--bg-control);
+	color: var(--text);
+	cursor: pointer;
+	transition: border-color 0.15s, background 0.15s;
+}
+
+.clarification-overlay__option:hover:not(:disabled) {
+	border-color: var(--accent);
+	background: var(--bg-surface);
+}
+
+.clarification-overlay__option.is-selected {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 18%, var(--bg-control));
+}
+
+.clarification-overlay__letter {
+	flex-shrink: 0;
+	font-weight: 700;
+	font-size: 12px;
+	min-width: 1.25em;
+	color: var(--accent);
+	line-height: 1.4;
+}
+
+.clarification-overlay__option-text {
+	flex: 1;
+	line-height: 1.45;
+	white-space: pre-wrap;
+}
+
+.clarification-overlay__textarea {
+	width: 100%;
+	box-sizing: border-box;
+	resize: vertical;
+	min-height: 72px;
+	margin-bottom: 10px;
+	padding: 10px 12px;
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	background: var(--bg-secondary);
+	color: var(--text);
+	font-size: 13px;
+	line-height: 1.45;
+	outline: none;
+	font-family: inherit;
+}
+
+.clarification-overlay__textarea:focus {
+	border-color: var(--accent);
+}
+
+.clarification-overlay__footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.clarification-overlay__hint {
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+.clarification-overlay__btn {
+	border: none;
+	border-radius: 8px;
+	padding: 8px 16px;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.clarification-overlay__btn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.clarification-overlay__btn--ghost {
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--border-color);
+}
+
+.clarification-overlay__btn--confirm {
+	margin-left: auto;
+	background: var(--accent);
+	color: #fff;
+}
+
+.clarification-overlay__btn--confirm:hover:not(:disabled) {
+	filter: brightness(1.08);
+}
+
+/* legacy clarification banner (kept for safety if referenced elsewhere) */
 .clarification-banner {
 	width: 100%;
 	margin-bottom: 8px;

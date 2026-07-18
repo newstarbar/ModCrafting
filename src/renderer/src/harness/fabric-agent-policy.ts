@@ -136,7 +136,7 @@ function modeSpecificRules(mode: FabricAgentPromptMode): string[] {
     '配方只能使用 create_recipe / fabric_recipe_generate，并由 fabric_recipe_validate 或生成器写后校验证据完成；禁止手写配方 JSON。',
     'Mixin 必须先 fabric_mixin_target_lookup 精确确认描述符与 side，再 scaffold/register/validate；禁止猜测重载或只靠编译通过。',
     '只执行当前步骤，禁止重规划；写入后通过 trigger_build / runClient 验证。',
-    '遇到不确定的文件路径、包名、类名或配置选项时，使用 ask_clarification 向用户提问，不要盲目猜测。'
+    '遇到不确定的实现方案时，使用 ask_clarification 并提供 2～4 个互斥 options；禁止向用户索取 list_directory/read_file 就能得到的文件列表。'
   ]
 }
 
