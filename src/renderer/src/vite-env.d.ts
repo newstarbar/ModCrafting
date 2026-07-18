@@ -84,6 +84,8 @@ interface ModCraftingApi {
   lookupFabricSymbol: (request: FabricSymbolLookupRequest) => Promise<FabricSymbolLookupResult>
   verifyFabricSymbolIndex: () => Promise<{ ok: boolean; error?: string; classes?: number }>
   setTitle: (title: string) => Promise<void>
+  notifyTaskComplete: () => Promise<void>
+  clearBadge: () => Promise<void>
   onMenuNewProject: (callback: () => void) => () => void
   onMenuOpenProject: (callback: () => void) => () => void
   onToolBuild: (callback: () => void) => () => void

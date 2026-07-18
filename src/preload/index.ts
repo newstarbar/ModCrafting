@@ -105,6 +105,10 @@ const api = {
   // Window
   setTitle: (title: string): Promise<void> =>
     ipcRenderer.invoke('window:setTitle', title),
+  notifyTaskComplete: (): Promise<void> =>
+    ipcRenderer.invoke('app:notifyTaskComplete'),
+  clearBadge: (): Promise<void> =>
+    ipcRenderer.invoke('app:clearBadge'),
 
   // Menu event listeners
   onMenuNewProject: (callback: () => void): (() => void) => {

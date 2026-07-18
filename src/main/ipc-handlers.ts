@@ -46,6 +46,7 @@ import {
   saveKnowledgeFile
 } from './knowledge-service'
 import { openExternalWithFallback } from './external-url'
+import { clearBadge, notifyTaskComplete } from './app-badge'
 import {
   loadProjectSessions,
   saveProjectSessions,
@@ -185,6 +186,14 @@ export function setupIpcHandlers(): void {
   // Window: set title
   ipcMain.handle('window:setTitle', async (_event, title: string) => {
     BrowserWindow.getFocusedWindow()?.setTitle(title)
+  })
+
+  // Taskbar / Dock badge when a workflow completes while unfocused
+  ipcMain.handle('app:notifyTaskComplete', async () => {
+    notifyTaskComplete()
+  })
+  ipcMain.handle('app:clearBadge', async () => {
+    clearBadge()
   })
 
   // File system: watch directory for changes

@@ -875,6 +875,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           setCompletionFlash('任务已完成')
           if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
           completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+          void window.api.notifyTaskComplete?.()
         } else if (!hasError && turnStatus === 'planned') {
           setCompletionFlash('计划已就绪')
           setPlanReady(true)

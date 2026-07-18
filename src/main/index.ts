@@ -10,6 +10,7 @@ import { setupTerminalHandlers, stopAllTerminalSessions } from './terminal-handl
 import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
 import { initUpdater } from './updater'
 import { stopGradleDaemonsOnExit } from './build-env'
+import { clearBadge, initAppBadge } from './app-badge'
 
 if (is.dev) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
@@ -17,6 +18,8 @@ if (is.dev) {
 
 let mainWindow: BrowserWindow | null = null
 let shutdownStarted = false
+
+initAppBadge(() => mainWindow)
 
 async function runShutdownCleanup(): Promise<void> {
   stopAllTerminalSessions()
@@ -92,6 +95,13 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow?.maximize()
     mainWindow?.show()
+  })
+
+  mainWindow.on('focus', () => {
+    clearBadge()
+  })
+  mainWindow.on('show', () => {
+    clearBadge()
   })
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
