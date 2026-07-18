@@ -162,7 +162,7 @@ function computeLineDiff(oldContent: string, newContent: string): { added: numbe
 
 export const writeFileTool: Tool & Previewer = {
 	name: "write_file",
-	description: "新建文件（全量写入）。仅用于不存在的路径；修改已有文件必须用 edit_file。自动创建中间目录。",
+	description: "新建或覆盖空文件（全量写入）。已有非空文件必须用 edit_file。自动创建中间目录。迁移文件时可先 write_file 到新路径，再 delete_file 删旧文件。",
 	schema: {
 		type: "object",
 		properties: {

@@ -141,12 +141,13 @@ export function isToolAllowedForStep(
     if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
     if (step.kind === 'build' || step.kind === 'run') return false
     if (step.kind === 'recipe') return false
-    if (step.kind === 'mixin') return call.name === 'edit_file'
+    // mixin 步需要 write_file（新建 client 路径）+ edit_file（改 stub）才能完成 main→client 迁移
+    if (step.kind === 'mixin') return true
     return true
   }
 
   if (call.name === 'delete_file') {
-    return step.kind === 'write'
+    return step.kind === 'write' || step.kind === 'mixin'
   }
 
   if (call.name === 'read_file') {

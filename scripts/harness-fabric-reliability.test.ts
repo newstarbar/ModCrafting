@@ -69,12 +69,15 @@ test('Mixin scaffold covers supported injection families', () => {
   }
 })
 
-test('workflow classifies Mixin separately and blocks generic writes', () => {
+test('workflow classifies Mixin separately and allows write/delete for client migration', () => {
   const [step] = normalizeWorkflowSteps([{ id: '1', description: '实现 PlayerMixin 并注册', status: 'running', kind: 'mixin', targetPath: 'src/main/java/com/example/mixin/PlayerMixin.java' }])
   assert.equal(step.kind, 'mixin')
-  assert.equal(isToolAllowedForStep(step, { name: 'write_file', args: { path: step.targetPath } }), false)
+  assert.equal(isToolAllowedForStep(step, { name: 'write_file', args: { path: step.targetPath } }), true)
+  assert.equal(isToolAllowedForStep(step, { name: 'delete_file', args: { path: step.targetPath } }), true)
   assert.equal(isToolAllowedForStep(step, { name: 'edit_file', args: { path: step.targetPath } }), true)
   assert.equal(isToolAllowedForStep(step, { name: 'fabric_mixin_validate', args: { sourcePath: step.targetPath } }), true)
+  assert.ok(step.allowedTools.includes('write_file'))
+  assert.ok(step.allowedTools.includes('delete_file'))
 })
 
 test('recipe and Mixin evidence require structured validation', () => {

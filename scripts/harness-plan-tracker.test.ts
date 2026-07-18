@@ -1282,7 +1282,7 @@ test('session storage round-trips usage stats', async () => {
   })
   try {
     const projectPath = 'D:/test-project'
-    saveSessions(projectPath, [{
+    await saveSessions(projectPath, [{
       id: 'session-1',
       name: 'Test',
       messages: [],
@@ -1301,7 +1301,7 @@ test('session storage round-trips usage stats', async () => {
         cost: 0.0123
       }
     }])
-    const loaded = loadSessions(projectPath)
+    const loaded = await loadSessions(projectPath)
     assert.equal(loaded.length, 1)
     assert.equal(loaded[0]?.usage?.sessionTokens, 5000)
     assert.equal(loaded[0]?.usage?.cost, 0.0123)

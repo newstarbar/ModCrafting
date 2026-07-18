@@ -43,12 +43,15 @@ export async function guardedWriteFile(
   }
 
   const allowOverwrite = options?.allowOverwrite === true
-  if (fileExisted && !allowOverwrite) {
+  // Empty / whitespace-only stubs count as "not really there" so scaffold/move can proceed.
+  const isEmptyStub = fileExisted && oldContent.trim().length === 0
+  if (fileExisted && !allowOverwrite && !isEmptyStub) {
     return {
       ok: false,
       message:
         `blocked: [aci_write_gate] 文件已存在：${normalized}。` +
-        `请用 edit_file 做精确替换；write_file 仅用于新建文件。`,
+        `请用 edit_file 做精确替换；write_file 仅用于新建文件。` +
+        `若需迁移到新路径：先 write_file 写新文件，再用 delete_file 删除旧文件。`,
       fileExisted,
       oldContent
     }

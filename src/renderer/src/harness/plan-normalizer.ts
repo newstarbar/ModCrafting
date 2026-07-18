@@ -109,6 +109,8 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_mixin_register',
         'fabric_mixin_validate',
         'edit_file',
+        'write_file',
+        'delete_file',
         'read_file',
         'list_directory',
         'grep',
