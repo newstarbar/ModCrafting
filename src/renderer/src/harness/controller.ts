@@ -15,7 +15,11 @@ import {
   type ComposerMode,
   resolveTurnIntent,
   buildSessionGoalBlock,
-  isErrorReportInput
+  isErrorReportInput,
+  isUserSymptomFeedback,
+  isSymptomResolvedFeedback,
+  buildUserSymptomBlock,
+  buildCrossTurnDiagnosisRetain
 } from './turn-intent'
 import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
 import { OpenCodeAdapter } from './opencode-adapter.ts'
@@ -54,6 +58,8 @@ export class Controller {
   private pendingApproval: { id: string; resolve: (allow: boolean) => void } | null = null
   private composerMode: ComposerMode = 'agent'
   private sessionGoal = ''
+  /** Sticky user-reported bug/symptom; runClient ready alone must not clear it. */
+  private activeUserSymptom: string | null = null
   /** Cached project scan for execute-entry user message (kept out of system prompt). */
   private lastProjectInfo = ''
   private planReadyAwaitingExecute = false
@@ -245,14 +251,37 @@ export class Controller {
 
   private retainCurrentUserAsNewTask(): void {
     const system = this.messages.find((message) => message.role === 'system')
-    const currentUser = [...this.messages].reverse().find((message) =>
-      message.role === 'user' && message.origin !== 'harness'
-    )
     this.taskId = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
-    this.messages = [
-      ...(system ? [{ ...system, origin: 'harness' as const }] : []),
-      ...(currentUser ? [{ ...currentUser, origin: 'user' as const, taskId: this.taskId }] : [])
-    ]
+    // Keep recent user feedback + short assistant notes so follow-up bugfix
+    // rounds do not start with only system+1 user (diag showed controllerMessages: 2).
+    this.messages = buildCrossTurnDiagnosisRetain({
+      system: system ? { role: 'system', content: system.content || '', origin: 'harness' } : undefined,
+      messages: this.messages,
+      taskId: this.taskId
+    }) as ChatMessage[]
+  }
+
+  private noteUserSymptomFromInput(input: string): void {
+    if (isSymptomResolvedFeedback(input)) {
+      this.activeUserSymptom = null
+      return
+    }
+    if (isUserSymptomFeedback(input) || isErrorReportInput(input)) {
+      this.activeUserSymptom = input.trim().slice(0, 400)
+    }
+  }
+
+  private maybeEmitSymptomConfirmNotice(): void {
+    if (!this.activeUserSymptom || !this.planTracker?.allDone()) return
+    this.emitEvent({
+      kind: EventKind.Notice,
+      notice: {
+        level: 'warn',
+        text:
+          `游戏已启动/计划步骤已跑完，但用户症状仍待确认：「${this.activeUserSymptom.slice(0, 100)}」。` +
+          `若问题仍在，请直接描述现象（不要只发「继续」）。若已解决可回复「好了」。`
+      }
+    })
   }
 
   private emitPlanState(tracker: PlanTracker): void {
@@ -450,7 +479,10 @@ export class Controller {
     }).join('\n')
 
     const fabricPolicy = buildFabricAgentPolicyPrompt(mode)
-    const goalBlock = buildSessionGoalBlock(this.sessionGoal)
+    const goalBlock = [
+      buildSessionGoalBlock(this.sessionGoal),
+      buildUserSymptomBlock(this.activeUserSymptom)
+    ].filter(Boolean).join('\n\n')
     // projectInfo is injected into the execute-entry user message (not system)
     // so writing files / phase switches do not invalidate the system prompt cache prefix.
     const projectInfo = mode === 'execute' ? '' : await this.buildProjectInfo()
@@ -515,7 +547,8 @@ submit_plan 参数要求：
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
-6. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。`
+6. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
+7. 若存在【用户待验证症状】：MC_PHASE:ready ≠ 症状已修复；必须针对症状做可验证代码修改，禁止空改/假完成。`
 
     const extraRules = mode === 'execute'
       ? ''
@@ -612,7 +645,7 @@ ${projectInfo}`
     this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
     this.onAgentStatus?.('执行中...')
 
-    return this.agent.run(
+    const result = await this.agent.run(
       this.apiConfig.endpoint,
       this.apiConfig.apiKey,
       this.apiConfig.model,
@@ -628,6 +661,8 @@ ${projectInfo}`
         openCodeDelegate: this.buildOpenCodeDelegate()
       }
     )
+    this.maybeEmitSymptomConfirmNotice()
+    return result
   }
 
   private async beginExecuteFromTracker(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
@@ -638,9 +673,10 @@ ${projectInfo}`
       return ''
     }
     this.lastPlanCandidate = null
+    const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
     this.messages.push({
       role: 'user',
-      content: this.buildExecuteConfirmMessage(this.planTracker),
+      content: [this.buildExecuteConfirmMessage(this.planTracker), symptomBlock].filter(Boolean).join('\n\n'),
       origin: 'harness',
       taskId: this.taskId,
       phase: 'execute'
@@ -661,6 +697,7 @@ ${projectInfo}`
     if (options.pushUser) {
       this.messages.push({ role: 'user', content: input, origin: 'user', taskId: this.taskId })
     }
+    this.noteUserSymptomFromInput(input)
     this.onAgentStatus?.('思考中...')
 
     let planStreamReasoning = ''

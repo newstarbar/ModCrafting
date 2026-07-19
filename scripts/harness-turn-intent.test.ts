@@ -5,7 +5,11 @@ import {
   resolveTurnIntent,
   buildSessionGoalBlock,
   isCodeExplainInput,
-  isErrorReportInput
+  isErrorReportInput,
+  isUserSymptomFeedback,
+  isSymptomResolvedFeedback,
+  buildUserSymptomBlock,
+  buildCrossTurnDiagnosisRetain
 } from '../src/renderer/src/harness/turn-intent.ts'
 import {
   compilePlanFromText,
@@ -70,10 +74,43 @@ test('resolveTurnIntent: what is mixin in ask → chat', () => {
   assert.equal(resolveTurnIntent('什么是 Mixin', intentCtx({ composerMode: 'ask' })), 'chat')
 })
 
-test('buildSessionGoalBlock includes goal text', () => {
-  const block = buildSessionGoalBlock('为本模组添加二段跳')
-  assert.match(block, /为本模组添加二段跳/)
-  assert.match(block, /当前会话目标/)
+test('isUserSymptomFeedback detects blur / still-broken reports', () => {
+  assert.equal(isUserSymptomFeedback('还是模糊的'), true)
+  assert.equal(isUserSymptomFeedback('预览画面是模糊的'), true)
+  assert.equal(isUserSymptomFeedback('F6报错：Rendersystem called from wrongthread'), true)
+  assert.equal(isUserSymptomFeedback('继续'), false)
+  assert.equal(isUserSymptomFeedback('好了'), false)
+})
+
+test('isSymptomResolvedFeedback accepts short confirmations', () => {
+  assert.equal(isSymptomResolvedFeedback('好了'), true)
+  assert.equal(isSymptomResolvedFeedback('解决了！'), true)
+  assert.equal(isSymptomResolvedFeedback('还是模糊的'), false)
+})
+
+test('buildUserSymptomBlock reminds ready ≠ fixed', () => {
+  const block = buildUserSymptomBlock('还是模糊的')
+  assert.match(block, /用户待验证症状/)
+  assert.match(block, /MC_PHASE:ready/)
+  assert.match(block, /不代表该症状已修复/)
+  assert.equal(buildUserSymptomBlock(null), '')
+})
+
+test('buildCrossTurnDiagnosisRetain keeps prior user feedback (not only system+1)', () => {
+  const retained = buildCrossTurnDiagnosisRetain({
+    system: { role: 'system', content: 'sys', origin: 'harness' },
+    messages: [
+      { role: 'system', content: 'sys', origin: 'harness' },
+      { role: 'user', content: 'F6报错 wrong thread', origin: 'user' },
+      { role: 'assistant', content: '已把 takeScreenshot 移回主线程并完成构建。', origin: 'assistant' },
+      { role: 'user', content: '还是模糊的', origin: 'user' }
+    ],
+    taskId: 'task_test'
+  })
+  assert.ok(retained.length >= 3, `expected more than system+user, got ${retained.length}`)
+  assert.equal(retained[0].role, 'system')
+  assert.ok(retained.some((m) => m.role === 'user' && /跨轮诊断摘要/.test(m.content)))
+  assert.ok(retained.some((m) => m.role === 'user' && m.content === '还是模糊的'))
 })
 
 test('compilePlanFromText: structured write steps append host terminal steps', () => {

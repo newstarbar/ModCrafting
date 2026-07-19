@@ -1341,20 +1341,30 @@ export class WorkflowEngine {
         let roundInstruction: string | undefined
 
         if (success) {
-          // Fix 3: a green build that compiled nothing (all UP-TO-DATE) while the run made
-          // zero writes, on a plan that had write/recipe/mixin work, is the silent
-          // "false success" signature. Do not report it as a clean pass — surface it loudly.
+          // No-op build (all UP-TO-DATE) on a plan that still had write/recipe/mixin work
+          // must not advance — otherwise "假完成" skips real code changes.
           if (
             step.kind === 'build' &&
             planHasWriteSteps &&
-            !anyWriteThisRun &&
             isNoOpBuildResult(decisiveResult!.output)
           ) {
-            const warning =
-              '⚠️ 构建为 UP-TO-DATE：本轮未检测到任何文件改动（无 write_file/edit_file 等写入）。' +
-              '这通常意味着预期的代码修改并未真正落盘，请核对上述写码步骤是否被跳过或误判完成。'
+            const warning = anyWriteThisRun
+              ? '⚠️ 构建为 UP-TO-DATE：本轮虽有写入，但未触发实际编译（compile* 全 UP-TO-DATE）。请核对是否改错 main/client 路径，或改动未保存到 Gradle 源集。'
+              : '⚠️ 构建为 UP-TO-DATE：本轮未检测到任何文件改动（无 write_file/edit_file 等写入）。禁止视为修复成功——请先对目标源码做真实修改。'
             this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: warning } })
-            finalContent = [finalContent.trim(), warning].filter(Boolean).join('\n\n')
+            roundInstruction = [
+              warning,
+              '禁止 complete_step / 推进构建步骤。请 edit_file 修改客户端或主源码后再次 trigger_build。'
+            ].join('\n')
+            pendingEphemeralInstruction = this.appendToolRound(
+              baseMessages,
+              modelResult.text || streamText,
+              allCalls,
+              resultsById,
+              roundInstruction
+            )
+            attempt++
+            continue
           }
           repairMode = false
           repairWriteRequired = false

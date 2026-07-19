@@ -59,8 +59,65 @@ test('Fix 3: isNoOpBuildResult returns false when a task actually ran', () => {
 
 // ── Fix 5: loop guard constant ──
 
-test('Fix 5: MAX_IDENTICAL_REJECTIONS is a small finite guard', () => {
-  assert.equal(MAX_IDENTICAL_REJECTIONS, 4)
+test('Fix 3: no-op UP-TO-DATE build does not complete when plan had write steps', async () => {
+  const noopLog = [
+    '> Task :compileJava UP-TO-DATE',
+    '> Task :compileClientJava UP-TO-DATE',
+    '> Task :jar UP-TO-DATE',
+    'BUILD SUCCESSFUL in 15s'
+  ].join('\n')
+  const registry = new Registry()
+  registry.add({
+    name: 'trigger_build', description: 'build',
+    schema: { type: 'object', properties: { task: { type: 'string' } } },
+    readOnly: () => false,
+    async execute() {
+      return `构建已完成。\n${noopLog}\n[退出码: 0]`
+    }
+  })
+  registry.add({
+    name: 'write_file', description: 'write',
+    schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } },
+    readOnly: () => false,
+    async execute(_ctx, args) { return `已写入: ${args.path}` }
+  })
+  registry.add({
+    name: 'complete_step', description: 'complete',
+    schema: { type: 'object', properties: { stepId: { type: 'string' } }, required: ['stepId'] },
+    readOnly: () => false,
+    async execute() { return '[STEP_COMPLETE_REQUEST]' }
+  })
+  registry.add({
+    name: 'read_file', description: 'read', schema: { type: 'object' }, readOnly: () => true,
+    async execute() { return 'ok' }
+  })
+
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '修改 src/main/java/One.java', status: 'completed', kind: 'write', targetPath: 'src/main/java/One.java' },
+    { id: '2', description: '构建项目（gradlew build）', status: 'pending' }
+  ])
+  const steps = normalizeWorkflowSteps(tracker.steps).map((s) => ({ ...s, maxAttempts: 2 }))
+  steps[0].status = 'completed'
+  steps[1].status = 'pending'
+  let round = 0
+  const engine = new WorkflowEngine({
+    steps,
+    planTracker: tracker,
+    registry,
+    projectPath: '/proj',
+    emit: () => {},
+    modelCall: async () => {
+      round++
+      if (round === 1) {
+        return { text: '', reasoning: '', toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }] }
+      }
+      // After rejection, model retries once more then stops attempting writes
+      return { text: '', reasoning: '', toolCalls: [{ name: 'trigger_build', args: { task: 'build' } }] }
+    }
+  })
+  const result = await engine.run([])
+  assert.equal(result.allDone, false)
+  assert.notEqual(tracker.steps[1].status, 'completed', 'UP-TO-DATE build must not advance write-plan build step')
 })
 
 // ── Fix 2: fresh write step over an existing file must not auto-complete ──

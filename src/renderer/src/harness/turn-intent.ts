@@ -45,6 +45,87 @@ export function isErrorReportInput(input: string): boolean {
   return false
 }
 
+/** User says the previous "fix" did not work — keep as sticky acceptance criteria. */
+const USER_SYMPTOM_PATTERN =
+  /还是|仍然|依旧|又|模糊|花屏|报错|不对|不行|没用|无效|失败|没有[看见反应效果]|看不见|不显示|不正确|崩溃|卡死|黑屏|闪退|键名|翻译键|预览|乱码|错位|穿模|冲突|wrong\s*thread|exception|blur|glitch|broken|still\s|doesn't\swork|does\snot\swork/i
+
+/** User confirms the symptom is gone. */
+const SYMPTOM_RESOLVED_PATTERN =
+  /^(好了|可以了|解决了|修好了|没问题了|正常了|通过了|ok了|已解决|已修复)[\s!！。.?？~]*$/i
+
+export function isUserSymptomFeedback(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed || trimmed.length > 800) return false
+  if (isResumeInput(trimmed)) return false
+  if (SYMPTOM_RESOLVED_PATTERN.test(trimmed)) return false
+  if (isErrorReportInput(trimmed)) return true
+  return USER_SYMPTOM_PATTERN.test(trimmed)
+}
+
+export function isSymptomResolvedFeedback(input: string): boolean {
+  return SYMPTOM_RESOLVED_PATTERN.test(input.trim())
+}
+
+export function buildUserSymptomBlock(symptom: string | null | undefined): string {
+  const text = (symptom || '').trim()
+  if (!text) return ''
+  return (
+    `【用户待验证症状】${text.slice(0, 400)}\n` +
+    `硬约束：trigger_build runClient 出现 MC_PHASE:ready 仅表示游戏启动成功，不代表该症状已修复。` +
+    `写码步骤必须针对该症状做可验证修改（禁止只加注释/空改）；若 build 全 UP-TO-DATE，说明改动未进入编译，须核对路径（main/client）与 edit_file 是否落盘。` +
+    `完成后用一两句说明改了哪一处，由用户确认是否解决。`
+  )
+}
+
+/** Keep recent user feedback + short assistant notes when starting a follow-up task. */
+export function buildCrossTurnDiagnosisRetain(args: {
+  system?: { role: 'system'; content: string; origin?: string }
+  messages: Array<{ role: string; content?: string; origin?: string }>
+  taskId: string
+  maxPriorUsers?: number
+  maxAssistantNotes?: number
+}): Array<{ role: string; content: string; origin?: string; taskId?: string }> {
+  const maxUsers = args.maxPriorUsers ?? 5
+  const maxAssistants = args.maxAssistantNotes ?? 2
+  const priorUsers = args.messages
+    .filter((m) => m.role === 'user' && m.origin !== 'harness')
+    .map((m) => (m.content || '').trim())
+    .filter(Boolean)
+    .slice(-maxUsers)
+  const currentUser = [...args.messages].reverse().find((m) => m.role === 'user' && m.origin !== 'harness')
+  const assistantNotes = args.messages
+    .filter((m) => m.role === 'assistant' && (m.content || '').trim().length > 20)
+    .map((m) => (m.content || '').trim().slice(0, 1200))
+    .slice(-maxAssistants)
+
+  const out: Array<{ role: string; content: string; origin?: string; taskId?: string }> = []
+  if (args.system) {
+    out.push({ role: 'system', content: args.system.content, origin: 'harness' })
+  }
+  if (priorUsers.length > 0) {
+    out.push({
+      role: 'user',
+      origin: 'harness',
+      content:
+        `【跨轮诊断摘要】用户近期反馈（必须保留，禁止遗忘）：\n` +
+        priorUsers.map((s, i) => `${i + 1}. ${s.slice(0, 240)}`).join('\n') +
+        `\n请针对最新用户消息修复；不要重复已尝试且无效的方案。`
+    })
+  }
+  for (const note of assistantNotes) {
+    out.push({ role: 'assistant', content: note, origin: 'assistant', taskId: args.taskId })
+  }
+  if (currentUser) {
+    out.push({
+      role: 'user',
+      content: currentUser.content || '',
+      origin: 'user',
+      taskId: args.taskId
+    })
+  }
+  return out
+}
+
 function heuristicChat(input: string): boolean {
   const trimmed = input.trim()
   if (GREETING_PATTERN.test(trimmed)) return true
