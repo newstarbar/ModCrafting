@@ -167,6 +167,20 @@ interface ModCraftingApi {
     error?: string
   }>
   openExternalUrl: (url: string) => Promise<{ success: boolean; usedFallback?: boolean; error?: string }>
+  showItemInFolder: (targetPath: string) => Promise<{ success: boolean; error?: string }>
+  findExportJar: (
+    projectPath: string
+  ) => Promise<{ success: boolean; jarPath?: string; jarName?: string; error?: string }>
+  exportJar: (
+    sourcePath: string,
+    suggestedName?: string
+  ) => Promise<{
+    success: boolean
+    cancelled?: boolean
+    path: string
+    name: string
+    error?: string
+  }>
   loadAgentConfig: () => Promise<{
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]

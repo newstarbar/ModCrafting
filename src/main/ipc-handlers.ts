@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, app, type IpcMainInvokeEvent } from 'electron'
+import { ipcMain, dialog, BrowserWindow, app, shell, type IpcMainInvokeEvent } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -437,6 +437,108 @@ export function setupIpcHandlers(): void {
   })
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => openExternalWithFallback(url))
+
+  ipcMain.handle('shell:showItemInFolder', async (_event, targetPath: string) => {
+    try {
+      if (typeof targetPath !== 'string' || !targetPath.trim()) {
+        return { success: false, error: '路径无效' }
+      }
+      const resolved = path.resolve(targetPath)
+      if (!fs.existsSync(resolved)) {
+        return { success: false, error: '文件不存在' }
+      }
+      shell.showItemInFolder(resolved)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('project:findExportJar', async (_event, projectPath: string) => {
+    try {
+      if (typeof projectPath !== 'string' || !projectPath.trim()) {
+        return { success: false, error: '项目路径无效' }
+      }
+      const libsDir = path.join(path.resolve(projectPath), 'build', 'libs')
+      if (!fs.existsSync(libsDir) || !fs.statSync(libsDir).isDirectory()) {
+        return { success: false, error: '未找到 build/libs 目录' }
+      }
+      const candidates = fs
+        .readdirSync(libsDir)
+        .filter((name) => {
+          if (!name.toLowerCase().endsWith('.jar')) return false
+          const lower = name.toLowerCase()
+          if (lower.endsWith('-sources.jar') || lower.endsWith('-javadoc.jar')) return false
+          if (lower.includes('-dev')) return false
+          return true
+        })
+        .map((name) => {
+          const jarPath = path.join(libsDir, name)
+          return { name, path: jarPath, mtime: fs.statSync(jarPath).mtimeMs }
+        })
+        .sort((a, b) => b.mtime - a.mtime)
+      if (candidates.length === 0) {
+        return { success: false, error: '构建成功但未找到可导出的 jar（已排除 sources/dev/javadoc）' }
+      }
+      const primary = candidates[0]
+      return { success: true, jarPath: primary.path, jarName: primary.name }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle(
+    'dialog:exportJar',
+    async (event, sourcePath: string, suggestedName?: string) => {
+      try {
+        if (typeof sourcePath !== 'string' || !sourcePath.trim()) {
+          return { success: false, cancelled: false, path: '', name: '', error: '源文件路径无效' }
+        }
+        const resolved = path.resolve(sourcePath)
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+          return { success: false, cancelled: false, path: '', name: '', error: '源 jar 不存在' }
+        }
+        if (!resolved.toLowerCase().endsWith('.jar')) {
+          return { success: false, cancelled: false, path: '', name: '', error: '仅支持导出 .jar 文件' }
+        }
+        const win = BrowserWindow.fromWebContents(event.sender)
+        const defaultName = (suggestedName || path.basename(resolved)).replace(
+          /[<>:"/\\|?*\x00-\x1f]/g,
+          '_'
+        )
+        const saveOpts: Electron.SaveDialogOptions = {
+          title: '导出模组 JAR',
+          defaultPath: path.join(app.getPath('desktop'), defaultName),
+          filters: [{ name: 'JAR', extensions: ['jar'] }]
+        }
+        const result = win
+          ? await dialog.showSaveDialog(win, saveOpts)
+          : await dialog.showSaveDialog(saveOpts)
+        if (result.canceled || !result.filePath) {
+          return { success: false, cancelled: true, path: '', name: '' }
+        }
+        let filePath = result.filePath
+        if (!/\.jar$/i.test(filePath)) {
+          filePath = `${filePath}.jar`
+        }
+        fs.copyFileSync(resolved, filePath)
+        return {
+          success: true,
+          cancelled: false,
+          path: filePath,
+          name: path.basename(filePath)
+        }
+      } catch (err) {
+        return {
+          success: false,
+          cancelled: false,
+          path: '',
+          name: '',
+          error: String(err)
+        }
+      }
+    }
+  )
 
   // Agent config (knowledge sources, tool toggles, MCP placeholders)
   ipcMain.handle('agentConfig:load', async () => loadAgentConfig())

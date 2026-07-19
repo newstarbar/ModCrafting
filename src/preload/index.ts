@@ -355,6 +355,22 @@ const api = {
   }> => ipcRenderer.invoke('deepseek:balance', apiKey),
   openExternalUrl: (url: string): Promise<{ success: boolean; usedFallback?: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openExternal', url),
+  showItemInFolder: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('shell:showItemInFolder', targetPath),
+  findExportJar: (
+    projectPath: string
+  ): Promise<{ success: boolean; jarPath?: string; jarName?: string; error?: string }> =>
+    ipcRenderer.invoke('project:findExportJar', projectPath),
+  exportJar: (
+    sourcePath: string,
+    suggestedName?: string
+  ): Promise<{
+    success: boolean
+    cancelled?: boolean
+    path: string
+    name: string
+    error?: string
+  }> => ipcRenderer.invoke('dialog:exportJar', sourcePath, suggestedName),
 
   // Agent config
   loadAgentConfig: (): Promise<{

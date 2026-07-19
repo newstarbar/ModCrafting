@@ -32,6 +32,8 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     const [terminalId, setTerminalId] = useState<string | null>(null)
     const [processRunning, setProcessRunning] = useState(false)
     const [detectedErrors, setDetectedErrors] = useState<ParsedError[]>([])
+    const [exportedJar, setExportedJar] = useState<{ path: string; name: string } | null>(null)
+    const [exporting, setExporting] = useState(false)
     const terminalRef = useRef<HTMLDivElement>(null)
     const xtermRef = useRef<Terminal | null>(null)
     const fitAddonRef = useRef<FitAddon | null>(null)
@@ -167,6 +169,10 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
     }, [projectPath, terminalExpanded])
 
     useEffect(() => {
+      setExportedJar(null)
+    }, [projectPath])
+
+    useEffect(() => {
       if (buildLogsExpanded && logRef.current) {
         logRef.current.scrollTop = logRef.current.scrollHeight
       }
@@ -220,6 +226,7 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       }
 
       resetBuildSession()
+      setExportedJar(null)
       logger.terminal('Build started', { projectPath })
       setProcessRunning(true)
       onBuildStatusChange?.({ running: true, failed: false })
@@ -261,6 +268,83 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       addLog('info', '已发送停止信号')
     }, [terminalId, addLog])
 
+    const runExportJar = useCallback(async () => {
+      if (!projectPath) {
+        addLog('warn', '请先打开项目')
+        return
+      }
+      if (!toolchainReady) {
+        addLog('warn', '构建环境尚未就绪，请等待初始化完成')
+        return
+      }
+
+      setExportedJar(null)
+      setExporting(true)
+      resetBuildSession()
+      logger.terminal('Export jar started', { projectPath })
+      setProcessRunning(true)
+      onBuildStatusChange?.({ running: true, failed: false })
+      addLog('info', '开始导出模组包…')
+      addLog('info', '正在执行 gradlew build…')
+
+      const unsub = window.api.onCommandOutput((text) => appendBuildOutput(text.trimEnd()))
+      let buildFailed = false
+      try {
+        const res = await window.api.runGradleTask(projectPath, 'build')
+        if (res.usedOnlineFallback) addLog('info', '已联网下载缺失依赖，后续可离线构建')
+        if (res.exitCode !== 0) {
+          buildFailed = true
+          addLog('error', `导出失败：构建未通过 (退出码 ${res.exitCode})`)
+          if (res.output?.trim()) appendBuildOutput(res.output.trim().slice(-4000), 'error')
+          setBuildLogsExpanded(true)
+          return
+        }
+
+        const found = await window.api.findExportJar(projectPath)
+        if (!found.success || !found.jarPath || !found.jarName) {
+          buildFailed = true
+          addLog('error', found.error || '构建成功但未找到可导出的 jar')
+          setBuildLogsExpanded(true)
+          return
+        }
+
+        setExportedJar({ path: found.jarPath, name: found.jarName })
+        addLog('info', `导出就绪：${found.jarName}`)
+        addLog('info', found.jarPath)
+      } catch (err) {
+        buildFailed = true
+        addLog('error', String(err))
+        setBuildLogsExpanded(true)
+      } finally {
+        unsub()
+        setProcessRunning(false)
+        setExporting(false)
+        onBuildStatusChange?.({ running: false, failed: buildFailed })
+      }
+    }, [projectPath, toolchainReady, addLog, appendBuildOutput, onBuildStatusChange, resetBuildSession])
+
+    const openExportedJarFolder = useCallback(async () => {
+      if (!exportedJar) return
+      const res = await window.api.showItemInFolder(exportedJar.path)
+      if (!res.success) {
+        addLog('error', res.error || '无法打开所在文件夹')
+      }
+    }, [exportedJar, addLog])
+
+    const saveExportedJarAs = useCallback(async () => {
+      if (!exportedJar) return
+      const res = await window.api.exportJar(exportedJar.path, exportedJar.name)
+      if (res.cancelled) {
+        addLog('info', '已取消另存为')
+        return
+      }
+      if (!res.success) {
+        addLog('error', res.error || '另存为失败')
+        return
+      }
+      addLog('info', `已另存为：${res.path}`)
+    }, [exportedJar, addLog])
+
     useImperativeHandle(ref, () => ({
       runBuild,
       stopProcess,
@@ -273,14 +357,18 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
       addLog('info', `已将 ${detectedErrors.length} 个错误发送给 AI 分析`)
     }
 
-    const lastLog = logs.length > 0 ? logs[logs.length - 1] : null
-    const buildSummary = processRunning
+    const busy = processRunning || exporting
+    const buildSummary = processRunning && !exporting
       ? '正在构建模组…'
-      : lastLog?.includes('[ERROR]')
-        ? '构建失败，请展开查看详情'
-        : lastLog?.includes('构建完成')
-          ? '上次构建已成功完成'
-          : '仅编译检查，不启动游戏'
+      : exporting
+        ? '正在导出模组包…'
+        : logs.some((line) => line.includes('[ERROR]'))
+          ? '构建失败，请展开查看详情'
+          : exportedJar
+            ? '模组包已就绪，可打开文件夹或另存为'
+            : logs.some((line) => line.includes('构建完成'))
+              ? '上次构建已成功完成'
+              : '仅编译检查，不启动游戏'
 
     return (
       <div className="advanced-panel">
@@ -298,11 +386,11 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
                 type="button"
                 className="mc-btn mc-btn--primary advanced-build-btn"
                 onClick={() => void runBuild()}
-                disabled={processRunning || !toolchainReady || !projectPath}
+                disabled={busy || !toolchainReady || !projectPath}
               >
-                {processRunning ? '构建中…' : '构建'}
+                {processRunning && !exporting ? '构建中…' : '构建'}
               </button>
-              {processRunning && (
+              {busy && (
                 <button type="button" className="mc-btn mc-btn--red" onClick={() => void stopProcess()}>
                   停止
                 </button>
@@ -360,6 +448,49 @@ const BottomPanel = forwardRef<BottomPanelHandle, BottomPanelProps>(
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+
+          <div className="advanced-section advanced-section--export">
+            <div className="advanced-section-header">
+              <span className="advanced-section-title mc-t">导出模组包</span>
+            </div>
+            <p className="advanced-hint mc-dim">
+              执行完整构建并定位可发布的 JAR（排除 sources / dev / javadoc）。成功后可打开所在文件夹，或另存到其他位置。
+            </p>
+            <div className="advanced-toolbar">
+              <button
+                type="button"
+                className="mc-btn mc-btn--primary advanced-build-btn"
+                onClick={() => void runExportJar()}
+                disabled={busy || !toolchainReady || !projectPath}
+              >
+                {exporting ? '导出中…' : '导出 JAR'}
+              </button>
+            </div>
+            {exportedJar && (
+              <div className="advanced-export-result">
+                <p className="advanced-export-name mc-t">{exportedJar.name}</p>
+                <p className="advanced-export-path mc-dim" title={exportedJar.path}>
+                  {exportedJar.path}
+                </p>
+                <div className="advanced-toolbar advanced-toolbar--export-actions">
+                  <button
+                    type="button"
+                    className="mc-btn"
+                    onClick={() => void openExportedJarFolder()}
+                  >
+                    打开所在文件夹
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-btn"
+                    onClick={() => void saveExportedJarAs()}
+                  >
+                    另存为…
+                  </button>
+                </div>
               </div>
             )}
           </div>
