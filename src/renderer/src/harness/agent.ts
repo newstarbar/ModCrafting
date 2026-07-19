@@ -26,10 +26,20 @@ import {
   sleep
 } from './fetch-retry.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
-import { getModelContextWindow } from '../../../shared/llm-providers.ts'
+import { getModelContextWindow, buildProviderThinkingFields } from '../../../shared/llm-providers.ts'
+import {
+  LONG_REASONING_KICK,
+  MAX_REASONING_HARD_CHARS,
+  MAX_REASONING_SOFT_CHARS
+} from './reasoning-limits.ts'
 
 export { isRepeatGuardedToolCall } from './repeat-guard.ts'
 export type { ChatMessage } from './chat-message.ts'
+export {
+  LONG_REASONING_KICK,
+  MAX_REASONING_HARD_CHARS,
+  MAX_REASONING_SOFT_CHARS
+} from './reasoning-limits.ts'
 
 let _toolCallIdCounter = 0
 
@@ -745,6 +755,10 @@ export class Agent {
           })
           this.consecutiveReasoningOnlyRounds = 0
           logger.agent('KICK: reasoning-only rounds cap reached')
+        } else if (streamReasoning.length >= MAX_REASONING_SOFT_CHARS) {
+          // GLM-5.2 max effort: long CoT then tools — still kick so the next round stays short.
+          messages.push({ role: 'user', content: LONG_REASONING_KICK })
+          logger.agent('KICK: long reasoning soft cap', { chars: streamReasoning.length })
         }
 
         // 2. Execute tools (with repeat-success loop guard)
@@ -1104,7 +1118,8 @@ export class Agent {
       model,
       messages: messages.map(({ origin: _origin, taskId: _taskId, phase: _phase, ...message }) => message),
       stream: true, max_tokens: maxTokens,
-      stream_options: { include_usage: true }
+      stream_options: { include_usage: true },
+      ...buildProviderThinkingFields(model)
     }
     if (tools.length > 0) {
       body.tools = tools.map((t) => ({
@@ -1154,6 +1169,9 @@ export class Agent {
     let usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number } = {}
     const collected: Array<{ index: number; id: string; name: string; args: string }> = []
     let fullText = ''
+    let reasoningChars = 0
+    let sawToolCallDelta = false
+    let reasoningCapped = false
 
     try {
       while (true) {
@@ -1182,8 +1200,24 @@ export class Agent {
           if (!choice) continue
           const delta = choice.delta || {}
           if (choice.finish_reason) finishReason = choice.finish_reason
-          if (delta.reasoning_content) onChunk?.('', delta.reasoning_content)
+          if (delta.reasoning_content) {
+            reasoningChars += String(delta.reasoning_content).length
+            onChunk?.('', delta.reasoning_content)
+            // Soft-abort endless GLM CoT before tool_calls arrive (max_tokens does not cap thinking).
+            if (
+              !sawToolCallDelta &&
+              !fullText &&
+              reasoningChars >= MAX_REASONING_HARD_CHARS
+            ) {
+              reasoningCapped = true
+              finishReason = 'reasoning_cap'
+              logger.agent('stream abort: reasoning hard cap', { reasoningChars, model })
+              try { await reader.cancel() } catch { /* ignore */ }
+              break
+            }
+          }
           if (delta.tool_calls) {
+            sawToolCallDelta = true
             for (const tc of delta.tool_calls) {
               let entry = collected.find((e) => e.index === (tc.index ?? 0))
               if (!entry) {
@@ -1198,10 +1232,18 @@ export class Agent {
           if (delta.content) { fullText += delta.content; onChunk?.(delta.content) }
         } catch { /* skip */ }
         }
+        if (reasoningCapped) break
       }
     } finally {
       clearTimeout(timeoutId)
       abortSignal?.removeEventListener('abort', onUserAbort)
+    }
+
+    if (reasoningCapped) {
+      onChunk?.(
+        '',
+        `\n\n【系统】推理已超过 ${MAX_REASONING_HARD_CHARS} 字符上限并中断，请直接调用工具。`
+      )
     }
 
     const nativeCalls: ModelToolCall[] = collected.filter((tc) => tc.name).map((tc) => {

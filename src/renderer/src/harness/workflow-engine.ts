@@ -17,6 +17,7 @@ import { FileSession } from './file-session.ts'
 import { workflowStepToPlanStep } from './workflow-types.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
 import { MAX_EXECUTE_CLARIFICATIONS } from './clarify-validation.ts'
+import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from './reasoning-limits.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -409,6 +410,15 @@ export function detectExistingHandlerHint(step: WorkflowStep, result: ToolResult
 }
 
 export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
+  if (step.kind === 'inspect') {
+    const readHint = step.targetPath
+      ? `read_file("${step.targetPath}") 或 grep`
+      : 'read_file / grep'
+    return (
+      `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
+      `本步为勘察（inspect）：请立即调用 ${readHint} 完成勘察后 complete_step()，不要只输出旁白。`
+    )
+  }
   const targetHint = step.targetPath
     ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)`
     : 'write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)'
@@ -967,6 +977,7 @@ export class WorkflowEngine {
       const seenDiagSignatures = new Set<string>()
       const pendingMigration = new Set<string>()
       let pendingEphemeralInstruction: string | undefined
+      let pendingReasoningKick = false
       let repairDiagRounds = 0
       const evidenceResults: ToolResult[] = [...diskEvidence, ...delegatedEvidence]
       let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
@@ -1001,8 +1012,11 @@ export class WorkflowEngine {
           stepHasEvidence
         })
         const offeredNames = allowedTools.map((tool) => tool.name)
-        const ephemeral = pendingEphemeralInstruction
+        const ephemeral = [pendingEphemeralInstruction, pendingReasoningKick ? LONG_REASONING_KICK : '']
+          .filter(Boolean)
+          .join('\n\n') || undefined
         pendingEphemeralInstruction = undefined
+        pendingReasoningKick = false
         const modelMessages = [
           ...baseMessages,
           this.workflowPrompt(
@@ -1057,6 +1071,11 @@ export class WorkflowEngine {
           }
         }
         finalContent = modelResult.text || streamText || finalContent
+
+        const reasoningLen = (modelResult.reasoning || streamReasoning || '').length
+        if (reasoningLen >= MAX_REASONING_SOFT_CHARS || modelResult.finishReason === 'reasoning_cap') {
+          pendingReasoningKick = true
+        }
 
         const allCalls = normalizeModelToolCalls(modelResult.toolCalls)
         if (allCalls.length === 0) {

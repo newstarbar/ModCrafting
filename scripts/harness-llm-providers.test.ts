@@ -6,8 +6,16 @@ import {
   resolveSelection,
   providerDisplayLabel,
   findProviderByEndpoint,
+  buildProviderThinkingFields,
+  supportsGlmReasoningEffort,
+  isGlmModel,
 } from '../src/shared/llm-providers.ts'
 import { MODEL_PRESETS } from '../src/renderer/src/config/model-presets.ts'
+import {
+  MAX_REASONING_HARD_CHARS,
+  MAX_REASONING_SOFT_CHARS,
+  LONG_REASONING_KICK
+} from '../src/renderer/src/harness/reasoning-limits.ts'
 
 test('resolveSelection returns correct endpoint for DeepSeek', () => {
   const sel = resolveSelection('deepseek', 'deepseek-chat')
@@ -71,4 +79,24 @@ test('getModelPricing distinguishes DeepSeek Flash vs Pro', async () => {
   assert.equal(pro.output, 6)
   assert.ok(pro.inputMiss > flash.inputMiss)
   assert.ok(pro.output > flash.output)
+})
+
+test('GLM-5.2 thinking fields use reasoning_effort high (not default max)', () => {
+  assert.equal(isGlmModel('glm-5.2'), true)
+  assert.equal(supportsGlmReasoningEffort('glm-5.2'), true)
+  assert.equal(supportsGlmReasoningEffort('glm-5.1'), false)
+  assert.deepEqual(buildProviderThinkingFields('glm-5.2'), {
+    thinking: { type: 'enabled' },
+    reasoning_effort: 'high'
+  })
+  assert.deepEqual(buildProviderThinkingFields('glm-5.1'), {
+    thinking: { type: 'enabled' }
+  })
+  assert.deepEqual(buildProviderThinkingFields('deepseek-chat'), {})
+})
+
+test('reasoning soft/hard caps guard against GLM Wait/Hmm rumination', () => {
+  assert.ok(MAX_REASONING_SOFT_CHARS < MAX_REASONING_HARD_CHARS)
+  assert.ok(MAX_REASONING_SOFT_CHARS >= 4000)
+  assert.match(LONG_REASONING_KICK, /Wait\/Hmm|立即调用工具/)
 })

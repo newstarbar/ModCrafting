@@ -98,10 +98,13 @@ export function resolveCompiledStepKind(step: {
   targetPath?: string
   targetPaths?: string[]
 }): StructuredStepKind | undefined {
+  // inspect/recipe are intentional — never promote to mixin just because targets are Mixin*.java
+  // (that turned "读 Mixin 源码" into register/validate and dropped the real write path).
+  if (step.kind === 'inspect' || step.kind === 'recipe') return step.kind
+
   const javaPaths = collectJavaTargets(step)
   if (javaPaths.length > 0) {
     if (javaPaths.every((path) => isMixinJavaTarget(path))) return 'mixin'
-    if (step.kind === 'recipe' || step.kind === 'inspect') return step.kind
     return 'write'
   }
   if (shouldForceMixinKind(step as CompiledPlanStep)) return 'mixin'
@@ -228,7 +231,11 @@ export function dedupeByPath(steps: CompiledPlanStep[]): CompiledPlanStep[] {
   const seen = new Set<string>()
   const result: CompiledPlanStep[] = []
   for (const step of steps) {
-    const key = (step.targetPath || step.targetPaths?.join('|') || step.description).toLowerCase().replace(/[\s`*_、,，。.；;：:()（）!！?？~-]/g, '')
+    const pathKey = (step.targetPath || step.targetPaths?.join('|') || step.description)
+      .toLowerCase()
+      .replace(/[\s`*_、,，。.；;：:()（）!！?？~-]/g, '')
+    // Include kind so inspect→write same path keeps the write (diag: write was dropped).
+    const key = pathKey ? `${step.kind || ''}|${pathKey}` : ''
     if (key && seen.has(key)) continue
     if (key) seen.add(key)
     result.push(step)

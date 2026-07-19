@@ -543,7 +543,7 @@ submit_plan 参数要求：
 
 规则（优先级从高到低）：
 1. 只执行当前步骤。不确定路径/类名/包名时先 read_file/grep；仅用户偏好才 ask_clarification，禁止猜需求。
-2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。
+2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。禁止 Wait/Hmm 式反复自我否定与超长推理；想清后立即调工具。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。

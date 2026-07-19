@@ -235,6 +235,41 @@ export function getModelContextWindow(modelId: string, providerId?: string): num
 	return undefined;
 }
 
+/** True for智谱 GLM chat models (glm-*). */
+export function isGlmModel(modelId: string): boolean {
+	return /^glm-/i.test(modelId.trim());
+}
+
+/**
+ * GLM-5.2+ supports `reasoning_effort` (docs: medium/low→high, xhigh→max).
+ * Older GLM thinking models only accept `thinking.type`.
+ */
+export function supportsGlmReasoningEffort(modelId: string): boolean {
+	const id = modelId.trim().toLowerCase();
+	if (!id.startsWith("glm-")) return false;
+	const match = id.match(/^glm-(\d+)(?:\.(\d+))?/);
+	if (!match) return false;
+	const major = Number(match[1]);
+	const minor = Number(match[2] || "0");
+	return major > 5 || (major === 5 && minor >= 2);
+}
+
+/**
+ * Extra chat/completions body fields for GLM deep-thinking control.
+ * Agent tool loops default to `reasoning_effort: high` — GLM-5.2's implicit `max`
+ * routinely emits 10k–70k-char Wait/Hmm rumination before a single tool call.
+ */
+export function buildProviderThinkingFields(modelId: string): Record<string, unknown> {
+	if (!isGlmModel(modelId)) return {};
+	const fields: Record<string, unknown> = {
+		thinking: { type: "enabled" }
+	};
+	if (supportsGlmReasoningEffort(modelId)) {
+		fields.reasoning_effort = "high";
+	}
+	return fields;
+}
+
 /** Per-million-token list prices in CNY (元) for cost estimates. */
 export interface ProviderPricing {
 	inputMiss: number;
