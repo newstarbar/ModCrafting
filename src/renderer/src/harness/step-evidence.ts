@@ -26,6 +26,23 @@ function normalizedPath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\/+/, '').replace(/[，,。；;）)]+$/g, '')
 }
 
+/**
+ * Loom splitEnvironment: the same class may live under src/main/java or src/client/java.
+ * Plans often list the client path while scaffold/edit lands on main (or vice versa).
+ * Treat those as the same artifact for write-evidence matching.
+ */
+export function sourceSetPathAliases(path: string): string[] {
+  const normalized = normalizedPath(path)
+  if (!normalized) return []
+  const aliases = [normalized]
+  if (normalized.includes('src/main/')) {
+    aliases.push(normalized.replace('src/main/', 'src/client/'))
+  } else if (normalized.includes('src/client/')) {
+    aliases.push(normalized.replace('src/client/', 'src/main/'))
+  }
+  return [...new Set(aliases)]
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -39,9 +56,7 @@ function extractPaths(description: string | undefined): string[] {
   return paths
 }
 
-/** Match an artifact path against a step target pattern.
- *  Directory targets (trailing `/`, or a path prefix) match any file underneath. */
-export function patternMatchesPath(pattern: string, actualPath: string): boolean {
+function patternMatchesPathExact(pattern: string, actualPath: string): boolean {
   const normalizedPattern = normalizedPath(pattern).replace(/\/+$/, '')
   const normalizedActual = normalizedPath(actualPath)
   if (!normalizedPattern) return false
@@ -61,6 +76,20 @@ export function patternMatchesPath(pattern: string, actualPath: string): boolean
     .replace(/<[^>]+>/g, '[^/]+')
   return new RegExp(`(^|/)${regexSource}$`).test(normalizedActual)
     || new RegExp(`(^|/)${regexSource}(/|$)`).test(normalizedActual)
+}
+
+/** Match an artifact path against a step target pattern.
+ *  Directory targets (trailing `/`, or a path prefix) match any file underneath.
+ *  Also accepts Loom main↔client source-set aliases for the same relative class path. */
+export function patternMatchesPath(pattern: string, actualPath: string): boolean {
+  const patternAliases = sourceSetPathAliases(pattern)
+  const actualAliases = sourceSetPathAliases(actualPath)
+  for (const p of patternAliases) {
+    for (const a of actualAliases) {
+      if (patternMatchesPathExact(p, a)) return true
+    }
+  }
+  return false
 }
 
 function writePathMatchesStep(step: PlanStepState, artifactPath: string | undefined): boolean {

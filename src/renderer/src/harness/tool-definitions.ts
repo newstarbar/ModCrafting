@@ -1143,7 +1143,8 @@ export const fabricMixinScaffoldTool: Tool = {
 		if (injectionType === "modify_return_value" && parseMethodDescriptor(descriptor).returnType === "void") return "Error: ModifyReturnValue cannot target a void method";
 		if (injectionType === "modify_arg" && (!Number.isInteger(args.argumentIndex) || Number(args.argumentIndex) < 0)) return "Error: modify_arg requires a non-negative integer argumentIndex";
 		const simpleName = mixinClass.split(".").pop() || "GeneratedMixin";
-		const classPath = `src/main/java/${javaPackagePath(mixinClass)}.java`;
+		// Prefer client source set for client-side mixins (Loom splitEnvironment).
+		const classPath = expectedMixinSourcePaths(mixinClass, side)[0];
 		const metadata: MixinScaffoldMetadata = {
 			version: 1,
 			targetClass: lookup.class.name,

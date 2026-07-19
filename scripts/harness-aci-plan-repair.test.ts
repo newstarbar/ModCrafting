@@ -321,6 +321,89 @@ test('stepEvidenceSatisfied requires every concrete targetPaths entry', () => {
   assert.equal(stepEvidenceSatisfied(step, [both]), true)
 })
 
+// Regression: plan targets client Mixin path but scaffold/edit wrote main (Loom split source sets).
+// Without main↔client equivalence, step #2 never gets evidence → burns attempts → partial stop.
+test('write evidence accepts src/main ↔ src/client for the same Java class', () => {
+  const clientMixin = 'src/client/java/com/example/frame_cover/mixin/GameRendererMixin.java'
+  const mainMixin = 'src/main/java/com/example/frame_cover/mixin/GameRendererMixin.java'
+  assert.equal(patternMatchesPath(clientMixin, mainMixin), true)
+  assert.equal(patternMatchesPath(mainMixin, clientMixin), true)
+  assert.equal(
+    patternMatchesPath(clientMixin, 'src/main/java/com/example/frame_cover/mixin/OtherMixin.java'),
+    false
+  )
+
+  const step = {
+    id: '2',
+    description: '实现截图引擎与 GameRendererMixin',
+    status: 'running' as const,
+    kind: 'write' as const,
+    targetPaths: [
+      'src/client/java/com/example/frame_cover/screenshot/ScreenshotManager.java',
+      'src/client/java/com/example/frame_cover/screenshot/ScreenshotEffects.java',
+      clientMixin
+    ]
+  } as WorkflowStep
+
+  const results = [
+    {
+      output: 'edited',
+      ok: true,
+      toolName: 'edit_file',
+      artifactPath: 'src/client/java/com/example/frame_cover/screenshot/ScreenshotManager.java',
+      durationMs: 1
+    },
+    {
+      output: 'edited',
+      ok: true,
+      toolName: 'edit_file',
+      artifactPath: 'src/client/java/com/example/frame_cover/screenshot/ScreenshotEffects.java',
+      durationMs: 1
+    },
+    {
+      output: 'edited',
+      ok: true,
+      toolName: 'edit_file',
+      artifactPath: mainMixin,
+      durationMs: 1
+    }
+  ]
+  assert.equal(stepEvidenceSatisfied(step, results), true)
+  assert.equal(
+    canToolResultAdvanceStep(
+      { id: '2', description: step.description, status: 'running', kind: 'write', targetPath: clientMixin },
+      results[2]
+    ).ok,
+    true
+  )
+})
+
+test('collectDiskWriteEvidence finds file via main↔client source-set alias', async () => {
+  const mainMixin = 'src/main/java/com/example/frame_cover/mixin/GameRendererMixin.java'
+  const clientMixin = 'src/client/java/com/example/frame_cover/mixin/GameRendererMixin.java'
+  const probe = {
+    async exists(absPath: string) {
+      const norm = absPath.replace(/\\/g, '/')
+      return norm.endsWith(`/${mainMixin}`)
+    },
+    async listDirectory() {
+      return [] as Array<{ name: string; isDirectory: boolean }>
+    }
+  }
+  const step = {
+    id: '2',
+    description: 'GameRendererMixin',
+    status: 'running' as const,
+    kind: 'write' as const,
+    targetPath: clientMixin,
+    targetPaths: [clientMixin]
+  } as WorkflowStep
+  const evidence = await collectDiskWriteEvidence('/proj', step, probe)
+  assert.equal(evidence.length, 1)
+  assert.deepEqual(evidence[0].artifactPaths, [mainMixin])
+  assert.equal(stepEvidenceSatisfied(step, evidence), true)
+})
+
 test('collectDiskWriteEvidence prefills directory and file targets from disk', async () => {
   const files = new Map<string, string[]>([
     ['/proj/src/main/java/com/example/frame_cover/config', ['ModConfig.java', 'ConfigManager.java']]

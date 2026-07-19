@@ -12,7 +12,7 @@ import {
 import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.ts'
 import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from './gradle-error-parser.ts'
 import { classifyFabricLog } from './fabric-utils.ts'
-import { canToolResultAdvanceStep } from './step-evidence.ts'
+import { canToolResultAdvanceStep, sourceSetPathAliases } from './step-evidence.ts'
 import { FileSession } from './file-session.ts'
 import { workflowStepToPlanStep } from './workflow-types.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
@@ -418,6 +418,32 @@ export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
   )
 }
 
+/** List target paths still lacking write evidence (for complete_step rejection hints). */
+export function missingWriteEvidencePaths(step: WorkflowStep, results: ToolResult[]): string[] {
+  if (step.kind !== 'write') return []
+  const required = step.targetPaths?.length
+    ? step.targetPaths
+    : (step.targetPath ? [step.targetPath] : [])
+  if (required.length === 0) return []
+  return required.filter((targetPath) => {
+    const planStep = {
+      ...workflowStepToPlanStep(step),
+      kind: 'write' as const,
+      targetPath,
+      targetPaths: undefined
+    }
+    return !results.some((result) => {
+      if (!result.ok || result.error) return false
+      const artifacts = result.artifactPaths?.length
+        ? result.artifactPaths
+        : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
+      return artifacts.some((artifactPath) =>
+        canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok
+      )
+    })
+  })
+}
+
 export function buildWriteForceInstruction(step: WorkflowStep): string {
   const target = step.targetPath
     ? `目标文件：${step.targetPath}`
@@ -585,25 +611,37 @@ export async function collectDiskWriteEvidence(
   const found: string[] = []
   for (const target of targets) {
     const rel = target.replace(/\\/g, '/').replace(/\/+$/, '')
-    const abs = `${projectPath}/${rel}`
     if (isDirectoryTarget(target)) {
-      try {
-        const entries = await probe.listDirectory(abs)
-        for (const entry of entries) {
-          if (!entry.isDirectory) {
-            found.push(`${rel}/${entry.name}`)
+      // Probe target + main↔client alias directories (Loom split source sets).
+      const dirCandidates = sourceSetPathAliases(rel)
+      for (const dirRel of dirCandidates) {
+        try {
+          const entries = await probe.listDirectory(`${projectPath}/${dirRel}`)
+          for (const entry of entries) {
+            if (!entry.isDirectory) {
+              found.push(`${dirRel}/${entry.name}`)
+            }
           }
+          if (entries.some((e) => !e.isDirectory)) break
+        } catch {
+          // directory missing or unreadable — try next alias
         }
-      } catch {
-        // directory missing or unreadable
       }
       continue
     }
-    try {
-      if (await probe.exists(abs)) found.push(rel)
-    } catch {
-      // ignore
+    // Prefer the planned path; fall back to main↔client twin when only one exists.
+    let hit: string | undefined
+    for (const candidate of sourceSetPathAliases(rel)) {
+      try {
+        if (await probe.exists(`${projectPath}/${candidate}`)) {
+          hit = candidate
+          break
+        }
+      } catch {
+        // ignore
+      }
     }
+    if (hit) found.push(hit)
   }
 
   if (found.length === 0) return []
@@ -1519,9 +1557,13 @@ export class WorkflowEngine {
 
         const requestedCompletion = orderedResults.some((result) => result.toolName === 'complete_step' && result.ok)
         if (requestedCompletion && !success) {
+          const missing = missingWriteEvidencePaths(step, evidenceResults)
+          const missingHint = missing.length
+            ? `缺少写入证据：${missing.join(', ')}。若文件已在 src/main 与 src/client 互换路径下，请对该真实路径 edit_file 一次，或确认磁盘路径后 complete_step。`
+            : '请先对目标路径完成 write_file/edit_file（或 mixin/recipe 校验）。'
           roundInstruction = [
             roundInstruction,
-            `blocked: [step_evidence_required] 步骤 #${step.id} 尚未满足验收证据，未推进计划。`
+            `blocked: [step_evidence_required] 步骤 #${step.id} 尚未满足验收证据，未推进计划。${missingHint}`
           ].filter(Boolean).join('\n\n')
         }
 

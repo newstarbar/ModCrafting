@@ -214,7 +214,10 @@ function artifactPathFor(toolName: string, args: Record<string, unknown>): strin
     return undefined
   }
   if (toolName === 'fabric_mixin_scaffold' && typeof args.mixinClass === 'string') {
-    return `src/main/java/${String(args.mixinClass).replace(/\./g, '/')}.java`
+    const side = typeof args.side === 'string' ? args.side : 'common'
+    const fqn = String(args.mixinClass)
+    if (side === 'client') return `src/client/java/${fqn.replace(/\./g, '/')}.java`
+    return `src/main/java/${fqn.replace(/\./g, '/')}.java`
   }
   return undefined
 }

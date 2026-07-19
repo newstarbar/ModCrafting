@@ -888,15 +888,17 @@ export class Agent {
           }
 
           const hasWrite = executedCalls.some((tc) => tc.name === 'write_file')
+          const hasEdit = executedCalls.some((tc) => tc.name === 'edit_file' || tc.name === 'delete_file')
           const hasBuild = executedCalls.some((tc) => tc.name === 'trigger_build')
           const hasStepDone = executedCalls.some((tc) => tc.name === 'complete_step')
           const combinedOutput = lines.join('\n')
           const successfulWrites = executableCalls.filter((tc) =>
-            tc.name === 'write_file' && !results.get(tc.id)?.error
+            (tc.name === 'write_file' || tc.name === 'edit_file' || tc.name === 'delete_file') &&
+            !results.get(tc.id)?.error
           )
           const hasSuccessfulWrite = successfulWrites.length > 0
 
-          if (hasWrite && !hasBuild && !hasStepDone) {
+          if ((hasWrite || hasEdit) && !hasBuild && !hasStepDone) {
             this.consecutiveWriteOnlyRounds++
           } else {
             this.consecutiveWriteOnlyRounds = 0
