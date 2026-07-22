@@ -50,8 +50,8 @@ export async function guardedWriteFile(
       ok: false,
       message:
         `blocked: [aci_write_gate] 文件已存在：${normalized}。` +
-        `请用 edit_file 做精确替换；write_file 仅用于新建文件。` +
-        `若需迁移到新路径：先 write_file 写新文件，再用 delete_file 删除旧文件。`,
+        `小改用 edit_file；整文件重写请 write_file(overwrite=true)（须先 read_file），内容过长则先写短骨架再分段 edit_file。` +
+        `迁移到新路径：先 write_file 写新文件，再用 delete_file 删除旧文件。`,
       fileExisted,
       oldContent
     }

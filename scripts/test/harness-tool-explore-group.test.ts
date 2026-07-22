@@ -158,26 +158,46 @@ test('summarizeExploreGroup project stats and path preview', () => {
 
 test('summarizeExploreGroup knowledge keywords', () => {
   const tools = [
-    tool('1', 'fabric_docs_search', { keyword: 'ArmorItem' }, 'done', '结果：主题路由命中\n摘要：查「ArmorItem」→ 命中 develop/items/custom-armor'),
-    tool('2', 'vanilla_mc_wiki_query', { keyword: 'recipe' }, 'done', '摘要：查「recipe」→ 本地无 Wiki 正文（未抓取）')
+    tool(
+      '1',
+      'fabric_docs_search',
+      { keyword: 'ArmorItem' },
+      'done',
+      '结果：主题路由命中\n摘要：查「ArmorItem」→ 文档 › 物品 › custom-armor › 护甲\n::kh::文档|物品|custom-armor|护甲'
+    ),
+    tool(
+      '2',
+      'vanilla_mc_wiki_query',
+      { keyword: 'recipe' },
+      'done',
+      '摘要：查「recipe」→ 本地无 Wiki 正文（未抓取）\n::kh::Wiki|未捆绑|recipe|无正文'
+    )
   ]
   const summary = summarizeExploreGroup('knowledge', tools)
   assert.equal(summary.title, '文档查询')
   assert.match(summary.statsLine, /ArmorItem/)
   assert.match(summary.statsLine, /命中/)
   assert.equal(summary.thoughtHint, null)
-  assert.match(summary.pathPreview, /recipe|Wiki|未抓取/)
+  assert.match(summary.knowledgeHitOutput, /::kh::文档\|物品\|custom-armor/)
 })
 
-test('extractPreview prefers 摘要 line for knowledge tools', async () => {
+test('extractPreview prefers knowledge hit trails', async () => {
   const { extractPreview } = await import('../../src/renderer/src/utils/tool-output-preview.ts')
   const preview = extractPreview(
     'fabric_docs_search',
-    '查询：Foo\n结果：主题路由命中\n摘要：查「Foo」→ 命中 develop/events；要点：事件',
+    '查询：Foo\n结果：主题路由命中\n摘要：查「Foo」→ 文档 › 事件 › events › 回调\n::kh::文档|事件|events|回调',
     { keyword: 'Foo' }
   )
-  assert.match(preview, /查「Foo」/)
-  assert.doesNotMatch(preview, /^Foo →/)
+  assert.match(preview, /文档 › 事件 › events › 回调/)
+})
+
+test('parseKnowledgeHitTrails reads hierarchy lines', async () => {
+  const { parseKnowledgeHitTrails, formatKnowledgeHitPlain } = await import(
+    '../../src/renderer/src/utils/knowledge-hit-tags.ts'
+  )
+  const trails = parseKnowledgeHitTrails('::kh::文档|物品|first-item|注册物品\n::kh::源码|Yarn|Item|精确匹配')
+  assert.equal(trails.length, 2)
+  assert.equal(formatKnowledgeHitPlain(trails[0]), '文档 › 物品 › first-item › 注册物品')
 })
 
 test('isExploreTool identifies project and knowledge tools only', () => {

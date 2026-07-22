@@ -319,19 +319,54 @@ export function isNoOpBuildResult(output: string | undefined): boolean {
 const EXPLORE_ROAM_TOOLS = new Set(['list_directory', 'grep'])
 
 /**
- * When explore rounds are exhausted, drop list/grep (+ knowledge) but keep read_file
- * so the model can still satisfy edit_file's read-before-edit gate.
+ * When explore rounds are exhausted, drop list/grep; optionally strip knowledge tools.
+ * stripKnowledge can apply even when explore is not exhausted (e.g. write-args truncation recovery).
  */
 export function applyExploreToolLimit(
   names: string[],
   options: { exploreExhausted: boolean; stripKnowledge?: boolean }
 ): string[] {
-  if (!options.exploreExhausted) return names
   return names.filter((name) => {
-    if (EXPLORE_ROAM_TOOLS.has(name)) return false
+    if (options.exploreExhausted && EXPLORE_ROAM_TOOLS.has(name)) return false
     if (options.stripKnowledge && KNOWLEDGE_TOOLS.has(name)) return false
     return true
   })
+}
+
+/** Consecutive write/edit JSON truncation failures before forcing skeleton protocol. */
+export const MAX_WRITE_TRUNCATION_STREAK = 2
+
+export const LARGE_FILE_REWRITE_RECOVERY =
+  `【大文件写入恢复】arguments JSON 连续截断，禁止再提交整文件。` +
+  `立即：① read_file 目标路径（若未读）→ ② write_file(path, 短骨架, overwrite=true)（<80 行）` +
+  `→ ③ 多次 edit_file 分段填充。不要 fabric_docs_search / javadoc / wiki——截断与文档无关。`
+
+export function isWriteArgsTruncationResult(result: ToolResult): boolean {
+  if (result.errorKind !== 'invalid_tool_arguments') return false
+  const name = result.toolName || ''
+  if (name !== 'write_file' && name !== 'edit_file') return false
+  return /不是合法 JSON|大文件易截断/i.test(String(result.output || result.error || ''))
+}
+
+export function pathFromWriteToolResult(result: ToolResult): string {
+  const p = result.args?.path
+  return typeof p === 'string' ? p.replace(/\\/g, '/') : ''
+}
+
+/** Count consecutive truncation rejects on the same path (or any path if previous was empty). */
+export function nextWriteTruncationStreak(
+  results: ToolResult[],
+  prevStreak: number,
+  prevPath: string
+): { streak: number; path: string } {
+  const truncations = results.filter(isWriteArgsTruncationResult)
+  if (truncations.length === 0) return { streak: 0, path: '' }
+  const path = pathFromWriteToolResult(truncations[truncations.length - 1]) || prevPath
+  const samePath = !prevPath || !path || prevPath === path
+  return {
+    streak: samePath ? prevStreak + truncations.length : truncations.length,
+    path
+  }
 }
 
 export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
@@ -729,11 +764,12 @@ export class WorkflowEngine {
   private toolSchemasFor(
     step: WorkflowStep,
     repairMode: boolean,
-    _limits?: {
+    limits?: {
       fabricDocsSearchCount?: number
       knowledgeQueries?: number
       exploreRounds?: number
       stepHasEvidence?: boolean
+      stripKnowledge?: boolean
     }
   ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
     // Stable tools set within a step: always offer the repair superset for build/run
@@ -747,6 +783,13 @@ export class WorkflowEngine {
       names = [...step.allowedTools]
       if (repairMode) names = repairExtraTools(step)
     }
+    const exploreExhausted =
+      isExploreLimitedStep(step, repairMode) &&
+      (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS
+    names = applyExploreToolLimit(names, {
+      exploreExhausted,
+      stripKnowledge: limits?.stripKnowledge === true
+    })
     return this.registry.schemas().filter((tool) => names.includes(tool.name))
   }
 
@@ -774,7 +817,7 @@ export class WorkflowEngine {
       ? `验收标准: ${step.evidence}\n`
       : ''
     const editHint =
-      '新建文件用 write_file；修改已有文件优先 edit_file（须先 read_file）；迁移用 write_file 新路径 + delete_file 旧路径。'
+      '新建用 write_file；小改用 edit_file（须先 read_file）；整文件重写用 write_file(overwrite=true)，过长则短骨架+分段 edit_file；迁移用 write_file 新路径 + delete_file 旧路径。'
     const buildFirst =
       (step.kind === 'build' || step.kind === 'run') && !repairMode
         ? step.kind === 'build'
@@ -938,7 +981,6 @@ export class WorkflowEngine {
         })
       }
 
-      const diskEvidence: ToolResult[] = []
       if (step.kind === 'write' && this.projectPath && wasResumedRun) {
         try {
           const existing = await collectDiskWriteEvidence(this.projectPath, step, {
@@ -946,7 +988,8 @@ export class WorkflowEngine {
             listDirectory: (p) => window.api.listDirectory(p)
           })
           if (existing.length > 0) {
-            diskEvidence.push(...existing)
+            // Informational only — existence alone must NOT satisfy write evidence
+            // (rewrite steps often target files that already exist on disk).
             const paths = existing.flatMap((result) =>
               result.artifactPaths?.length
                 ? result.artifactPaths
@@ -955,8 +998,9 @@ export class WorkflowEngine {
             baseMessages.push({
               role: 'system',
               content:
-                `【已有文件证据】目标路径已存在于磁盘：${paths.join(', ')}。` +
-                `若内容已满足验收标准，请直接 complete_step；不要重复写入。`
+                `【磁盘提示】目标路径已存在：${paths.join(', ')}。` +
+                `若需按本步描述重写，请 write_file(overwrite=true) 或分段 edit_file；` +
+                `勿仅因文件存在而 complete_step。`
             })
           }
         } catch {
@@ -978,12 +1022,15 @@ export class WorkflowEngine {
       let pendingEphemeralInstruction: string | undefined
       let pendingReasoningKick = false
       let repairDiagRounds = 0
-      const evidenceResults: ToolResult[] = [...diskEvidence, ...delegatedEvidence]
+      const evidenceResults: ToolResult[] = [...delegatedEvidence]
       let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
       let evidenceIdleRounds = 0
       let exploreRounds = 0
       let consecutiveIdenticalRejections = 0
       let lastRejectionSignature = ''
+      let writeTruncationStreak = 0
+      let writeTruncationPath = ''
+      let stripKnowledgeForTruncation = false
       let debuggerPrefetched = false
       let attempt = 0
       let loopIterations = 0
@@ -1008,7 +1055,8 @@ export class WorkflowEngine {
           fabricDocsSearchCount,
           knowledgeQueries,
           exploreRounds,
-          stepHasEvidence
+          stepHasEvidence,
+          stripKnowledge: stripKnowledgeForTruncation
         })
         const offeredNames = allowedTools.map((tool) => tool.name)
         const ephemeral = [pendingEphemeralInstruction, pendingReasoningKick ? LONG_REASONING_KICK : '']
@@ -1131,15 +1179,27 @@ export class WorkflowEngine {
             attempt++
             continue
           }
+          const trunc = nextWriteTruncationStreak(
+            [...validation.rejected.values()],
+            writeTruncationStreak,
+            writeTruncationPath
+          )
+          writeTruncationStreak = trunc.streak
+          writeTruncationPath = trunc.path
+          if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
+            stripKnowledgeForTruncation = true
+          }
           const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values())
+          const truncHint =
+            writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : undefined
           pendingEphemeralInstruction = this.appendToolRound(
             baseMessages,
             modelResult.text || streamText,
             allCalls,
             validation.rejected,
-            onlyKnowledgeRejected
-              ? buildEmptyToolCallInstruction(step)
-              : '所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。'
+            [onlyKnowledgeRejected ? buildEmptyToolCallInstruction(step) : '所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。', truncHint]
+              .filter(Boolean)
+              .join('\n\n')
           )
           if (!onlyKnowledgeRejected) attempt++
           continue
@@ -1230,6 +1290,16 @@ export class WorkflowEngine {
             calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
           const docSearchBlockedOnly = isDocSearchOnlyRejectionRound(resultsById.values())
           const nonBurningRejection = isNonBurningRejectionRound(resultsById.values())
+          const trunc = nextWriteTruncationStreak(
+            [...resultsById.values()],
+            writeTruncationStreak,
+            writeTruncationPath
+          )
+          writeTruncationStreak = trunc.streak
+          writeTruncationPath = trunc.path
+          if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
+            stripKnowledgeForTruncation = true
+          }
           const rejectionSig = [...resultsById.values()]
             .map((r) => `${r.toolName}:${r.errorKind || r.error || ''}`)
             .sort()
@@ -1259,8 +1329,9 @@ export class WorkflowEngine {
                   : '【禁止循环改文件】运行步骤当前不允许 edit_file。请立即 trigger_build({"task":"runClient"})；失败后才进入修复模式。')
               : docSearchBlockedOnly || nonBurningRejection
                 ? buildEmptyToolCallInstruction(step)
-                : `本步骤允许的工具：${offeredNames.join(', ') || '无'}。请改用其中之一完成当前步骤。`
-          ].join('\n\n')
+                : `本步骤允许的工具：${offeredNames.join(', ') || '无'}。请改用其中之一完成当前步骤。`,
+            writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : ''
+          ].filter(Boolean).join('\n\n')
           pendingEphemeralInstruction = this.appendToolRound(
             baseMessages,
             modelResult.text || streamText,
@@ -1289,6 +1360,9 @@ export class WorkflowEngine {
           resultsById.set(id, result)
           if (result.ok && !result.error && RUN_WRITE_TOOLS.has(result.toolName || '')) {
             anyWriteThisRun = true
+            writeTruncationStreak = 0
+            writeTruncationPath = ''
+            stripKnowledgeForTruncation = false
           }
           if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || '') && result.ok && !result.error) {
             seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`)
@@ -1306,6 +1380,22 @@ export class WorkflowEngine {
           evidenceResults.push(result)
         }
         stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
+
+        const truncAfterExec = nextWriteTruncationStreak(
+          [...resultsById.values()],
+          writeTruncationStreak,
+          writeTruncationPath
+        )
+        // Only advance streak from this round's truncations if we didn't just succeed a write
+        if ([...executed.values()].some((r) => r.ok && !r.error && RUN_WRITE_TOOLS.has(r.toolName || ''))) {
+          // already cleared above
+        } else {
+          writeTruncationStreak = truncAfterExec.streak
+          writeTruncationPath = truncAfterExec.path
+          if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
+            stripKnowledgeForTruncation = true
+          }
+        }
 
         const orderedResults = executableAllowed
           .map((call) => resultsById.get(call.id))
@@ -1357,6 +1447,9 @@ export class WorkflowEngine {
           ? resultCompletesStep(step, decisiveResult, stepHasEvidence)
           : false
         let roundInstruction: string | undefined
+        if (stripKnowledgeForTruncation) {
+          roundInstruction = LARGE_FILE_REWRITE_RECOVERY
+        }
 
         if (success) {
           // No-op build (all UP-TO-DATE) on a plan that still had write/recipe/mixin work

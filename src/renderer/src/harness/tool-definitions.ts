@@ -220,12 +220,19 @@ function computeLineDiff(oldContent: string, newContent: string): { added: numbe
 
 export const writeFileTool: Tool & Previewer = {
 	name: "write_file",
-	description: "新建或覆盖空文件（全量写入）。已有非空文件必须用 edit_file。自动创建中间目录。迁移文件时可先 write_file 到新路径，再 delete_file 删旧文件。",
+	description:
+		"全量写入文件。小改用 edit_file；整文件重写用 write_file(overwrite=true)（须先 read_file）。" +
+		"内容过长易截断：先写短骨架（建议 <80 行）再用多次 edit_file 分段填充；禁止把整文件塞进一次 edit_file 的 new_string。" +
+		"自动创建中间目录。迁移时可先 write_file 到新路径，再 delete_file 删旧文件。",
 	schema: {
 		type: "object",
 		properties: {
 			path: { type: "string", description: "Relative path from project root" },
-			content: { type: "string", description: "Full file content to write" }
+			content: { type: "string", description: "Full file content to write (keep short for rewrites — skeleton first)" },
+			overwrite: {
+				type: "boolean",
+				description: "为 true 时允许覆盖已有非空文件（整文件重写）。须先 read_file。默认 false。"
+			}
 		},
 		required: ["path", "content"]
 	},
@@ -234,8 +241,16 @@ export const writeFileTool: Tool & Previewer = {
 		if (!ctx.projectPath) return "No project open";
 		const relPath = String(args.path || "");
 		const content = String(args.content || "");
+		const overwrite = args.overwrite === true;
 
-		const written = await guardedWriteFile(ctx, relPath, content, { allowOverwrite: false });
+		if (overwrite && ctx.fileSession && !ctx.fileSession.hasRead(relPath)) {
+			return (
+				`blocked: [aci_read_gate] 覆盖写入前须先 read_file：${relPath}。` +
+				`请先读取该文件再调用 write_file(overwrite=true)。`
+			);
+		}
+
+		const written = await guardedWriteFile(ctx, relPath, content, { allowOverwrite: overwrite });
 		if (!written.ok) return written.message;
 
 		logger.file(`Written: ${relPath}`, `${content.length} bytes`);
@@ -285,7 +300,8 @@ function countOccurrences(haystack: string, needle: string): number {
 export const editFileTool: Tool & Previewer = {
 	name: "edit_file",
 	description:
-		"精确替换文件中的文本。默认只替换第一处；设 replace_all=true 可替换全部。old_string 须精确匹配。修改已有文件优先用此工具（须先 read_file），新建用 write_file。",
+		"精确替换文件中的文本。默认只替换第一处；设 replace_all=true 可替换全部。old_string 须精确匹配。" +
+		"小改优先用此工具（须先 read_file）；整文件重写请 write_file(overwrite=true)+短骨架，禁止把整文件塞进一次 new_string（易截断）。",
 	schema: {
 		type: "object",
 		properties: {
@@ -571,7 +587,8 @@ export const fabricJavadocLookupTool: Tool = {
 关键词：${keyword}
 建议：优先调用 fabric_docs_search 查本地文档与 Yarn/Fabric API 源码签名。
 可选人工外链：${buildFabricJavadocLookupUrl(version, keyword)}
-摘要：查「${keyword}」→ JavaDoc 未抓取正文；请改用本地 fabric_docs_search`;
+摘要：查「${keyword}」→ JavaDoc 未抓取正文；请改用本地 fabric_docs_search
+::kh::JavaDoc|未抓取|${keyword.slice(0, 40)}|改用文档搜索`;
 	}
 };
 

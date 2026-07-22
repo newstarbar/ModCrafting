@@ -1,4 +1,5 @@
 import { FABRIC_KNOWLEDGE_SOURCES, type FabricKnowledgeSource } from './fabric-agent-policy.ts'
+import { formatKnowledgeHitLine, type KnowledgeHitTrail } from '../utils/knowledge-hit-tags.ts'
 
 export interface FabricDocsSearchInput {
   keyword: string
@@ -15,6 +16,36 @@ const SEARCH_STOPWORDS = new Set([
   'fabric', 'api', 'minecraft', 'packet', 'packets', 'yarn', 'mapping', 'mappings',
   'mc', 'mod', 'java', 'the', 'and', 'for', 'with', 'from', 'example', 'docs'
 ])
+
+const CATEGORY_LABELS: Record<string, string> = {
+  items: '物品',
+  blocks: '方块',
+  entities: '实体',
+  networking: '网络',
+  mixins: 'Mixin',
+  commands: '命令',
+  rendering: '渲染',
+  'data-generation': '数据生成',
+  loom: 'Loom',
+  loader: 'Loader',
+  sounds: '音效',
+  fluids: '流体',
+  serialization: '序列化',
+  'class-tweakers': 'ClassTweaker',
+  'getting-started': '入门',
+  porting: '迁移',
+  'migrating-mappings': '映射迁移',
+  debugging: '调试',
+  'automatic-testing': '自动化测试',
+  'game-rules': '游戏规则',
+  'key-mappings': '按键',
+  'resource-conditions': '资源条件',
+  statistics: '统计',
+  'text-and-translations': '翻译',
+  'custom-recipe-types': '自定义配方',
+  codecs: 'Codec',
+  events: '事件'
+}
 
 /** Topic → local develop paths (synced from fabric-docs). */
 const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[] }> = [
@@ -243,6 +274,18 @@ function shortFileLabel(file: string): string {
     .replace(/\.md$/, '')
 }
 
+function classifyDocPath(file: string): { category: string; doc: string } {
+  const label = shortFileLabel(file).replace(/^develop\//, '')
+  const parts = label.split('/')
+  if (parts.length === 1) {
+    const key = parts[0]
+    return { category: CATEGORY_LABELS[key] || key, doc: key }
+  }
+  const top = parts[0]
+  const doc = parts.slice(1).join('/')
+  return { category: CATEGORY_LABELS[top] || top, doc }
+}
+
 function extractTitleHint(content: string): string {
   const fm = content.match(/^---\s*\n[\s\S]*?\ntitle:\s*(.+)\n/)
   if (fm) return fm[1].replace(/^["']|["']$/g, '').trim()
@@ -250,11 +293,23 @@ function extractTitleHint(content: string): string {
   return h1?.[1]?.replace(/\s*\{#.*\}$/, '').trim() || ''
 }
 
-function extractRelevantCodeBlocks(content: string, tokens: string[], maxBlocks = 1): string[] {
+function headingAtOrAbove(lines: string[], index: number): string {
+  for (let i = index; i >= 0; i--) {
+    const m = lines[i].match(/^(#{1,4})\s+(.+?)(?:\s*\{#.*\})?\s*$/)
+    if (m) return m[2].trim()
+  }
+  return ''
+}
+
+function extractRelevantCodeBlocks(
+  content: string,
+  tokens: string[],
+  maxBlocks = 1
+): Array<{ score: number; text: string; lineIndex: number }> {
   const highValue = tokens.filter(isHighValueToken)
   const matchTokens = highValue.length > 0 ? highValue : tokens
   const lines = content.split('\n')
-  const blocks: Array<{ score: number; text: string }> = []
+  const blocks: Array<{ score: number; text: string; lineIndex: number }> = []
   const fenceRe = /```(\w*)/
 
   for (let i = 0; i < lines.length; i++) {
@@ -276,6 +331,7 @@ function extractRelevantCodeBlocks(content: string, tokens: string[], maxBlocks 
     const context = lines.slice(contextStart, i).join('\n').trim()
     blocks.push({
       score,
+      lineIndex: i,
       text: `${context ? `${context}\n\n` : ''}\`\`\`${lang}\n${blockLines.slice(1, -1).join('\n')}\n\`\`\``.trim()
     })
     i = j
@@ -284,34 +340,51 @@ function extractRelevantCodeBlocks(content: string, tokens: string[], maxBlocks 
   return blocks
     .sort((a, b) => b.score - a.score)
     .slice(0, maxBlocks)
-    .map((b) => b.text)
 }
 
 function scoreFileContent(content: string, matchTokens: string[], minMatches: number): {
   score: number
   snippet: string
   kind: 'code' | 'text'
+  section: string
 } | null {
+  const lines = content.split('\n')
   const blocks = extractRelevantCodeBlocks(content, matchTokens, 1)
   if (blocks.length > 0) {
-    return { score: 10 + matchTokens.filter((t) => blocks[0].toLowerCase().includes(t)).length, snippet: blocks[0], kind: 'code' }
+    const block = blocks[0]
+    return {
+      score: 10 + matchTokens.filter((t) => block.text.toLowerCase().includes(t)).length,
+      snippet: block.text,
+      kind: 'code',
+      section: headingAtOrAbove(lines, block.lineIndex) || '代码示例'
+    }
   }
-  const lines = content.split('\n')
-  let best: { start: number; end: number; score: number } | null = null
+  let best: { start: number; end: number; score: number; hitLine: number } | null = null
   for (let i = 0; i < lines.length; i++) {
     const lineLower = lines[i].toLowerCase()
     const matchCount = matchTokens.filter((t) => lineLower.includes(t)).length
     if (matchCount >= minMatches) {
       const start = Math.max(0, i - 2)
       const end = Math.min(lines.length, i + 8)
-      if (!best || matchCount > best.score) best = { start, end, score: matchCount }
+      if (!best || matchCount > best.score) best = { start, end, score: matchCount, hitLine: i }
     }
   }
   if (!best) return null
   return {
     score: best.score,
     snippet: lines.slice(best.start, best.end).join('\n').trim(),
-    kind: 'text'
+    kind: 'text',
+    section: headingAtOrAbove(lines, best.hitLine) || extractTitleHint(content) || '正文'
+  }
+}
+
+function trailForDocFile(file: string, section: string): KnowledgeHitTrail {
+  const { category, doc } = classifyDocPath(file)
+  return {
+    kind: '文档',
+    category,
+    doc,
+    section: section.replace(/^#+\s*/, '').slice(0, 40)
   }
 }
 
@@ -342,9 +415,12 @@ async function listSearchableKnowledgeFiles(): Promise<string[]> {
   return [...files]
 }
 
-async function searchRoutedKnowledgeFiles(keyword: string): Promise<{ text: string; hitFiles: string[]; titles: string[] }> {
+async function searchRoutedKnowledgeFiles(keyword: string): Promise<{
+  text: string
+  trails: KnowledgeHitTrail[]
+}> {
   const routedFiles = resolveTopicRouteFiles(keyword)
-  if (routedFiles.length === 0) return { text: '', hitFiles: [], titles: [] }
+  if (routedFiles.length === 0) return { text: '', trails: [] }
 
   const tokens = tokenizeKeyword(keyword)
   const highValue = tokens.filter(isHighValueToken)
@@ -352,48 +428,41 @@ async function searchRoutedKnowledgeFiles(keyword: string): Promise<{ text: stri
   const minMatches = Math.max(1, Math.ceil(matchTokens.length / 2))
 
   const results: string[] = []
-  const hitFiles: string[] = []
-  const titles: string[] = []
+  const trails: KnowledgeHitTrail[] = []
 
   for (const file of routedFiles) {
     const content = await readKnowledge(file)
     if (!content) continue
     const scored = scoreFileContent(content, matchTokens, minMatches)
-    // Topic-routed files always count as a soft hit if readable (even weak keyword match)
     if (scored || content.length > 80) {
-      const title = extractTitleHint(content)
       const label = shortFileLabel(file)
-      hitFiles.push(label)
-      if (title) titles.push(title)
+      const section = scored?.section || extractTitleHint(content) || '概览'
+      trails.push(trailForDocFile(file, section))
       if (scored) {
-        results.push(
-          scored.kind === 'code'
-            ? `[主题路由 · ${label}]\n${scored.snippet}`
-            : `[主题路由 · ${label}]\n${scored.snippet}`
-        )
+        results.push(`[主题路由 · ${label} · ${section}]\n${scored.snippet}`)
       } else {
         const preview = content.split('\n').filter((l) => l.trim() && !l.startsWith('---') && !l.startsWith('title:')).slice(0, 6).join('\n')
-        results.push(`[主题路由 · ${label}]\n${preview}`)
+        results.push(`[主题路由 · ${label} · ${section}]\n${preview}`)
       }
       if (results.length >= 3) break
     }
   }
 
-  return { text: results.join('\n\n'), hitFiles, titles }
+  return { text: results.join('\n\n'), trails }
 }
 
 async function searchLocalKnowledgeFiles(
   keyword: string,
   excludeFiles: Set<string> = new Set()
-): Promise<{ text: string; hitFiles: string[]; titles: string[] }> {
+): Promise<{ text: string; trails: KnowledgeHitTrail[] }> {
   const tokens = tokenizeKeyword(keyword)
-  if (tokens.length === 0) return { text: '', hitFiles: [], titles: [] }
+  if (tokens.length === 0) return { text: '', trails: [] }
   const highValue = tokens.filter(isHighValueToken)
   const matchTokens = highValue.length > 0 ? highValue : tokens
   const minMatches = Math.max(1, Math.ceil(matchTokens.length / 2))
 
   const allFiles = await listSearchableKnowledgeFiles()
-  const scoredFiles: Array<{ file: string; score: number; snippet: string; title: string }> = []
+  const scoredFiles: Array<{ file: string; score: number; snippet: string; section: string }> = []
 
   for (const file of allFiles) {
     if (excludeFiles.has(file)) continue
@@ -405,24 +474,41 @@ async function searchLocalKnowledgeFiles(
       file,
       score: scored.score,
       snippet: scored.snippet,
-      title: extractTitleHint(content)
+      section: scored.section
     })
   }
 
   scoredFiles.sort((a, b) => b.score - a.score)
   const top = scoredFiles.slice(0, 3)
+  const trails = top.map((item) => trailForDocFile(item.file, item.section))
   const results = top.map((item) => {
     const label = shortFileLabel(item.file)
     return item.snippet.includes('```')
-      ? `[${label} — 代码示例]\n${item.snippet}`
-      : `[${label} — 匹配]\n${item.snippet}`
+      ? `[${label} · ${item.section} — 代码示例]\n${item.snippet}`
+      : `[${label} · ${item.section} — 匹配]\n${item.snippet}`
   })
 
-  return {
-    text: results.join('\n\n'),
-    hitFiles: top.map((t) => shortFileLabel(t.file)),
-    titles: top.map((t) => t.title).filter(Boolean)
+  return { text: results.join('\n\n'), trails }
+}
+
+function yarnTrailFromResult(localSourceResult: string): KnowledgeHitTrail | null {
+  if (!localSourceResult || isNoisyYarnResult(localSourceResult)) return null
+  const exact = localSourceResult.match(/\[Yarn 精确匹配[^\]]*\]\s*([^\n]+)/)
+  const high = localSourceResult.match(/高相关类[：:]\s*([^\n]+)/)
+  const api = localSourceResult.includes('Fabric API 源码')
+  if (exact) {
+    return { kind: '源码', category: 'Yarn', doc: exact[1].trim().slice(0, 48), section: '精确匹配' }
   }
+  if (high) {
+    return { kind: '源码', category: 'Yarn', doc: high[1].trim().slice(0, 48), section: '高相关类' }
+  }
+  if (api) {
+    return { kind: '源码', category: 'Fabric API', doc: '源码命中', section: '检索' }
+  }
+  if (localSourceResult.includes('Yarn') || localSourceResult.includes('Fabric API')) {
+    return { kind: '源码', category: 'Yarn', doc: '映射命中', section: '检索' }
+  }
+  return null
 }
 
 export function isNoisyYarnResult(localSourceResult: string): boolean {
@@ -444,21 +530,14 @@ export function hasHighConfidenceLocalHit(
   return false
 }
 
-function buildHumanSummaryLine(opts: {
-  keyword: string
-  hitFiles: string[]
-  titles: string[]
-  yarnHit: boolean
-  noHit: boolean
-}): string {
-  if (opts.noHit) {
-    return `摘要：查「${opts.keyword}」→ 本地文档与源码均未命中`
+function buildHumanSummaryLine(trails: KnowledgeHitTrail[], keyword: string, noHit: boolean): string {
+  if (noHit || trails.length === 0) {
+    return `摘要：查「${keyword}」→ 本地文档与源码均未命中`
   }
-  const sources: string[] = []
-  if (opts.hitFiles.length > 0) sources.push(opts.hitFiles.slice(0, 3).join('、'))
-  if (opts.yarnHit) sources.push('Yarn/源码')
-  const tip = opts.titles[0] ? `；要点：${opts.titles[0]}` : ''
-  return `摘要：查「${opts.keyword}」→ 命中 ${sources.join(' / ')}${tip}`
+  const parts = trails.slice(0, 3).map((t) =>
+    [t.kind, t.category, t.doc, t.section].filter(Boolean).join(' › ')
+  )
+  return `摘要：查「${keyword}」→ ${parts.join('；')}`
 }
 
 export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput): Promise<string> {
@@ -483,11 +562,9 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     ).trim()
   }
 
-  const yarnHit = Boolean(
-    localSourceResult &&
-    !isNoisyYarnResult(localSourceResult) &&
-    (localSourceResult.includes('Yarn') || localSourceResult.includes('Fabric API') || localSourceResult.includes('高相关'))
-  )
+  const yarnTrail = yarnTrailFromResult(localSourceResult)
+  const trails: KnowledgeHitTrail[] = [...routed.trails, ...local.trails]
+  if (yarnTrail) trails.push(yarnTrail)
 
   const lines: string[] = [
     `查询：${keyword}`,
@@ -496,8 +573,6 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
   ]
 
   const summaryParts: string[] = []
-  const hitFiles = [...routed.hitFiles, ...local.hitFiles]
-  const titles = [...routed.titles, ...local.titles]
 
   if (routed.text) {
     summaryParts.push('主题路由命中')
@@ -508,7 +583,7 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
   if (localSourceResult && !isNoisyYarnResult(localSourceResult)) {
     lines.push(localSourceResult)
     lines.push('')
-    if (yarnHit) summaryParts.push('本地源码/Yarn 命中')
+    if (yarnTrail) summaryParts.push('本地源码/Yarn 命中')
   } else if (localSourceResult && !routed.text && !local.text) {
     lines.push(localSourceResult)
     lines.push('')
@@ -520,15 +595,16 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     lines.push('')
   }
 
-  const noHit = summaryParts.length === 0 && !yarnHit
+  const noHit = trails.length === 0
+  if (noHit) {
+    trails.push({ kind: '未命中', category: '本地知识库', doc: keyword.slice(0, 32), section: '' })
+  }
+
   lines.push(`结果：${summaryParts.length > 0 ? summaryParts.join('，') : '无命中'}`)
-  lines.push(buildHumanSummaryLine({
-    keyword,
-    hitFiles,
-    titles,
-    yarnHit,
-    noHit
-  }))
+  lines.push(buildHumanSummaryLine(trails.filter((t) => t.kind !== '未命中'), keyword, noHit))
+  for (const trail of trails.slice(0, 4)) {
+    lines.push(formatKnowledgeHitLine(trail))
+  }
   return lines.join('\n')
 }
 
@@ -545,6 +621,7 @@ export async function buildVanillaWikiQuerySummary(keyword: string, _lang: 'zh_c
     `关键词：${normalized}`,
     `说明：本产品知识库不捆绑 Minecraft Wiki；运行时不联网抓取。`,
     `建议：模组 API / 注册 / 事件请改用 fabric_docs_search（本地官方文档 + Yarn/源码）。`,
-    `摘要：查「${normalized}」→ 本地无 Wiki 正文（未抓取）`
+    `摘要：查「${normalized}」→ 本地无 Wiki 正文（未抓取）`,
+    formatKnowledgeHitLine({ kind: 'Wiki', category: '未捆绑', doc: normalized.slice(0, 32), section: '无正文' })
   ].join('\n')
 }

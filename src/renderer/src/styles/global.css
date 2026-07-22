@@ -1257,6 +1257,79 @@ body,
 	color: var(--text-muted);
 }
 
+/* Knowledge hit hierarchy tags: 文档 › 物品 › first-item › 注册物品 */
+.kh-hit-tags {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.kh-hit-tags--inline {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.kh-hit-tags-block {
+	margin-bottom: 6px;
+}
+
+.kh-hit-trail {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 3px;
+	max-width: 100%;
+}
+
+.kh-hit-sep {
+	color: var(--text-secondary);
+	opacity: 0.55;
+	font-size: 10px;
+	user-select: none;
+}
+
+.kh-hit-tag {
+	display: inline-block;
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 1px 6px;
+	border-radius: 3px;
+	font-size: 10px;
+	line-height: 1.4;
+	font-family: var(--font-ui, var(--font-mono));
+	border: 1px solid transparent;
+}
+
+.kh-hit-tag--l0 {
+	background: rgba(160, 120, 220, 0.18);
+	border-color: rgba(160, 120, 220, 0.35);
+	color: #d4c2f0;
+	font-weight: 600;
+}
+
+.kh-hit-tag--l1 {
+	background: rgba(100, 149, 237, 0.14);
+	border-color: rgba(100, 149, 237, 0.3);
+	color: #9ec0f0;
+}
+
+.kh-hit-tag--l2 {
+	background: rgba(255, 255, 255, 0.06);
+	border-color: rgba(255, 255, 255, 0.12);
+	color: var(--text-secondary);
+}
+
+.kh-hit-tag--l3 {
+	background: rgba(80, 180, 120, 0.12);
+	border-color: rgba(80, 180, 120, 0.28);
+	color: #8fd4a8;
+}
+
 .tool-explore-group-bd {
 	width: 100%;
 	padding: 4px 0 0 12px;

@@ -3,6 +3,7 @@ import type { ChronoEntryTool } from '../types/display-message.ts'
 import type { ExploreGroupKind } from '../utils/tool-explore-group.ts'
 import { summarizeExploreGroup } from '../utils/tool-explore-group.ts'
 import { extractPreview } from '../utils/tool-output-preview.ts'
+import { KnowledgeHitTags, hasKnowledgeHitTags } from './KnowledgeHitTags.tsx'
 
 const TOOL_SHORT_NAMES: Record<string, string> = {
   read_file: '读取',
@@ -50,6 +51,7 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
   void runTick
   const summary = summarizeExploreGroup(kind, tools, reasoningCount)
   const statusClass = summary.aggregateStatus
+  const showGroupTags = kind === 'knowledge' && hasKnowledgeHitTags(summary.knowledgeHitOutput)
 
   return (
     <div className={`tool-explore-group tool-explore-group--${kind}${summary.hasRunning ? ' running' : ''}`}>
@@ -68,10 +70,14 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
             {summary.thoughtHint && (
               <span className="tool-explore-group-thought">{summary.thoughtHint}</span>
             )}
-            {summary.pathPreview && (
-              <span className="tool-explore-group-preview" title={summary.pathPreview}>
-                {summary.pathPreview}
-              </span>
+            {showGroupTags ? (
+              <KnowledgeHitTags output={summary.knowledgeHitOutput} className="kh-hit-tags--inline" maxTrails={2} />
+            ) : (
+              summary.pathPreview && (
+                <span className="tool-explore-group-preview" title={summary.pathPreview}>
+                  {summary.pathPreview}
+                </span>
+              )
             )}
           </>
         )}
@@ -86,6 +92,7 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
             const elapsedSec = tool.startMs && tool.status === 'running'
               ? Math.max(1, Math.floor((Date.now() - tool.startMs) / 1000))
               : null
+            const useTags = Boolean(displayOutput && hasKnowledgeHitTags(displayOutput))
             const preview = displayOutput
               ? extractPreview(tool.name, displayOutput, tool.args)
               : path || getToolShortName(tool.name)
@@ -102,9 +109,13 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
                     {path}
                   </span>
                 )}
-                <span className="tool-explore-item-preview" title={displayOutput || preview}>
-                  {preview}
-                </span>
+                {useTags ? (
+                  <KnowledgeHitTags output={displayOutput || ''} className="kh-hit-tags--inline" maxTrails={2} />
+                ) : (
+                  <span className="tool-explore-item-preview" title={displayOutput || preview}>
+                    {preview}
+                  </span>
+                )}
                 {tool.durationMs != null && (
                   <span className="tool-explore-item-meta">
                     {tool.durationMs >= 1000 ? `${(tool.durationMs / 1000).toFixed(1)}s` : `${tool.durationMs}ms`}
@@ -124,6 +135,11 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
                 )}
                 {displayOutput && !isChildCollapsed && (
                   <div className="tool-line-output tool-explore-item-output">
+                    {hasKnowledgeHitTags(displayOutput) && (
+                      <div className="kh-hit-tags-block">
+                        <KnowledgeHitTags output={displayOutput} maxTrails={4} />
+                      </div>
+                    )}
                     <pre className={tool.status === 'error' ? 'is-error' : undefined}>{displayOutput}</pre>
                   </div>
                 )}

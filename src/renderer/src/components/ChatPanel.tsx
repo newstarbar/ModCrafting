@@ -44,6 +44,7 @@ import { shouldShowPinnedPlan } from '../utils/plan-visibility'
 import ToolExploreGroup from './ToolExploreGroup'
 import { groupExploreToolRuns, collectExploreGroupKeys, isExploreTool } from '../utils/tool-explore-group'
 import { extractPreview } from '../utils/tool-output-preview'
+import { KnowledgeHitTags, hasKnowledgeHitTags } from './KnowledgeHitTags'
 import {
   shouldApplyTurnEvent,
   shouldCancelTurnOnSessionLeave,
@@ -1638,9 +1639,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                       {(entry.status === 'done' || entry.status === 'error') && displayOutput && (
                         <>
                           {isCollapsed && (
-                            <span className="tool-line-preview" title={displayOutput}>
-                              {extractPreview(entry.name, displayOutput, entry.args)}
-                            </span>
+                            hasKnowledgeHitTags(displayOutput) ? (
+                              <KnowledgeHitTags output={displayOutput} className="kh-hit-tags--inline" maxTrails={2} />
+                            ) : (
+                              <span className="tool-line-preview" title={displayOutput}>
+                                {extractPreview(entry.name, displayOutput, entry.args)}
+                              </span>
+                            )
                           )}
                           <span
                             className="tool-line-toggle"
@@ -1659,11 +1664,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                         </span>
                       )}
                       {entry.status === 'running' && isExploreTool(entry.name) && isCollapsed && (
-                        <span className="tool-line-preview" title={displayOutput || ''}>
-                          {displayOutput
-                            ? extractPreview(entry.name, displayOutput, entry.args)
-                            : pathFileName || '…'}
-                        </span>
+                        hasKnowledgeHitTags(displayOutput || '') ? (
+                          <KnowledgeHitTags output={displayOutput || ''} className="kh-hit-tags--inline" maxTrails={2} />
+                        ) : (
+                          <span className="tool-line-preview" title={displayOutput || ''}>
+                            {displayOutput
+                              ? extractPreview(entry.name, displayOutput, entry.args)
+                              : pathFileName || '…'}
+                          </span>
+                        )
                       )}
                       {entry.status === 'pending' && (
                         <span className="tool-line-toggle mc-dim">等待中…</span>
@@ -1692,6 +1701,11 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                             else toolOutputRefs.current.delete(entry.id)
                           }}
                         >
+                          {displayOutput && hasKnowledgeHitTags(displayOutput) && (
+                            <div className="kh-hit-tags-block">
+                              <KnowledgeHitTags output={displayOutput} maxTrails={4} />
+                            </div>
+                          )}
                           <pre className={entry.status === 'error' ? 'is-error' : undefined}>
                             {displayOutput || '正在执行，等待实时日志…'}
                           </pre>

@@ -82,8 +82,8 @@ export function validateToolCalls(
       }
     } catch {
       const hint =
-        call.name === 'write_file'
-          ? 'arguments 不是合法 JSON（大文件易截断）。请改用 write_file 写骨架（短内容）+ 多次 edit_file 分段填充。'
+        call.name === 'write_file' || call.name === 'edit_file'
+          ? 'arguments 不是合法 JSON（大文件易截断）。整文件重写请：① write_file 短骨架（overwrite=true，内容建议 <80 行）；② 多次 edit_file，每次 new_string 只加一小段方法/字段。禁止再次提交整文件 JSON；此问题与文档无关，不要 fabric_docs_search。'
           : 'arguments 不是合法 JSON'
       rejected.set(call.id, rejectedResult(call, 'invalid_tool_arguments', hint))
       continue

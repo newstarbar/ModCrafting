@@ -1,3 +1,8 @@
+import {
+  formatKnowledgeHitPlain,
+  parseKnowledgeHitTrails
+} from './knowledge-hit-tags.ts'
+
 /** Extract a clean preview summary from tool output (for collapsed view). */
 export function extractPreview(toolName: string, output: string, args?: Record<string, unknown>): string {
   if (!output) return ''
@@ -51,10 +56,14 @@ export function extractPreview(toolName: string, output: string, args?: Record<s
   }
 
   if (toolName === 'fabric_docs_search' || toolName === 'fabric_javadoc_lookup' || toolName === 'vanilla_mc_wiki_query') {
-    const kw = String(args?.keyword || args?.query || '')
+    const trails = parseKnowledgeHitTrails(output)
+    if (trails.length > 0) {
+      return trails.slice(0, 2).map(formatKnowledgeHitPlain).join(' · ')
+    }
     const human = output.match(/^摘要：(.+)$/m)?.[1]?.trim() || ''
     if (human) return human.length > 72 ? `${human.slice(0, 72)}…` : human
     const summary = output.match(/^结果：(.+)$/m)?.[1] || ''
+    const kw = String(args?.keyword || args?.query || '')
     return summary ? `${kw.slice(0, 28)} → ${summary}` : kw.slice(0, 36)
   }
   if (toolName === 'fabric_meta_version_check') {

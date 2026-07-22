@@ -200,7 +200,7 @@ test('Fix 2: real write lets a fresh write step complete', async () => {
   }
 })
 
-test('Fix 2: resumed (running) write step trusts disk evidence for existing file', async () => {
+test('Fix 2: resumed (running) write step does NOT complete from disk existence alone', async () => {
   const restore = installWindow({
     exists: async () => true,
     listDirectory: async () => [] as DirEntry[]
@@ -210,7 +210,11 @@ test('Fix 2: resumed (running) write step trusts disk evidence for existing file
       [{ name: 'complete_step', args: { stepId: '1' } }]
     ])
     await engine.run([])
-    assert.equal(tracker.steps[0].status, 'completed', 'resumed step may complete from disk evidence')
+    assert.notEqual(
+      tracker.steps[0].status,
+      'completed',
+      'disk existence alone must not satisfy write evidence / auto-complete'
+    )
   } finally {
     restore()
   }

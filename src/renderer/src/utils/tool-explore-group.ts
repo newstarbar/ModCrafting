@@ -148,6 +148,8 @@ export interface ExploreGroupSummary {
   countLabel: string
   statsLine: string
   pathPreview: string
+  /** Concatenated knowledge tool outputs for tag parsing (knowledge groups). */
+  knowledgeHitOutput: string
   thoughtHint: string | null
   hasRunning: boolean
   hasError: boolean
@@ -207,6 +209,7 @@ export function summarizeExploreGroup(
       countLabel,
       statsLine,
       pathPreview,
+      knowledgeHitOutput: '',
       thoughtHint,
       hasRunning,
       hasError,
@@ -223,12 +226,18 @@ export function summarizeExploreGroup(
     ? extractPreview(lastDone.name, lastDone.output || lastDone.liveOutput || '', lastDone.args)
     : ''
 
+  const knowledgeHitOutput = tools
+    .filter((t) => t.status === 'done')
+    .map((t) => t.output || t.liveOutput || '')
+    .filter(Boolean)
+    .join('\n')
+
   let hit = 0
   let miss = 0
   for (const t of tools) {
     if (t.status !== 'done') continue
     const out = t.output || t.liveOutput || ''
-    if (/本地文档与源码均未命中|本地无 Wiki|无命中/.test(out) && !/主题路由命中|本地参考命中|本地源码/.test(out)) miss++
+    if (/::kh::未命中|本地无 Wiki|无命中/.test(out) && !/::kh::文档|::kh::源码/.test(out)) miss++
     else if (out) hit++
   }
   const hitStats = tools.some((t) => t.status === 'done')
@@ -244,6 +253,7 @@ export function summarizeExploreGroup(
     countLabel,
     statsLine,
     pathPreview: lastPreview,
+    knowledgeHitOutput,
     thoughtHint,
     hasRunning,
     hasError,

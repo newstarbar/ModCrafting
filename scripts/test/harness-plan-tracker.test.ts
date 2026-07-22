@@ -831,6 +831,8 @@ test('fabric docs search summary returns keyword and local-only summary line', a
   assert.match(summary, /版本：1\.21\.4/)
   assert.match(summary, /摘要：/)
   assert.doesNotMatch(summary, /联网补充/)
+  // Offline harness has no window.api — expect structured miss trail
+  assert.match(summary, /::kh::/)
 })
 
 test('topic routing maps CustomPayload queries to networking knowledge files', () => {
