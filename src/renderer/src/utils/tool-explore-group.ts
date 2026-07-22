@@ -223,10 +223,26 @@ export function summarizeExploreGroup(
     ? extractPreview(lastDone.name, lastDone.output || lastDone.liveOutput || '', lastDone.args)
     : ''
 
+  let hit = 0
+  let miss = 0
+  for (const t of tools) {
+    if (t.status !== 'done') continue
+    const out = t.output || t.liveOutput || ''
+    if (/本地文档与源码均未命中|本地无 Wiki|无命中/.test(out) && !/主题路由命中|本地参考命中|本地源码/.test(out)) miss++
+    else if (out) hit++
+  }
+  const hitStats = tools.some((t) => t.status === 'done')
+    ? `命中 ${hit} / 未命中 ${miss}`
+    : ''
+  const statsLine = [
+    keywords.length ? keywords.join(', ') : `${tools.length} 次查询`,
+    hitStats
+  ].filter(Boolean).join(' · ')
+
   return {
     title: GROUP_TITLES.knowledge,
     countLabel,
-    statsLine: keywords.length ? keywords.join(', ') : `${tools.length} 次查询`,
+    statsLine,
     pathPreview: lastPreview,
     thoughtHint,
     hasRunning,

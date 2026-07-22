@@ -210,8 +210,10 @@ export function buildRepairInstruction(output: string, kind: 'build' | 'run'): s
   return (
     `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
     `流程：观察（read_error_log / fabric_log_debugger，限 ${MAX_FREE_REPAIR_DIAG_ROUNDS} 轮）→ ` +
+    `若错误含 cannot find symbol / 方法不存在 / Mixin 目标 / Registry / 错误 API，先 fabric_docs_search 查本地文档与 Yarn 确认签名 → ` +
     `write_file / edit_file / delete_file 修改代码 → 再验证（${retry}）。\n` +
-    `在成功 write_file/edit_file/delete_file 之前禁止直接调用 ${retry}。\n\n` +
+    `在成功 write_file/edit_file/delete_file 之前禁止直接调用 ${retry}。\n` +
+    `文档查询不占用上述诊断轮次（另有知识查询免费额度）。\n\n` +
     `--- 错误摘要 ---\n${structuredGradle}` +
     fabricBlock
   )
@@ -254,10 +256,7 @@ const REPAIR_DIAGNOSTIC_TOOLS = new Set([
   'fabric_log_debugger',
   // read_file / list_directory intentionally excluded — unlimited free reads caused
   // explore thrashing in repair mode (see session diag 20260718).
-  'fabric_docs_search',
-  'fabric_javadoc_lookup',
-  'vanilla_mc_wiki_query',
-  'fabric_meta_version_check',
+  // Knowledge tools are NOT diagnostic-round tools — they use MAX_FREE_KNOWLEDGE_ROUNDS.
   'fabric_mod_json_validate'
 ])
 

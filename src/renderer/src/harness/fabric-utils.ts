@@ -84,42 +84,49 @@ export function classifyFabricLog(log: string): FabricLogClassification {
     return {
       kind: 'mixin-error',
       title: 'Mixin 注入失败',
-      advice: '检查目标类/方法 Yarn 名称、方法签名、注入点和 remap 设置；能用 Fabric API 事件替代时优先移除 Mixin。'
+      advice: '用 fabric_docs_search 查本地 Mixin/Yarn 文档，核对目标类/方法签名与注入点；能用 Fabric API 事件替代时优先移除 Mixin。'
     }
   }
   if (/attempted to load class .*client|invalid dist dedicated_server|dedicated_server.*client/.test(lower)) {
     return {
       kind: 'side-error',
       title: '客户端代码被服务端加载',
-      advice: '把渲染、模型、Screen、HUD、Client 类移动到 src/client/java 或 ClientModInitializer，并避免 main 入口引用客户端类。'
+      advice: '把渲染、模型、Screen、HUD、Client 类移动到 src/client/java 或 ClientModInitializer；可查本地 errors-compile-common / yarn-gotchas。'
     }
   }
   if (/jsonparseexception|malformedjsonexception|unable to load model|missing model|filenotfoundexception.*assets/.test(lower)) {
     return {
       kind: 'resource-error',
       title: '资源或 JSON 格式错误',
-      advice: '检查 assets/data 路径、命名空间、模型 parent、textures、blockstates、loot_tables 与 JSON 语法。'
+      advice: '检查 assets/data 路径、命名空间、模型 parent、textures、blockstates、loot_tables 与 JSON 语法；可 fabric_docs_search 查 DataGen/模型相关本地文档。'
     }
   }
   if (/datagen|data generator|fabric-api.datagen/.test(lower)) {
     return {
       kind: 'datagen-error',
       title: 'DataGen 失败',
-      advice: '检查 DataGeneratorEntrypoint、runDatagen VM 参数、输出目录和 provider 注册。'
+      advice: '检查 DataGeneratorEntrypoint、runDatagen VM 参数、输出目录和 provider 注册；本地文档见 develop/data-generation/setup。'
     }
   }
   if (/registry|duplicate key|already registered|registrykey/.test(lower)) {
     return {
       kind: 'registry-error',
       title: 'Registry 注册错误',
-      advice: '检查 Identifier、RegistryKey、重复注册、注册时机和 Item.Settings/Block.Settings 的 registryKey。'
+      advice: '用 fabric_docs_search 查本地注册示例，检查 Identifier、RegistryKey、重复注册、注册时机和 Item.Settings/Block.Settings 的 registryKey。'
+    }
+  }
+  if (/cannot find symbol|package .* does not exist|cannot find|找不到符号/.test(lower)) {
+    return {
+      kind: 'gradle-error',
+      title: '编译符号错误',
+      advice: '先 fabric_docs_search 查本地文档与 Yarn 确认类名/方法签名，再改 import 或 API 用法；参见 errors-compile-common。'
     }
   }
   if (/build failed|could not resolve|gradle|loom/.test(lower)) {
     return {
       kind: 'gradle-error',
       title: 'Gradle/Loom 构建错误',
-      advice: '检查 Loom、Fabric API、Loader、Yarn 和 Java 版本是否匹配；必要时重新预取依赖缓存。'
+      advice: '检查 Loom、Fabric API、Loader、Yarn 和 Java 版本是否匹配；必要时重新预取依赖缓存。本地文档见 develop/loom。'
     }
   }
   return {

@@ -824,23 +824,30 @@ test('fabric knowledge sources include authoritative URLs for product runtime lo
   assert.ok(urls.includes('https://minecraft.wiki/api.php'))
 })
 
-test('fabric docs search summary returns source URLs and keyword matches without writing files', async () => {
+test('fabric docs search summary returns keyword and local-only summary line', async () => {
   const summary = await buildFabricDocsSearchSummary({ keyword: '方块实体', mcVersion: '1.21.4', limit: 3 })
 
   assert.match(summary, /方块实体/)
   assert.match(summary, /版本：1\.21\.4/)
+  assert.match(summary, /摘要：/)
+  assert.doesNotMatch(summary, /联网补充/)
 })
 
 test('topic routing maps CustomPayload queries to networking knowledge files', () => {
   const files = resolveTopicRouteFiles('CustomPayload ServerPlayNetworking C2S 1.21.4')
-  assert.ok(files.includes('fabric/docs/networking.md'))
+  assert.ok(files.includes('fabric/docs/develop/networking.md'))
   assert.ok(files.includes('fabric/networking-snippets.md'))
 })
 
 test('topic routing maps player interact queries to events knowledge files', () => {
   const files = resolveTopicRouteFiles('UseBlockCallback 空手 右键')
-  assert.ok(files.includes('fabric/docs/events.md'))
+  assert.ok(files.includes('fabric/docs/develop/events.md'))
   assert.ok(files.includes('fabric/api-aliases.md'))
+})
+
+test('topic routing maps block entity queries to develop blocks docs', () => {
+  const files = resolveTopicRouteFiles('方块实体 BlockEntity')
+  assert.ok(files.some((f) => f.includes('docs/develop/blocks/')))
 })
 
 test('networking-snippets stays generic without session-specific player interact tuning', () => {
@@ -855,7 +862,7 @@ test('networking-snippets stays generic without session-specific player interact
   assert.doesNotMatch(aliases, /玩家交互事件速查/)
 })
 
-test('bundled fabric knowledge is curated and excludes removed meta files', () => {
+test('bundled fabric knowledge includes synced develop docs and product overlays', () => {
   const fabricRoot = path.join(process.cwd(), 'resources/agent-knowledge/fabric')
   const mdFiles: string[] = []
   const walk = (dir: string): void => {
@@ -867,7 +874,12 @@ test('bundled fabric knowledge is curated and excludes removed meta files', () =
   }
   walk(fabricRoot)
 
-  assert.ok(mdFiles.length <= 15, `expected ≤15 bundled markdown files, got ${mdFiles.length}: ${mdFiles.join(', ')}`)
+  const developDocs = mdFiles.filter((f) => f.startsWith('docs/develop/'))
+  assert.ok(developDocs.length >= 40, `expected ≥40 develop docs, got ${developDocs.length}`)
+  assert.ok(mdFiles.includes('docs/develop/items/first-item.md'))
+  assert.ok(mdFiles.includes('docs/develop/blocks/block-entities.md'))
+  assert.ok(mdFiles.includes('errors-compile-common.md'))
+  assert.ok(mdFiles.includes('errors-runtime-common.md'))
   assert.ok(!mdFiles.includes('policies.md'))
   assert.ok(!mdFiles.includes('workflows.md'))
   assert.ok(!mdFiles.includes('templates.md'))
@@ -876,6 +888,11 @@ test('bundled fabric knowledge is curated and excludes removed meta files', () =
   assert.ok(mdFiles.includes('yarn-gotchas.md'))
   assert.ok(mdFiles.includes('networking-snippets.md'))
   assert.ok(mdFiles.includes('api-aliases.md'))
+
+  const firstItem = fs.readFileSync(path.join(fabricRoot, 'docs/develop/items/first-item.md'), 'utf-8')
+  assert.doesNotMatch(firstItem, /<<<\s+@\//)
+  assert.doesNotMatch(firstItem, /@\[code/)
+  assert.match(firstItem, /```java/)
 })
 
 test('selectVisiblePlanText ignores reasoning numbered lists', () => {

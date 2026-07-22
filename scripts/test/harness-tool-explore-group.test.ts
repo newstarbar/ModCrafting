@@ -158,13 +158,26 @@ test('summarizeExploreGroup project stats and path preview', () => {
 
 test('summarizeExploreGroup knowledge keywords', () => {
   const tools = [
-    tool('1', 'fabric_docs_search', { keyword: 'ArmorItem' }, 'done', '结果：命中'),
-    tool('2', 'vanilla_mc_wiki_query', { keyword: 'recipe' }, 'done', '结果：wiki')
+    tool('1', 'fabric_docs_search', { keyword: 'ArmorItem' }, 'done', '结果：主题路由命中\n摘要：查「ArmorItem」→ 命中 develop/items/custom-armor'),
+    tool('2', 'vanilla_mc_wiki_query', { keyword: 'recipe' }, 'done', '摘要：查「recipe」→ 本地无 Wiki 正文（未抓取）')
   ]
   const summary = summarizeExploreGroup('knowledge', tools)
   assert.equal(summary.title, '文档查询')
   assert.match(summary.statsLine, /ArmorItem/)
+  assert.match(summary.statsLine, /命中/)
   assert.equal(summary.thoughtHint, null)
+  assert.match(summary.pathPreview, /recipe|Wiki|未抓取/)
+})
+
+test('extractPreview prefers 摘要 line for knowledge tools', async () => {
+  const { extractPreview } = await import('../../src/renderer/src/utils/tool-output-preview.ts')
+  const preview = extractPreview(
+    'fabric_docs_search',
+    '查询：Foo\n结果：主题路由命中\n摘要：查「Foo」→ 命中 develop/events；要点：事件',
+    { keyword: 'Foo' }
+  )
+  assert.match(preview, /查「Foo」/)
+  assert.doesNotMatch(preview, /^Foo →/)
 })
 
 test('isExploreTool identifies project and knowledge tools only', () => {

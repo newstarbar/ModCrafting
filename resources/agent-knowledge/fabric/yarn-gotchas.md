@@ -18,4 +18,4 @@
 ## 查表方式
 
 - 类名/方法签名：优先 `fabric_docs_search` 的 Yarn 精确匹配或 Fabric API 源码搜索。
-- 完整 API 教程：见 `docs/events.md`、`docs/networking.md` 等官方文档镜像。
+- 完整 API 教程：见 `docs/develop/` 下官方中文文档（本地同步，如 `docs/develop/events.md`、`docs/develop/networking.md`）。

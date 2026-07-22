@@ -529,7 +529,7 @@ export const createRecipeTool: Tool & Previewer = {
 // ── fabric_docs_search ──
 export const fabricDocsSearchTool: Tool = {
 	name: "fabric_docs_search",
-	description: "搜索 Fabric 知识库：优先查本地 Yarn 参考表（类名/方法签名/Mixin 模式），再联网抓取文档摘要。只读。写代码前用此工具确认类名和字段名是否正确。",
+	description: "搜索本地 Fabric 知识库：官方中文 develop 文档、产品参考（别名/片段/报错速查）与本地 Yarn/Fabric API 源码签名。只读，不联网。写代码或修复编译错误前用此工具确认类名、方法签名与推荐写法。",
 	schema: {
 		type: "object",
 		properties: {
@@ -567,10 +567,11 @@ export const fabricJavadocLookupTool: Tool = {
 	async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
 		const version = String(args.fabricApiVersion || (await window.api.getFabricVersions()).fabric_version);
 		const keyword = String(args.keyword || "");
-		return `Fabric API JavaDoc 查询（只读）
+		return `Fabric API JavaDoc（只读，运行时不抓取正文）
 关键词：${keyword}
-URL：${buildFabricJavadocLookupUrl(version, keyword)}
-提示：写代码前用该页面确认类名、方法签名、事件参数和模块依赖。`;
+建议：优先调用 fabric_docs_search 查本地文档与 Yarn/Fabric API 源码签名。
+可选人工外链：${buildFabricJavadocLookupUrl(version, keyword)}
+摘要：查「${keyword}」→ JavaDoc 未抓取正文；请改用本地 fabric_docs_search`;
 	}
 };
 
