@@ -26,6 +26,13 @@ import {
   sleep
 } from './fetch-retry.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
+import {
+  MAX_PLAN_OFFERED_REJECT_ROUNDS,
+  MAX_READONLY_ROUNDS,
+  PLAN_EXPLORATION_LOCK_KICK,
+  PLAN_SUBMIT_NUDGE,
+  shouldNudgePlanSubmit
+} from './plan-phase-gate.ts'
 import { getModelContextWindow, buildProviderThinkingFields } from '../../../shared/llm-providers.ts'
 import {
   LONG_REASONING_KICK,
@@ -35,6 +42,13 @@ import {
 
 export { isRepeatGuardedToolCall } from './repeat-guard.ts'
 export type { ChatMessage } from './chat-message.ts'
+export {
+  MAX_PLAN_OFFERED_REJECT_ROUNDS,
+  MAX_PLAN_SUBMIT_NUDGE_ROUNDS,
+  MAX_READONLY_ROUNDS,
+  PLAN_SUBMIT_NUDGE,
+  shouldNudgePlanSubmit
+} from './plan-phase-gate.ts'
 export {
   LONG_REASONING_KICK,
   MAX_REASONING_HARD_CHARS,
@@ -67,8 +81,6 @@ export interface RunOptions {
   }>
 }
 
-const MAX_READONLY_ROUNDS = 3
-const MAX_PLAN_OFFERED_REJECT_ROUNDS = 2
 const REPEAT_SUCCESS_THRESHOLD = 2
 const MAX_FINAL_READINESS_BLOCKS = 3
 const EXPLORATION_TOOL_NAMES = ['list_directory', 'read_file', 'grep', 'read_error_log', 'run_command']
@@ -115,6 +127,8 @@ export class Agent {
   /** Plan phase: escalate to submit_plan-only after repeated tool_not_offered. */
   private planOfferedRejectRounds = 0
   private planForceSubmitOnly = false
+  /** Plan phase: text-only replies nudged toward submit_plan. */
+  private planSubmitNudgeRounds = 0
 
   // Track written files to detect duplicate writes
   private writtenFiles = new Map<string, string>()
@@ -157,6 +171,7 @@ export class Agent {
     this.planExplorationLocked = false
     this.planOfferedRejectRounds = 0
     this.planForceSubmitOnly = false
+    this.planSubmitNudgeRounds = 0
     this.writtenFiles.clear()
     this.consecutiveWriteOnlyRounds = 0
     this.repeatSuccessCounts.clear()
@@ -536,10 +551,8 @@ export class Agent {
       } else if (phase === 'plan') {
         if (readonlyRounds >= MAX_READONLY_ROUNDS && !this.planExplorationLocked) {
           this.planExplorationLocked = true
-          const kick =
-            '【系统】计划阶段已探索足够。list_directory/read_file/grep 已锁定。' +
-            '请立即调用 submit_plan 提交结构化计划；信息仍不足时用 ask_clarification（须带 options）。' +
-            '不要再尝试列出目录或搜索源码。'
+          this.planForceSubmitOnly = true
+          const kick = PLAN_EXPLORATION_LOCK_KICK
           messages.push({ role: 'user', content: kick })
           apiMessages.push({ role: 'user', content: kick })
           logger.agent('KICK: plan phase exploration cap reached')
@@ -669,8 +682,29 @@ export class Agent {
           this.planOfferedRejectRounds = 0
         }
 
-        // Final answer — plan phase always ends here; execute phase may kick if idle
+        // Final answer — plan phase must submit_plan (or ask); prose-only is nudged.
+        // Execute phase may kick if idle / unfinished plan steps remain.
         if (toolCalls.length === 0) {
+          if (phase === 'plan' && !this.graceRound) {
+            if (shouldNudgePlanSubmit(this.planSubmitNudgeRounds)) {
+              this.planSubmitNudgeRounds++
+              this.planExplorationLocked = true
+              this.planForceSubmitOnly = true
+              if (cleanText) messages.push({ role: 'assistant', content: cleanText })
+              messages.push({ role: 'user', content: PLAN_SUBMIT_NUDGE })
+              logger.agent('KICK: plan phase text-only → submit_plan', {
+                nudge: this.planSubmitNudgeRounds
+              })
+              continue
+            }
+            this.emit({
+              kind: EventKind.Notice,
+              notice: {
+                level: 'warn',
+                text: '计划阶段多次未调用 submit_plan，已结束本轮（将尝试从文字中解析计划）'
+              }
+            })
+          }
           if (phase === 'execute' && planTracker && !planTracker.allDone() && !this.graceRound) {
             this.finalReadinessBlocks++
             const remaining = planTracker.toContextBlock()
