@@ -836,13 +836,11 @@ test('fabric docs search summary returns keyword and local-only summary line', a
 test('topic routing maps CustomPayload queries to networking knowledge files', () => {
   const files = resolveTopicRouteFiles('CustomPayload ServerPlayNetworking C2S 1.21.4')
   assert.ok(files.includes('fabric/docs/develop/networking.md'))
-  assert.ok(files.includes('fabric/networking-snippets.md'))
 })
 
 test('topic routing maps player interact queries to events knowledge files', () => {
   const files = resolveTopicRouteFiles('UseBlockCallback 空手 右键')
   assert.ok(files.includes('fabric/docs/develop/events.md'))
-  assert.ok(files.includes('fabric/api-aliases.md'))
 })
 
 test('topic routing maps block entity queries to develop blocks docs', () => {
@@ -850,19 +848,7 @@ test('topic routing maps block entity queries to develop blocks docs', () => {
   assert.ok(files.some((f) => f.includes('docs/develop/blocks/')))
 })
 
-test('networking-snippets stays generic without session-specific player interact tuning', () => {
-  const snippetsPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/networking-snippets.md')
-  const aliasesPath = path.join(process.cwd(), 'resources/agent-knowledge/fabric/api-aliases.md')
-  const snippets = fs.readFileSync(snippetsPath, 'utf-8')
-  const aliases = fs.readFileSync(aliasesPath, 'utf-8')
-
-  assert.doesNotMatch(snippets, /空手右键/)
-  assert.doesNotMatch(snippets, /EggThrow/)
-  assert.match(snippets, /ExampleC2SPayload/)
-  assert.doesNotMatch(aliases, /玩家交互事件速查/)
-})
-
-test('bundled fabric knowledge includes synced develop docs and product overlays', () => {
+test('bundled fabric knowledge is official develop docs only', () => {
   const fabricRoot = path.join(process.cwd(), 'resources/agent-knowledge/fabric')
   const mdFiles: string[] = []
   const walk = (dir: string): void => {
@@ -878,16 +864,16 @@ test('bundled fabric knowledge includes synced develop docs and product overlays
   assert.ok(developDocs.length >= 40, `expected ≥40 develop docs, got ${developDocs.length}`)
   assert.ok(mdFiles.includes('docs/develop/items/first-item.md'))
   assert.ok(mdFiles.includes('docs/develop/blocks/block-entities.md'))
-  assert.ok(mdFiles.includes('errors-compile-common.md'))
-  assert.ok(mdFiles.includes('errors-runtime-common.md'))
+  assert.ok(mdFiles.includes('docs/index.md'))
+  assert.ok(!mdFiles.includes('client-screenshot.md'))
+  assert.ok(!mdFiles.includes('api-aliases.md'))
+  assert.ok(!mdFiles.includes('networking-snippets.md'))
+  assert.ok(!mdFiles.includes('yarn-gotchas.md'))
+  assert.ok(!mdFiles.includes('reliability-1.21.4.md'))
+  assert.ok(!mdFiles.includes('errors-compile-common.md'))
+  assert.ok(!mdFiles.includes('errors-runtime-common.md'))
   assert.ok(!mdFiles.includes('policies.md'))
   assert.ok(!mdFiles.includes('workflows.md'))
-  assert.ok(!mdFiles.includes('templates.md'))
-  assert.ok(!mdFiles.includes('sources.md'))
-  assert.ok(!mdFiles.includes('yarn-reference.md'))
-  assert.ok(mdFiles.includes('yarn-gotchas.md'))
-  assert.ok(mdFiles.includes('networking-snippets.md'))
-  assert.ok(mdFiles.includes('api-aliases.md'))
 
   const firstItem = fs.readFileSync(path.join(fabricRoot, 'docs/develop/items/first-item.md'), 'utf-8')
   assert.doesNotMatch(firstItem, /<<<\s+@\//)
@@ -950,7 +936,7 @@ test('actionable plan with file paths passes isActionablePlanText', () => {
 
 test('hasHighConfidenceLocalHit prefers routed snippets over noisy yarn counts', () => {
   const noisyYarn = '[Yarn 映射 1613 个类命中，显示前 4 个]\n📦 ItemStack'
-  const routed = '[主题路由 · networking-snippets.md]\n```java\nServerPlayNetworking.registerGlobalReceiver\n```'
+  const routed = '[主题路由 · develop/networking.md]\n```java\nServerPlayNetworking.registerGlobalReceiver\n```'
   assert.equal(isNoisyYarnResult(noisyYarn), true)
   assert.equal(hasHighConfidenceLocalHit(routed, '', noisyYarn), true)
   assert.equal(hasHighConfidenceLocalHit('', '', noisyYarn), false)

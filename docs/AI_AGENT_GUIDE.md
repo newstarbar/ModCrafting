@@ -102,7 +102,7 @@ React 19 UI + AI harness 系统。
 ### 捆绑资源
 
 - `resources/fabric-versions.json` — 锁定版本：MC 1.21.4、Fabric Loader 0.16.10、Fabric API 0.116.0+1.21.4、Loom 1.17.12、Gradle 9.5.0、Java 21
-- `resources/agent-knowledge/fabric/` — 精简本地知识库：`api-aliases.md`（类名纠正）、`networking-snippets.md`（C2S 模板）、`yarn-gotchas.md`（Yarn/Mixin 易错点）、8 个核心 docs 镜像 + `docs/index.md`（官方 URL 索引，含联网-only 主题）
+- `resources/agent-knowledge/fabric/` — 本地官方中文 develop 文档（`docs/develop/**`，由 `npm run docs:sync-fabric` 从 fabric-docs 同步）+ `docs/index.md`；运行时不联网。
 - `resources/_base_mods/` — 捆绑的辅助模组（如 Mod Menu），新建项目时复制进去
 
 ### Agent 关键特性

@@ -16,23 +16,22 @@ const SEARCH_STOPWORDS = new Set([
   'mc', 'mod', 'java', 'the', 'and', 'for', 'with', 'from', 'example', 'docs'
 ])
 
-/** Product overlays + topic → local develop paths (synced from fabric-docs). */
+/** Topic → local develop paths (synced from fabric-docs). */
 const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[] }> = [
   {
     pattern: /custompayload|custompacketpayload|serverplaynetworking|clientplaynetworking|c2s|s2c|payload|networking/i,
-    files: ['fabric/docs/develop/networking.md', 'fabric/networking-snippets.md', 'fabric/api-aliases.md']
+    files: ['fabric/docs/develop/networking.md']
   },
   {
     pattern: /useblockcallback|useentitycallback|useitemcallback|player.*interact|右键|空手|interact/i,
-    files: ['fabric/docs/develop/events.md', 'fabric/api-aliases.md']
+    files: ['fabric/docs/develop/events.md']
   },
   {
     pattern: /first.?item|register.*item|moditems|item\.settings|物品|盔甲|armor|工具|food|食物/i,
     files: [
       'fabric/docs/develop/items/first-item.md',
       'fabric/docs/develop/items/custom-armor.md',
-      'fabric/docs/develop/items/custom-tools.md',
-      'fabric/api-aliases.md'
+      'fabric/docs/develop/items/custom-tools.md'
     ]
   },
   {
@@ -46,16 +45,13 @@ const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[] }> = [
   {
     pattern: /mixin|@inject|@accessor|spongepowered|注入/i,
     files: [
-      'fabric/reliability-1.21.4.md',
       'fabric/docs/develop/mixins/bytecode.md',
-      'fabric/docs/develop/mixins/accessors.md',
-      'fabric/yarn-gotchas.md'
+      'fabric/docs/develop/mixins/accessors.md'
     ]
   },
   {
     pattern: /配方|recipe|crafting|smelting|blasting|stonecutting|custom.?recipe/i,
     files: [
-      'fabric/reliability-1.21.4.md',
       'fabric/docs/develop/data-generation/recipes.md',
       'fabric/docs/develop/custom-recipe-types.md',
       'fabric/docs/develop/items/first-item.md'
@@ -72,11 +68,7 @@ const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[] }> = [
   },
   {
     pattern: /debug|crash|构建失败|build.?fail|cannot find symbol|compilation/i,
-    files: [
-      'fabric/docs/develop/debugging.md',
-      'fabric/errors-compile-common.md',
-      'fabric/errors-runtime-common.md'
-    ]
+    files: ['fabric/docs/develop/debugging.md']
   },
   {
     pattern: /loom|gradle|gradlew/i,
@@ -186,18 +178,12 @@ const TOPIC_ROUTES: Array<{ pattern: RegExp; files: string[] }> = [
   },
   {
     pattern: /registry|duplicate key|already registered|registrykey|cannot find symbol|client.?in.?main|splitEnvironment/i,
-    files: ['fabric/errors-compile-common.md', 'fabric/errors-runtime-common.md', 'fabric/api-aliases.md']
+    files: [
+      'fabric/docs/develop/items/first-item.md',
+      'fabric/docs/develop/blocks/first-block.md',
+      'fabric/docs/develop/debugging.md'
+    ]
   }
-]
-
-const PRODUCT_OVERLAY_FILES = [
-  'fabric/reliability-1.21.4.md',
-  'fabric/networking-snippets.md',
-  'fabric/api-aliases.md',
-  'fabric/yarn-gotchas.md',
-  'fabric/client-screenshot.md',
-  'fabric/errors-compile-common.md',
-  'fabric/errors-runtime-common.md'
 ]
 
 function normalizeKeyword(keyword: string): string {
@@ -341,14 +327,13 @@ async function readKnowledge(file: string): Promise<string | null> {
 }
 
 async function listSearchableKnowledgeFiles(): Promise<string[]> {
-  const files = new Set<string>(PRODUCT_OVERLAY_FILES)
+  const files = new Set<string>()
   if (typeof window !== 'undefined' && window.api?.listKnowledgeFiles) {
     try {
       const listed = await window.api.listKnowledgeFiles()
       for (const entry of listed) {
         const p = entry.path.replace(/\\/g, '/')
         if (p.startsWith('fabric/docs/develop/') && p.endsWith('.md')) files.add(p)
-        if (PRODUCT_OVERLAY_FILES.includes(p)) files.add(p)
       }
     } catch {
       // ignore
@@ -450,7 +435,7 @@ export function hasHighConfidenceLocalHit(
   localSourceResult: string
 ): boolean {
   if (routedResult.includes('[主题路由')) return true
-  if (localResult.includes('代码示例') || localResult.includes('networking-snippets') || localResult.includes('yarn-gotchas') || localResult.includes('匹配]')) return true
+  if (localResult.includes('代码示例') || localResult.includes('匹配]')) return true
   if (localSourceResult.includes('[Yarn 精确匹配]') && !localSourceResult.includes('无额外字段/方法记录')) return true
   if (localSourceResult.includes('高相关类')) return true
   if (localSourceResult.includes('Fabric API 源码')) return true

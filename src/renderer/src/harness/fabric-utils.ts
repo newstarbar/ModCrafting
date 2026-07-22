@@ -91,7 +91,7 @@ export function classifyFabricLog(log: string): FabricLogClassification {
     return {
       kind: 'side-error',
       title: '客户端代码被服务端加载',
-      advice: '把渲染、模型、Screen、HUD、Client 类移动到 src/client/java 或 ClientModInitializer；可查本地 errors-compile-common / yarn-gotchas。'
+      advice: '把渲染、模型、Screen、HUD、Client 类移动到 src/client/java 或 ClientModInitializer，并避免 main 入口引用客户端类。'
     }
   }
   if (/jsonparseexception|malformedjsonexception|unable to load model|missing model|filenotfoundexception.*assets/.test(lower)) {
@@ -119,7 +119,7 @@ export function classifyFabricLog(log: string): FabricLogClassification {
     return {
       kind: 'gradle-error',
       title: '编译符号错误',
-      advice: '先 fabric_docs_search 查本地文档与 Yarn 确认类名/方法签名，再改 import 或 API 用法；参见 errors-compile-common。'
+      advice: '先 fabric_docs_search 查本地文档与 Yarn 确认类名/方法签名，再改 import 或 API 用法。'
     }
   }
   if (/build failed|could not resolve|gradle|loom/.test(lower)) {

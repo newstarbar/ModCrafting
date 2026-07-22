@@ -529,7 +529,7 @@ export const createRecipeTool: Tool & Previewer = {
 // ── fabric_docs_search ──
 export const fabricDocsSearchTool: Tool = {
 	name: "fabric_docs_search",
-	description: "搜索本地 Fabric 知识库：官方中文 develop 文档、产品参考（别名/片段/报错速查）与本地 Yarn/Fabric API 源码签名。只读，不联网。写代码或修复编译错误前用此工具确认类名、方法签名与推荐写法。",
+	description: "搜索本地 Fabric 官方中文 develop 文档与本地 Yarn/Fabric API 源码签名。只读，不联网。写代码或修复编译错误前用此工具确认类名、方法签名与推荐写法。",
 	schema: {
 		type: "object",
 		properties: {
