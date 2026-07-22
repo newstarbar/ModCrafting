@@ -540,6 +540,13 @@ function buildHumanSummaryLine(trails: KnowledgeHitTrail[], keyword: string, noH
   return `摘要：查「${keyword}」→ ${parts.join('；')}`
 }
 
+/** ClassName + methodName style queries (compile/API fixes). */
+export function looksLikeApiSignatureQuery(keyword: string): boolean {
+  const hasClass = /\b[A-Z][a-zA-Z0-9]+/.test(keyword)
+  const hasMethod = /\b[a-z][a-zA-Z0-9]{2,}\b/.test(keyword)
+  return hasClass && hasMethod
+}
+
 export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput): Promise<string> {
   const keyword = normalizeKeyword(input.keyword)
   const mcVersion = input.mcVersion || '当前项目版本'
@@ -573,6 +580,16 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
   ]
 
   const summaryParts: string[] = []
+  const apiQuery = looksLikeApiSignatureQuery(keyword)
+  const yarnUsable = Boolean(localSourceResult && !isNoisyYarnResult(localSourceResult))
+
+  // Compile/API fixes: surface Yarn method signatures before narrative docs.
+  if (apiQuery && yarnUsable) {
+    summaryParts.push('本地源码/Yarn 命中')
+    lines.push('【优先】以下 Yarn 方法签名用于对照编译错误；勿忽略 Function/RenderLayer 等首参。')
+    lines.push(localSourceResult)
+    lines.push('')
+  }
 
   if (routed.text) {
     summaryParts.push('主题路由命中')
@@ -580,13 +597,15 @@ export async function buildFabricDocsSearchSummary(input: FabricDocsSearchInput)
     lines.push('')
   }
 
-  if (localSourceResult && !isNoisyYarnResult(localSourceResult)) {
+  if (yarnUsable && !(apiQuery && yarnUsable)) {
     lines.push(localSourceResult)
     lines.push('')
     if (yarnTrail) summaryParts.push('本地源码/Yarn 命中')
-  } else if (localSourceResult && !routed.text && !local.text) {
+  } else if (localSourceResult && !routed.text && !local.text && !yarnUsable) {
     lines.push(localSourceResult)
     lines.push('')
+  } else if (localSourceResult && !yarnUsable && !routed.text && local.text) {
+    // noisy yarn suppressed when docs exist — keep existing behavior via earlier replace
   }
 
   if (local.text) {

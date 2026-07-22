@@ -13,6 +13,11 @@ import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.t
 import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from './gradle-error-parser.ts'
 import { classifyFabricLog } from './fabric-utils.ts'
 import { canToolResultAdvanceStep, patternMatchesPath, sourceSetPathAliases } from './step-evidence.ts'
+import {
+  extractCompileApiHints,
+  hasSimilarDocSearch,
+  normalizeDocSearchFingerprint
+} from './doc-search-dedup.ts'
 import { FileSession } from './file-session.ts'
 import { workflowStepToPlanStep } from './workflow-types.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
@@ -190,6 +195,7 @@ export function buildRepairInstruction(output: string, kind: 'build' | 'run'): s
   const classified = classifyFabricLog(output)
   const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
   const migrations = extractClientInMainMigrations(output)
+  const apiHints = extractCompileApiHints(output)
   const fabricBlock =
     gradleEntries.length === 0 || kind === 'run'
       ? `\n--- Fabric/MC 分类 ---\n[${classified.kind}] ${classified.title}\n建议：${classified.advice}\n`
@@ -213,8 +219,12 @@ export function buildRepairInstruction(output: string, kind: 'build' | 'run'): s
     `若错误含 cannot find symbol / 方法不存在 / Mixin 目标 / Registry / 错误 API，先 fabric_docs_search 查本地文档与 Yarn 确认签名 → ` +
     `write_file / edit_file / delete_file 修改代码 → 再验证（${retry}）。\n` +
     `在成功 write_file/edit_file/delete_file 之前禁止直接调用 ${retry}。\n` +
-    `文档查询不占用上述诊断轮次（另有知识查询免费额度）。\n\n` +
-    `--- 错误摘要 ---\n${structuredGradle}` +
+    `文档查询不占用上述诊断轮次（另有知识查询免费额度）。\n` +
+    (apiHints.length > 0
+      ? `API 修复：针对 ${apiHints.join('、')} —— 用「类名 方法名」只查一次 fabric_docs_search，优先对照结果中的 Yarn「方法:」签名改调用；` +
+        `禁止用略改关键词反复查同一 API；查完立刻 edit_file 再 ${retry}。\n`
+      : '') +
+    `\n--- 错误摘要 ---\n${structuredGradle}` +
     fabricBlock
   )
 }
@@ -369,8 +379,10 @@ export function nextWriteTruncationStreak(
   }
 }
 
-export function isDocSearchLimitedStep(step: WorkflowStep): boolean {
-  return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
+export function isDocSearchLimitedStep(step: WorkflowStep, repairMode = false): boolean {
+  if (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin') return true
+  if (repairMode && (step.kind === 'build' || step.kind === 'run')) return true
+  return false
 }
 
 export function isExploreLimitedStep(step: WorkflowStep, repairMode = false): boolean {
@@ -382,7 +394,7 @@ export function buildDocSearchBlockedResult(step: WorkflowStep, call: ToolCallWi
   return {
     output:
       `blocked: [doc_search_limit] 当前步骤 #${step.id} 已进行 ${MAX_DOC_SEARCH_PER_WRITE_STEP} 次 fabric_docs_search。` +
-      `请直接 edit_file（优先）或 write_file 写入目标文件，或 complete_step 标记完成，不要再搜索文档。`,
+      `请直接 edit_file / write_file 按已查到的 Yarn 签名改代码并重新构建，不要再搜索文档。`,
     error: 'doc_search_limit: fabric_docs_search',
     durationMs: 0,
     ok: false,
@@ -409,6 +421,7 @@ export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boole
   if (list.length === 0) return false
   return list.every((result) =>
     result.errorKind === 'doc_search_limit' ||
+    result.errorKind === 'repair_doc_dedup' ||
     result.errorKind === 'tool_not_offered' ||
     result.errorKind === 'tool_call_limit' ||
     result.errorKind === 'after_control_barrier'
@@ -1054,6 +1067,7 @@ export class WorkflowEngine {
       let lastFailureOutput = ''
       const seenRepairSignatures = new Set<string>()
       const seenDiagSignatures = new Set<string>()
+      const seenDocFingerprints = new Set<string>()
       const pendingMigration = new Set<string>()
       let pendingEphemeralInstruction: string | undefined
       let pendingReasoningKick = false
@@ -1283,7 +1297,7 @@ export class WorkflowEngine {
             continue
           }
           if (
-            isDocSearchLimitedStep(step) &&
+            isDocSearchLimitedStep(step, repairMode) &&
             call.name === 'fabric_docs_search' &&
             projectedDocSearchCount >= MAX_DOC_SEARCH_PER_WRITE_STEP
           ) {
@@ -1291,6 +1305,26 @@ export class WorkflowEngine {
             this.emitRejected(call.id, rejected)
             resultsById.set(call.id, rejected)
             continue
+          }
+          if (repairMode && call.name === 'fabric_docs_search') {
+            const fp = normalizeDocSearchFingerprint(String(call.args?.keyword || call.args?.query || ''))
+            if (fp && hasSimilarDocSearch(seenDocFingerprints, fp)) {
+              const rejected: ToolResult = {
+                output:
+                  `blocked: [repair_doc_dedup] 已查询过相近关键词（${fp}）。` +
+                  `请对照上次结果中的 Yarn「方法:」签名直接 edit_file，禁止换措辞再查同一 API。`,
+                error: 'repair_doc_dedup',
+                durationMs: 0,
+                ok: false,
+                toolName: call.name,
+                args: call.args,
+                exitCode: null,
+                errorKind: 'repair_doc_dedup'
+              }
+              this.emitRejected(call.id, rejected)
+              resultsById.set(call.id, rejected)
+              continue
+            }
           }
           if (repairMode && REPAIR_DIAG_DEDUP_TOOLS.has(call.name)) {
             const diagSig = `${call.name}\0${stableArgsKey(call.args)}`
@@ -1442,6 +1476,11 @@ export class WorkflowEngine {
         fabricDocsSearchCount += orderedResults.filter((result) =>
           result.toolName === 'fabric_docs_search' && result.ok && !result.error
         ).length
+        for (const result of orderedResults) {
+          if (result.toolName !== 'fabric_docs_search' || !result.ok || result.error) continue
+          const fp = normalizeDocSearchFingerprint(String(result.args?.keyword || result.args?.query || ''))
+          if (fp) seenDocFingerprints.add(fp)
+        }
 
         const clarificationResult = orderedResults.find((result) =>
           result.toolName === 'ask_clarification' && result.ok && !result.error

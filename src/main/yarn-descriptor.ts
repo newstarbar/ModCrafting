@@ -219,3 +219,38 @@ export function getYarnOfficialToNamedMap(yarnPath: string): Map<string, string>
     return new Map()
   }
 }
+
+/** Method-like tokens from a search keyword (e.g. drawTexture from "DrawContext drawTexture 1.21.4"). */
+export function extractMethodLikeTokens(keyword: string): string[] {
+  const parts = keyword.split(/[\s.,()#/<>,\[\]]+/).filter(Boolean)
+  const out: string[] = []
+  for (const p of parts) {
+    if (/^\d/.test(p)) continue
+    if (/^[a-z][a-zA-Z0-9]{2,}$/.test(p)) out.push(p.toLowerCase())
+    else if (/^[A-Z][a-z]+[A-Z]/.test(p) && !/^[A-Z][a-z]+$/.test(p)) {
+      // CamelCase that isn't a simple ClassName (DrawTexture) — rare; skip ClassNames
+    }
+  }
+  return [...new Set(out)]
+}
+
+/**
+ * Prefer Yarn member lines whose method name matches keyword method tokens.
+ * Fixes: exact-class dumps truncated at 30 lines before drawTexture etc. appeared.
+ */
+export function prioritizeYarnMemberLines(lines: string[], keyword: string, max = 30): string[] {
+  const methodTokens = extractMethodLikeTokens(keyword)
+  if (methodTokens.length === 0 || lines.length === 0) return lines.slice(0, max)
+  const preferred: string[] = []
+  const rest: string[] = []
+  for (const line of lines) {
+    const m = line.match(/方法:\s*([a-zA-Z_][a-zA-Z0-9_]*)/)
+    const name = (m?.[1] || '').toLowerCase()
+    if (name && methodTokens.some((t) => name === t || name.startsWith(t) || t.startsWith(name))) {
+      preferred.push(line)
+    } else {
+      rest.push(line)
+    }
+  }
+  return [...preferred, ...rest].slice(0, max)
+}

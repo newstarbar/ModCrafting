@@ -14,7 +14,8 @@ import {
   collectParamNames,
   formatYarnField,
   formatYarnMethod,
-  getYarnOfficialToNamedMap
+  getYarnOfficialToNamedMap,
+  prioritizeYarnMemberLines
 } from './yarn-descriptor'
 
 export { getAppEdition, isPortableEdition, isFullEdition } from './edition'
@@ -2178,25 +2179,28 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
         if (startLine >= 0) {
           // Collect all fields/methods of this class (with remapped descriptors + param names)
           const classLine = yarnLines[startLine]
-          const classParts: string[] = []
+          const rawParts: string[] = []
           for (let i = startLine + 1; i < yarnLines.length; ) {
             const parts = yarnLines[i].split('\t')
             if (parts[0] === 'c') break // next class
             const kindIndex = parts[0] ? 0 : 1
             if (parts[kindIndex] === 'f') {
-              classParts.push(formatYarnField(parts[parts.length - 1], parts[kindIndex + 1] || '', officialToNamed))
+              rawParts.push(formatYarnField(parts[parts.length - 1], parts[kindIndex + 1] || '', officialToNamed))
               i++
             } else if (parts[kindIndex] === 'm') {
               const desc = parts[kindIndex + 1] || ''
               const name = parts[parts.length - 1]
               const { names: paramNames, nextLine } = collectParamNames(yarnLines, i + 1)
-              classParts.push(formatYarnMethod(name, desc, officialToNamed, paramNames))
+              rawParts.push(formatYarnMethod(name, desc, officialToNamed, paramNames))
               i = nextLine
             } else {
               i++ // skip p / other rows already consumed, or unknown kinds
             }
-            if (classParts.length >= 30) break
+            // Collect more than we display so prioritizeYarnMemberLines can surface
+            // keyword methods that appear late in the class (e.g. drawTexture).
+            if (rawParts.length >= 120) break
           }
+          const classParts = prioritizeYarnMemberLines(rawParts, keyword, 30)
           const clName = classLine.split('\t').pop() || cls
           const header = (classParts.length > 0
             ? `[Yarn 精确匹配] ${clName}\n${classParts.join('\n')}`
