@@ -12,7 +12,7 @@ import {
 import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.ts'
 import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from './gradle-error-parser.ts'
 import { classifyFabricLog } from './fabric-utils.ts'
-import { canToolResultAdvanceStep, sourceSetPathAliases } from './step-evidence.ts'
+import { canToolResultAdvanceStep, patternMatchesPath, sourceSetPathAliases } from './step-evidence.ts'
 import { FileSession } from './file-session.ts'
 import { workflowStepToPlanStep } from './workflow-types.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
@@ -486,6 +486,42 @@ export function missingWriteEvidencePaths(step: WorkflowStep, results: ToolResul
       )
     })
   })
+}
+
+/** Successful write/edit artifact paths from this step run. */
+export function successfulWriteArtifacts(results: ToolResult[]): string[] {
+  const paths: string[] = []
+  for (const result of results) {
+    if (!result.ok || result.error) continue
+    if (!RUN_WRITE_TOOLS.has(result.toolName || '')) continue
+    const artifacts = result.artifactPaths?.length
+      ? result.artifactPaths
+      : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
+    for (const p of artifacts) {
+      const n = String(p).replace(/\\/g, '/')
+      if (n) paths.push(n)
+    }
+  }
+  return [...new Set(paths)]
+}
+
+/**
+ * Plan listed targetPath A, but the model wrote B (common when F6/UI logic lives in a
+ * helper, not the client entry). Single-target write steps only.
+ */
+export function orphanWriteArtifacts(step: WorkflowStep, results: ToolResult[]): string[] {
+  if (step.kind !== 'write') return []
+  if (step.targetPaths && step.targetPaths.length > 1) return []
+  const required = step.targetPaths?.length
+    ? step.targetPaths
+    : (step.targetPath ? [step.targetPath] : [])
+  if (required.length !== 1) return []
+  const written = successfulWriteArtifacts(results)
+  if (written.length === 0) return []
+  const target = required[0]
+  // If any write already matches the planned path, nothing to adopt.
+  if (written.some((p) => patternMatchesPath(target, p))) return []
+  return written.filter((p) => !patternMatchesPath(target, p))
 }
 
 export function buildWriteForceInstruction(step: WorkflowStep): string {
@@ -1678,9 +1714,35 @@ export class WorkflowEngine {
 
         const requestedCompletion = orderedResults.some((result) => result.toolName === 'complete_step' && result.ok)
         if (requestedCompletion && !success) {
+          const orphans = orphanWriteArtifacts(step, evidenceResults)
+          if (step.kind === 'write' && orphans.length > 0) {
+            const missing = missingWriteEvidencePaths(step, evidenceResults)
+            pendingEphemeralInstruction = this.appendToolRound(
+              baseMessages,
+              modelResult.text || streamText,
+              allCalls,
+              resultsById,
+              roundInstruction
+            )
+            step.status = 'completed'
+            this.planTracker.advanceCurrent(`adopted_orphan_write:${orphans.join(',')}`)
+            completed = true
+            this.emitPlanState()
+            this.emit({
+              kind: EventKind.Notice,
+              notice: {
+                level: 'info',
+                text:
+                  `步骤 #${step.id} 计划路径与实际写入不一致` +
+                  `（要求 ${missing.join(', ') || step.targetPath || '?'}，实际 ${orphans.join(', ')}），` +
+                  `已按实际写入推进。`
+              }
+            })
+            break
+          }
           const missing = missingWriteEvidencePaths(step, evidenceResults)
           const missingHint = missing.length
-            ? `缺少写入证据：${missing.join(', ')}。若文件已在 src/main 与 src/client 互换路径下，请对该真实路径 edit_file 一次，或确认磁盘路径后 complete_step。`
+            ? `缺少写入证据：${missing.join(', ')}。请对该路径 edit_file/write_file 一次后再 complete_step（仅确认文件已存在不够）。`
             : '请先对目标路径完成 write_file/edit_file（或 mixin/recipe 校验）。'
           roundInstruction = [
             roundInstruction,
