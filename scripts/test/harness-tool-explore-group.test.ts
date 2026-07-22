@@ -200,8 +200,39 @@ test('parseKnowledgeHitTrails reads hierarchy lines', async () => {
   assert.equal(formatKnowledgeHitPlain(trails[0]), '文档 › 物品 › first-item › 注册物品')
 })
 
+test('groupExploreToolRuns merges grep with read_file into project group', () => {
+  const entries = [
+    tool('1', 'grep', { pattern: 'ConfigScreen' }),
+    reasoning('定位入口'),
+    tool('2', 'read_file', { path: 'src/Client.java' }),
+    tool('3', 'list_directory', { path: 'src/client' })
+  ]
+  const segments = groupExploreToolRuns('msg-grep', entries)
+  assert.equal(segments.length, 1)
+  assert.equal(segments[0].type, 'explore-group')
+  if (segments[0].type === 'explore-group') {
+    assert.equal(segments[0].kind, 'project')
+    assert.equal(segments[0].tools.length, 3)
+    assert.equal(segments[0].reasoningCount, 1)
+  }
+})
+
+test('summarizeExploreGroup counts grep as 搜索', () => {
+  const tools = [
+    tool('1', 'grep', { pattern: 'F6|KEY_F6' }, 'done', 'a.java:1 | F6'),
+    tool('2', 'read_file', { path: 'src/a.java' }, 'done', 'ok')
+  ]
+  const summary = summarizeExploreGroup('project', tools)
+  assert.equal(summary.title, '项目探索')
+  assert.match(summary.statsLine, /1 搜索/)
+  assert.match(summary.statsLine, /1 读取/)
+  assert.match(summary.pathPreview, /F6/)
+})
+
 test('isExploreTool identifies project and knowledge tools only', () => {
   assert.equal(isExploreTool('read_file'), true)
+  assert.equal(isExploreTool('list_directory'), true)
+  assert.equal(isExploreTool('grep'), true)
   assert.equal(isExploreTool('fabric_docs_search'), true)
   assert.equal(isExploreTool('write_file'), false)
 })

@@ -8,6 +8,7 @@ import { KnowledgeHitTags, hasKnowledgeHitTags } from './KnowledgeHitTags.tsx'
 const TOOL_SHORT_NAMES: Record<string, string> = {
   read_file: '读取',
   list_directory: '目录',
+  grep: '搜索',
   fabric_docs_search: '文档',
   fabric_javadoc_lookup: 'JavaDoc',
   vanilla_mc_wiki_query: 'Wiki'
@@ -18,6 +19,11 @@ function getToolShortName(name: string): string {
 }
 
 function pathLabel(tool: ChronoEntryTool): string | undefined {
+  if (tool.name === 'grep') {
+    const pattern = String(tool.args?.pattern || '').trim()
+    if (!pattern) return undefined
+    return pattern.length > 28 ? `${pattern.slice(0, 28)}…` : pattern
+  }
   const raw = tool.args?.path ?? tool.args?.keyword ?? tool.args?.query
   if (typeof raw !== 'string' || !raw.trim()) return undefined
   return raw.split('/').pop() || raw
@@ -105,7 +111,7 @@ const ToolExploreGroup: React.FC<ToolExploreGroupProps> = ({
                 <span className={`tool-status-dot ${tool.status === 'done' ? 'done' : tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'pending'}`} />
                 <span className="tool-explore-item-name">{getToolShortName(tool.name)}</span>
                 {path && (
-                  <span className="tool-explore-item-path" title={String(tool.args?.path || tool.args?.keyword || '')}>
+                  <span className="tool-explore-item-path" title={String(tool.args?.path || tool.args?.pattern || tool.args?.keyword || '')}>
                     {path}
                   </span>
                 )}

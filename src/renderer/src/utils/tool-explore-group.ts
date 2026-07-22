@@ -3,7 +3,7 @@ import { extractPreview } from './tool-output-preview.ts'
 
 export type ExploreGroupKind = 'project' | 'knowledge'
 
-const PROJECT_TOOLS = new Set(['read_file', 'list_directory'])
+const PROJECT_TOOLS = new Set(['read_file', 'list_directory', 'grep'])
 const KNOWLEDGE_TOOLS = new Set(['fabric_docs_search', 'fabric_javadoc_lookup', 'vanilla_mc_wiki_query'])
 
 export interface ExploreBurst {
@@ -162,6 +162,11 @@ const GROUP_TITLES: Record<ExploreGroupKind, string> = {
 }
 
 function pathChipFromTool(tool: ChronoEntryTool): string {
+  if (tool.name === 'grep') {
+    const pattern = String(tool.args?.pattern || '').trim()
+    if (!pattern) return ''
+    return pattern.length > 24 ? `${pattern.slice(0, 24)}…` : pattern
+  }
   const path = String(tool.args?.path || tool.args?.keyword || tool.args?.query || '')
   if (!path) return ''
   return path.split('/').pop() || path
@@ -188,9 +193,11 @@ export function summarizeExploreGroup(
   if (kind === 'project') {
     const reads = tools.filter((t) => t.name === 'read_file').length
     const lists = tools.filter((t) => t.name === 'list_directory').length
+    const greps = tools.filter((t) => t.name === 'grep').length
     const parts: string[] = []
     if (reads) parts.push(`${reads} 读取`)
     if (lists) parts.push(`${lists} 目录`)
+    if (greps) parts.push(`${greps} 搜索`)
     const statsLine = parts.join(' · ') || `${tools.length} 次`
 
     const chips = tools

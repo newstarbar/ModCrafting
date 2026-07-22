@@ -41,6 +41,16 @@ export function extractPreview(toolName: string, output: string, args?: Record<s
     return `${dirName} (${items.length} 项)`
   }
 
+  if (toolName === 'grep') {
+    const pattern = String(args?.pattern || '').trim()
+    const label = pattern.length > 32 ? `${pattern.slice(0, 32)}…` : pattern
+    const hitMatch = output.match(/找到\s*(\d+)\s*处/)
+    if (hitMatch) return `${label || 'grep'} → ${hitMatch[1]} 处`
+    if (/^无匹配/.test(output)) return `${label || 'grep'} → 无匹配`
+    const lines = output.split('\n').filter((l) => l.trim()).length
+    return label ? `${label} (${lines} 行)` : `${lines} 行结果`
+  }
+
   if (toolName === 'trigger_build' || toolName === 'run_command') {
     if (output.includes('BUILD SUCCESSFUL')) {
       const timeMatch = output.match(/(\d+)s/)
