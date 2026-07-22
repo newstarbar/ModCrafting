@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { validateToolCalls } from '../src/renderer/src/harness/tool-call-validator.ts'
-import { executeBatch, Registry } from '../src/renderer/src/harness/tools.ts'
-import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
-import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
-import { WorkflowEngine } from '../src/renderer/src/harness/workflow-engine.ts'
-import { compilePlanFromText } from '../src/renderer/src/harness/plan-compiler.ts'
-import { microCompact } from '../src/renderer/src/harness/context-compact.ts'
+import { validateToolCalls } from '../../src/renderer/src/harness/tool-call-validator.ts'
+import { executeBatch, Registry } from '../../src/renderer/src/harness/tools.ts'
+import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
+import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
+import { WorkflowEngine } from '../../src/renderer/src/harness/workflow-engine.ts'
+import { compilePlanFromText } from '../../src/renderer/src/harness/plan-compiler.ts'
+import { microCompact } from '../../src/renderer/src/harness/context-compact.ts'
 
 test('tool boundary rejects tools not offered in the current phase', () => {
   const result = validateToolCalls([

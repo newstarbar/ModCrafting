@@ -7,7 +7,7 @@ import {
   parseGradleProperties,
   scanJavaSourceTree,
   toProjectRelativePath
-} from '../src/renderer/src/harness/project-info.ts'
+} from '../../src/renderer/src/harness/project-info.ts'
 
 test('toProjectRelativePath normalizes Windows separators', () => {
   assert.equal(

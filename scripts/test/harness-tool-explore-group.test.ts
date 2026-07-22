@@ -6,8 +6,8 @@ import {
   isExploreTool,
   findExploreBursts,
   getAbsorbedEntryIndices
-} from '../src/renderer/src/utils/tool-explore-group.ts'
-import type { ChronoEntry, ChronoEntryTool } from '../src/renderer/src/types/display-message.ts'
+} from '../../src/renderer/src/utils/tool-explore-group.ts'
+import type { ChronoEntry, ChronoEntryTool } from '../../src/renderer/src/types/display-message.ts'
 
 function tool(
   id: string,

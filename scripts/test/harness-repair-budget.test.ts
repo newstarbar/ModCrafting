@@ -8,11 +8,11 @@ import {
   mainToClientPath,
   MAX_FREE_REPAIR_DIAG_ROUNDS,
   uniqueGradleErrorFiles
-} from '../src/renderer/src/harness/workflow-engine.ts'
-import { appendToolRoundHistory } from '../src/renderer/src/harness/chat-message.ts'
-import { buildRepairPrompt } from '../src/renderer/src/utils/log-parser.ts'
-import { microCompact, compactToolCallArguments } from '../src/renderer/src/harness/context-compact.ts'
-import type { ChatMessage } from '../src/renderer/src/harness/chat-message.ts'
+} from '../../src/renderer/src/harness/workflow-engine.ts'
+import { appendToolRoundHistory } from '../../src/renderer/src/harness/chat-message.ts'
+import { buildRepairPrompt } from '../../src/renderer/src/utils/log-parser.ts'
+import { microCompact, compactToolCallArguments } from '../../src/renderer/src/harness/context-compact.ts'
+import type { ChatMessage } from '../../src/renderer/src/harness/chat-message.ts'
 
 const CLIENT_IN_MAIN_LOG = [
   'BUILD FAILED',

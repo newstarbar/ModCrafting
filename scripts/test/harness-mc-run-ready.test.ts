@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isMcHarnessReady, parseMcLogs } from '../src/renderer/src/utils/mc-phase-parser.ts'
-import { isRunClientReadyResult, parseTriggerBuildMeta } from '../src/renderer/src/harness/tools.ts'
-import { canToolResultAdvanceStep } from '../src/renderer/src/harness/step-evidence.ts'
-import { MC_RUN_READY_SOAK_MS, waitForMcRunReady } from '../src/renderer/src/utils/mc-wait-playing.ts'
-import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
+import { isMcHarnessReady, parseMcLogs } from '../../src/renderer/src/utils/mc-phase-parser.ts'
+import { isRunClientReadyResult, parseTriggerBuildMeta } from '../../src/renderer/src/harness/tools.ts'
+import { canToolResultAdvanceStep } from '../../src/renderer/src/harness/step-evidence.ts'
+import { MC_RUN_READY_SOAK_MS, waitForMcRunReady } from '../../src/renderer/src/utils/mc-wait-playing.ts'
+import type { ToolResult } from '../../src/renderer/src/harness/tools.ts'
 
 function installMcApiMock(): {
   pushLog: (instanceId: string, text: string) => void

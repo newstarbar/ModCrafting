@@ -19,7 +19,7 @@ import {
 } from './gradle-seed-utils.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const root = path.join(__dirname, '..')
+const root = path.join(__dirname, '..', '..')
 const resourcesDir = path.join(root, 'resources')
 const seedDir = path.join(resourcesDir, 'gradle-home-seed')
 const seedMarker = path.join(seedDir, '.modcrafting-seed.json')

@@ -5,7 +5,7 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const versions = JSON.parse(readFileSync(path.join(root, 'resources', 'fabric-versions.json'), 'utf8'))
 const seedRoot = path.join(root, 'resources', 'gradle-home-seed', 'caches', 'fabric-loom', 'minecraftMaven')
 const outputPath = path.join(root, 'resources', `fabric-symbol-index-${versions.minecraft_version}.json.gz`)

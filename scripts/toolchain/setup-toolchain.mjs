@@ -16,7 +16,7 @@ import {
 } from './toolchain-download.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const resourcesDir = path.join(__dirname, '..', 'resources')
+const resourcesDir = path.join(__dirname, '..', '..', 'resources')
 const jdkTargetDir = path.join(resourcesDir, 'jdk-21')
 const gradleTargetDir = path.join(resourcesDir, GRADLE_RUNTIME_FOLDER)
 const gradleLauncherJar = path.join(gradleTargetDir, 'lib', GRADLE_LAUNCHER_JAR)

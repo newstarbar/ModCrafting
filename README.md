@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="build/appIcon.png" alt="ModCrafting" width="128" height="128" />
+<img src="packaging/appIcon.png" alt="ModCrafting" width="128" height="128" />
 
 # ModCrafting
 
@@ -211,16 +211,17 @@ npm run build:win:portable
 
 | 命令 | 说明 |
 |------|------|
-| `npm run dev` | Electron 开发模式 |
-| `npm run setup:toolchain` | 下载 JDK 21 + Gradle 发行版 |
-| `npm run prefetch:deps` | 预取 Fabric/Minecraft 依赖到种子目录 |
-| `npm run verify:toolchain` | 检查 JDK / Gradle / Wrapper |
-| `npm run verify:offline` | 验证离线构建流程 |
+| `npm run test` | 运行 harness 单元测试 |
+| `npm run toolchain:setup` | 下载 JDK 21 + Gradle 发行版 |
+| `npm run toolchain:prefetch` | 预取 Fabric/Minecraft 依赖到种子目录 |
+| `npm run toolchain:verify` | 检查 JDK / Gradle / Wrapper |
+| `npm run toolchain:verify-offline` | 验证离线构建流程 |
 | `npm run build:win` | 构建 Setup + Portable（推荐发版用） |
 | `npm run build:win:setup` | 仅构建 NSIS 完整版（含离线工具链） |
 | `npm run build:win:portable` | 仅构建轻量便携版（不含 JDK/Gradle/seed） |
-| `npm run generate:icon` | 从 appIcon.png / installerIcon.png 生成 .ico |
-| `npm run render:manifest` | 渲染 `build/update-manifest.json`（发布用） |
+| `npm run assets:icon` | 从 appIcon.png / installerIcon.png 生成 .ico |
+| `npm run release:manifest` | 渲染 `packaging/update-manifest.json`（发布用） |
+| `npm run clean:local` | 清理本地 release/out 等生成物 |
 
 ### 发布新版本
 
@@ -270,9 +271,9 @@ ModCrafting/
 │   ├── main/           # Electron 主进程：IPC、工具链、游戏实例、终端
 │   ├── preload/        # 安全桥接 API
 │   └── renderer/       # React UI：对话、游戏面板、项目向导
-├── scripts/            # 工具链下载、依赖预取、打包辅助
+├── scripts/            # 构建脚本（toolchain / assets / packaging / release / test）
 ├── resources/          # JDK / Gradle / 依赖种子（大部分由脚本生成，不进 Git）
-├── build/              # 安装包资源：图标、NSIS 脚本、许可说明
+├── packaging/          # 安装包资源：图标、NSIS 脚本、许可说明
 └── package.json
 ```
 
@@ -371,7 +372,7 @@ ModCrafting/
 
 本项目源码以 **[GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)** 发布（见 [`package.json`](package.json)）。上传 GitHub 前请在根目录添加 `LICENSE` 全文文件。
 
-安装包内的 [`build/license.txt`](build/license.txt) 为面向最终用户的分发说明，与源码许可证相互独立。
+安装包内的 [`packaging/license_zh_CN.txt`](packaging/license_zh_CN.txt) 为面向最终用户的分发说明，与源码许可证相互独立。
 
 ---
 

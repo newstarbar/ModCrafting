@@ -4,7 +4,7 @@ import {
   shouldApplyTurnEvent,
   shouldCancelTurnOnSessionLeave,
   shouldForceRestoreSnapshot
-} from '../src/renderer/src/utils/session-switch-guard.ts'
+} from '../../src/renderer/src/utils/session-switch-guard.ts'
 
 test('shouldApplyTurnEvent only accepts matching generation', () => {
   assert.equal(shouldApplyTurnEvent(0, 0), true)

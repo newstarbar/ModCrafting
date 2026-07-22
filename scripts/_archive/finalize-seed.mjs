@@ -10,10 +10,10 @@ import {
   validateSeedContent,
   writeSeedMarker,
   runOfflineBuildVerification
-} from './gradle-seed-utils.mjs'
+} from '../toolchain/gradle-seed-utils.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const root = path.join(__dirname, '..')
+const root = path.join(__dirname, '..', '..')
 const gradleHome = path.join(root, 'resources', '_prefetch_runtime', 'gradle-home')
 const seedDir = path.join(root, 'resources', 'gradle-home-seed')
 const skipVerify = process.argv.includes('--skip-verify')

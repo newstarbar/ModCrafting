@@ -48,43 +48,49 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python asset dependencies
-        run: pip install -r scripts/requirements-assets.txt
+        run: pip install -r scripts/assets/requirements-assets.txt
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Run harness tests
+        run: npm run test
+
       - name: Setup full toolchain
-        run: npm run setup:toolchain
+        run: npm run toolchain:setup
 
       - name: Prefetch Fabric deps
-        run: npm run prefetch:deps
+        run: npm run toolchain:prefetch
+
+      - name: Verify toolchain
+        run: npm run toolchain:verify
 
       - name: Prepare installer assets
         run: |
-          npm run generate:icon
-          node scripts/patch-nsis-install-ui.mjs
+          npm run assets:icon
+          node scripts/packaging/patch-nsis-install-ui.mjs
 
       - name: Prepare renderer assets
-        run: npm run prepare:renderer-assets
+        run: npm run assets:prepare
 
       - name: Render release notes
-        run: node scripts/render-release-notes.mjs "${{ github.ref_name }}"
+        run: npm run release:notes -- "${{ github.ref_name }}"
 
       - name: Render update manifest
-        run: node scripts/render-update-manifest.mjs "${{ github.ref_name }}"
+        run: npm run release:manifest -- "${{ github.ref_name }}"
 
       - name: Build app
         run: npm run build
 
       - name: Cleanup duplicate GitHub Release
         shell: bash
-        run: node scripts/cleanup-github-release.mjs "${{ github.ref_name }}"
+        run: npm run release:cleanup-github -- "${{ github.ref_name }}"
 
       - name: Build Setup (NSIS) and publish GitHub Release
-        run: node scripts/run-electron-builder.mjs --win nsis --publish always
+        run: node scripts/packaging/run-electron-builder.mjs --win nsis --publish always
 
       - name: Build Portable
-        run: node scripts/run-electron-builder.mjs --config electron-builder.portable.json --win portable --publish never
+        run: node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable --publish never
 
       - name: Upload Portable to GitHub Release
         shell: bash
@@ -103,7 +109,7 @@ jobs:
         run: |
           gh release edit "${GITHUB_REF_NAME}" \
             --title "ModCrafting ${GITHUB_REF_NAME}" \
-            --notes-file build/release-body.md \
+            --notes-file packaging/release-body.md \
             --draft=false
 
       - name: Push git ref and tag to Gitee
@@ -112,7 +118,7 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_OWNER: ${{ vars.GITEE_OWNER }}
           GITEE_REPO: ${{ vars.GITEE_REPO }}
-        run: node scripts/push-gitee-git.mjs "${{ github.ref_name }}"
+        run: npm run release:push-gitee -- "${{ github.ref_name }}"
 
       - name: Sync Gitee Release
         continue-on-error: true
@@ -121,7 +127,7 @@ jobs:
           GITEE_OWNER: ${{ vars.GITEE_OWNER }}
           GITEE_REPO: ${{ vars.GITEE_REPO }}
           GITHUB_SHA: ${{ github.sha }}
-        run: node scripts/sync-gitee-release.mjs "${{ github.ref_name }}"
+        run: npm run release:sync-gitee -- "${{ github.ref_name }}"
 
       - name: Commit update manifest
         continue-on-error: true
@@ -129,7 +135,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          MANIFEST="build/update-manifest.json"
+          MANIFEST="packaging/update-manifest.json"
           if [ ! -f "$MANIFEST" ]; then
             echo "Manifest not found, skip"
             exit 0

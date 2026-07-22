@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { validateSeedIntegrity } from './gradle-seed-utils.mjs'
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const seedDir = path.join(root, 'resources', 'gradle-home-seed')
 const archivePath = path.join(root, 'resources', 'gradle-home-seed.zip')
 const stampPath = path.join(root, 'resources', '.gradle-home-seed.zip.stamp')

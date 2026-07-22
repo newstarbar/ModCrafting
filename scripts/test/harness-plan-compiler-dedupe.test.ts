@@ -5,10 +5,10 @@ import {
   dedupeByPath,
   resolveCompiledStepKind,
   type CompiledPlanStep
-} from '../src/renderer/src/harness/plan-compiler.ts'
-import { buildEmptyToolCallInstruction } from '../src/renderer/src/harness/workflow-engine.ts'
-import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
-import type { PlanStepState } from '../src/renderer/src/harness/plan-tracker.ts'
+} from '../../src/renderer/src/harness/plan-compiler.ts'
+import { buildEmptyToolCallInstruction } from '../../src/renderer/src/harness/workflow-engine.ts'
+import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
+import type { PlanStepState } from '../../src/renderer/src/harness/plan-tracker.ts'
 
 /** Repro: inspect then write same path must keep the write step (diag 20260719). */
 test('dedupeByPath: inspect + write same targetPath keeps both', () => {

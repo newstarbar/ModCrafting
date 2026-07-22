@@ -608,11 +608,7 @@ function bundledGradleSearchPaths(): string[] {
     path.join(process.resourcesPath || '', GRADLE_RUNTIME_DIR),
     path.join(__dirname, '..', 'resources', GRADLE_RUNTIME_DIR),
     path.join(__dirname, '..', '..', 'resources', GRADLE_RUNTIME_DIR),
-    path.join(__dirname, '..', '..', '..', 'resources', GRADLE_RUNTIME_DIR),
-    // legacy bundle path (pre-9.5 upgrade)
-    path.join(process.resourcesPath || '', 'gradle-8.11'),
-    path.join(__dirname, '..', 'resources', 'gradle-8.11'),
-    path.join(__dirname, '..', '..', 'resources', 'gradle-8.11')
+    path.join(__dirname, '..', '..', '..', 'resources', GRADLE_RUNTIME_DIR)
   ]
 }
 

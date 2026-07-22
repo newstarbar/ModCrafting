@@ -1,13 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { validateFileEditGate, validateJavaBraceBalance, validateJsonSyntax } from '../src/renderer/src/harness/edit-gate.ts'
+import { validateFileEditGate, validateJavaBraceBalance, validateJsonSyntax } from '../../src/renderer/src/harness/edit-gate.ts'
 import {
   formatGradleErrorsForPrompt,
   gradleErrorSignature,
   parseGradleErrors
-} from '../src/renderer/src/harness/gradle-error-parser.ts'
-import { compilePlanFromText, parseJsonPlanSteps, parseStructuredSteps } from '../src/renderer/src/harness/plan-compiler.ts'
-import { formatPlanValidationIssues, validateCompiledSteps } from '../src/renderer/src/harness/plan-validator.ts'
+} from '../../src/renderer/src/harness/gradle-error-parser.ts'
+import { compilePlanFromText, parseJsonPlanSteps, parseStructuredSteps } from '../../src/renderer/src/harness/plan-compiler.ts'
+import { formatPlanValidationIssues, validateCompiledSteps } from '../../src/renderer/src/harness/plan-validator.ts'
 
 test('edit-gate rejects unbalanced Java braces', () => {
   const bad = 'public class Foo {\n  void bar() {\n'

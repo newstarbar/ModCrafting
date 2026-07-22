@@ -1,19 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { FileSession } from '../src/renderer/src/harness/file-session.ts'
-import { compilePlanFromText, parseJsonPlanSteps } from '../src/renderer/src/harness/plan-compiler.ts'
-import { validateCompiledSteps } from '../src/renderer/src/harness/plan-validator.ts'
-import { isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import { canToolResultAdvanceStep, patternMatchesPath } from '../src/renderer/src/harness/step-evidence.ts'
-import { inferToolError } from '../src/renderer/src/harness/tools.ts'
+import { FileSession } from '../../src/renderer/src/harness/file-session.ts'
+import { compilePlanFromText, parseJsonPlanSteps } from '../../src/renderer/src/harness/plan-compiler.ts'
+import { validateCompiledSteps } from '../../src/renderer/src/harness/plan-validator.ts'
+import { isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
+import { canToolResultAdvanceStep, patternMatchesPath } from '../../src/renderer/src/harness/step-evidence.ts'
+import { inferToolError } from '../../src/renderer/src/harness/tools.ts'
 import {
   collectDiskWriteEvidence,
   repairErrorSignature,
   stepEvidenceSatisfied
-} from '../src/renderer/src/harness/workflow-engine.ts'
-import { isActionablePlanText } from '../src/renderer/src/utils/plan-steps.ts'
-import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
-import type { WorkflowStep } from '../src/renderer/src/harness/workflow-types.ts'
+} from '../../src/renderer/src/harness/workflow-engine.ts'
+import { isActionablePlanText } from '../../src/renderer/src/utils/plan-steps.ts'
+import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
+import type { WorkflowStep } from '../../src/renderer/src/harness/workflow-types.ts'
 
 test('FileSession tracks read-before-edit paths', () => {
   const session = new FileSession()
@@ -468,7 +468,7 @@ test('repairErrorSignature uses classifyFabricLog kind for MC logs', () => {
 
 test('grep tool is registered via name contract in plan-readonly set (smoke)', async () => {
   // Lightweight: globToRegExp / FileSession used by grep-search; ensure module loads
-  const { grepInProject } = await import('../src/renderer/src/harness/grep-search.ts')
+  const { grepInProject } = await import('../../src/renderer/src/harness/grep-search.ts')
   assert.equal(typeof grepInProject, 'function')
   const empty = await grepInProject({ projectPath: null, callId: 't' }, 'Foo')
   assert.match(empty, /No project open/)

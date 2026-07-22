@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
-import appIcon from '../../../../build/appIcon.png'
-import installerIcon from '../../../../build/installerIcon.png'
+import appIcon from '../../../../packaging/appIcon.png'
+import installerIcon from '../../../../packaging/installerIcon.png'
 import { Controller } from '../harness/controller'
 import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'

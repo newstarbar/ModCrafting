@@ -2,26 +2,26 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
-import { canToolResultAdvanceStep, inferStepKind } from '../src/renderer/src/harness/step-evidence.ts'
-import { buildShapelessRecipeContent, recipePath } from '../src/renderer/src/harness/recipe-utils.ts'
-import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
-import { filterToolCallsForStep, isRecipeCleanupCommand, isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import { WorkflowEngine, isTerminalFailure, buildDocSearchBlockedResult, buildEmptyToolCallInstruction, buildWriteForceInstruction, detectExistingHandlerHint, isDocSearchOnlyRejectionRound, isKnowledgeOnlyRejectionRound, isNonBurningRejectionRound, isPureExploreRound } from '../src/renderer/src/harness/workflow-engine.ts'
-import { Registry } from '../src/renderer/src/harness/tools.ts'
-import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
-import { buildFabricAgentPolicyPrompt, FABRIC_KNOWLEDGE_SOURCES } from '../src/renderer/src/harness/fabric-agent-policy.ts'
-import { buildFabricDocsSearchSummary, hasHighConfidenceLocalHit, isNoisyYarnResult, resolveTopicRouteFiles } from '../src/renderer/src/harness/fabric-knowledge.ts'
-import { buildRecipeContent } from '../src/renderer/src/harness/recipe-utils.ts'
-import { classifyFabricLog, validateFabricModJsonContent } from '../src/renderer/src/harness/fabric-utils.ts'
-import { generateBuildGradle, generateFabricModJson } from '../src/renderer/src/project/scaffold.ts'
-import { ensureDevTerminalSteps, parsePlanSteps, planHasActionableSteps, selectVisiblePlanText, isActionablePlanText } from '../src/renderer/src/utils/plan-steps.ts'
-import { resolveTurnDoneStatus } from '../src/renderer/src/utils/turn-status.ts'
-import { needsKnowledgeInspect } from '../src/renderer/src/harness/plan-compiler.ts'
-import { finalizeTerminalSteps } from '../src/renderer/src/harness/finalize-terminal.ts'
-import { registerPanelBridge } from '../src/renderer/src/utils/panel-bridge.ts'
-import { EventKind } from '../src/renderer/src/harness/events.ts'
-import { isRepeatGuardedToolCall } from '../src/renderer/src/harness/repeat-guard.ts'
+import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
+import { canToolResultAdvanceStep, inferStepKind } from '../../src/renderer/src/harness/step-evidence.ts'
+import { buildShapelessRecipeContent, recipePath } from '../../src/renderer/src/harness/recipe-utils.ts'
+import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
+import { filterToolCallsForStep, isRecipeCleanupCommand, isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
+import { WorkflowEngine, isTerminalFailure, buildDocSearchBlockedResult, buildEmptyToolCallInstruction, buildWriteForceInstruction, detectExistingHandlerHint, isDocSearchOnlyRejectionRound, isKnowledgeOnlyRejectionRound, isNonBurningRejectionRound, isPureExploreRound } from '../../src/renderer/src/harness/workflow-engine.ts'
+import { Registry } from '../../src/renderer/src/harness/tools.ts'
+import type { ToolResult } from '../../src/renderer/src/harness/tools.ts'
+import { buildFabricAgentPolicyPrompt, FABRIC_KNOWLEDGE_SOURCES } from '../../src/renderer/src/harness/fabric-agent-policy.ts'
+import { buildFabricDocsSearchSummary, hasHighConfidenceLocalHit, isNoisyYarnResult, resolveTopicRouteFiles } from '../../src/renderer/src/harness/fabric-knowledge.ts'
+import { buildRecipeContent } from '../../src/renderer/src/harness/recipe-utils.ts'
+import { classifyFabricLog, validateFabricModJsonContent } from '../../src/renderer/src/harness/fabric-utils.ts'
+import { generateBuildGradle, generateFabricModJson } from '../../src/renderer/src/project/scaffold.ts'
+import { ensureDevTerminalSteps, parsePlanSteps, planHasActionableSteps, selectVisiblePlanText, isActionablePlanText } from '../../src/renderer/src/utils/plan-steps.ts'
+import { resolveTurnDoneStatus } from '../../src/renderer/src/utils/turn-status.ts'
+import { needsKnowledgeInspect } from '../../src/renderer/src/harness/plan-compiler.ts'
+import { finalizeTerminalSteps } from '../../src/renderer/src/harness/finalize-terminal.ts'
+import { registerPanelBridge } from '../../src/renderer/src/utils/panel-bridge.ts'
+import { EventKind } from '../../src/renderer/src/harness/events.ts'
+import { isRepeatGuardedToolCall } from '../../src/renderer/src/harness/repeat-guard.ts'
 
 test('PlanTracker.advance rejects stale step ids without moving current step', () => {
   const tracker = PlanTracker.fromSteps([
@@ -1161,7 +1161,7 @@ test('scaffold build.gradle includes datagen run configuration and fabric.mod.js
 })
 
 test('appendToolRoundHistory writes paired assistant.tool_calls and role:tool messages', async () => {
-  const { appendToolRoundHistory } = await import('../src/renderer/src/harness/chat-message.ts')
+  const { appendToolRoundHistory } = await import('../../src/renderer/src/harness/chat-message.ts')
 
   const messages: Array<Record<string, unknown>> = []
   const calls = [{
@@ -1186,7 +1186,7 @@ test('appendToolRoundHistory writes paired assistant.tool_calls and role:tool me
 })
 
 test('isRetryableFetchError detects transient network failures', async () => {
-  const { isRetryableFetchError } = await import('../src/renderer/src/harness/fetch-retry.ts')
+  const { isRetryableFetchError } = await import('../../src/renderer/src/harness/fetch-retry.ts')
   assert.equal(isRetryableFetchError(new Error('Failed to fetch')), true)
   assert.equal(isRetryableFetchError(new Error('API error 503: gateway')), true)
   assert.equal(isRetryableFetchError(new DOMException('Aborted', 'AbortError')), false)
@@ -1239,7 +1239,7 @@ test('workflow engine returns partial result after model network failure', async
 })
 
 test('normalizeSessionUsage fills defaults and clears turn-level fields', async () => {
-  const { normalizeSessionUsage } = await import('../src/renderer/src/utils/usage.ts')
+  const { normalizeSessionUsage } = await import('../../src/renderer/src/utils/usage.ts')
 
   const restored = normalizeSessionUsage({
     sessionTokens: 12_000,
@@ -1263,13 +1263,13 @@ test('normalizeSessionUsage fills defaults and clears turn-level fields', async 
 })
 
 test('normalizeSessionUsage returns empty usage for missing input', async () => {
-  const { normalizeSessionUsage, EMPTY_USAGE } = await import('../src/renderer/src/utils/usage.ts')
+  const { normalizeSessionUsage, EMPTY_USAGE } = await import('../../src/renderer/src/utils/usage.ts')
   const restored = normalizeSessionUsage(undefined)
   assert.deepEqual(restored, EMPTY_USAGE)
 })
 
 test('session storage round-trips usage stats', async () => {
-  const { saveSessions, loadSessions } = await import('../src/renderer/src/utils/session-storage.ts')
+  const { saveSessions, loadSessions } = await import('../../src/renderer/src/utils/session-storage.ts')
   const store: Record<string, string> = {}
   const original = globalThis.localStorage
   Object.defineProperty(globalThis, 'localStorage', {

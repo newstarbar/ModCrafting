@@ -4,7 +4,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
-const DOCS_DIR = path.join(import.meta.dirname || __dirname, '..', 'resources', 'agent-knowledge', 'fabric', 'docs')
+const DOCS_DIR = path.join(import.meta.dirname || __dirname, '..', '..', 'resources', 'agent-knowledge', 'fabric', 'docs')
 
 /** Core bundled docs only; other topics are indexed for online fetch. */
 const PAGES: Array<{ url: string; name: string }> = [

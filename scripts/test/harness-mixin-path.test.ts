@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   expectedMixinSourcePaths,
   isValidMixinSourcePath
-} from '../src/renderer/src/harness/mixin-utils.ts'
+} from '../../src/renderer/src/harness/mixin-utils.ts'
 
 test('client mixin accepts src/client/java and falls back to src/main/java', () => {
   const fqn = 'com.example.frame_cover.mixin.TitleScreenBgInjector'

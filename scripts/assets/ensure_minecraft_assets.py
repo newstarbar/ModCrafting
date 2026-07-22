@@ -11,6 +11,7 @@ import urllib.request
 import zipfile
 
 from mc_assets_config import (
+    ROOT,
     get_assets_minecraft_path,
     get_assets_root,
     get_minecraft_assets_version,
@@ -19,7 +20,6 @@ from mc_assets_config import (
 )
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def fetch_json(url):

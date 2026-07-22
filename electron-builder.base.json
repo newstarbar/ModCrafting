@@ -16,11 +16,11 @@
   },
   "electronDist": "node_modules/electron/dist",
   "afterPack": null,
-  "beforePack": "./scripts/patch-nsis-install-ui.mjs",
+  "beforePack": "./scripts/packaging/patch-nsis-install-ui.mjs",
   "npmRebuild": "false",
   "extraResources": [
     {
-      "from": "build/gitee-config.json",
+      "from": "packaging/gitee-config.json",
       "to": "gitee-config.json"
     }
   ],

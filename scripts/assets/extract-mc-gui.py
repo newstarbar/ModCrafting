@@ -7,10 +7,9 @@ import shutil
 import zipfile
 from pathlib import Path
 
-from mc_assets_config import get_assets_minecraft_path
+from mc_assets_config import ROOT, get_assets_minecraft_path
 
-ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = ROOT / "src" / "renderer" / "src" / "assets" / "mc"
+OUTPUT_DIR = Path(ROOT) / "src" / "renderer" / "src" / "assets" / "mc"
 ASSETS_PATH = Path(get_assets_minecraft_path())
 BLOCK_TEX = ASSETS_PATH / "textures" / "block"
 

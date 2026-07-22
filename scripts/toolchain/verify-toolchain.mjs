@@ -9,7 +9,7 @@ import { validateSeedIntegrity } from './gradle-seed-utils.mjs'
 import { gunzipSync } from 'zlib'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
-const root = path.join(scriptDir, '..')
+const root = path.join(scriptDir, '..', '..')
 const jdkJava = path.join(root, 'resources', 'jdk-21', 'bin', 'java.exe')
 const gradleLauncher = path.join(root, 'resources', 'gradle-9.5', 'lib', 'gradle-launcher-9.5.0.jar')
 const wrapperJar = path.join(root, 'resources', 'gradle-wrapper.jar')

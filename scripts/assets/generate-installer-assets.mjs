@@ -6,8 +6,8 @@ import { existsSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
-const buildDir = path.join(root, 'build')
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const buildDir = path.join(root, 'packaging')
 const force = process.argv.includes('--force')
 
 const targets = [

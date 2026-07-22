@@ -29,8 +29,8 @@ function loadGiteeRepo(): { owner: string; repo: string } {
 const giteeRepo = loadGiteeRepo()
 
 const MANIFEST_URLS = {
-  gitee: `https://gitee.com/${giteeRepo.owner}/${giteeRepo.repo}/raw/main/build/update-manifest.json`,
-  github: 'https://raw.githubusercontent.com/newstarbar/ModCrafting/main/build/update-manifest.json'
+  gitee: `https://gitee.com/${giteeRepo.owner}/${giteeRepo.repo}/raw/main/packaging/update-manifest.json`,
+  github: 'https://raw.githubusercontent.com/newstarbar/ModCrafting/main/packaging/update-manifest.json'
 }
 
 const DEFAULT_RELEASE_PAGES = {

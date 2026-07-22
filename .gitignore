@@ -1,6 +1,5 @@
 runtime/
 resources/gradle-9.5.0-bin.zip
-resources/gradle-8.11.1-bin.zip
 resources/_gradle_extract/
 resources/_jdk_extract/
 resources/_test_extract/
@@ -18,11 +17,14 @@ out/
 dist/
 temp/
 design/
-build/
 
 # 打包产物
 release/
 release2/
+
+# 安装器生成物（packaging/ 内静态资源可跟踪）
+packaging/nsisbi/
+packaging/*.7z
 
 # 运行时缓存（用户本机生成）
 runtime/
@@ -30,13 +32,15 @@ runtime/
 # 工具链（由脚本下载/生成，不进仓库）
 resources/jdk-21/
 resources/gradle-9.5/
-resources/gradle-8.11/
 resources/*.zip
 resources/*jdk*.tar.gz
 resources/_jdk-21-download.*
 resources/gradle-home-seed/
 resources/gradle-home-seed.zip
 resources/.gradle-home-seed.zip.stamp
+
+# TypeScript 增量编译缓存
+*.tsbuildinfo
 
 # IDE / 本地工具
 .trae/
@@ -48,13 +52,13 @@ resources/.gradle-home-seed.zip.stamp
 .superpowers/
 
 # Python
-scripts/__pycache__/
+scripts/**/__pycache__/
 
 # 系统
 Thumbs.db
 .DS_Store
 
-# 渲染器物品材质（npm run prepare:renderer-assets 生成，不进仓库）
+# 渲染器物品材质（npm run assets:prepare 生成，不进仓库）
 src/renderer/public/items/
 !src/renderer/public/items/.gitkeep
 

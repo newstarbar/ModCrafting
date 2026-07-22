@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import zlib from 'node:zlib'
-import { buildRecipeContent, validateRecipeContent } from '../src/renderer/src/harness/recipe-utils.ts'
-import { buildMixinScaffold, parseMethodDescriptor, type MixinScaffoldMetadata } from '../src/renderer/src/harness/mixin-utils.ts'
-import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
-import { isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import { recordsStepEvidence } from '../src/renderer/src/harness/workflow-engine.ts'
-import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
+import { buildRecipeContent, validateRecipeContent } from '../../src/renderer/src/harness/recipe-utils.ts'
+import { buildMixinScaffold, parseMethodDescriptor, type MixinScaffoldMetadata } from '../../src/renderer/src/harness/mixin-utils.ts'
+import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
+import { isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
+import { recordsStepEvidence } from '../../src/renderer/src/harness/workflow-engine.ts'
+import type { ToolResult } from '../../src/renderer/src/harness/tools.ts'
 
 const vanilla = new Set(['minecraft:stone', 'minecraft:diamond', 'minecraft:iron_ore', 'minecraft:iron_ingot'])
 const recipeOptions = { path: 'src/main/resources/data/example/recipe/test.json', modId: 'example', knownVanillaIds: vanilla }

@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { restoreActivePlan, serializeDisplayMessages } from '../src/renderer/src/utils/chat-persist.ts'
-import { isResumeInput, resolveTurnIntent } from '../src/renderer/src/harness/turn-intent.ts'
-import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
+import { restoreActivePlan, serializeDisplayMessages } from '../../src/renderer/src/utils/chat-persist.ts'
+import { isResumeInput, resolveTurnIntent } from '../../src/renderer/src/harness/turn-intent.ts'
+import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 
 test('restoreActivePlan recovers incomplete plan from partial turnStatus', () => {
   const display = [
@@ -84,9 +84,9 @@ test('PlanTracker.fromSteps treats error-like restore as first incomplete', () =
 })
 
 test('hybrid write+mixins.json step stays write and keeps write_file', async () => {
-  const { compilePlanFromText } = await import('../src/renderer/src/harness/plan-compiler.ts')
-  const { normalizeWorkflowSteps } = await import('../src/renderer/src/harness/plan-normalizer.ts')
-  const { isToolAllowedForStep } = await import('../src/renderer/src/harness/step-policy.ts')
+  const { compilePlanFromText } = await import('../../src/renderer/src/harness/plan-compiler.ts')
+  const { normalizeWorkflowSteps } = await import('../../src/renderer/src/harness/plan-normalizer.ts')
+  const { isToolAllowedForStep } = await import('../../src/renderer/src/harness/step-policy.ts')
 
   const plan = JSON.stringify([
     {
@@ -126,8 +126,8 @@ test('hybrid write+mixins.json step stays write and keeps write_file', async () 
 })
 
 test('persisted kind=mixin hybrid step is demoted to write on normalize (resume)', async () => {
-  const { normalizeWorkflowSteps } = await import('../src/renderer/src/harness/plan-normalizer.ts')
-  const { isToolAllowedForStep } = await import('../src/renderer/src/harness/step-policy.ts')
+  const { normalizeWorkflowSteps } = await import('../../src/renderer/src/harness/plan-normalizer.ts')
+  const { isToolAllowedForStep } = await import('../../src/renderer/src/harness/step-policy.ts')
   const [wf] = normalizeWorkflowSteps([{
     id: '7',
     description:
@@ -153,8 +153,8 @@ test('persisted kind=mixin hybrid step is demoted to write on normalize (resume)
 })
 
 test('build step does not offer edit_file until repair (prevents edit loops)', async () => {
-  const { normalizeWorkflowSteps } = await import('../src/renderer/src/harness/plan-normalizer.ts')
-  const { isToolAllowedForStep, createRejectedToolResult } = await import('../src/renderer/src/harness/step-policy.ts')
+  const { normalizeWorkflowSteps } = await import('../../src/renderer/src/harness/plan-normalizer.ts')
+  const { isToolAllowedForStep, createRejectedToolResult } = await import('../../src/renderer/src/harness/step-policy.ts')
   const [build] = normalizeWorkflowSteps([{
     id: '6',
     description: '构建项目（gradlew build）',
@@ -180,7 +180,7 @@ test('build step does not offer edit_file until repair (prevents edit loops)', a
 })
 
 test('pure Mixin java target still compiles as mixin', async () => {
-  const { compilePlanFromText } = await import('../src/renderer/src/harness/plan-compiler.ts')
+  const { compilePlanFromText } = await import('../../src/renderer/src/harness/plan-compiler.ts')
   const compiled = compilePlanFromText(JSON.stringify([
     {
       kind: 'write',
@@ -194,7 +194,7 @@ test('pure Mixin java target still compiles as mixin', async () => {
 })
 
 test('shouldShowPinnedPlan hides overlay after partial turn ends', async () => {
-  const { shouldShowPinnedPlan } = await import('../src/renderer/src/utils/plan-visibility.ts')
+  const { shouldShowPinnedPlan } = await import('../../src/renderer/src/utils/plan-visibility.ts')
   const activePlan = {
     steps: [
       { id: '1', description: 'a', status: 'completed' as const },

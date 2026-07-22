@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generate NSIS-compatible .ico files from build PNG sources:
+ * Generate NSIS-compatible .ico files from packaging PNG sources:
  *   appIcon.png       → appIcon.ico       (exe / window)
  *   installerIcon.png → installerIcon.ico (NSIS installer UI)
  *
@@ -10,8 +10,8 @@ import { writeFileSync, existsSync, statSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
-const buildDir = path.join(root, 'build')
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const buildDir = path.join(root, 'packaging')
 const force = process.argv.includes('--force')
 
 const targets = [
@@ -80,7 +80,7 @@ try {
     process.exit(0)
   }
   throw new Error(
-    `Cannot generate icons (${err.message}). Run npm install, or commit build/*.ico files.`
+    `Cannot generate icons (${err.message}). Run npm install, or commit packaging/*.ico files.`
   )
 }
 

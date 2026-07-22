@@ -40,7 +40,7 @@ app.on('before-quit', (event) => {
 function resolveAppIcon(): string | undefined {
   const candidates = [
     join(process.resourcesPath, 'icon.png'),
-    join(__dirname, '../../build/appIcon.png'),
+    join(__dirname, '../../packaging/appIcon.png'),
     join(app.getAppPath(), 'build', 'appIcon.png')
   ]
   return candidates.find((p) => existsSync(p))

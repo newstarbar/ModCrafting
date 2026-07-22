@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
+import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 import {
   resolveTurnIntent,
   buildSessionGoalBlock,
@@ -10,16 +10,16 @@ import {
   isSymptomResolvedFeedback,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
-} from '../src/renderer/src/harness/turn-intent.ts'
+} from '../../src/renderer/src/harness/turn-intent.ts'
 import {
   compilePlanFromText,
   dropVagueSteps,
   isTemplateQuickCreateText,
   needsKnowledgeInspect,
   parseStructuredSteps
-} from '../src/renderer/src/harness/plan-compiler.ts'
-import { isToolAllowedForStep } from '../src/renderer/src/harness/step-policy.ts'
-import type { WorkflowStep } from '../src/renderer/src/harness/workflow-types.ts'
+} from '../../src/renderer/src/harness/plan-compiler.ts'
+import { isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
+import type { WorkflowStep } from '../../src/renderer/src/harness/workflow-types.ts'
 
 function intentCtx(overrides: Partial<Parameters<typeof resolveTurnIntent>[1]> = {}) {
   return {

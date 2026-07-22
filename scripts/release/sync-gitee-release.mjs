@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url'
 import { resolveGiteeRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const root = path.join(__dirname, '..')
+const root = path.join(__dirname, '..', '..')
 
 const version = process.argv[2]
 const releaseDir = process.argv[3] || path.join(root, 'release')
@@ -185,7 +185,7 @@ function collectReleaseAssets(dir) {
 }
 
 function readReleaseBody() {
-  const bodyPath = path.join(root, 'build', 'release-body.md')
+  const bodyPath = path.join(root, 'packaging', 'release-body.md')
   if (!existsSync(bodyPath)) {
     throw new Error(`[gitee] ${bodyPath} not found — run render-release-notes.mjs first`)
   }

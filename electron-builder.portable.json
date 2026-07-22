@@ -19,7 +19,7 @@
       "filter": ["**/*.md"]
     },
     {
-      "from": "build/appIcon.png",
+      "from": "packaging/appIcon.png",
       "to": "icon.png"
     },
     {
@@ -35,7 +35,7 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "build/appIcon.ico",
+    "icon": "packaging/appIcon.ico",
     "signExecutable": false
   }
 }

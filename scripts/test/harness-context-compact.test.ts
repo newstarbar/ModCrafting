@@ -9,9 +9,9 @@ import {
   prepareMessages,
   RECENT_WINDOW,
   warnTokenThreshold
-} from '../src/renderer/src/harness/context-compact.ts'
-import { contextPercentFromPrompt } from '../src/renderer/src/utils/usage.ts'
-import type { ChatMessage } from '../src/renderer/src/harness/chat-message.ts'
+} from '../../src/renderer/src/harness/context-compact.ts'
+import { contextPercentFromPrompt } from '../../src/renderer/src/utils/usage.ts'
+import type { ChatMessage } from '../../src/renderer/src/harness/chat-message.ts'
 
 test('effectiveContextWindow caps 1M models at 128k', () => {
   assert.equal(effectiveContextWindow(1_000_000), 128_000)

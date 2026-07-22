@@ -4,12 +4,12 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const required = [
   'resources/gradle-wrapper.jar',
   'resources/fabric-versions.json',
   'resources/fabric-symbol-index-1.21.4.json.gz',
-  'build/appIcon.png'
+  'packaging/appIcon.png'
 ]
 
 const missing = required.filter((rel) => !existsSync(path.join(root, rel)))

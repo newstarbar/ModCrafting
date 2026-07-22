@@ -7,9 +7,9 @@ import {
   formatFormSummaryForDisplay,
   buildQuickCreateUserMessage,
   isQuickCreateGeneratedMessage
-} from '../src/renderer/src/project/template-params.ts'
-import { runTemplateCodegen } from '../src/renderer/src/project/template-codegen.ts'
-import type { ProjectCreateConfig } from '../src/renderer/src/project/scaffold.ts'
+} from '../../src/renderer/src/project/template-params.ts'
+import { runTemplateCodegen } from '../../src/renderer/src/project/template-codegen.ts'
+import type { ProjectCreateConfig } from '../../src/renderer/src/project/scaffold.ts'
 
 const baseConfig: ProjectCreateConfig = {
   projectDir: '/tmp/mod',

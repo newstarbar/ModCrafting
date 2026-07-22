@@ -1,5 +1,5 @@
 import React from 'react'
-import appIcon from '../../../../build/appIcon.png'
+import appIcon from '../../../../packaging/appIcon.png'
 import { IconFolder, IconHistory, IconPlus } from './Icon'
 
 interface RecentProject {

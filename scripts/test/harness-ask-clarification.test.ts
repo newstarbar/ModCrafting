@@ -6,7 +6,7 @@ import {
   MAX_CLARIFY_OPTION_CHARS,
   MAX_CLARIFY_QUESTION_CHARS,
   validateClarificationArgs
-} from '../src/renderer/src/harness/clarify-validation.ts'
+} from '../../src/renderer/src/harness/clarify-validation.ts'
 
 test('validateClarificationArgs accepts short preference question', () => {
   const result = validateClarificationArgs('你希望主菜单背景默认开启模糊吗？', [

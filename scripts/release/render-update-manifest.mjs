@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Render build/update-manifest.json for a release version.
+ * Render packaging/update-manifest.json for a release version.
  * Usage: node scripts/render-update-manifest.mjs 1.0.1 "Release notes"
  */
 import { readFileSync, writeFileSync, existsSync } from 'fs'
@@ -9,8 +9,8 @@ import { fileURLToPath } from 'url'
 import { giteeUrls, resolveGiteeRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const root = path.join(__dirname, '..')
-const manifestPath = path.join(root, 'build', 'update-manifest.json')
+const root = path.join(__dirname, '..', '..')
+const manifestPath = path.join(root, 'packaging', 'update-manifest.json')
 
 const rawVersion = process.argv[2]
 const notesArg = process.argv[3]
@@ -31,7 +31,7 @@ const tag = rawVersion.startsWith('v') ? rawVersion : `v${ver}`
 const { owner, repo } = resolveGiteeRepo()
 const gitee = giteeUrls(owner, repo, tag, ver)
 
-const releaseBodyPath = path.join(root, 'build', 'release-body.md')
+const releaseBodyPath = path.join(root, 'packaging', 'release-body.md')
 let notes = notesArg
 if (!notes && existsSync(releaseBodyPath)) {
   const firstLine = readFileSync(releaseBodyPath, 'utf-8').split(/\r?\n/).find((l) => l.trim())

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { clampBadgeLabel, encodePngRGBA } from '../src/main/app-badge-utils.ts'
+import { clampBadgeLabel, encodePngRGBA } from '../../src/main/app-badge-utils.ts'
 
 test('clampBadgeLabel: zero and negative → empty', () => {
   assert.equal(clampBadgeLabel(0), '')

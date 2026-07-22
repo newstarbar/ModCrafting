@@ -3,7 +3,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const configPath = path.join(__dirname, '..', 'build', 'gitee-config.json')
+const configPath = path.join(__dirname, '..', '..', 'packaging', 'gitee-config.json')
 
 const FALLBACK = { owner: 'newstarbar', repo: 'ModCrafting' }
 
@@ -18,7 +18,7 @@ function readFileConfig() {
   return null
 }
 
-/** Resolve Gitee owner/repo: env vars override build/gitee-config.json, then fallback. */
+/** Resolve Gitee owner/repo: env vars override packaging/gitee-config.json, then fallback. */
 export function resolveGiteeRepo() {
   const fromFile = readFileConfig()
   const owner = process.env.GITEE_OWNER?.trim() || fromFile?.owner || FALLBACK.owner
@@ -26,7 +26,7 @@ export function resolveGiteeRepo() {
   const source = process.env.GITEE_OWNER?.trim()
     ? 'env'
     : fromFile
-      ? 'build/gitee-config.json'
+      ? 'packaging/gitee-config.json'
       : 'fallback'
   return { owner, repo, source }
 }
@@ -38,6 +38,6 @@ export function giteeUrls(owner, repo, tag, ver) {
     setup: `${base}/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`,
     portable: `${base}/releases/download/${tag}/ModCrafting%20${ver}%20Portable.exe`,
     releasesPage: `${base}/releases`,
-    manifestRaw: `${base}/raw/main/build/update-manifest.json`
+    manifestRaw: `${base}/raw/main/packaging/update-manifest.json`
   }
 }

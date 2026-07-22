@@ -3,7 +3,8 @@ import os
 import re
 import shutil
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from mc_assets_config import ROOT
+
 PUBLIC_DIR = os.path.join(ROOT, "src", "renderer", "public")
 ITEMS_DIR = os.path.join(PUBLIC_DIR, "items")
 ITEMS_TS = os.path.join(ROOT, "src", "renderer", "src", "data", "items.ts")

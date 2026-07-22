@@ -4,8 +4,8 @@ import {
   applyExploreToolLimit,
   buildWriteForceInstruction,
   MAX_FREE_EXPLORE_ROUNDS
-} from '../src/renderer/src/harness/workflow-engine.ts'
-import type { WorkflowStep } from '../src/renderer/src/harness/workflow-types.ts'
+} from '../../src/renderer/src/harness/workflow-engine.ts'
+import type { WorkflowStep } from '../../src/renderer/src/harness/workflow-types.ts'
 
 const MIXIN_TOOLS = [
   'fabric_mixin_target_lookup',

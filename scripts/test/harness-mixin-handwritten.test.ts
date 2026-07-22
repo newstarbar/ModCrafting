@@ -10,10 +10,10 @@ import {
   relativeMixinClassName,
   sideToConfigKey,
   validateHandwrittenMixin
-} from '../src/renderer/src/harness/mixin-registration.ts'
-import { recordsStepEvidence } from '../src/renderer/src/harness/workflow-engine.ts'
-import type { WorkflowStep } from '../src/renderer/src/harness/workflow-types.ts'
-import type { ToolResult } from '../src/renderer/src/harness/tools.ts'
+} from '../../src/renderer/src/harness/mixin-registration.ts'
+import { recordsStepEvidence } from '../../src/renderer/src/harness/workflow-engine.ts'
+import type { WorkflowStep } from '../../src/renderer/src/harness/workflow-types.ts'
+import type { ToolResult } from '../../src/renderer/src/harness/tools.ts'
 
 const HANDWRITTEN_MOUSE = `package com.example.frame_cover.mixin;
 

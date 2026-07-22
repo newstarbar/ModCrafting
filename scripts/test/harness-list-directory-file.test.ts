@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   listDirectoryEmptyFileMessage,
   pathBasenameLooksLikeFile
-} from '../src/renderer/src/harness/list-directory-guard.ts'
+} from '../../src/renderer/src/harness/list-directory-guard.ts'
 
 test('pathBasenameLooksLikeFile detects java/json files', () => {
   assert.equal(

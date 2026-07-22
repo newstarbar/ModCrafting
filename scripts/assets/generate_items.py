@@ -5,17 +5,11 @@ import sys
 
 from PIL import Image
 
-from mc_assets_config import get_assets_minecraft_path
+from mc_assets_config import ROOT, get_assets_minecraft_path
 
 ASSETS_PATH = get_assets_minecraft_path()
-OUTPUT_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "src", "renderer", "src", "data", "items.ts",
-)
-PUBLIC_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "src", "renderer", "public",
-)
+OUTPUT_PATH = os.path.join(ROOT, "src", "renderer", "src", "data", "items.ts")
+PUBLIC_DIR = os.path.join(ROOT, "src", "renderer", "public")
 
 SHAPE_PARENTS = {
     "slab": "slab",

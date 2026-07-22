@@ -12,7 +12,7 @@ import {
   getYarnOfficialToNamedMap,
   namedSimpleName,
   remapDescriptor
-} from '../src/main/yarn-descriptor.ts'
+} from '../../src/main/yarn-descriptor.ts'
 
 const SAMPLE_TINY = [
   'tiny\t2\t0\tofficial\tintermediary\tnamed',

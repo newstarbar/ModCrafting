@@ -10,13 +10,13 @@ import { fileURLToPath } from 'url'
 import { giteeUrls, resolveGiteeRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const root = path.join(__dirname, '..')
+const root = path.join(__dirname, '..', '..')
 
 const GITHUB_OWNER = 'newstarbar'
 const GITHUB_REPO = 'ModCrafting'
 
 const rawTag = process.argv[2]
-const outputPath = process.argv[3] || path.join(root, 'build', 'release-body.md')
+const outputPath = process.argv[3] || path.join(root, 'packaging', 'release-body.md')
 
 if (!rawTag) {
   console.error('Usage: node scripts/render-release-notes.mjs <tag> [outputPath]')

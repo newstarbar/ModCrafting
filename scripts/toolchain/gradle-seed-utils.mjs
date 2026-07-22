@@ -9,7 +9,7 @@ import { FABRIC_VERSIONS } from './fabric-versions.mjs'
 import { setupPrefetchProject, generateGradleWrapperProperties } from './fabric-template.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
-export const PROJECT_ROOT = path.join(scriptDir, '..')
+export const PROJECT_ROOT = path.join(scriptDir, '..', '..')
 export const GRADLE_RUNTIME_DIR = 'gradle-9.5'
 export const GRADLE_LAUNCHER = `gradle-launcher-${FABRIC_VERSIONS.gradle_version}.jar`
 

@@ -1,14 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PlanTracker } from '../src/renderer/src/harness/plan-tracker.ts'
-import { Registry } from '../src/renderer/src/harness/tools.ts'
-import { normalizeWorkflowSteps } from '../src/renderer/src/harness/plan-normalizer.ts'
+import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
+import { Registry } from '../../src/renderer/src/harness/tools.ts'
+import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
 import {
   WorkflowEngine,
   isNoOpBuildResult,
   MAX_IDENTICAL_REJECTIONS
-} from '../src/renderer/src/harness/workflow-engine.ts'
-import { findFilesByBasename } from '../src/renderer/src/harness/grep-search.ts'
+} from '../../src/renderer/src/harness/workflow-engine.ts'
+import { findFilesByBasename } from '../../src/renderer/src/harness/grep-search.ts'
 
 type DirEntry = { name: string; isDirectory: boolean }
 

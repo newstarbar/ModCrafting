@@ -9,13 +9,13 @@ import {
   buildProviderThinkingFields,
   supportsGlmReasoningEffort,
   isGlmModel,
-} from '../src/shared/llm-providers.ts'
-import { MODEL_PRESETS } from '../src/renderer/src/config/model-presets.ts'
+} from '../../src/shared/llm-providers.ts'
+import { MODEL_PRESETS } from '../../src/renderer/src/config/model-presets.ts'
 import {
   MAX_REASONING_HARD_CHARS,
   MAX_REASONING_SOFT_CHARS,
   LONG_REASONING_KICK
-} from '../src/renderer/src/harness/reasoning-limits.ts'
+} from '../../src/renderer/src/harness/reasoning-limits.ts'
 
 test('resolveSelection returns correct endpoint for DeepSeek', () => {
   const sel = resolveSelection('deepseek', 'deepseek-chat')
@@ -67,7 +67,7 @@ test('MODEL_PRESETS is non-empty and includes DeepSeek defaults', () => {
 })
 
 test('getModelPricing distinguishes DeepSeek Flash vs Pro', async () => {
-  const { getModelPricing } = await import('../src/shared/llm-providers.ts')
+  const { getModelPricing } = await import('../../src/shared/llm-providers.ts')
   const flash = getModelPricing('deepseek', 'deepseek-v4-flash')
   const pro = getModelPricing('deepseek', 'deepseek-v4-pro')
   // 中文官网人民币标价（元 / 百万 tokens）
