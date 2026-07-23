@@ -1919,7 +1919,20 @@ export class WorkflowEngine {
       }
     }
 
-    const allDone = this.steps.every((step) => step.status === 'completed')
+    const allDone =
+      this.steps.length > 0 && this.steps.every((step) => step.status === 'completed')
+    if (this.steps.length === 0) {
+      this.emit({
+        kind: EventKind.Notice,
+        notice: { level: 'error', text: '执行计划为空，无法推进。请重新发送需求或「游戏测试」。' }
+      })
+      return {
+        finalContent: '执行计划为空，未能启动游戏内校验。',
+        allDone: false,
+        partial: true,
+        steps: this.steps
+      }
+    }
     return {
       finalContent: finalContent || (allDone ? '全部计划步骤已完成。' : '工作流已停止。'),
       allDone,

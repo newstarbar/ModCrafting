@@ -147,6 +147,21 @@ test('compilePlanFromText: recipe-only plan skips knowledge inspect', () => {
   assert.ok(!steps[0].description.includes('fabric_docs_search'))
 })
 
+test('compilePlanFromText: ops-only runClient plan is not stripped to empty', () => {
+  const compiled = compilePlanFromText('1. 启动游戏进行真实测试（runClient）')
+  assert.equal(compiled.length, 1)
+  assert.match(compiled[0].description, /runClient/i)
+})
+
+test('compilePlanFromText: ops-only build+run plan keeps both terminals', () => {
+  const compiled = compilePlanFromText(
+    '1. 构建项目（gradlew build）\n2. 启动游戏进行真实测试（runClient）'
+  )
+  assert.equal(compiled.length, 2)
+  assert.match(compiled[0].description, /build|构建/i)
+  assert.match(compiled[1].description, /runClient/i)
+})
+
 test('dropVagueSteps removes generic validation without path', () => {
   const filtered = dropVagueSteps([
     { id: '1', description: '确保编译通过' },

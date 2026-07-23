@@ -707,7 +707,10 @@ ${projectInfo}`
     await this.updateSystemPrompt('execute')
     this._phase = 'execute'
     const opsPlan = '1. 启动游戏进行真实测试（runClient）'
-    this.planTracker = PlanTracker.fromPlanText(opsPlan)
+    // Prefer fromSteps: compilePlanFromText historically stripped pure host terminals to [].
+    this.planTracker = PlanTracker.fromSteps([
+      { id: '1', description: '启动游戏进行真实测试（runClient）', status: 'pending' }
+    ])
     this.emitPlanState(this.planTracker)
     this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
     const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)

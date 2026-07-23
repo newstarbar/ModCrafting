@@ -345,6 +345,13 @@ export function prependKnowledgeInspect(steps: CompiledPlanStep[]): CompiledPlan
 
 export function compilePlanFromText(text: string): CompiledPlanStep[] {
   let steps = parseStructuredSteps(text)
+  // Pure build/run plans are entirely host terminals. stripHostTerminalFromLlmSteps
+  // would leave [] and appendHostTerminalSteps([]) is a no-op — so restore terminals
+  // from the source instead of inventing an empty "all done" workflow.
+  const opsOnlySource = isOpsOnlyPlan(steps)
+  const sourceHasBuild = steps.some((s) => BUILD_STEP_PATTERN.test(s.description))
+  const sourceHasRun = steps.some((s) => RUN_STEP_PATTERN.test(s.description))
+
   steps = steps.map((step) => {
     const kind = resolveCompiledStepKind(step)
     if (kind !== 'mixin') {
@@ -361,6 +368,17 @@ export function compilePlanFromText(text: string): CompiledPlanStep[] {
   steps = stripHostTerminalFromLlmSteps(steps)
   steps = dropVagueSteps(steps)
   steps = dedupeByPath(steps)
+
+  if (opsOnlySource) {
+    const restored: CompiledPlanStep[] = []
+    if (sourceHasBuild) {
+      restored.push({ id: '0', description: HOST_BUILD_DESC, hostManaged: true })
+    }
+    if (sourceHasRun) {
+      restored.push({ id: '0', description: HOST_RUN_DESC, hostManaged: true })
+    }
+    return renumber(restored)
+  }
 
   // Mixin audit: force agent to read existing config + sources before writing
   if (needsMixinAudit(steps)) {
