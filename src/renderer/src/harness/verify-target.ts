@@ -202,3 +202,41 @@ export function describeVerifyMismatch(
       : '非 TitleScreen'
   return `检测未达标：期望界面匹配「${expect}」，实际「${actual}」。继续按【检测目标】打开功能后再 mc_inspect。`
 }
+
+/**
+ * Landed on a real (non-title) screen that still doesn't match the target —
+ * this is a concrete bug finding (wrong wiring), not "keep clicking".
+ */
+export function isWrongScreenVerifyFinding(
+  output: string,
+  target: VerifyTarget
+): { actual: string; expected: string } | null {
+  if (matchesVerifyTarget(output, target)) return null
+  const screen = parseInspectScreen(output)
+  if (!screen) return null
+  const name = (screen.simpleName || screen.className.split('.').pop() || '').trim()
+  if (!name) return null
+  if (target.rejectScreenNames.some((n) => n.toLowerCase() === name.toLowerCase())) {
+    return null
+  }
+  if (screen.kind && target.rejectKinds.some((k) => k.toLowerCase() === screen.kind.toLowerCase())) {
+    return null
+  }
+  // Only treat as a finding when we have a positive target pattern to miss.
+  if (target.screenNamePatterns.length === 0) return null
+  const expected = target.screenNamePatterns.map((r) => r.source).join(' | ')
+  return { actual: name, expected }
+}
+
+export function formatVerifyRepairKick(finding: {
+  actual: string
+  expected: string
+}): string {
+  return [
+    `【检测发现错误界面 → 进入修复】期望匹配「${finding.expected}」，实际打开了「${finding.actual}」。`,
+    '这通常是入口接错（例如截图/热键后 setScreen 到了 ConfigScreen 而不是 Preview）。',
+    '立刻 edit_file / write_file 修改相关源码，使流程打开目标屏；',
+    '改完后 trigger_build({"task":"build"}) → trigger_build({"task":"runClient"})，再按【检测目标】mc_inspect 验证。',
+    '禁止只在错误界面上反复点按/截图而不改代码；禁止结束本步。'
+  ].join('\n')
+}

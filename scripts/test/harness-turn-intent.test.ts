@@ -228,7 +228,9 @@ test('deriveVerifyTarget: F6 preview requires MainMenuPreviewScreen', async () =
   const {
     deriveVerifyTarget,
     matchesVerifyTarget,
-    formatVerifyTargetBlock
+    formatVerifyTargetBlock,
+    isWrongScreenVerifyFinding,
+    formatVerifyRepairKick
   } = await import('../../src/renderer/src/harness/verify-target.ts')
   const target = deriveVerifyTarget('实际F6的预览的GUI显示有问题')
   assert.ok(target)
@@ -256,6 +258,22 @@ test('deriveVerifyTarget: F6 preview requires MainMenuPreviewScreen', async () =
     true
   )
   assert.match(formatVerifyTargetBlock(target!), /检测目标/)
+
+  // Wrong functional screen → repair finding (not "keep clicking")
+  const finding = isWrongScreenVerifyFinding(
+    JSON.stringify({ screen: { simpleName: 'ConfigScreen', kind: 'generic' } }),
+    target!
+  )
+  assert.ok(finding)
+  assert.equal(finding!.actual, 'ConfigScreen')
+  assert.equal(
+    isWrongScreenVerifyFinding(
+      JSON.stringify({ screen: { simpleName: 'TitleScreen', kind: 'title' } }),
+      target!
+    ),
+    null
+  )
+  assert.match(formatVerifyRepairKick(finding!), /进入修复/)
 })
 
 test('isGuiFeatureSymptom detects preview / F-key reports', () => {

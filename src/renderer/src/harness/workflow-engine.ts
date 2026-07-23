@@ -24,7 +24,12 @@ import { validateToolCalls } from './tool-call-validator.ts'
 import { MAX_EXECUTE_CLARIFICATIONS } from './clarify-validation.ts'
 import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from './reasoning-limits.ts'
 import type { VerifyTarget } from './verify-target.ts'
-import { describeVerifyMismatch, matchesVerifyTarget } from './verify-target.ts'
+import {
+  describeVerifyMismatch,
+  formatVerifyRepairKick,
+  isWrongScreenVerifyFinding,
+  matchesVerifyTarget
+} from './verify-target.ts'
 
 export interface WorkflowModelResult {
   finishReason?: string
@@ -1650,27 +1655,57 @@ export class WorkflowEngine {
           !this.inGameVerified
         ) {
           const target = this.verifyTarget
-          const titleHint = target
-            ? [
-                `【检测目标未达成】${target.label}`,
-                this.lastVerifyMismatch || '尚未在目标界面上完成 mc_inspect。',
-                '打开步骤：',
-                ...target.openSteps.map((s, i) => `${i + 1}. ${s}`),
-                '禁止在 TitleScreen 上宣称校验完成；禁止仅凭 ready / 随便进一个无关界面结束。'
-              ].join('\n')
-            : this.lastVerifyWasTitleScreen
+          let wrongScreenFinding: { actual: string; expected: string } | null = null
+          if (target) {
+            for (const result of orderedResults) {
+              if (result.toolName !== 'mc_inspect' || !result.ok) continue
+              wrongScreenFinding = isWrongScreenVerifyFinding(
+                String(result.output || ''),
+                target
+              )
+              if (wrongScreenFinding) break
+            }
+          }
+          if (wrongScreenFinding) {
+            if (!repairMode) {
+              repairMode = true
+              repairWriteRequired = true
+              this.emit({
+                kind: EventKind.Notice,
+                notice: {
+                  level: 'warn',
+                  text:
+                    `检测目标未达成：期望「${wrongScreenFinding.expected}」，` +
+                    `实际「${wrongScreenFinding.actual}」。已进入修复模式，请改代码后重测。`
+                }
+              })
+            }
+            roundInstruction = [
+              roundInstruction,
+              formatVerifyRepairKick(wrongScreenFinding)
+            ]
+              .filter(Boolean)
+              .join('\n')
+          } else {
+            const titleHint = target
               ? [
-                  '刚才仍停在 TitleScreen（标题屏），这不算打开了待测功能。',
-                  '必须进入症状相关界面后再检视/截图：',
-                  '1) 症状含 F6/F9：mc_input key_press 后稍等再 mc_inspect',
-                  '2) 若仍是标题屏：click_widget label=模组 或进入设置里的预览入口',
-                  '3) 进入目标 GUI 后再 mc_inspect + mc_screenshot'
+                  `【检测目标未达成】${target.label}`,
+                  this.lastVerifyMismatch || '尚未在目标界面上完成 mc_inspect。',
+                  '打开步骤：',
+                  ...target.openSteps.map((s, i) => `${i + 1}. ${s}`),
+                  '禁止在 TitleScreen 上宣称校验完成；禁止仅凭 ready / 随便进一个无关界面结束。'
                 ].join('\n')
-              : [
-                  '【游戏内校验未完成】MC_PHASE:ready 仅表示进了主菜单。',
-                  '必须打开待测功能界面后再校验，禁止只看标题屏就结束。'
-                ].join('\n')
-          roundInstruction = [roundInstruction, titleHint].filter(Boolean).join('\n')
+              : this.lastVerifyWasTitleScreen
+                ? [
+                    '刚才仍停在 TitleScreen（标题屏），这不算打开了待测功能。',
+                    '必须进入症状相关界面后再检视/截图。'
+                  ].join('\n')
+                : [
+                    '【游戏内校验未完成】MC_PHASE:ready 仅表示进了主菜单。',
+                    '必须打开待测功能界面后再校验，禁止只看标题屏就结束。'
+                  ].join('\n')
+            roundInstruction = [roundInstruction, titleHint].filter(Boolean).join('\n')
+          }
         }
 
         if (success) {
