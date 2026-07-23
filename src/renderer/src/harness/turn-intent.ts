@@ -13,30 +13,33 @@ export interface TurnIntentContext {
   hasPlanCandidate?: boolean
 }
 
-const RESUME_PATTERN = /^(继续|接着|往下|continue|执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i
-const GREETING_PATTERN = /^(你好|您好|嗨|hello|hi|hey|在吗|谢谢|感谢|好的|ok|okay|再见|拜拜)[\s!！。.?？~，,]*$/i
-const QA_PATTERN = /^(什么是|为什么|怎么|如何|能否|是否|解释|说明|什么意思|这段|请问)/i
-const DEV_PATTERN = /创建|实现|开发|添加|修改|修复|删除|重构|构建|写一个|制作|帮我.{0,8}(做|改|修|加)|生成.{0,8}(模组|mod|类|文件|物品|功能)|\b(create|implement|add|modify|fix|delete|refactor|build)\b/i
-const FEATURE_PATTERN = /可以进行|能够|支持|二段跳|配方|物品|方块|mixin|功能|效果|技能/i
-const PLAN_ADJUST_PATTERN = /调整计划|修改计划|重新计划|重做计划/i
+/** Extremely narrow resume command — structural fallback only (not a Chinese keyword bag). */
+const NARROW_RESUME_PATTERN =
+  /^(继续|接着|往下|continue|执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i
 
-/** Crash reports, Gradle failures, stack traces — should drive repair, not chat. */
-const ERROR_REPORT_PATTERN =
-  /Crash Report|----\s*Minecraft Crash Report\s*----|Exception in thread|java\.lang\.\w*Exception|at\s+knot\/\/|BUILD FAILED|Compilation failed|\.java:\d+|error:\s|Caused by:|什么都没改|崩溃报告|编译错误|构建失败/i
+export function isNarrowResumeInput(input: string): boolean {
+  return NARROW_RESUME_PATTERN.test(input.trim())
+}
 
+/** @deprecated Use isNarrowResumeInput — kept for session-resume tests / callers. */
 export function isResumeInput(input: string): boolean {
-  return RESUME_PATTERN.test(input.trim())
+  return isNarrowResumeInput(input)
 }
 
-export function isPlanAdjustInput(input: string): boolean {
-  return PLAN_ADJUST_PATTERN.test(input.trim())
-}
-
-export function isErrorReportInput(input: string): boolean {
+/**
+ * Structural crash / build failure detection (format-based, not Chinese word bags).
+ * Used as safety gate when LLM classification fails or mislabels.
+ */
+export function isStructuralErrorReport(input: string): boolean {
   const trimmed = input.trim()
   if (!trimmed) return false
-  if (ERROR_REPORT_PATTERN.test(trimmed)) return true
-  // Multi-line stack-ish dumps without the exact Crash Report header
+  if (
+    /Crash Report|----\s*Minecraft Crash Report\s*----|Exception in thread|java\.lang\.\w*Exception|at\s+knot\/\/|BUILD FAILED|Compilation failed|\.java:\d+|Caused by:/i.test(
+      trimmed
+    )
+  ) {
+    return true
+  }
   const lines = trimmed.split(/\r?\n/).filter((l) => l.trim())
   if (lines.length >= 4) {
     const stackish = lines.filter((l) => /^\s*at\s+\S+/.test(l) || /Exception|Error/.test(l)).length
@@ -45,57 +48,15 @@ export function isErrorReportInput(input: string): boolean {
   return false
 }
 
-/** User says the previous "fix" did not work — keep as sticky acceptance criteria. */
-const USER_SYMPTOM_PATTERN =
-  /还是|仍然|依旧|又|模糊|花屏|报错|不对|不行|没用|无效|失败|没有[看见反应效果]|看不见|不显示|不正确|崩溃|卡死|黑屏|闪退|键名|翻译键|预览|乱码|错位|穿模|冲突|wrong\s*thread|exception|blur|glitch|broken|still\s|doesn't\swork|does\snot\swork/i
-
-/** User confirms the symptom is gone. */
-const SYMPTOM_RESOLVED_PATTERN =
-  /^(好了|可以了|解决了|修好了|没问题了|正常了|通过了|ok了|已解决|已修复)[\s!！。.?？~]*$/i
-
-export function isUserSymptomFeedback(input: string): boolean {
-  const trimmed = input.trim()
-  if (!trimmed || trimmed.length > 800) return false
-  if (isResumeInput(trimmed)) return false
-  if (SYMPTOM_RESOLVED_PATTERN.test(trimmed)) return false
-  if (isErrorReportInput(trimmed)) return true
-  return USER_SYMPTOM_PATTERN.test(trimmed)
+/** @deprecated Prefer classifyUserTurn / isStructuralErrorReport */
+export function isErrorReportInput(input: string): boolean {
+  return isStructuralErrorReport(input)
 }
 
-export function isSymptomResolvedFeedback(input: string): boolean {
-  return SYMPTOM_RESOLVED_PATTERN.test(input.trim())
-}
+const CODE_EXPLAIN_PATTERN = /---\s*代码解释\s*---/i
 
-/** User asks to verify in-game after a plan finished — do not start a new submit_plan cycle. */
-const IN_GAME_VERIFY_REQUEST_PATTERN =
-  /^(游戏测试|再测一次|再测试|再测|验证一下|验证下|验证|测试一下|测试下|看看效果|检查一下|检查下|截个图|截图看看|in-?game\s*test|test\s*in\s*game|verify)[\s!！。.?？~]*$/i
-
-export function isInGameVerifyRequest(input: string): boolean {
-  const trimmed = input.trim()
-  if (!trimmed || trimmed.length > 80) return false
-  return IN_GAME_VERIFY_REQUEST_PATTERN.test(trimmed)
-}
-
-/** Symptom about GUI / hotkey / preview — TitleScreen alone is not enough evidence. */
-export function isGuiFeatureSymptom(symptom: string | null | undefined): boolean {
-  const text = (symptom || '').trim()
-  if (!text) return false
-  return /预览|GUI|gui|界面|屏幕|布局|按钮|控件|面板|F\d|按键|快捷键|Screen|显示|错乱|模糊|穿模|配置屏|设置屏/i.test(
-    text
-  )
-}
-
-/**
- * Short symptom / bug reports in agent mode can skip formal submit_plan and go
- * straight to execute (freeform or host-driven).
- */
-export function shouldSkipFormalPlan(input: string): boolean {
-  const trimmed = input.trim()
-  if (!trimmed || trimmed.length > 160) return false
-  if (isInGameVerifyRequest(trimmed)) return false
-  if (isResumeInput(trimmed) || isSymptomResolvedFeedback(trimmed)) return false
-  if (isUserSymptomFeedback(trimmed) || isErrorReportInput(trimmed)) return true
-  return /有问题|不对|错乱|显示|布局|预览|修复|改一下|修一下|修下|模糊|穿模/.test(trimmed)
+export function isCodeExplainInput(input: string): boolean {
+  return CODE_EXPLAIN_PATTERN.test(input)
 }
 
 export function buildUserSymptomBlock(symptom: string | null | undefined): string {
@@ -157,87 +118,6 @@ export function buildCrossTurnDiagnosisRetain(args: {
     })
   }
   return out
-}
-
-function heuristicChat(input: string): boolean {
-  const trimmed = input.trim()
-  if (GREETING_PATTERN.test(trimmed)) return true
-  if (QA_PATTERN.test(trimmed)) return true
-  if ((trimmed.endsWith('?') || trimmed.endsWith('？')) && trimmed.length < 120) return true
-  return false
-}
-
-function heuristicDevelop(input: string, hasProject: boolean): boolean {
-  const trimmed = input.trim()
-  if (DEV_PATTERN.test(trimmed)) return true
-  if (FEATURE_PATTERN.test(trimmed)) return true
-  if (hasProject && trimmed.length >= 4 && !heuristicChat(input)) return true
-  return false
-}
-
-const CODE_EXPLAIN_PATTERN = /---\s*代码解释\s*---/i
-
-export function isCodeExplainInput(input: string): boolean {
-  return CODE_EXPLAIN_PATTERN.test(input)
-}
-
-export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIntent {
-  const trimmed = input.trim()
-
-  if (isCodeExplainInput(trimmed)) {
-    return 'chat'
-  }
-
-  if (ctx.composerMode === 'ask') {
-    return 'chat'
-  }
-
-  const hasIncompletePlan = Boolean(ctx.planTracker && !ctx.planTracker.allDone())
-  const hasReadyPlan = Boolean(ctx.planTracker && ctx.planTracker.steps.length > 0 && !ctx.planTracker.allDone())
-  const canResumePlan = hasIncompletePlan || Boolean(ctx.hasPlanCandidate)
-
-  if (isResumeInput(trimmed) && (ctx.phase === 'execute' || canResumePlan)) {
-    return 'resume'
-  }
-
-  // Error/crash dumps should resume or re-enter develop, never silent chat.
-  if (isErrorReportInput(trimmed)) {
-    if (ctx.phase === 'execute' || canResumePlan) return 'resume'
-    return 'develop'
-  }
-
-  if (ctx.composerMode === 'plan') {
-    if (hasReadyPlan && !isPlanAdjustInput(trimmed) && !isResumeInput(trimmed)) {
-      return 'plan_only'
-    }
-    if (isPlanAdjustInput(trimmed) || ctx.phase === 'plan' || !ctx.planTracker) {
-      return 'plan_only'
-    }
-    if (isResumeInput(trimmed)) {
-      return 'resume'
-    }
-    return 'plan_only'
-  }
-
-  if (ctx.composerMode === 'agent') {
-    // Only resume if user explicitly says "continue" or similar
-    if (canResumePlan && isResumeInput(trimmed)) {
-      return 'resume'
-    }
-    // In-game verify phrases must never fall into read-only chat.
-    if (ctx.hasProject && isInGameVerifyRequest(trimmed)) {
-      return 'develop'
-    }
-    // Agent mode is capable of acting, but questions/explanations remain read-only.
-    // Only an explicit mutation signal enters the plan -> execute workflow.
-    if (heuristicChat(trimmed)) return 'chat'
-    if (heuristicDevelop(trimmed, ctx.hasProject)) return 'develop'
-    return ctx.hasProject ? 'develop' : 'chat'
-  }
-
-  if (heuristicChat(trimmed)) return 'chat'
-  if (heuristicDevelop(trimmed, ctx.hasProject)) return 'develop'
-  return ctx.hasProject ? 'develop' : 'chat'
 }
 
 export function buildSessionGoalBlock(sessionGoal: string): string {

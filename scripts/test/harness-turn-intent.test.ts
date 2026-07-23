@@ -2,15 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 import {
-  resolveTurnIntent,
   buildSessionGoalBlock,
   isCodeExplainInput,
-  isErrorReportInput,
-  isUserSymptomFeedback,
-  isSymptomResolvedFeedback,
-  isInGameVerifyRequest,
-  shouldSkipFormalPlan,
-  isGuiFeatureSymptom,
+  isStructuralErrorReport,
+  isNarrowResumeInput,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
 } from '../../src/renderer/src/harness/turn-intent.ts'
@@ -24,71 +19,40 @@ import {
 import { isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
 import type { WorkflowStep } from '../../src/renderer/src/harness/workflow-types.ts'
 
-function intentCtx(overrides: Partial<Parameters<typeof resolveTurnIntent>[1]> = {}) {
-  return {
-    phase: 'plan' as const,
-    planTracker: null,
-    hasProject: true,
-    composerMode: 'agent' as const,
-    ...overrides
-  }
-}
-
-test('resolveTurnIntent: feature statement in agent mode → develop', () => {
-  assert.equal(resolveTurnIntent('玩家可以进行二段跳', intentCtx()), 'develop')
+test('isNarrowResumeInput accepts trailing punctuation', () => {
+  assert.equal(isNarrowResumeInput('继续'), true)
+  assert.equal(isNarrowResumeInput('继续。'), true)
+  assert.equal(isNarrowResumeInput('请继续'), false)
 })
 
-test('resolveTurnIntent: question in agent mode stays read-only chat', () => {
-  assert.equal(
-    resolveTurnIntent('为什么这个 Mixin 不生效？', intentCtx({ composerMode: 'agent', hasProject: true })),
-    'chat'
+test('isStructuralErrorReport detects crash and build failures', () => {
+  assert.ok(
+    isStructuralErrorReport(
+      '--- 崩溃报告 ---\n---- Minecraft Crash Report ----\njava.lang.IllegalStateException'
+    )
   )
-})
-
-test('resolveTurnIntent: same input in ask mode → chat', () => {
-  assert.equal(resolveTurnIntent('玩家可以进行二段跳', intentCtx({ composerMode: 'ask' })), 'chat')
-})
-
-test('resolveTurnIntent: continue with incomplete plan → resume', () => {
-  const tracker = PlanTracker.fromSteps([
-    { id: '1', description: '写文件', status: 'running' },
-    { id: '2', description: '构建', status: 'pending' }
-  ])
-  assert.equal(resolveTurnIntent('继续', intentCtx({ phase: 'execute', planTracker: tracker })), 'resume')
-})
-
-test('resolveTurnIntent: continue with plan candidate after plan_failed → resume', () => {
-  assert.equal(
-    resolveTurnIntent('继续', intentCtx({ phase: 'plan', planTracker: null, hasPlanCandidate: true })),
-    'resume'
+  assert.ok(
+    isStructuralErrorReport(
+      'BUILD FAILED\nCompilation failed\nFoo.java:12: error: cannot find symbol'
+    )
   )
-  // No plan to resume: with a project open, prefer develop over silent chat.
-  assert.equal(
-    resolveTurnIntent('继续', intentCtx({ phase: 'plan', planTracker: null, hasPlanCandidate: false })),
-    'develop'
+  assert.ok(
+    isStructuralErrorReport(
+      'at knot//net.minecraft.client.gui.screen.Screen.render(Screen.java:1)'
+    )
   )
+  assert.equal(isStructuralErrorReport('你好'), false)
+  assert.equal(isStructuralErrorReport('为什么这个 Mixin 不生效？'), false)
 })
 
-test('resolveTurnIntent: plan mode → plan_only', () => {
-  assert.equal(resolveTurnIntent('添加二段跳', intentCtx({ composerMode: 'plan' })), 'plan_only')
+test('isCodeExplainInput detects marker', () => {
+  const input = '--- 代码解释 ---\nFooItem (item)\n```java\nclass Foo {}\n```'
+  assert.ok(isCodeExplainInput(input))
 })
 
-test('resolveTurnIntent: what is mixin in ask → chat', () => {
-  assert.equal(resolveTurnIntent('什么是 Mixin', intentCtx({ composerMode: 'ask' })), 'chat')
-})
-
-test('isUserSymptomFeedback detects blur / still-broken reports', () => {
-  assert.equal(isUserSymptomFeedback('还是模糊的'), true)
-  assert.equal(isUserSymptomFeedback('预览画面是模糊的'), true)
-  assert.equal(isUserSymptomFeedback('F6报错：Rendersystem called from wrongthread'), true)
-  assert.equal(isUserSymptomFeedback('继续'), false)
-  assert.equal(isUserSymptomFeedback('好了'), false)
-})
-
-test('isSymptomResolvedFeedback accepts short confirmations', () => {
-  assert.equal(isSymptomResolvedFeedback('好了'), true)
-  assert.equal(isSymptomResolvedFeedback('解决了！'), true)
-  assert.equal(isSymptomResolvedFeedback('还是模糊的'), false)
+test('buildSessionGoalBlock includes goal', () => {
+  assert.match(buildSessionGoalBlock('做二段跳'), /当前会话目标/)
+  assert.match(buildSessionGoalBlock('做二段跳'), /二段跳/)
 })
 
 test('buildUserSymptomBlock reminds ready ≠ fixed', () => {
@@ -126,12 +90,6 @@ test('compilePlanFromText: structured write steps append host terminal steps', (
   assert.ok(compiled.length >= 5)
   assert.ok(compiled.some((s) => /gradlew build/i.test(s.description)))
   assert.ok(compiled.some((s) => /runClient/i.test(s.description)))
-})
-
-test('resolveTurnIntent: code explain context → chat even with project', () => {
-  const input = '--- 代码解释 ---\nFooItem (item)\n```java\nclass Foo {}\n```'
-  assert.equal(resolveTurnIntent(input, intentCtx({ composerMode: 'agent' })), 'chat')
-  assert.ok(isCodeExplainInput(input))
 })
 
 test('needsKnowledgeInspect: template quick create skips knowledge inspect', () => {
@@ -178,61 +136,20 @@ test('PlanTracker uses compiler terminal steps', () => {
   assert.ok(tracker.steps.some((s) => /build/i.test(s.description)))
 })
 
-test('isErrorReportInput detects crash and build failures', () => {
-  assert.ok(isErrorReportInput('--- 崩溃报告 ---\n---- Minecraft Crash Report ----\njava.lang.IllegalStateException'))
-  assert.ok(isErrorReportInput('BUILD FAILED\nCompilation failed\nFoo.java:12: error: cannot find symbol'))
-  assert.ok(isErrorReportInput('at knot//net.minecraft.client.gui.screen.Screen.render(Screen.java:1)'))
-  assert.equal(isErrorReportInput('你好'), false)
-  assert.equal(isErrorReportInput('为什么这个 Mixin 不生效？'), false)
-})
-
-test('resolveTurnIntent: crash report during execute → resume', () => {
-  const tracker = PlanTracker.fromSteps([
-    { id: '1', description: '写文件', status: 'completed' },
-    { id: '2', description: '构建项目（gradlew build）', status: 'failed' },
-    { id: '3', description: '启动游戏', status: 'pending' }
-  ])
-  const crash = `--- 崩溃报告 ---
----- Minecraft Crash Report ----
-java.lang.IllegalStateException: setScreen on the wrong thread
-	at knot//net.minecraft.client.gui.screen.Screen.ensureEventsAreInitialized(Screen.java:1347)`
-  assert.equal(
-    resolveTurnIntent(crash, intentCtx({ phase: 'execute', planTracker: tracker, composerMode: 'agent' })),
-    'resume'
-  )
-})
-
-test('resolveTurnIntent: BUILD FAILED with project and no plan → develop', () => {
-  assert.equal(
-    resolveTurnIntent(
-      'BUILD FAILED\nsrc/main/java/Foo.java:10: error: cannot find symbol',
-      intentCtx({ phase: 'plan', planTracker: null, hasProject: true })
-    ),
-    'develop'
-  )
-})
-
-test('resolveTurnIntent: short greeting stays chat even with project', () => {
-  assert.equal(resolveTurnIntent('谢谢', intentCtx({ hasProject: true })), 'chat')
-  assert.equal(resolveTurnIntent('你好', intentCtx({ hasProject: true })), 'chat')
-})
-
-test('resolveTurnIntent: plain bug note with project → develop (not silent chat)', () => {
-  assert.equal(
-    resolveTurnIntent('F6后鼠标被强制做到屏幕中心，无法操作截图设置', intentCtx({ hasProject: true })),
-    'develop'
-  )
-})
-
-test('deriveVerifyTarget: F6 preview requires MainMenuPreviewScreen', async () => {
+test('verifyTargetFromClassification: Preview hints match MainMenuPreviewScreen', async () => {
   const {
-    deriveVerifyTarget,
+    verifyTargetFromClassification,
     matchesVerifyTarget,
     formatVerifyTargetBlock,
     isWrongScreenVerifyFinding,
     formatVerifyRepairKick
   } = await import('../../src/renderer/src/harness/verify-target.ts')
-  const target = deriveVerifyTarget('实际F6的预览的GUI显示有问题')
+  const target = verifyTargetFromClassification({
+    label: '打开 F6 预览屏（MainMenuPreviewScreen）',
+    hotkey: 'f6',
+    screenNameHints: ['Preview', 'MainMenuPreviewScreen'],
+    openSteps: ['mc_input key_press f6', 'mc_inspect']
+  })
   assert.ok(target)
   assert.equal(target!.hotkey, 'f6')
   assert.match(target!.label, /Preview|预览/)
@@ -259,7 +176,6 @@ test('deriveVerifyTarget: F6 preview requires MainMenuPreviewScreen', async () =
   )
   assert.match(formatVerifyTargetBlock(target!), /检测目标/)
 
-  // Wrong functional screen → repair finding (not "keep clicking")
   const finding = isWrongScreenVerifyFinding(
     JSON.stringify({ screen: { simpleName: 'ConfigScreen', kind: 'generic' } }),
     target!
@@ -276,50 +192,11 @@ test('deriveVerifyTarget: F6 preview requires MainMenuPreviewScreen', async () =
   assert.match(formatVerifyRepairKick(finding!), /进入修复/)
 })
 
-test('isGuiFeatureSymptom detects preview / F-key reports', () => {
-  assert.equal(isGuiFeatureSymptom('实际F6的预览的GUI显示有问题'), true)
-  assert.equal(isGuiFeatureSymptom('用户请求游戏内测试/验证'), false)
-})
-
 test('getToolLabelZh: mc tools and input actions use Chinese', async () => {
   const { getToolLabelZh } = await import('../../src/renderer/src/harness/tool-labels.ts')
   assert.equal(getToolLabelZh('mc_inspect'), '游戏内检视')
   assert.equal(getToolLabelZh('mc_input', { action: 'key_press', key: 'f6' }), '游戏按键 F6')
   assert.equal(getToolLabelZh('mc_input', { action: 'click_widget', label: '模组' }), '点击控件「模组」')
-})
-
-test('isInGameVerifyRequest: short verify phrases', () => {
-  assert.equal(isInGameVerifyRequest('游戏测试'), true)
-  assert.equal(isInGameVerifyRequest('验证一下'), true)
-  assert.equal(isInGameVerifyRequest('截图看看'), true)
-  assert.equal(isInGameVerifyRequest('实际F6的预览的GUI显示有问题'), false)
-})
-
-test('resolveTurnIntent: 游戏测试 with completed/null plan still develops', () => {
-  const done = PlanTracker.fromSteps([
-    { id: '1', description: '启动游戏进行真实测试（runClient）', status: 'completed' }
-  ])
-  assert.equal(
-    resolveTurnIntent('游戏测试', intentCtx({ phase: 'execute', planTracker: done })),
-    'develop'
-  )
-  assert.equal(
-    resolveTurnIntent('游戏测试', intentCtx({ phase: 'plan', planTracker: null })),
-    'develop'
-  )
-})
-
-test('shouldSkipFormalPlan: short symptom skips submit_plan ceremony', () => {
-  assert.equal(shouldSkipFormalPlan('实际F6的预览的GUI显示有问题'), true)
-  assert.equal(shouldSkipFormalPlan('还是模糊的'), true)
-  assert.equal(shouldSkipFormalPlan('游戏测试'), false)
-  assert.equal(shouldSkipFormalPlan('继续'), false)
-  assert.equal(
-    shouldSkipFormalPlan(
-      '请帮我做一个完整的大型模组，包含自定义维度、生物、武器树、任务系统和多人同步，并写详细设计文档'
-    ),
-    false
-  )
 })
 
 test('isToolAllowedForStep: delete_file allowed on build without repairMode', () => {

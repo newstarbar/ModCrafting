@@ -13,25 +13,24 @@ import { buildFabricAgentPolicyPrompt } from './fabric-agent-policy'
 import { isRetryableFetchError } from './fetch-retry'
 import {
   type ComposerMode,
-  resolveTurnIntent,
   buildSessionGoalBlock,
-  isErrorReportInput,
-  isUserSymptomFeedback,
-  isSymptomResolvedFeedback,
-  isInGameVerifyRequest,
-  shouldSkipFormalPlan,
-  isGuiFeatureSymptom,
-  isResumeInput,
+  isNarrowResumeInput,
+  isStructuralErrorReport,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
 } from './turn-intent'
+import {
+  classifyUserTurn,
+  type ClassifyUserTurnResult
+} from './turn-classifier.ts'
 import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
 import { OpenCodeAdapter } from './opencode-adapter.ts'
 import type { WorkflowStep } from './workflow-types.ts'
 import { TOOL_LABELS_ZH } from './tool-labels'
 import {
-  deriveVerifyTarget,
+  defaultVerifyTarget,
   formatVerifyTargetBlock,
+  verifyTargetFromClassification,
   type VerifyTarget
 } from './verify-target.ts'
 import {
@@ -70,8 +69,10 @@ export class Controller {
   private sessionGoal = ''
   /** Sticky user-reported bug/symptom; runClient ready alone must not clear it. */
   private activeUserSymptom: string | null = null
-  /** Derived from symptom: which screen/hotkey must be hit for in-game verify. */
+  /** Derived from classifier: which screen/hotkey must be hit for in-game verify. */
   private activeVerifyTarget: VerifyTarget | null = null
+  /** Last classifier: symptom is GUI/hotkey/preview related. */
+  private lastGuiFeatureSymptom = false
   /** Cached project scan for execute-entry user message (kept out of system prompt). */
   private lastProjectInfo = ''
   private planReadyAwaitingExecute = false
@@ -207,7 +208,7 @@ export class Controller {
     this.sink.emit(event)
   }
 
-  private intentContext(): Parameters<typeof resolveTurnIntent>[1] {
+  private intentContext() {
     return {
       phase: this._phase,
       planTracker: this.planTracker,
@@ -273,20 +274,37 @@ export class Controller {
     }) as ChatMessage[]
   }
 
-  private noteUserSymptomFromInput(input: string): void {
-    if (isSymptomResolvedFeedback(input)) {
+  private applyClassificationSideEffects(
+    classified: ClassifyUserTurnResult,
+    input: string
+  ): void {
+    this.lastGuiFeatureSymptom = classified.isGuiFeatureSymptom
+    if (classified.isSymptomResolved) {
       this.activeUserSymptom = null
       this.activeVerifyTarget = null
+      this.lastGuiFeatureSymptom = false
       return
     }
-    if (isUserSymptomFeedback(input) || isErrorReportInput(input)) {
+    if (classified.isUserSymptom || classified.isErrorReport) {
       this.activeUserSymptom = input.trim().slice(0, 400)
-      this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom)
+    }
+    const fromClass = verifyTargetFromClassification(classified.verifyTarget)
+    if (fromClass) {
+      this.activeVerifyTarget = fromClass
+    } else if (
+      classified.isGuiFeatureSymptom ||
+      classified.isInGameVerifyRequest
+    ) {
+      if (!this.activeVerifyTarget) {
+        this.activeVerifyTarget = defaultVerifyTarget()
+      }
     }
   }
 
-  private syncVerifyTargetFromSymptom(): void {
-    this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom)
+  private ensureVerifyTargetForGui(): void {
+    if (!this.activeVerifyTarget) {
+      this.activeVerifyTarget = defaultVerifyTarget()
+    }
   }
 
   private maybeEmitSymptomConfirmNotice(): void {
@@ -645,10 +663,9 @@ ${projectInfo}`
 
     const requireFeatureGuiVerify =
       Boolean(options?.forceFeatureGuiVerify) ||
-      (Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom))
-    this.syncVerifyTargetFromSymptom()
-    if (options?.forceFeatureGuiVerify && !this.activeVerifyTarget) {
-      this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom || '用户请求游戏内测试/验证')
+      (Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom)
+    if (options?.forceFeatureGuiVerify) {
+      this.ensureVerifyTargetForGui()
     }
 
     const result = await this.agent.run(
@@ -711,10 +728,7 @@ ${projectInfo}`
     ) {
       this.activeUserSymptom = recovered || '用户请求游戏内测试/验证'
     }
-    this.syncVerifyTargetFromSymptom()
-    if (!this.activeVerifyTarget) {
-      this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom)
-    }
+    this.ensureVerifyTargetForGui()
     // Drop any stale plan/candidate so we never fall back into submit_plan.
     this.lastPlanCandidate = null
     this.planReadyAwaitingExecute = false
@@ -766,10 +780,12 @@ ${projectInfo}`
       const m = this.messages[i]
       if (m.role !== 'user' || m.origin === 'harness') continue
       const c = (m.content || '').trim()
-      if (!c || isInGameVerifyRequest(c) || isResumeInput(c) || isSymptomResolvedFeedback(c)) continue
-      if (isUserSymptomFeedback(c) || isErrorReportInput(c) || shouldSkipFormalPlan(c)) {
-        return c.slice(0, 400)
-      }
+      if (!c || c === '用户请求游戏内测试/验证') continue
+      if (isNarrowResumeInput(c)) continue
+      // Structural crash/build dumps are always useful sticky symptoms.
+      if (isStructuralErrorReport(c)) return c.slice(0, 400)
+      // Prefer substantive prior user text over short verify/resume commands.
+      if (c.length >= 12 && c.length <= 800) return c.slice(0, 400)
     }
     return null
   }
@@ -782,7 +798,9 @@ ${projectInfo}`
     if (!this.activeUserSymptom) {
       this.activeUserSymptom = input.trim().slice(0, 400)
     }
-    this.syncVerifyTargetFromSymptom()
+    if (this.lastGuiFeatureSymptom) {
+      this.ensureVerifyTargetForGui()
+    }
     await this.updateSystemPrompt('execute')
     this._phase = 'execute'
     this.planReadyAwaitingExecute = false
@@ -818,13 +836,22 @@ ${projectInfo}`
     this.abortController = new AbortController()
     this.agent.resetRunState()
 
-    const intent = resolveTurnIntent(input, this.intentContext())
+    this.onAgentStatus?.('意图分类...')
+    const classified = await classifyUserTurn({
+      apiConfig: this.apiConfig,
+      input,
+      ctx: this.intentContext(),
+      stickySymptom: this.activeUserSymptom,
+      abortSignal: this.abortController.signal
+    })
+    this.applyClassificationSideEffects(classified, input)
+
+    const intent = classified.intent
     this.lastTurnMode = intent === 'plan_only' ? 'plan_only' : intent
 
     if (options.pushUser) {
       this.messages.push({ role: 'user', content: input, origin: 'user', taskId: this.taskId })
     }
-    this.noteUserSymptomFromInput(input)
     this.onAgentStatus?.('思考中...')
 
     let planStreamReasoning = ''
@@ -836,6 +863,16 @@ ${projectInfo}`
     }
 
     try {
+      if (classified.usedFallback) {
+        this.emitEvent({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'warn',
+            text: `意图分类失败，已用兜底：${classified.rationale}`
+          }
+        })
+      }
+
       // Guard: crash/error dumps must not steal into chat while execute is still active —
       // that would overwrite messages[0] with "对话模式 / 不要调用任何工具".
       let effectiveIntent = intent
@@ -844,18 +881,18 @@ ${projectInfo}`
         this._phase === 'execute' &&
         this.planTracker &&
         !this.planTracker.allDone() &&
-        isErrorReportInput(input)
+        (classified.isErrorReport || isStructuralErrorReport(input))
       ) {
         effectiveIntent = 'resume'
         this.lastTurnMode = 'resume'
       }
 
-      // "游戏测试/验证"：不依赖 planTracker（完成后常为 null），禁止再进 plan（无 mc_*/trigger_build）。
+      // In-game verify: do not depend on planTracker (often null after allDone).
       // Must run before chat — otherwise a misclassified chat turn locks tools out.
       if (
         this.composerMode === 'agent' &&
         Boolean(this._projectPath) &&
-        isInGameVerifyRequest(input)
+        classified.isInGameVerifyRequest
       ) {
         const result = await this.beginInGameVerifyExecute(streamCb)
         this.onAgentStatus?.('')
@@ -894,7 +931,7 @@ ${projectInfo}`
         intent === 'develop' &&
         this.composerMode === 'agent' &&
         (!this.planTracker || this.planTracker.allDone()) &&
-        shouldSkipFormalPlan(input)
+        classified.skipFormalPlan
       ) {
         if (this.planTracker?.allDone()) {
           this.retainCurrentUserAsNewTask()
@@ -1264,8 +1301,8 @@ ${projectInfo}`
           opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
           requireInGameVerify: Boolean(this.activeUserSymptom),
           requireFeatureGuiVerify:
-            Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom),
-          verifyTarget: this.activeVerifyTarget ?? deriveVerifyTarget(this.activeUserSymptom)
+            Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom,
+          verifyTarget: this.activeVerifyTarget
         }
       )
       this.onAgentStatus?.('')

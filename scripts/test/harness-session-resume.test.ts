@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { restoreActivePlan, serializeDisplayMessages } from '../../src/renderer/src/utils/chat-persist.ts'
-import { isResumeInput, resolveTurnIntent } from '../../src/renderer/src/harness/turn-intent.ts'
+import { isNarrowResumeInput } from '../../src/renderer/src/harness/turn-intent.ts'
+import { structuralClassifyFallback } from '../../src/renderer/src/harness/turn-classifier.ts'
 import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 
 test('restoreActivePlan recovers incomplete plan from partial turnStatus', () => {
@@ -50,25 +51,25 @@ test('restoreActivePlan skips answered/completed turns', () => {
   assert.equal(restoreActivePlan(display, persisted), null)
 })
 
-test('isResumeInput accepts trailing punctuation', () => {
-  assert.equal(isResumeInput('继续'), true)
-  assert.equal(isResumeInput('继续。'), true)
-  assert.equal(isResumeInput('继续！'), true)
-  assert.equal(isResumeInput('请继续'), false)
+test('isNarrowResumeInput accepts trailing punctuation', () => {
+  assert.equal(isNarrowResumeInput('继续'), true)
+  assert.equal(isNarrowResumeInput('继续。'), true)
+  assert.equal(isNarrowResumeInput('继续！'), true)
+  assert.equal(isNarrowResumeInput('请继续'), false)
 })
 
-test('resolveTurnIntent: 继续。 with incomplete plan → resume', () => {
+test('structuralClassifyFallback: 继续。 with incomplete plan → resume', () => {
   const tracker = PlanTracker.fromSteps([
     { id: '1', description: '写文件', status: 'running' },
     { id: '2', description: '构建', status: 'pending' }
   ])
   assert.equal(
-    resolveTurnIntent('继续。', {
+    structuralClassifyFallback('继续。', {
       phase: 'execute',
       planTracker: tracker,
       hasProject: true,
       composerMode: 'agent'
-    }),
+    }).intent,
     'resume'
   )
 })

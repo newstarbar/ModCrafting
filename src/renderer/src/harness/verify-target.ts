@@ -26,92 +26,73 @@ export interface VerifyTarget {
 const TITLE_REJECT = ['TitleScreen']
 const TITLE_KINDS = ['title']
 
-function extractHotkey(text: string): string | undefined {
-  const m = text.match(/\bF([1-9]|1[0-2])\b/i)
-  return m ? `f${m[1]}` : undefined
+export interface ClassifyVerifyTargetInput {
+  label: string
+  hotkey?: string
+  screenNameHints: string[]
+  openSteps: string[]
+}
+
+/** Default target when user asks for in-game verify but no concrete screen was classified. */
+export function defaultVerifyTarget(): VerifyTarget {
+  return {
+    label: '打开待测功能界面（非标题屏）后截图/检视',
+    screenNamePatterns: [],
+    rejectScreenNames: TITLE_REJECT,
+    rejectKinds: TITLE_KINDS,
+    openSteps: [
+      '若症状含热键：mc_input key_press',
+      '否则 click_widget 点「模组 / 选项 / 预览」',
+      'mc_inspect 确认已离开 TitleScreen'
+    ],
+    derivedFrom: 'default'
+  }
+}
+
+function hintToRegExp(hint: string): RegExp | null {
+  const raw = hint.trim()
+  if (!raw) return null
+  // Escape regex metacharacters from model hints; match as substring.
+  const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  try {
+    return new RegExp(escaped, 'i')
+  } catch {
+    return null
+  }
 }
 
 /**
- * Derive a concrete verification target from sticky symptom text.
- * Returns null when no in-game GUI target can be inferred.
+ * Build VerifyTarget from constrained LLM classification (not keyword bags).
  */
-export function deriveVerifyTarget(symptom: string | null | undefined): VerifyTarget | null {
-  const text = (symptom || '').trim()
-  if (!text) return null
-  if (/^用户请求游戏内测试/.test(text) && text.length < 40) {
-    return {
-      label: '打开待测功能界面（非标题屏）后截图/检视',
-      screenNamePatterns: [],
-      rejectScreenNames: TITLE_REJECT,
-      rejectKinds: TITLE_KINDS,
-      openSteps: [
-        '若症状含热键：mc_input key_press',
-        '否则 click_widget 点「模组 / 选项 / 预览」',
-        'mc_inspect 确认已离开 TitleScreen'
-      ],
-      derivedFrom: 'default'
-    }
+export function verifyTargetFromClassification(
+  payload: ClassifyVerifyTargetInput | null | undefined,
+  derivedFrom: 'symptom' | 'default' = 'symptom'
+): VerifyTarget | null {
+  if (!payload) return null
+  const label = String(payload.label || '').trim()
+  if (!label) return null
+  const patterns = (payload.screenNameHints || [])
+    .map(hintToRegExp)
+    .filter((re): re is RegExp => Boolean(re))
+  const hotkeyRaw = payload.hotkey?.trim()
+  const hotkeyMatch = hotkeyRaw?.match(/^f?([1-9]|1[0-2])$/i)
+  const hotkey = hotkeyMatch ? `f${hotkeyMatch[1]}` : undefined
+  const openSteps = (payload.openSteps || []).map((s) => String(s || '').trim()).filter(Boolean)
+  return {
+    label: label.slice(0, 160),
+    hotkey,
+    screenNamePatterns: patterns,
+    rejectScreenNames: TITLE_REJECT,
+    rejectKinds: TITLE_KINDS,
+    openSteps:
+      openSteps.length > 0
+        ? openSteps.slice(0, 8)
+        : [
+            hotkey ? `mc_input key_press {"key":"${hotkey}"}` : '打开待测功能界面',
+            'mc_inspect 确认已离开 TitleScreen'
+          ],
+    derivedFrom
   }
-
-  const hotkey = extractHotkey(text)
-  const wantsPreview = /预览|preview|WYSIWYG|MainMenuPreview/i.test(text)
-  const wantsConfig = /配置|设置屏|ConfigScreen|设置界面/i.test(text)
-  const wantsGui = /GUI|gui|界面|屏幕|布局|按钮|控件|面板|显示|错乱|模糊|Screen/i.test(text)
-
-  if (wantsPreview || (hotkey && wantsGui)) {
-    const key = hotkey || 'f6'
-    return {
-      label: `打开 F${key.slice(1).toUpperCase()} 预览屏（MainMenuPreviewScreen / *Preview*）`,
-      hotkey: key,
-      screenNamePatterns: [/Preview/i, /MainMenuPreviewScreen/i],
-      rejectScreenNames: TITLE_REJECT,
-      rejectKinds: TITLE_KINDS,
-      openSteps: [
-        `mc_input key_press {"key":"${key}"}（预览常异步打开，稍后再检视）`,
-        '若仍为 TitleScreen：click_widget 进入模组设置里的预览入口',
-        'mc_inspect 确认 screen.simpleName 匹配 Preview / MainMenuPreviewScreen',
-        '再 mc_screenshot 对照症状'
-      ],
-      derivedFrom: 'symptom'
-    }
-  }
-
-  if (wantsConfig) {
-    return {
-      label: '打开模组配置界面（ConfigScreen / *Config*）',
-      hotkey,
-      screenNamePatterns: [/ConfigScreen/i, /Config/i, /Settings/i],
-      rejectScreenNames: TITLE_REJECT,
-      rejectKinds: TITLE_KINDS,
-      openSteps: [
-        hotkey ? `mc_input key_press {"key":"${hotkey}"}` : 'click_widget label=模组 或 选项',
-        'mc_inspect 确认进入 Config/Settings 类界面'
-      ],
-      derivedFrom: 'symptom'
-    }
-  }
-
-  if (wantsGui || hotkey) {
-    return {
-      label: hotkey
-        ? `按 ${hotkey.toUpperCase()} 打开相关界面后检视（禁止停在 TitleScreen）`
-        : '打开症状相关 GUI 后检视（禁止停在 TitleScreen）',
-      hotkey,
-      screenNamePatterns: [],
-      rejectScreenNames: TITLE_REJECT,
-      rejectKinds: TITLE_KINDS,
-      openSteps: [
-        hotkey
-          ? `mc_input key_press {"key":"${hotkey}"}`
-          : 'click_widget 点开症状相关按钮',
-        'mc_inspect 确认已离开 TitleScreen',
-        'mc_screenshot 对照症状'
-      ],
-      derivedFrom: 'symptom'
-    }
-  }
-
-  return null
 }
 
 export function parseInspectScreen(output: string): {
