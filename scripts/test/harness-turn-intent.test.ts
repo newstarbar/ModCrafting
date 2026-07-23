@@ -224,6 +224,40 @@ test('resolveTurnIntent: plain bug note with project → develop (not silent cha
   )
 })
 
+test('deriveVerifyTarget: F6 preview requires MainMenuPreviewScreen', async () => {
+  const {
+    deriveVerifyTarget,
+    matchesVerifyTarget,
+    formatVerifyTargetBlock
+  } = await import('../../src/renderer/src/harness/verify-target.ts')
+  const target = deriveVerifyTarget('实际F6的预览的GUI显示有问题')
+  assert.ok(target)
+  assert.equal(target!.hotkey, 'f6')
+  assert.match(target!.label, /Preview|预览/)
+  assert.equal(
+    matchesVerifyTarget(
+      JSON.stringify({ screen: { simpleName: 'TitleScreen', kind: 'title' } }),
+      target!
+    ),
+    false
+  )
+  assert.equal(
+    matchesVerifyTarget(
+      JSON.stringify({ screen: { simpleName: 'ConfigScreen', kind: 'generic' } }),
+      target!
+    ),
+    false
+  )
+  assert.equal(
+    matchesVerifyTarget(
+      JSON.stringify({ screen: { simpleName: 'MainMenuPreviewScreen', kind: 'generic' } }),
+      target!
+    ),
+    true
+  )
+  assert.match(formatVerifyTargetBlock(target!), /检测目标/)
+})
+
 test('isGuiFeatureSymptom detects preview / F-key reports', () => {
   assert.equal(isGuiFeatureSymptom('实际F6的预览的GUI显示有问题'), true)
   assert.equal(isGuiFeatureSymptom('用户请求游戏内测试/验证'), false)

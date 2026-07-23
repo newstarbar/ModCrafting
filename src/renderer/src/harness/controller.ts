@@ -30,6 +30,11 @@ import { OpenCodeAdapter } from './opencode-adapter.ts'
 import type { WorkflowStep } from './workflow-types.ts'
 import { TOOL_LABELS_ZH } from './tool-labels'
 import {
+  deriveVerifyTarget,
+  formatVerifyTargetBlock,
+  type VerifyTarget
+} from './verify-target.ts'
+import {
   formatGradleSummary,
   formatJavaFileList,
   parseGradleProperties,
@@ -65,6 +70,8 @@ export class Controller {
   private sessionGoal = ''
   /** Sticky user-reported bug/symptom; runClient ready alone must not clear it. */
   private activeUserSymptom: string | null = null
+  /** Derived from symptom: which screen/hotkey must be hit for in-game verify. */
+  private activeVerifyTarget: VerifyTarget | null = null
   /** Cached project scan for execute-entry user message (kept out of system prompt). */
   private lastProjectInfo = ''
   private planReadyAwaitingExecute = false
@@ -269,21 +276,31 @@ export class Controller {
   private noteUserSymptomFromInput(input: string): void {
     if (isSymptomResolvedFeedback(input)) {
       this.activeUserSymptom = null
+      this.activeVerifyTarget = null
       return
     }
     if (isUserSymptomFeedback(input) || isErrorReportInput(input)) {
       this.activeUserSymptom = input.trim().slice(0, 400)
+      this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom)
     }
+  }
+
+  private syncVerifyTargetFromSymptom(): void {
+    this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom)
   }
 
   private maybeEmitSymptomConfirmNotice(): void {
     if (!this.activeUserSymptom || !this.planTracker?.allDone()) return
+    const targetHint = this.activeVerifyTarget
+      ? `检测目标「${this.activeVerifyTarget.label}」是否已在游戏内确认？`
+      : ''
     this.emitEvent({
       kind: EventKind.Notice,
       notice: {
         level: 'warn',
         text:
           `游戏已启动/计划步骤已跑完，但用户症状仍待确认：「${this.activeUserSymptom.slice(0, 100)}」。` +
+          (targetHint ? targetHint : '') +
           `若问题仍在，请直接描述现象（不要只发「继续」）。若已解决可回复「好了」。`
       }
     })
@@ -458,7 +475,8 @@ export class Controller {
     const fabricPolicy = buildFabricAgentPolicyPrompt(mode)
     const goalBlock = [
       buildSessionGoalBlock(this.sessionGoal),
-      buildUserSymptomBlock(this.activeUserSymptom)
+      buildUserSymptomBlock(this.activeUserSymptom),
+      formatVerifyTargetBlock(this.activeVerifyTarget)
     ].filter(Boolean).join('\n\n')
     // projectInfo is injected into the execute-entry user message (not system)
     // so writing files / phase switches do not invalidate the system prompt cache prefix.
@@ -628,6 +646,10 @@ ${projectInfo}`
     const requireFeatureGuiVerify =
       Boolean(options?.forceFeatureGuiVerify) ||
       (Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom))
+    this.syncVerifyTargetFromSymptom()
+    if (options?.forceFeatureGuiVerify && !this.activeVerifyTarget) {
+      this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom || '用户请求游戏内测试/验证')
+    }
 
     const result = await this.agent.run(
       this.apiConfig.endpoint,
@@ -644,6 +666,7 @@ ${projectInfo}`
         opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
         requireInGameVerify: Boolean(this.activeUserSymptom) || Boolean(options?.forceFeatureGuiVerify),
         requireFeatureGuiVerify,
+        verifyTarget: this.activeVerifyTarget,
         openCodeDelegate: this.buildOpenCodeDelegate()
       }
     )
@@ -688,6 +711,10 @@ ${projectInfo}`
     ) {
       this.activeUserSymptom = recovered || '用户请求游戏内测试/验证'
     }
+    this.syncVerifyTargetFromSymptom()
+    if (!this.activeVerifyTarget) {
+      this.activeVerifyTarget = deriveVerifyTarget(this.activeUserSymptom)
+    }
     // Drop any stale plan/candidate so we never fall back into submit_plan.
     this.lastPlanCandidate = null
     this.planReadyAwaitingExecute = false
@@ -700,17 +727,28 @@ ${projectInfo}`
     ])
     this.emitPlanState(this.planTracker)
     this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
-    const hotkey = (this.activeUserSymptom.match(/\bF(\d{1,2})\b/i) || [])[0] || 'F6'
+    if (this.activeVerifyTarget) {
+      this.emitEvent({
+        kind: EventKind.Notice,
+        notice: {
+          level: 'info',
+          text: `检测目标：${this.activeVerifyTarget.label}`
+        }
+      })
+    }
+    const hotkey =
+      this.activeVerifyTarget?.hotkey ||
+      (this.activeUserSymptom.match(/\bF(\d{1,2})\b/i) || [])[0]?.toLowerCase() ||
+      'f6'
     const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
+    const targetBlock = formatVerifyTargetBlock(this.activeVerifyTarget)
     this.messages.push({
       role: 'user',
       content: [
         '用户要求游戏内测试。禁止 submit_plan / 重新规划。',
         '当前为执行阶段：若游戏未运行则 trigger_build task=runClient。',
-        `ready 后必须打开待测功能，禁止只停在 TitleScreen：`,
-        `1) mc_input key_press key=${hotkey.toLowerCase()}（预览常异步打开，稍后再 inspect）`,
-        '2) 若仍是标题屏：click_widget 点「模组」「选项」或预览/设置入口，直到 screen.simpleName 不是 TitleScreen',
-        '3) 进入目标 GUI 后 mc_inspect + mc_screenshot，对照症状说明是否仍存在',
+        targetBlock ||
+          `ready 后按 ${hotkey.toUpperCase()} 打开待测界面，用 mc_inspect 确认已进入目标屏后再截图。`,
         symptomBlock
       ]
         .filter(Boolean)
@@ -744,6 +782,7 @@ ${projectInfo}`
     if (!this.activeUserSymptom) {
       this.activeUserSymptom = input.trim().slice(0, 400)
     }
+    this.syncVerifyTargetFromSymptom()
     await this.updateSystemPrompt('execute')
     this._phase = 'execute'
     this.planReadyAwaitingExecute = false
@@ -1225,7 +1264,8 @@ ${projectInfo}`
           opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
           requireInGameVerify: Boolean(this.activeUserSymptom),
           requireFeatureGuiVerify:
-            Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom)
+            Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom),
+          verifyTarget: this.activeVerifyTarget ?? deriveVerifyTarget(this.activeUserSymptom)
         }
       )
       this.onAgentStatus?.('')

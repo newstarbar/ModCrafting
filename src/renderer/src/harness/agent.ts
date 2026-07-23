@@ -10,6 +10,7 @@ import type { PlanTracker } from './plan-tracker'
 import { normalizeWorkflowSteps } from './plan-normalizer'
 import { WorkflowEngine } from './workflow-engine'
 import { finalizeTerminalSteps } from './finalize-terminal'
+import type { VerifyTarget } from './verify-target.ts'
 import { logger } from '../utils/logger'
 import { isRepeatGuardedToolCall } from './repeat-guard.ts'
 import { prepareMessages, estimatePromptTokens, warnTokenThreshold, RECENT_WINDOW, type CompactionResult } from './context-compact'
@@ -77,6 +78,8 @@ export interface RunOptions {
   requireInGameVerify?: boolean
   /** GUI/preview symptoms: TitleScreen-only inspect does not count. */
   requireFeatureGuiVerify?: boolean
+  /** Explicit screen match target for in-game verification. */
+  verifyTarget?: VerifyTarget | null
   openCodeDelegate?: (step: import('./workflow-types.ts').WorkflowStep, instruction: string) => Promise<{
     ok: boolean
     output?: string
@@ -290,7 +293,8 @@ export class Agent {
     onStream?: (text: string, reasoning?: string) => void,
     openCodeDelegate?: RunOptions['openCodeDelegate'],
     requireInGameVerify = false,
-    requireFeatureGuiVerify = false
+    requireFeatureGuiVerify = false,
+    verifyTarget: VerifyTarget | null = null
   ): Promise<string> {
     const clarificationGate = { count: this.clarificationCount }
     const engine = new WorkflowEngine({
@@ -308,6 +312,7 @@ export class Agent {
       visionModel: isVisionCapableModel(apiModel),
       requireInGameVerify,
       requireFeatureGuiVerify,
+      verifyTarget,
       modelCall: async (workflowMessages, tools, onChunk) => {
         // Last message is the per-step workflow prompt; compact/persist history only.
         const stepPromptMsg = workflowMessages[workflowMessages.length - 1]
@@ -477,7 +482,8 @@ export class Agent {
         onStream,
         options.openCodeDelegate,
         Boolean(options.requireInGameVerify),
-        Boolean(options.requireFeatureGuiVerify)
+        Boolean(options.requireFeatureGuiVerify),
+        options.verifyTarget ?? null
       )
     }
 
