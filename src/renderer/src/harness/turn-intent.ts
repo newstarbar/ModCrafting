@@ -66,6 +66,29 @@ export function isSymptomResolvedFeedback(input: string): boolean {
   return SYMPTOM_RESOLVED_PATTERN.test(input.trim())
 }
 
+/** User asks to verify in-game after a plan finished — do not start a new submit_plan cycle. */
+const IN_GAME_VERIFY_REQUEST_PATTERN =
+  /^(游戏测试|再测一次|再测试|再测|验证一下|验证下|验证|测试一下|测试下|看看效果|检查一下|检查下|截个图|截图看看|in-?game\s*test|test\s*in\s*game|verify)[\s!！。.?？~]*$/i
+
+export function isInGameVerifyRequest(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed || trimmed.length > 80) return false
+  return IN_GAME_VERIFY_REQUEST_PATTERN.test(trimmed)
+}
+
+/**
+ * Short symptom / bug reports in agent mode can skip formal submit_plan and go
+ * straight to execute (freeform or host-driven).
+ */
+export function shouldSkipFormalPlan(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed || trimmed.length > 160) return false
+  if (isInGameVerifyRequest(trimmed)) return false
+  if (isResumeInput(trimmed) || isSymptomResolvedFeedback(trimmed)) return false
+  if (isUserSymptomFeedback(trimmed) || isErrorReportInput(trimmed)) return true
+  return /有问题|不对|错乱|显示|布局|预览|修复|改一下|修一下|修下|模糊|穿模/.test(trimmed)
+}
+
 export function buildUserSymptomBlock(symptom: string | null | undefined): string {
   const text = (symptom || '').trim()
   if (!text) return ''

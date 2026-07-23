@@ -8,6 +8,8 @@ import {
   isErrorReportInput,
   isUserSymptomFeedback,
   isSymptomResolvedFeedback,
+  isInGameVerifyRequest,
+  shouldSkipFormalPlan,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
 } from '../../src/renderer/src/harness/turn-intent.ts'
@@ -203,6 +205,26 @@ test('resolveTurnIntent: plain bug note with project → develop (not silent cha
   assert.equal(
     resolveTurnIntent('F6后鼠标被强制做到屏幕中心，无法操作截图设置', intentCtx({ hasProject: true })),
     'develop'
+  )
+})
+
+test('isInGameVerifyRequest: short verify phrases', () => {
+  assert.equal(isInGameVerifyRequest('游戏测试'), true)
+  assert.equal(isInGameVerifyRequest('验证一下'), true)
+  assert.equal(isInGameVerifyRequest('截图看看'), true)
+  assert.equal(isInGameVerifyRequest('实际F6的预览的GUI显示有问题'), false)
+})
+
+test('shouldSkipFormalPlan: short symptom skips submit_plan ceremony', () => {
+  assert.equal(shouldSkipFormalPlan('实际F6的预览的GUI显示有问题'), true)
+  assert.equal(shouldSkipFormalPlan('还是模糊的'), true)
+  assert.equal(shouldSkipFormalPlan('游戏测试'), false)
+  assert.equal(shouldSkipFormalPlan('继续'), false)
+  assert.equal(
+    shouldSkipFormalPlan(
+      '请帮我做一个完整的大型模组，包含自定义维度、生物、武器树、任务系统和多人同步，并写详细设计文档'
+    ),
+    false
   )
 })
 

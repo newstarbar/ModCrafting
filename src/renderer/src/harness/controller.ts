@@ -18,6 +18,8 @@ import {
   isErrorReportInput,
   isUserSymptomFeedback,
   isSymptomResolvedFeedback,
+  isInGameVerifyRequest,
+  shouldSkipFormalPlan,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
 } from './turn-intent'
@@ -685,6 +687,81 @@ ${projectInfo}`
     return this.runExecutePhase(streamCb)
   }
 
+  /** After plan allDone: verify in-game without clearing tracker into a new submit_plan cycle. */
+  private async beginInGameVerifyExecute(
+    streamCb: (text: string, reasoning?: string) => void
+  ): Promise<string> {
+    this.emitEvent({
+      kind: EventKind.Notice,
+      notice: {
+        level: 'info',
+        text: '计划已完成，直接进入游戏内校验（跳过重新提交计划）。'
+      }
+    })
+    if (!this.activeUserSymptom) {
+      this.activeUserSymptom = '用户请求游戏内测试/验证'
+    }
+    await this.updateSystemPrompt('execute')
+    this._phase = 'execute'
+    this.planReadyAwaitingExecute = false
+    this.lastPlanCandidate = null
+    const opsPlan = '1. 启动游戏进行真实测试（runClient）'
+    this.planTracker = PlanTracker.fromPlanText(opsPlan)
+    this.emitPlanState(this.planTracker)
+    this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
+    const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
+    this.messages.push({
+      role: 'user',
+      content: [
+        '用户要求游戏内测试。不要重新规划。',
+        '若游戏未运行则 trigger_build runClient；ready 后必须用 mc_input / mc_inspect / mc_screenshot 验证症状（禁止仅凭 ready 结束）。',
+        symptomBlock
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      origin: 'harness',
+      taskId: this.taskId,
+      phase: 'execute'
+    })
+    return this.runExecutePhase(streamCb)
+  }
+
+  /** Short symptom fixes: synthetic mini-plan, skip formal submit_plan. */
+  private async beginSymptomFastExecute(
+    streamCb: (text: string, reasoning?: string) => void,
+    input: string
+  ): Promise<string> {
+    if (!this.activeUserSymptom) {
+      this.activeUserSymptom = input.trim().slice(0, 400)
+    }
+    await this.updateSystemPrompt('execute')
+    this._phase = 'execute'
+    this.planReadyAwaitingExecute = false
+    this.lastPlanCandidate = null
+    const opsPlan =
+      '1. [write] 针对用户症状定位并修复相关源码\n' +
+      '2. 构建项目（gradlew build）\n' +
+      '3. 启动游戏进行真实测试（runClient）'
+    this.planTracker = PlanTracker.fromPlanText(opsPlan)
+    this.emitPlanState(this.planTracker)
+    this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
+    const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
+    this.messages.push({
+      role: 'user',
+      content: [
+        '短修复：已跳过正式 submit_plan。按上方合成步骤直接改码、构建、runClient。',
+        'ready 后必须 mc_inspect / mc_screenshot 验证症状。',
+        symptomBlock
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      origin: 'harness',
+      taskId: this.taskId,
+      phase: 'execute'
+    })
+    return this.runExecutePhase(streamCb)
+  }
+
   private async runTurn(input: string, options: { pushUser: boolean }): Promise<string> {
     if (this._running) return ''
 
@@ -747,6 +824,40 @@ ${projectInfo}`
           return missing
         }
         const result = await this.beginExecuteFromTracker(streamCb)
+        this.onAgentStatus?.('')
+        return result
+      }
+
+      // Plan finished + "游戏测试"：禁止清计划再走 submit_plan（plan 阶段无 mc_*）。
+      if (
+        (intent === 'develop' || intent === 'plan_only') &&
+        this.planTracker?.allDone() &&
+        isInGameVerifyRequest(input)
+      ) {
+        const result = await this.beginInGameVerifyExecute(streamCb)
+        this.onAgentStatus?.('')
+        return result
+      }
+
+      // 短症状/修复：agent 模式跳过正式 submit_plan。
+      if (
+        intent === 'develop' &&
+        this.composerMode === 'agent' &&
+        (!this.planTracker || this.planTracker.allDone()) &&
+        shouldSkipFormalPlan(input)
+      ) {
+        if (this.planTracker?.allDone()) {
+          this.retainCurrentUserAsNewTask()
+          this.planTracker = null
+        }
+        this.emitEvent({
+          kind: EventKind.Notice,
+          notice: {
+            level: 'info',
+            text: '短修复任务：跳过正式计划，直接进入执行与游戏内校验。'
+          }
+        })
+        const result = await this.beginSymptomFastExecute(streamCb, input)
         this.onAgentStatus?.('')
         return result
       }
