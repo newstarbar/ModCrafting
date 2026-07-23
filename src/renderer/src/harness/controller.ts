@@ -695,16 +695,17 @@ ${projectInfo}`
       kind: EventKind.Notice,
       notice: {
         level: 'info',
-        text: '计划已完成，直接进入游戏内校验（跳过重新提交计划）。'
+        text: '进入游戏内校验：跳过计划阶段，直接 runClient + mc_inspect/mc_screenshot。'
       }
     })
     if (!this.activeUserSymptom) {
       this.activeUserSymptom = '用户请求游戏内测试/验证'
     }
+    // Drop any stale plan/candidate so we never fall back into submit_plan.
+    this.lastPlanCandidate = null
+    this.planReadyAwaitingExecute = false
     await this.updateSystemPrompt('execute')
     this._phase = 'execute'
-    this.planReadyAwaitingExecute = false
-    this.lastPlanCandidate = null
     const opsPlan = '1. 启动游戏进行真实测试（runClient）'
     this.planTracker = PlanTracker.fromPlanText(opsPlan)
     this.emitPlanState(this.planTracker)
@@ -713,8 +714,9 @@ ${projectInfo}`
     this.messages.push({
       role: 'user',
       content: [
-        '用户要求游戏内测试。不要重新规划。',
-        '若游戏未运行则 trigger_build runClient；ready 后必须用 mc_input / mc_inspect / mc_screenshot 验证症状（禁止仅凭 ready 结束）。',
+        '用户要求游戏内测试。禁止 submit_plan / 重新规划。',
+        '当前为执行阶段：若游戏未运行则 trigger_build task=runClient；',
+        'ready 后必须用 mc_input（如 key_press f6）打开界面，再用 mc_inspect / mc_screenshot 验证（禁止仅凭 ready 结束）。',
         symptomBlock
       ]
         .filter(Boolean)
@@ -801,6 +803,18 @@ ${projectInfo}`
         this.lastTurnMode = 'resume'
       }
 
+      // "游戏测试/验证"：不依赖 planTracker（完成后常为 null），禁止再进 plan（无 mc_*/trigger_build）。
+      // Must run before chat — otherwise a misclassified chat turn locks tools out.
+      if (
+        this.composerMode === 'agent' &&
+        Boolean(this._projectPath) &&
+        isInGameVerifyRequest(input)
+      ) {
+        const result = await this.beginInGameVerifyExecute(streamCb)
+        this.onAgentStatus?.('')
+        return result
+      }
+
       if (effectiveIntent === 'chat') {
         const result = await this.runChatTurn(streamCb)
         this.onAgentStatus?.('')
@@ -824,17 +838,6 @@ ${projectInfo}`
           return missing
         }
         const result = await this.beginExecuteFromTracker(streamCb)
-        this.onAgentStatus?.('')
-        return result
-      }
-
-      // Plan finished + "游戏测试"：禁止清计划再走 submit_plan（plan 阶段无 mc_*）。
-      if (
-        (intent === 'develop' || intent === 'plan_only') &&
-        this.planTracker?.allDone() &&
-        isInGameVerifyRequest(input)
-      ) {
-        const result = await this.beginInGameVerifyExecute(streamCb)
         this.onAgentStatus?.('')
         return result
       }

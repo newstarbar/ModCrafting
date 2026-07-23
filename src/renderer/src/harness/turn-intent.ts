@@ -215,6 +215,10 @@ export function resolveTurnIntent(input: string, ctx: TurnIntentContext): TurnIn
     if (canResumePlan && isResumeInput(trimmed)) {
       return 'resume'
     }
+    // In-game verify phrases must never fall into read-only chat.
+    if (ctx.hasProject && isInGameVerifyRequest(trimmed)) {
+      return 'develop'
+    }
     // Agent mode is capable of acting, but questions/explanations remain read-only.
     // Only an explicit mutation signal enters the plan -> execute workflow.
     if (heuristicChat(trimmed)) return 'chat'

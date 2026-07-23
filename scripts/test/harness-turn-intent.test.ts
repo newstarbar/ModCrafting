@@ -215,6 +215,20 @@ test('isInGameVerifyRequest: short verify phrases', () => {
   assert.equal(isInGameVerifyRequest('实际F6的预览的GUI显示有问题'), false)
 })
 
+test('resolveTurnIntent: 游戏测试 with completed/null plan still develops', () => {
+  const done = PlanTracker.fromSteps([
+    { id: '1', description: '启动游戏进行真实测试（runClient）', status: 'completed' }
+  ])
+  assert.equal(
+    resolveTurnIntent('游戏测试', intentCtx({ phase: 'execute', planTracker: done })),
+    'develop'
+  )
+  assert.equal(
+    resolveTurnIntent('游戏测试', intentCtx({ phase: 'plan', planTracker: null })),
+    'develop'
+  )
+})
+
 test('shouldSkipFormalPlan: short symptom skips submit_plan ceremony', () => {
   assert.equal(shouldSkipFormalPlan('实际F6的预览的GUI显示有问题'), true)
   assert.equal(shouldSkipFormalPlan('还是模糊的'), true)
