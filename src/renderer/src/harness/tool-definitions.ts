@@ -1781,6 +1781,7 @@ export const askClarificationTool: Tool = {
 // Register all built-in tools
 import { Registry } from "./tools";
 import { logger } from "../utils/logger";
+import { MC_OBSERVER_TOOLS } from "./mc-observer-tools";
 
 export function registerModCraftingTools(registry: Registry, options?: { disabledTools?: string[] }): void {
 	const disabled = new Set(options?.disabledTools || []);
@@ -1814,7 +1815,8 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		fabricTemplateGenerateTool,
 		submitPlanTool,
 		askClarificationTool,
-		completeStepTool
+		completeStepTool,
+		...MC_OBSERVER_TOOLS
 	];
 	for (const tool of tools) {
 		if (!disabled.has(tool.name)) registry.add(tool);

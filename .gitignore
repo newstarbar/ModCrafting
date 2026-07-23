@@ -42,6 +42,12 @@ resources/.gradle-home-seed.zip.stamp
 # TypeScript 增量编译缓存
 *.tsbuildinfo
 
+# bridge-mod Gradle 构建产物
+bridge-mod/.gradle/
+bridge-mod/.gradle-home/
+bridge-mod/build/
+bridge-mod/run/
+
 # IDE / 本地工具
 .trae/
 .reasonix/

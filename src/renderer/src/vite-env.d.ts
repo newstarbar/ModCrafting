@@ -109,6 +109,27 @@ interface ModCraftingApi {
   mcListInstances: () => Promise<object[]>
   mcGetCrashReport: (crashReportPath: string) => Promise<FileResult>
   mcDeleteInstance: (id: string) => Promise<WriteResult>
+  mcBridgeStatus: (instanceId?: string) => Promise<{
+    ready: boolean
+    instanceId?: string
+    status?: string
+    port?: number | null
+    modVersion?: string | null
+    gameDir?: string | null
+    error?: string
+  }>
+  mcBridgeCall: (payload: {
+    instanceId?: string
+    method?: 'GET' | 'POST'
+    path: string
+    body?: Record<string, unknown>
+    timeoutMs?: number
+  }) => Promise<{
+    ok: boolean
+    status: number
+    data: Record<string, unknown>
+    error?: string
+  }>
   onMcLog: (callback: (id: string, text: string) => void) => () => void
   onMcStateChanged: (callback: (id: string, state: object) => void) => () => void
   onMcCrashed: (callback: (id: string, exitCode: number, crashReportPath: string | null) => void) => () => void

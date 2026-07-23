@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "modcrafting_observer",
+  "version": "${version}",
+  "name": "ModCrafting Observer",
+  "description": "Local HTTP bridge for ModCrafting AI to inspect and control the Minecraft client during runClient tests.",
+  "authors": ["ModCrafting"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.modcrafting.observer.ModCraftingObserverClient"]
+  },
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

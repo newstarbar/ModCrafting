@@ -72,6 +72,7 @@ export function buildUserSymptomBlock(symptom: string | null | undefined): strin
   return (
     `【用户待验证症状】${text.slice(0, 400)}\n` +
     `硬约束：trigger_build runClient 出现 MC_PHASE:ready 仅表示游戏启动成功，不代表该症状已修复。` +
+    `ready 后必须调用 mc_inspect 或 mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验。` +
     `写码步骤必须针对该症状做可验证修改（禁止只加注释/空改）；若 build 全 UP-TO-DATE，说明改动未进入编译，须核对路径（main/client）与 edit_file 是否落盘。` +
     `完成后用一两句说明改了哪一处，由用户确认是否解决。`
   )

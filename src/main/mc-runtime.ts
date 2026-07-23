@@ -4,6 +4,13 @@ import * as path from 'path'
 import * as fs from 'fs'
 import * as iconv from 'iconv-lite'
 import { ensureJdkReady, isGradleHomeSeedReady, prepareBuild, purgeGradleEphemeralCaches } from './build-env'
+import {
+  clearBridgeDiscovery,
+  readBridgeDiscovery,
+  requestBridge,
+  waitForBridgeDiscovery,
+  type BridgeDiscovery
+} from './mc-bridge-client'
 
 const LOG_BUFFER_MAX_LINES = 500
 
@@ -145,6 +152,8 @@ interface McInstance {
   crashReportPath: string | null
   exitReason: ExitReason
   logBuffer: string[]
+  gameDir: string | null
+  bridge: BridgeDiscovery | null
 }
 
 const instances = new Map<string, McInstance>()
@@ -162,7 +171,9 @@ function createInstanceRecord(projectPath: string, name?: string): McInstance {
     crashedAt: null,
     crashReportPath: null,
     exitReason: 'none',
-    logBuffer: []
+    logBuffer: [],
+    gameDir: null,
+    bridge: null
   }
   instances.set(id, instance)
   notifyInstanceState(id)
@@ -190,14 +201,17 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
   instance.crashReportPath = null
   instance.exitReason = 'none'
   instance.logBuffer = []
+  instance.bridge = null
   notifyInstanceState(id)
 
   const gradlew = path.join(instance.projectPath, 'gradlew.bat')
   const cmd = fs.existsSync(gradlew) ? gradlew : 'gradle'
   const offlineFlags = isGradleHomeSeedReady() ? '--offline' : '-Dorg.gradle.offline=false'
   const gameDirAbs = instanceGameDirAbs(instance.projectPath, id)
+  instance.gameDir = gameDirAbs
   fs.mkdirSync(path.join(gameDirAbs, 'mods'), { recursive: true })
   ensureGameOptions(gameDirAbs)
+  clearBridgeDiscovery(gameDirAbs)
 
   const sharedGradleHome = buildPrep.env?.GRADLE_USER_HOME
   if (typeof sharedGradleHome === 'string') {
@@ -238,6 +252,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
       if (instance.status === 'starting' && isClientStarted(text)) {
         instance.status = 'running'
         notifyInstanceState(id)
+        void attachBridgeWhenReady(instance, gameDirAbs)
       }
     }
 
@@ -248,6 +263,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
       const wasManual = instance.exitReason === 'manual'
       instance.process = null
       instance.startedAt = null
+      instance.bridge = null
 
       if (wasManual) {
         instance.status = 'stopped'
@@ -419,6 +435,101 @@ export function setupMcRuntimeHandlers(): void {
     instances.delete(id)
     return { success: true }
   })
+
+  ipcMain.handle('mc:bridgeStatus', async (_event, instanceId?: string) => {
+    const instance = resolveBridgeInstance(instanceId)
+    if (!instance) {
+      return { ready: false, error: '没有运行中的游戏实例' }
+    }
+    if (!instance.bridge && instance.gameDir) {
+      instance.bridge = readBridgeDiscovery(instance.gameDir)
+    }
+    return {
+      ready: Boolean(instance.bridge),
+      instanceId: instance.id,
+      status: instance.status,
+      port: instance.bridge?.port ?? null,
+      modVersion: instance.bridge?.modVersion ?? null,
+      gameDir: instance.gameDir,
+      error: instance.bridge ? undefined : '观测桥尚未就绪（等待 modcrafting-bridge.json）'
+    }
+  })
+
+  ipcMain.handle(
+    'mc:bridgeCall',
+    async (
+      _event,
+      payload: {
+        instanceId?: string
+        method?: 'GET' | 'POST'
+        path: string
+        body?: Record<string, unknown>
+        timeoutMs?: number
+      }
+    ) => {
+      const instance = resolveBridgeInstance(payload?.instanceId)
+      if (!instance) {
+        return {
+          ok: false,
+          status: 0,
+          data: {},
+          error: '没有运行中的游戏实例，请先 trigger_build({"task":"runClient"})'
+        }
+      }
+      if (!instance.bridge) {
+        if (instance.gameDir) {
+          instance.bridge = readBridgeDiscovery(instance.gameDir)
+        }
+        if (!instance.bridge && instance.gameDir && instance.status === 'running') {
+          instance.bridge = await waitForBridgeDiscovery(instance.gameDir, 15_000, 400)
+        }
+      }
+      if (!instance.bridge) {
+        return {
+          ok: false,
+          status: 0,
+          data: {},
+          error:
+            '观测桥未就绪。确认 resources/_base_mods/modcrafting-observer.jar 已同步到项目 .modcrafting/base-mods/'
+        }
+      }
+      const method = payload.method === 'POST' ? 'POST' : 'GET'
+      const apiPath = String(payload.path || '')
+      if (!apiPath.startsWith('/v1/')) {
+        return { ok: false, status: 0, data: {}, error: 'path 必须以 /v1/ 开头' }
+      }
+      const timeoutMs =
+        typeof payload.timeoutMs === 'number'
+          ? payload.timeoutMs
+          : apiPath.includes('screenshot')
+            ? 20_000
+            : 10_000
+      return requestBridge(instance.bridge, method, apiPath, payload.body, timeoutMs)
+    }
+  )
+}
+
+async function attachBridgeWhenReady(instance: McInstance, gameDirAbs: string): Promise<void> {
+  const discovery = await waitForBridgeDiscovery(gameDirAbs, 90_000, 500)
+  if (instances.get(instance.id) !== instance) return
+  if (instance.status !== 'running' && instance.status !== 'starting') return
+  if (discovery) {
+    instance.bridge = discovery
+    notifyInstanceState(instance.id)
+  }
+}
+
+function resolveBridgeInstance(instanceId?: string): McInstance | null {
+  if (instanceId) {
+    return instances.get(instanceId) || null
+  }
+  const running = Array.from(instances.values()).filter(
+    (i) => i.status === 'running' || i.status === 'starting'
+  )
+  if (running.length === 0) return null
+  const withBridge = running.find((i) => i.bridge)
+  if (withBridge) return withBridge
+  return running.sort((a, b) => (b.startedAt?.getTime() || 0) - (a.startedAt?.getTime() || 0))[0]
 }
 
 function serializeInstance(instance: McInstance): object {
@@ -431,7 +542,10 @@ function serializeInstance(instance: McInstance): object {
     crashedAt: instance.crashedAt?.toISOString() || null,
     crashReportPath: instance.crashReportPath,
     exitReason: instance.exitReason,
-    logLength: instance.logBuffer.reduce((acc, s) => acc + s.length, 0)
+    logLength: instance.logBuffer.reduce((acc, s) => acc + s.length, 0),
+    gameDir: instance.gameDir,
+    bridgeReady: Boolean(instance.bridge),
+    bridgePort: instance.bridge?.port ?? null
   }
 }
 

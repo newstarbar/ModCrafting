@@ -29,6 +29,9 @@ export interface ToolExecutionPayload {
   output: string
   artifactPaths?: string[]
   validation?: ToolValidationEvidence
+  /** Optional PNG/JPEG base64 for vision-capable models (e.g. mc_screenshot). */
+  imageBase64?: string
+  imageMimeType?: string
 }
 
 // Optional preview interface for write tools
@@ -241,6 +244,8 @@ export interface ToolResult {
     mcPhase?: McPhase
     runClientStarted?: boolean
   }
+  imageBase64?: string
+  imageMimeType?: string
 }
 
 export function parseTriggerBuildMeta(output: string): ToolResult['meta'] | undefined {
@@ -377,7 +382,9 @@ export async function executeTool(
       validation: payload?.validation,
       exitCode,
       fileDiff,
-      meta
+      meta,
+      imageBase64: payload?.imageBase64,
+      imageMimeType: payload?.imageMimeType
     }
   } catch (err) {
     const duration = Date.now() - start

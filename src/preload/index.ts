@@ -190,6 +190,27 @@ const api = {
     ipcRenderer.invoke('mc:getCrashReport', crashReportPath),
   mcDeleteInstance: (id: string): Promise<WriteResult> =>
     ipcRenderer.invoke('mc:deleteInstance', id),
+  mcBridgeStatus: (instanceId?: string): Promise<{
+    ready: boolean
+    instanceId?: string
+    status?: string
+    port?: number | null
+    modVersion?: string | null
+    gameDir?: string | null
+    error?: string
+  }> => ipcRenderer.invoke('mc:bridgeStatus', instanceId),
+  mcBridgeCall: (payload: {
+    instanceId?: string
+    method?: 'GET' | 'POST'
+    path: string
+    body?: Record<string, unknown>
+    timeoutMs?: number
+  }): Promise<{
+    ok: boolean
+    status: number
+    data: Record<string, unknown>
+    error?: string
+  }> => ipcRenderer.invoke('mc:bridgeCall', payload),
 
   // MC Runtime listeners
   onMcLog: (callback: (id: string, text: string) => void): (() => void) => {

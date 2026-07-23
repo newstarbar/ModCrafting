@@ -85,7 +85,14 @@ const REPAIR_OVERRIDE_TOOLS = new Set([
   'fabric_mixin_scaffold',
   'fabric_mixin_register',
   'fabric_recipe_validate',
-  'fabric_mixin_validate'
+  'fabric_mixin_validate',
+  'mc_screenshot',
+  'mc_inspect',
+  'mc_inventory',
+  'mc_world',
+  'mc_chat',
+  'mc_command',
+  'mc_input'
 ])
 
 export function isRepairWriteBlocked(

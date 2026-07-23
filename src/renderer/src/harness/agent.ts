@@ -16,6 +16,7 @@ import { prepareMessages, estimatePromptTokens, warnTokenThreshold, RECENT_WINDO
 import { MAX_EXECUTE_CLARIFICATIONS } from './clarify-validation.ts'
 import {
   appendToolRoundHistory,
+  isVisionCapableModel,
   type ChatMessage,
   type ModelToolCall
 } from './chat-message.ts'
@@ -72,6 +73,8 @@ export interface RunOptions {
   opsOnlyPlan?: boolean
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
+  /** Sticky user symptom: run step needs mc_inspect/mc_screenshot after ready. */
+  requireInGameVerify?: boolean
   openCodeDelegate?: (step: import('./workflow-types.ts').WorkflowStep, instruction: string) => Promise<{
     ok: boolean
     output?: string
@@ -283,7 +286,8 @@ export class Agent {
     emitLifecycle: boolean,
     abortSignal?: AbortSignal,
     onStream?: (text: string, reasoning?: string) => void,
-    openCodeDelegate?: RunOptions['openCodeDelegate']
+    openCodeDelegate?: RunOptions['openCodeDelegate'],
+    requireInGameVerify = false
   ): Promise<string> {
     const clarificationGate = { count: this.clarificationCount }
     const engine = new WorkflowEngine({
@@ -298,6 +302,8 @@ export class Agent {
       openCodeDelegate,
       fileSession: this.fileSession,
       clarificationGate,
+      visionModel: isVisionCapableModel(apiModel),
+      requireInGameVerify,
       modelCall: async (workflowMessages, tools, onChunk) => {
         // Last message is the per-step workflow prompt; compact/persist history only.
         const stepPromptMsg = workflowMessages[workflowMessages.length - 1]
@@ -465,7 +471,8 @@ export class Agent {
         emitLifecycle,
         abortSignal,
         onStream,
-        options.openCodeDelegate
+        options.openCodeDelegate,
+        Boolean(options.requireInGameVerify)
       )
     }
 
@@ -881,7 +888,9 @@ export class Agent {
         if (phase === 'plan') {
           const submittedPlan = [...results.values()].find((r) => r.toolName === 'submit_plan' && r.ok)
           if (submittedPlan) {
-            appendToolRoundHistory(messages, streamContent, callsWithIds, results)
+            appendToolRoundHistory(messages, streamContent, callsWithIds, results, undefined, {
+              visionModel: isVisionCapableModel(apiModel)
+            })
             finalContent = submittedPlan.output
             messages.push({ role: 'assistant', content: finalContent })
             this.finishRun(emitLifecycle)
@@ -897,7 +906,9 @@ export class Agent {
               ? (r.args.options as string[]).map(String)
               : undefined
             const text = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
-            appendToolRoundHistory(messages, text, callsWithIds, results)
+            appendToolRoundHistory(messages, text, callsWithIds, results, undefined, {
+              visionModel: isVisionCapableModel(apiModel)
+            })
             this.clarificationPending = true
             this.clarificationCount++
             this.emit({
@@ -965,7 +976,14 @@ export class Agent {
           }
 
           const pushRoundHistory = (instruction: string): void => {
-            const ephemeral = appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction)
+            const ephemeral = appendToolRoundHistory(
+              messages,
+              streamContent,
+              executedCalls,
+              results,
+              instruction,
+              { visionModel: isVisionCapableModel(apiModel) }
+            )
             if (ephemeral) {
               messages.push({ role: 'user', content: ephemeral })
             }

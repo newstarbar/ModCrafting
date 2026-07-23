@@ -61,6 +61,13 @@ export interface WorkflowEngineOptions {
   fileSession?: FileSession
   /** Shared with Agent — execute-phase ask_clarification cap. */
   clarificationGate?: { count: number }
+  /** When true, attach mc_screenshot base64 as multimodal tool content. */
+  visionModel?: boolean
+  /**
+   * When true (sticky user symptom), run step needs MC_PHASE:ready AND a successful
+   * mc_inspect / mc_screenshot before auto-completing.
+   */
+  requireInGameVerify?: boolean
 }
 
 let workflowToolId = 0
@@ -83,7 +90,14 @@ const REPAIR_EXTRA_TOOLS = [
   'fabric_mixin_scaffold',
   'fabric_mixin_register',
   'fabric_recipe_validate',
-  'fabric_mixin_validate'
+  'fabric_mixin_validate',
+  'mc_screenshot',
+  'mc_inspect',
+  'mc_inventory',
+  'mc_world',
+  'mc_chat',
+  'mc_command',
+  'mc_input'
 ] as const
 
 const REPAIR_DIAG_DEDUP_TOOLS = new Set(['read_error_log', 'fabric_log_debugger'])
@@ -591,7 +605,8 @@ function normalizeModelToolCalls(
 function resultCompletesStep(
   step: WorkflowStep,
   result: ToolResult,
-  stepHasEvidence: boolean
+  stepHasEvidence: boolean,
+  runGate?: { requireInGameVerify: boolean; runReady: boolean; inGameVerified: boolean }
 ): boolean {
   if (!result.ok || result.error) return false
   if (result.toolName === 'complete_step') {
@@ -619,10 +634,23 @@ function resultCompletesStep(
         (result.toolName === 'run_command' && result.exitCode === 0)
       )
     case 'run':
+      if (runGate?.requireInGameVerify) {
+        return runGate.runReady && runGate.inGameVerified
+      }
       return isRunClientReadyResult(result)
     case 'answer':
       return true
   }
+}
+
+export function isInGameVerifyResult(result: ToolResult): boolean {
+  if (!result.ok || result.error) return false
+  const name = result.toolName || ''
+  if (name !== 'mc_inspect' && name !== 'mc_screenshot') return false
+  const out = String(result.output || '')
+  if (/^Error:/i.test(out)) return false
+  if (/观测桥未就绪|没有运行中的游戏实例/i.test(out)) return false
+  return true
 }
 
 export function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
@@ -763,6 +791,10 @@ export class WorkflowEngine {
   private openCodeDelegate?: WorkflowEngineOptions['openCodeDelegate']
   private fileSession: FileSession
   private clarificationGate?: { count: number }
+  private visionModel: boolean
+  private requireInGameVerify: boolean
+  private runClientReady = false
+  private inGameVerified = false
 
   constructor(options: WorkflowEngineOptions) {
     this.steps = options.steps
@@ -777,6 +809,8 @@ export class WorkflowEngine {
     this.openCodeDelegate = options.openCodeDelegate
     this.fileSession = options.fileSession || new FileSession()
     this.clarificationGate = options.clarificationGate
+    this.visionModel = Boolean(options.visionModel)
+    this.requireInGameVerify = Boolean(options.requireInGameVerify)
   }
 
   private planState(): Array<{
@@ -949,7 +983,11 @@ export class WorkflowEngine {
     baseMessages.push(assistantToolCallMessage(streamContent, calls))
     for (const call of calls) {
       const result = resultsById.get(call.id)
-      baseMessages.push(toolResultMessage(call, result?.output ?? ''))
+      const image =
+        this.visionModel && result?.imageBase64
+          ? { base64: result.imageBase64, mimeType: result.imageMimeType }
+          : undefined
+      baseMessages.push(toolResultMessage(call, result?.output ?? '', image))
     }
     // Do NOT persist instruction as role:system in baseMessages — that breaks
     // prompt-cache prefixes. Return it for the next ephemeral workflowPrompt instead.
@@ -975,6 +1013,10 @@ export class WorkflowEngine {
       // "modify existing file" step) must NOT auto-satisfy evidence.
       const wasResumedRun = step.status === 'running'
       if (step.status === 'pending' || step.status === 'failed') step.status = 'running'
+      if (step.kind === 'run' && !wasResumedRun) {
+        this.runClientReady = false
+        this.inGameVerified = false
+      }
       this.emitPlanState()
       const delegatedEvidence: ToolResult[] = []
 
@@ -1515,15 +1557,50 @@ export class WorkflowEngine {
           }
         }
 
+        // Track run-step gates across rounds when symptom verification is required.
+        if (step.kind === 'run') {
+          for (const result of orderedResults) {
+            if (isRunClientReadyResult(result)) this.runClientReady = true
+            if (isInGameVerifyResult(result)) this.inGameVerified = true
+          }
+        }
+        const runGate = {
+          requireInGameVerify: this.requireInGameVerify,
+          runReady: this.runClientReady,
+          inGameVerified: this.inGameVerified
+        }
         const decisiveResult = orderedResults.find((result) =>
-          isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence)
+          isTerminalFailure(step, result) ||
+          resultCompletesStep(step, result, stepHasEvidence, runGate)
         )
-        const success = decisiveResult
-          ? resultCompletesStep(step, decisiveResult, stepHasEvidence)
-          : false
+        const success =
+          (decisiveResult
+            ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate)
+            : false) ||
+          (step.kind === 'run' &&
+            this.requireInGameVerify &&
+            this.runClientReady &&
+            this.inGameVerified)
         let roundInstruction: string | undefined
         if (stripKnowledgeForTruncation) {
           roundInstruction = LARGE_FILE_REWRITE_RECOVERY
+        }
+        if (
+          step.kind === 'run' &&
+          this.requireInGameVerify &&
+          this.runClientReady &&
+          !this.inGameVerified
+        ) {
+          roundInstruction = [
+            roundInstruction,
+            '【游戏内校验未完成】MC_PHASE:ready 仅表示进了主菜单。',
+            '必须立刻调用 mc_inspect 或 mc_screenshot 查看当前界面；若需打开/切换 GUI，用 mc_input：',
+            '- key_press {"key":"f6"} 触发热键',
+            '- click_widget {"label":"…"} 或 click_at {"x":…,"y":…} 点击按钮（先看 mc_inspect 的 widgets）',
+            '未完成游戏内校验前禁止结束本步。'
+          ]
+            .filter(Boolean)
+            .join('\n')
         }
 
         if (success) {
@@ -1532,7 +1609,8 @@ export class WorkflowEngine {
           if (
             step.kind === 'build' &&
             planHasWriteSteps &&
-            isNoOpBuildResult(decisiveResult!.output)
+            decisiveResult &&
+            isNoOpBuildResult(decisiveResult.output)
           ) {
             const warning = anyWriteThisRun
               ? '⚠️ 构建为 UP-TO-DATE：本轮虽有写入，但未触发实际编译（compile* 全 UP-TO-DATE）。请核对是否改错 main/client 路径，或改动未保存到 Gradle 源集。'
@@ -1559,7 +1637,10 @@ export class WorkflowEngine {
           pendingMigration.clear()
           pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
           step.status = 'completed'
-          this.planTracker.advanceCurrent(decisiveResult!.toolName || 'workflow evidence')
+          const advanceName =
+            decisiveResult?.toolName ||
+            (this.inGameVerified ? 'mc_inspect' : 'workflow evidence')
+          this.planTracker.advanceCurrent(advanceName)
           completed = true
           this.emitPlanState()
           break

@@ -658,6 +658,7 @@ ${projectInfo}`
         emitLifecycle: true,
         planTracker: this.planTracker,
         opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
+        requireInGameVerify: Boolean(this.activeUserSymptom),
         openCodeDelegate: this.buildOpenCodeDelegate()
       }
     )
@@ -1099,7 +1100,8 @@ ${projectInfo}`
           phase: 'execute',
           emitLifecycle: false,
           planTracker: this.planTracker,
-          opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false
+          opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
+          requireInGameVerify: Boolean(this.activeUserSymptom)
         }
       )
       this.onAgentStatus?.('')

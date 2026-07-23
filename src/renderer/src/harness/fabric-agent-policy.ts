@@ -92,7 +92,8 @@ const COMMON_GUARDRAILS = [
   'BlockEntity、NBT、ScreenHandler、网络同步必须同时考虑服务端状态、客户端显示和保存/读取。',
   '资源 JSON 必须使用原版格式并保持路径一致：assets/<modid>/... 与 data/<modid>/...。',
   '生成 Mixin 或 Access Widener 时必须提示冲突风险，并优先说明为何不能用 Fabric API 替代。',
-  '构建验证优先走产品内 trigger_build；写入资源或 DataGen 后要通过构建或 runDatagen 验证。'
+  '构建验证优先走产品内 trigger_build；写入资源或 DataGen 后要通过构建或 runDatagen 验证。',
+  'runClient 出现 MC_PHASE:ready 后，若用户描述了游戏内症状，必须用 mc_inspect / mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验，禁止仅凭 ready 宣称修复。'
 ]
 
 const BEHAVIOR_GUARDRAILS = [

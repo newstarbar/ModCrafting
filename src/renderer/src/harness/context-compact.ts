@@ -7,7 +7,8 @@
 //   system prompt    micro-placeholders    last RECENT_WINDOW messages
 //                    or LLM summary
 
-import type { ChatMessage, ChatToolCall } from './chat-message'
+import type { ChatMessage, ChatToolCall } from './chat-message.ts'
+import { contentAsText } from './chat-message.ts'
 
 // ── Thresholds ──
 
@@ -47,7 +48,7 @@ export function estimateTokens(text: string): number {
 export function estimatePromptTokens(messages: ChatMessage[]): number {
   let total = 0
   for (const m of messages) {
-    total += estimateTokens(m.content || '')
+    total += estimateTokens(contentAsText(m.content))
     if (m.tool_calls) {
       total += estimateTokens(JSON.stringify(m.tool_calls))
     }
@@ -192,7 +193,7 @@ export function microCompact(
       // reset between turns and previously made old session results immortal.
       const age = assistantTurnsSeen
       if (age >= MICRO_COMPACT_AGE) {
-        const existing = messages[i].content || ''
+        const existing = contentAsText(messages[i].content)
         // Already compacted — leave stable so prompt-cache prefixes don't thrash.
         if (existing.startsWith('[已压缩:')) continue
         const name = messages[i].name || 'unknown'
@@ -254,20 +255,20 @@ const SUMMARIZE_SYSTEM_PROMPT = `你是一个上下文压缩器。你需要将�
 function buildSummarizeMessages(messages: ChatMessage[]): ChatMessage[] {
   // Find the system message to extract the original task context
   const userMsgs = messages.filter((m) => m.role === 'user')
-  const firstUserMsg = userMsgs.length > 0 ? userMsgs[0].content : '(无)'
+  const firstUserMsg = userMsgs.length > 0 ? contentAsText(userMsgs[0].content) : '(无)'
 
   return [
     { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT },
     { role: 'user', content: `原始任务: ${firstUserMsg.slice(0, 200)}\n\n请将以下对话历史压缩为结构化摘要:\n\n${messages.map((m) => {
       if (m.role === 'tool') {
         const name = m.name || 'tool'
-        return `[${name}]: ${(m.content || '').slice(0, 300)}`
+        return `[${name}]: ${contentAsText(m.content).slice(0, 300)}`
       }
       if (m.role === 'assistant' && m.tool_calls) {
         const names = m.tool_calls.map((tc) => tc.function.name).join(', ')
         return `[assistant → 调用: ${names}]`
       }
-      return `[${m.role}]: ${(m.content || '').slice(0, 200)}`
+      return `[${m.role}]: ${contentAsText(m.content).slice(0, 200)}`
     }).join('\n')}` }
   ]
 }

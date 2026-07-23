@@ -12,6 +12,7 @@
 		"start": "electron .",
 		"test": "node scripts/test/run-harness.mjs",
 		"test:harness": "npm run test",
+		"bridge:build": "node scripts/bridge/build-observer.mjs",
 		"build:win": "electron-vite build && node scripts/packaging/run-electron-builder.mjs --win nsis && node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable",
 		"build:win:setup": "electron-vite build && node scripts/packaging/run-electron-builder.mjs --win nsis",
 		"build:win:portable": "electron-vite build && node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable",

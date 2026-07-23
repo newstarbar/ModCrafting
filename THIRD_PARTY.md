@@ -60,8 +60,9 @@ cd resources/_prefetch_project
 | 模组 | 典型文件名 | 许可 | 上游 |
 |------|------------|------|------|
 | **Mod Menu** | `modmenu-*.jar` | MIT | [TerraformersMC/ModMenu](https://github.com/TerraformersMC/ModMenu) |
+| **ModCrafting Observer** | `modcrafting-observer.jar` | MIT | 本仓库 [`bridge-mod/`](bridge-mod/)（`npm run bridge:build` 产出） |
 
-> 若仓库中未包含对应 JAR，打包时该目录为空，不影响核心功能。自行放入 JAR 时须遵守其上游许可。
+> 若仓库中未包含对应 JAR，打包时该目录为空，不影响核心功能。自行放入 JAR 时须遵守其上游许可。Observer 为客户端本地 HTTP 观测桥，仅在 `runClient` 调试时加载。
 
 ---
 

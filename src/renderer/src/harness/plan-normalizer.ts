@@ -170,7 +170,14 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'ask_clarification',
         'fabric_log_debugger',
         'fabric_docs_search',
-        'read_error_log'
+        'read_error_log',
+        'mc_screenshot',
+        'mc_inspect',
+        'mc_inventory',
+        'mc_world',
+        'mc_chat',
+        'mc_command',
+        'mc_input'
       ]
     case 'answer':
       return ['complete_step', 'explain_code', 'read_file', 'ask_clarification']
