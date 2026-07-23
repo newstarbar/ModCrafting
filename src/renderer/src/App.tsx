@@ -621,9 +621,15 @@ const App: React.FC = () => {
 
 	const handlePersistSession = useCallback((sessionId: string, messages: PersistedMessage[]) => {
 		setSessions((prev) => sortSessionsByUpdatedAt(
-			prev.map((s) => (
-				s.id === sessionId ? { ...s, messages, updatedAt: Date.now() } : s
-			))
+			prev.map((s) => {
+				if (s.id !== sessionId) return s;
+				// Only bump list order/time when the user sends a new message.
+				// Leave-session flush / turn persistence must not reshuffle the sidebar.
+				const prevUserCount = s.messages.filter((m) => m.role === 'user').length;
+				const nextUserCount = messages.filter((m) => m.role === 'user').length;
+				const updatedAt = nextUserCount > prevUserCount ? Date.now() : s.updatedAt;
+				return { ...s, messages, updatedAt };
+			})
 		));
 	}, []);
 
