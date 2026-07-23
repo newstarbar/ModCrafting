@@ -76,6 +76,15 @@ export function isInGameVerifyRequest(input: string): boolean {
   return IN_GAME_VERIFY_REQUEST_PATTERN.test(trimmed)
 }
 
+/** Symptom about GUI / hotkey / preview — TitleScreen alone is not enough evidence. */
+export function isGuiFeatureSymptom(symptom: string | null | undefined): boolean {
+  const text = (symptom || '').trim()
+  if (!text) return false
+  return /预览|GUI|gui|界面|屏幕|布局|按钮|控件|面板|F\d|按键|快捷键|Screen|显示|错乱|模糊|穿模|配置屏|设置屏/i.test(
+    text
+  )
+}
+
 /**
  * Short symptom / bug reports in agent mode can skip formal submit_plan and go
  * straight to execute (freeform or host-driven).

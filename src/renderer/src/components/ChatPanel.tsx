@@ -113,42 +113,10 @@ function uid(): string {
 }
 
 // 工具中文名映射
-const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  read_file: '读取文件',
-  write_file: '写入文件',
-  list_directory: '列出目录',
-  run_command: '运行命令',
-  trigger_build: '触发构建',
-  create_recipe: '创建配方',
-  read_error_log: '读取错误日志',
-  complete_step: '完成步骤',
-  fabric_docs_search: '搜索文档',
-  fabric_javadoc_lookup: '查询 JavaDoc',
-  vanilla_mc_wiki_query: '查询 Wiki',
-  fabric_meta_version_check: '检查版本',
-  fabric_mod_json_validate: '验证 mod.json',
-  fabric_recipe_generate: '生成配方',
-  fabric_content_register: '注册内容',
-  fabric_data_assets_generate: '生成资源',
-  fabric_mixin_scaffold: '生成 Mixin',
-  fabric_log_debugger: '分析日志',
-  explain_code: '代码解释',
-  list_templates: '列出模板',
-  fabric_template_generate: '生成模板',
-  ask_clarification: '向用户提问'
-}
+import { getToolLabelZh } from '../harness/tool-labels'
 
 function getToolDisplayName(name: string, args?: Record<string, unknown>): string {
-  if (name === 'trigger_build' && args) {
-    const task = String(args.task || '')
-    if (task === 'runClient') return '游戏测试'
-    if (task === 'build') return '构建编译'
-    if (task === 'runServer') return '启动服务端'
-    if (task === 'runDatagen') return '数据生成'
-    if (task === 'test') return '运行测试'
-    return '触发构建'
-  }
-  return TOOL_DISPLAY_NAMES[name] || name
+  return getToolLabelZh(name, args)
 }
 
 function toPlanSteps(steps: Array<{

@@ -52,12 +52,11 @@ function optionalInstanceId(args: Record<string, unknown>): string | undefined {
 
 export const mcScreenshotTool: Tool = {
   name: 'mc_screenshot',
-  description:
-    'Capture the current Minecraft client framebuffer via the observer bridge. Returns path/size; may include base64 for vision models.',
+  description: '截取当前 Minecraft 客户端画面（观测桥）。返回路径/尺寸；视觉模型可能附带 base64。',
   schema: {
     type: 'object',
     properties: {
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      instanceId: { type: 'string', description: '可选实例 id' }
     }
   },
   readOnly: () => true,
@@ -78,11 +77,11 @@ export const mcScreenshotTool: Tool = {
 export const mcInspectTool: Tool = {
   name: 'mc_inspect',
   description:
-    'One-shot game inspection: player + current screen + widgets + crosshair. After runClient ready, use this (or mc_screenshot) to verify GUI/symptoms. For GUI buttons use mc_input click_widget/click_at.',
+    '一次性检视：玩家 + 当前界面 + 控件 + 准星。ready 后用此或 mc_screenshot 验证症状；点按钮用 mc_input click_widget/click_at。仅 TitleScreen 不算验证完成。',
   schema: {
     type: 'object',
     properties: {
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      instanceId: { type: 'string', description: '可选实例 id' }
     }
   },
   readOnly: () => true,
@@ -94,11 +93,11 @@ export const mcInspectTool: Tool = {
 
 export const mcInventoryTool: Tool = {
   name: 'mc_inventory',
-  description: 'Read player hotbar, main inventory, armor and offhand via the observer bridge.',
+  description: '读取玩家快捷栏、主背包、盔甲与副手（观测桥）。',
   schema: {
     type: 'object',
     properties: {
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      instanceId: { type: 'string', description: '可选实例 id' }
     }
   },
   readOnly: () => true,
@@ -110,12 +109,12 @@ export const mcInventoryTool: Tool = {
 
 export const mcWorldTool: Tool = {
   name: 'mc_world',
-  description: 'List nearby entities and sample nearby blocks around the player.',
+  description: '列出附近实体并采样玩家周围方块。',
   schema: {
     type: 'object',
     properties: {
-      radius: { type: 'number', description: 'Search radius (1-64, default 8)' },
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      radius: { type: 'number', description: '搜索半径（1-64，默认 8）' },
+      instanceId: { type: 'string', description: '可选实例 id' }
     }
   },
   readOnly: () => true,
@@ -129,14 +128,14 @@ export const mcWorldTool: Tool = {
 
 export const mcChatTool: Tool = {
   name: 'mc_chat',
-  description: 'Read recent chat or send a chat message (commands with leading / are allowed).',
+  description: '读取近期聊天，或发送聊天/命令（以 / 开头的命令可用）。',
   schema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['read', 'send'], description: 'read buffer or send message' },
-      text: { type: 'string', description: 'Message to send when action=send' },
-      limit: { type: 'number', description: 'Max messages when action=read (default 50)' },
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      action: { type: 'string', enum: ['read', 'send'], description: 'read=读缓冲；send=发送' },
+      text: { type: 'string', description: 'action=send 时的消息内容' },
+      limit: { type: 'number', description: 'action=read 时最多条数（默认 50）' },
+      instanceId: { type: 'string', description: '可选实例 id' }
     },
     required: ['action']
   },
@@ -158,12 +157,12 @@ export const mcChatTool: Tool = {
 }
 export const mcCommandTool: Tool = {
   name: 'mc_command',
-  description: 'Execute a Minecraft command as the local player (auto-prefixes /). Singleplayer integrated server required for most commands.',
+  description: '以本地玩家执行 Minecraft 命令（自动补 /）。多数命令需要单人集成服务端。',
   schema: {
     type: 'object',
     properties: {
-      command: { type: 'string', description: 'Command without or with leading /' },
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      command: { type: 'string', description: '命令（可带或不带前导 /）' },
+      instanceId: { type: 'string', description: '可选实例 id' }
     },
     required: ['command']
   },
@@ -178,7 +177,7 @@ export const mcCommandTool: Tool = {
 export const mcInputTool: Tool = {
   name: 'mc_input',
   description:
-    'Simulate client input. For GUI: click_at {x,y} or click_widget {index|label} to press screen buttons; key_press {key:"f6"} for hotkeys. World: forward/jump/use/attack/…',
+    '模拟客户端输入。GUI：click_at {x,y} 或 click_widget {index|label} 点按钮；key_press {key:"f6"} 热键。世界：前进/跳跃/使用/攻击等。验证 GUI 时必须点进待测界面，不能停在 TitleScreen。',
   schema: {
     type: 'object',
     properties: {
@@ -187,17 +186,17 @@ export const mcInputTool: Tool = {
         description:
           'click_at|click_widget|key_press|key_down|key_up|mouse_click|mouse_move|scroll|forward|back|left|right|jump|sneak|sprint|use|attack|inventory|drop|swap_hands'
       },
-      key: { type: 'string', description: 'Key for key_* (w/e/space/f6/esc/…)' },
+      key: { type: 'string', description: 'key_* 用按键（w/e/space/f6/esc/…）' },
       button: { type: 'string', description: 'left|right|middle' },
-      x: { type: 'number', description: 'Scaled GUI X for click_at' },
-      y: { type: 'number', description: 'Scaled GUI Y for click_at' },
-      index: { type: 'number', description: 'Widget index from /v1/widgets for click_widget' },
-      label: { type: 'string', description: 'Substring of widget message for click_widget' },
-      dx: { type: 'number', description: 'Yaw delta for mouse_move' },
-      dy: { type: 'number', description: 'Pitch delta for mouse_move' },
-      delta: { type: 'number', description: 'Scroll delta' },
-      durationMs: { type: 'number', description: 'Hold duration for press actions' },
-      instanceId: { type: 'string', description: 'Optional MC instance id' }
+      x: { type: 'number', description: 'click_at 的缩放 GUI X' },
+      y: { type: 'number', description: 'click_at 的缩放 GUI Y' },
+      index: { type: 'number', description: 'click_widget 的控件序号（来自 inspect/widgets）' },
+      label: { type: 'string', description: 'click_widget 的按钮文案子串' },
+      dx: { type: 'number', description: 'mouse_move 偏航增量' },
+      dy: { type: 'number', description: 'mouse_move 俯仰增量' },
+      delta: { type: 'number', description: '滚轮增量' },
+      durationMs: { type: 'number', description: '按住时长（毫秒）' },
+      instanceId: { type: 'string', description: '可选实例 id' }
     },
     required: ['action']
   },
@@ -218,6 +217,18 @@ export const mcInputTool: Tool = {
       durationMs: args.durationMs
     }
     const result = await callMcBridge('POST', '/v1/input', body, optionalInstanceId(args))
+    // F-keys often open screens asynchronously (screenshot → preview). Brief settle wait.
+    const action = String(args.action || '').toLowerCase()
+    const key = String(args.key || '').toLowerCase()
+    if (
+      (action === 'key_press' || action === 'key_down') &&
+      /^f([1-9]|1[0-2])$/.test(key)
+    ) {
+      await new Promise((r) => setTimeout(r, 900))
+    }
+    if (action === 'click_widget' || action === 'click_at') {
+      await new Promise((r) => setTimeout(r, 250))
+    }
     return formatBridgeResult(result)
   }
 }

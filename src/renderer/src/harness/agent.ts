@@ -75,6 +75,8 @@ export interface RunOptions {
   composerMode?: 'agent' | 'plan' | 'ask'
   /** Sticky user symptom: run step needs mc_inspect/mc_screenshot after ready. */
   requireInGameVerify?: boolean
+  /** GUI/preview symptoms: TitleScreen-only inspect does not count. */
+  requireFeatureGuiVerify?: boolean
   openCodeDelegate?: (step: import('./workflow-types.ts').WorkflowStep, instruction: string) => Promise<{
     ok: boolean
     output?: string
@@ -287,7 +289,8 @@ export class Agent {
     abortSignal?: AbortSignal,
     onStream?: (text: string, reasoning?: string) => void,
     openCodeDelegate?: RunOptions['openCodeDelegate'],
-    requireInGameVerify = false
+    requireInGameVerify = false,
+    requireFeatureGuiVerify = false
   ): Promise<string> {
     const clarificationGate = { count: this.clarificationCount }
     const engine = new WorkflowEngine({
@@ -304,6 +307,7 @@ export class Agent {
       clarificationGate,
       visionModel: isVisionCapableModel(apiModel),
       requireInGameVerify,
+      requireFeatureGuiVerify,
       modelCall: async (workflowMessages, tools, onChunk) => {
         // Last message is the per-step workflow prompt; compact/persist history only.
         const stepPromptMsg = workflowMessages[workflowMessages.length - 1]
@@ -472,7 +476,8 @@ export class Agent {
         abortSignal,
         onStream,
         options.openCodeDelegate,
-        Boolean(options.requireInGameVerify)
+        Boolean(options.requireInGameVerify),
+        Boolean(options.requireFeatureGuiVerify)
       )
     }
 

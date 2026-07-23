@@ -10,6 +10,7 @@ import {
   isSymptomResolvedFeedback,
   isInGameVerifyRequest,
   shouldSkipFormalPlan,
+  isGuiFeatureSymptom,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
 } from '../../src/renderer/src/harness/turn-intent.ts'
@@ -221,6 +222,18 @@ test('resolveTurnIntent: plain bug note with project → develop (not silent cha
     resolveTurnIntent('F6后鼠标被强制做到屏幕中心，无法操作截图设置', intentCtx({ hasProject: true })),
     'develop'
   )
+})
+
+test('isGuiFeatureSymptom detects preview / F-key reports', () => {
+  assert.equal(isGuiFeatureSymptom('实际F6的预览的GUI显示有问题'), true)
+  assert.equal(isGuiFeatureSymptom('用户请求游戏内测试/验证'), false)
+})
+
+test('getToolLabelZh: mc tools and input actions use Chinese', async () => {
+  const { getToolLabelZh } = await import('../../src/renderer/src/harness/tool-labels.ts')
+  assert.equal(getToolLabelZh('mc_inspect'), '游戏内检视')
+  assert.equal(getToolLabelZh('mc_input', { action: 'key_press', key: 'f6' }), '游戏按键 F6')
+  assert.equal(getToolLabelZh('mc_input', { action: 'click_widget', label: '模组' }), '点击控件「模组」')
 })
 
 test('isInGameVerifyRequest: short verify phrases', () => {

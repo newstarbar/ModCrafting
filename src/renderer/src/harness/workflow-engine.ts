@@ -68,6 +68,8 @@ export interface WorkflowEngineOptions {
    * mc_inspect / mc_screenshot before auto-completing.
    */
   requireInGameVerify?: boolean
+  /** Reject TitleScreen-only inspect/screenshot as verification (GUI/preview symptoms). */
+  requireFeatureGuiVerify?: boolean
 }
 
 let workflowToolId = 0
@@ -606,7 +608,12 @@ function resultCompletesStep(
   step: WorkflowStep,
   result: ToolResult,
   stepHasEvidence: boolean,
-  runGate?: { requireInGameVerify: boolean; runReady: boolean; inGameVerified: boolean }
+  runGate?: {
+    requireInGameVerify: boolean
+    requireFeatureGuiVerify?: boolean
+    runReady: boolean
+    inGameVerified: boolean
+  }
 ): boolean {
   if (!result.ok || result.error) return false
   if (result.toolName === 'complete_step') {
@@ -643,13 +650,25 @@ function resultCompletesStep(
   }
 }
 
-export function isInGameVerifyResult(result: ToolResult): boolean {
+/** True when inspect/screenshot payload is still the main menu title screen. */
+export function isTitleScreenVerifyOutput(output: string): boolean {
+  const out = String(output || '')
+  if (/"simpleName"\s*:\s*"TitleScreen"/i.test(out)) return true
+  if (/"kind"\s*:\s*"title"/i.test(out)) return true
+  return false
+}
+
+export function isInGameVerifyResult(
+  result: ToolResult,
+  options?: { requireFeatureGui?: boolean }
+): boolean {
   if (!result.ok || result.error) return false
   const name = result.toolName || ''
   if (name !== 'mc_inspect' && name !== 'mc_screenshot') return false
   const out = String(result.output || '')
   if (/^Error:/i.test(out)) return false
   if (/观测桥未就绪|没有运行中的游戏实例/i.test(out)) return false
+  if (options?.requireFeatureGui && isTitleScreenVerifyOutput(out)) return false
   return true
 }
 
@@ -793,8 +812,10 @@ export class WorkflowEngine {
   private clarificationGate?: { count: number }
   private visionModel: boolean
   private requireInGameVerify: boolean
+  private requireFeatureGuiVerify: boolean
   private runClientReady = false
   private inGameVerified = false
+  private lastVerifyWasTitleScreen = false
 
   constructor(options: WorkflowEngineOptions) {
     this.steps = options.steps
@@ -811,6 +832,7 @@ export class WorkflowEngine {
     this.clarificationGate = options.clarificationGate
     this.visionModel = Boolean(options.visionModel)
     this.requireInGameVerify = Boolean(options.requireInGameVerify)
+    this.requireFeatureGuiVerify = Boolean(options.requireFeatureGuiVerify)
   }
 
   private planState(): Array<{
@@ -1561,11 +1583,25 @@ export class WorkflowEngine {
         if (step.kind === 'run') {
           for (const result of orderedResults) {
             if (isRunClientReadyResult(result)) this.runClientReady = true
-            if (isInGameVerifyResult(result)) this.inGameVerified = true
+            if (
+              isInGameVerifyResult(result, {
+                requireFeatureGui: this.requireFeatureGuiVerify
+              })
+            ) {
+              this.inGameVerified = true
+              this.lastVerifyWasTitleScreen = false
+            } else if (
+              (result.toolName === 'mc_inspect' || result.toolName === 'mc_screenshot') &&
+              result.ok &&
+              isTitleScreenVerifyOutput(String(result.output || ''))
+            ) {
+              this.lastVerifyWasTitleScreen = true
+            }
           }
         }
         const runGate = {
           requireInGameVerify: this.requireInGameVerify,
+          requireFeatureGuiVerify: this.requireFeatureGuiVerify,
           runReady: this.runClientReady,
           inGameVerified: this.inGameVerified
         }
@@ -1591,16 +1627,22 @@ export class WorkflowEngine {
           this.runClientReady &&
           !this.inGameVerified
         ) {
-          roundInstruction = [
-            roundInstruction,
-            '【游戏内校验未完成】MC_PHASE:ready 仅表示进了主菜单。',
-            '必须立刻调用 mc_inspect 或 mc_screenshot 查看当前界面；若需打开/切换 GUI，用 mc_input：',
-            '- key_press {"key":"f6"} 触发热键',
-            '- click_widget {"label":"…"} 或 click_at {"x":…,"y":…} 点击按钮（先看 mc_inspect 的 widgets）',
-            '未完成游戏内校验前禁止结束本步。'
-          ]
-            .filter(Boolean)
-            .join('\n')
+          const titleHint = this.lastVerifyWasTitleScreen
+            ? [
+                '刚才仍停在 TitleScreen（标题屏），这不算打开了待测功能。',
+                '必须进入症状相关界面后再检视/截图：',
+                '1) 症状含 F6/F9：mc_input key_press 后稍等再 mc_inspect（预览常异步打开）；若仍是标题屏，再试 click_widget label=模组 或进入设置里的预览入口',
+                '2) 用 click_widget / click_at 点开「模组 / 选项 / 预览 / 设置」等按钮，直到 screen.simpleName 不是 TitleScreen',
+                '3) 进入目标 GUI 后再 mc_inspect + mc_screenshot，对照用户症状描述'
+              ].join('\n')
+            : [
+                '【游戏内校验未完成】MC_PHASE:ready 仅表示进了主菜单。',
+                '必须打开待测功能界面后再校验，禁止只看标题屏就结束：',
+                '- mc_input key_press {"key":"f6"}（或症状里的热键）；预览异步打开时先稍后再 mc_inspect',
+                '- 或 click_widget {"label":"模组"} / {"label":"选项"} / 预览相关按钮（先看 widgets）',
+                '- 进入非 TitleScreen 后调用 mc_inspect 或 mc_screenshot'
+              ].join('\n')
+          roundInstruction = [roundInstruction, titleHint].filter(Boolean).join('\n')
         }
 
         if (success) {

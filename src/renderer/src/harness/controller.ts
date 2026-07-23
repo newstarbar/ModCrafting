@@ -20,12 +20,15 @@ import {
   isSymptomResolvedFeedback,
   isInGameVerifyRequest,
   shouldSkipFormalPlan,
+  isGuiFeatureSymptom,
+  isResumeInput,
   buildUserSymptomBlock,
   buildCrossTurnDiagnosisRetain
 } from './turn-intent'
 import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
 import { OpenCodeAdapter } from './opencode-adapter.ts'
 import type { WorkflowStep } from './workflow-types.ts'
+import { TOOL_LABELS_ZH } from './tool-labels'
 import {
   formatGradleSummary,
   formatJavaFileList,
@@ -440,35 +443,7 @@ export class Controller {
 
   // Build system prompt with tool descriptions and Fabric knowledge
   private async buildSystemPrompt(mode: 'chat' | 'plan' | 'execute'): Promise<string> {
-    const toolNameMap: Record<string, string> = {
-      read_file: '读取文件',
-      write_file: '写入文件',
-      edit_file: '编辑文件（精确替换）',
-      grep: '搜索项目源码',
-      list_directory: '列出目录',
-      run_command: '运行命令',
-      trigger_build: '触发构建',
-      create_recipe: '创建配方',
-      fabric_docs_search: '查询 Fabric 文档',
-      fabric_javadoc_lookup: '查询 Fabric JavaDoc',
-      vanilla_mc_wiki_query: '查询原版 Wiki',
-      fabric_meta_version_check: '查询 Fabric 版本',
-      fabric_mod_json_validate: '校验 fabric.mod.json',
-      fabric_recipe_generate: '生成 Fabric 配方',
-      fabric_recipe_validate: '校验 Fabric 配方',
-      fabric_template_generate: '生成模板代码',
-      fabric_content_register: '生成内容注册',
-      fabric_data_assets_generate: '生成资源数据',
-      fabric_mixin_scaffold: '生成 Mixin 脚手架',
-      fabric_mixin_target_lookup: '精确查询 Mixin 目标',
-      fabric_mixin_register: '注册 Mixin 条目',
-      fabric_mixin_validate: '校验 Mixin',
-      fabric_log_debugger: '分析 Fabric 日志',
-      read_error_log: '读取错误日志',
-      complete_step: '完成任务步骤',
-      ask_clarification: '向用户提问',
-      submit_plan: '提交结构化计划'
-    }
+    const toolNameMap: Record<string, string> = { ...TOOL_LABELS_ZH }
     const toolDescs = this.registry.names().filter((name) => {
       if (name === 'complete_step') return false
       const tool = this.registry.get(name)
@@ -635,7 +610,10 @@ ${projectInfo}`
     return result
   }
 
-  private async runExecutePhase(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+  private async runExecutePhase(
+    streamCb: (text: string, reasoning?: string) => void,
+    options?: { forceFeatureGuiVerify?: boolean }
+  ): Promise<string> {
     await this.refreshOpenCodeSettings()
     await this.updateSystemPrompt('execute')
     this._phase = 'execute'
@@ -646,6 +624,10 @@ ${projectInfo}`
     }
     this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
     this.onAgentStatus?.('执行中...')
+
+    const requireFeatureGuiVerify =
+      Boolean(options?.forceFeatureGuiVerify) ||
+      (Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom))
 
     const result = await this.agent.run(
       this.apiConfig.endpoint,
@@ -660,7 +642,8 @@ ${projectInfo}`
         emitLifecycle: true,
         planTracker: this.planTracker,
         opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
-        requireInGameVerify: Boolean(this.activeUserSymptom),
+        requireInGameVerify: Boolean(this.activeUserSymptom) || Boolean(options?.forceFeatureGuiVerify),
+        requireFeatureGuiVerify,
         openCodeDelegate: this.buildOpenCodeDelegate()
       }
     )
@@ -695,11 +678,15 @@ ${projectInfo}`
       kind: EventKind.Notice,
       notice: {
         level: 'info',
-        text: '进入游戏内校验：跳过计划阶段，直接 runClient + mc_inspect/mc_screenshot。'
+        text: '进入游戏内校验：跳过计划阶段，直接 runClient + 打开待测功能 + mc_inspect/mc_screenshot。'
       }
     })
-    if (!this.activeUserSymptom) {
-      this.activeUserSymptom = '用户请求游戏内测试/验证'
+    const recovered = this.recoverActiveSymptomFromHistory()
+    if (
+      !this.activeUserSymptom ||
+      this.activeUserSymptom === '用户请求游戏内测试/验证'
+    ) {
+      this.activeUserSymptom = recovered || '用户请求游戏内测试/验证'
     }
     // Drop any stale plan/candidate so we never fall back into submit_plan.
     this.lastPlanCandidate = null
@@ -713,13 +700,17 @@ ${projectInfo}`
     ])
     this.emitPlanState(this.planTracker)
     this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
+    const hotkey = (this.activeUserSymptom.match(/\bF(\d{1,2})\b/i) || [])[0] || 'F6'
     const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
     this.messages.push({
       role: 'user',
       content: [
         '用户要求游戏内测试。禁止 submit_plan / 重新规划。',
-        '当前为执行阶段：若游戏未运行则 trigger_build task=runClient；',
-        'ready 后必须用 mc_input（如 key_press f6）打开界面，再用 mc_inspect / mc_screenshot 验证（禁止仅凭 ready 结束）。',
+        '当前为执行阶段：若游戏未运行则 trigger_build task=runClient。',
+        `ready 后必须打开待测功能，禁止只停在 TitleScreen：`,
+        `1) mc_input key_press key=${hotkey.toLowerCase()}（预览常异步打开，稍后再 inspect）`,
+        '2) 若仍是标题屏：click_widget 点「模组」「选项」或预览/设置入口，直到 screen.simpleName 不是 TitleScreen',
+        '3) 进入目标 GUI 后 mc_inspect + mc_screenshot，对照症状说明是否仍存在',
         symptomBlock
       ]
         .filter(Boolean)
@@ -728,7 +719,21 @@ ${projectInfo}`
       taskId: this.taskId,
       phase: 'execute'
     })
-    return this.runExecutePhase(streamCb)
+    return this.runExecutePhase(streamCb, { forceFeatureGuiVerify: true })
+  }
+
+  /** Prefer a real prior bug report over the generic「游戏测试」placeholder. */
+  private recoverActiveSymptomFromHistory(): string | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]
+      if (m.role !== 'user' || m.origin === 'harness') continue
+      const c = (m.content || '').trim()
+      if (!c || isInGameVerifyRequest(c) || isResumeInput(c) || isSymptomResolvedFeedback(c)) continue
+      if (isUserSymptomFeedback(c) || isErrorReportInput(c) || shouldSkipFormalPlan(c)) {
+        return c.slice(0, 400)
+      }
+    }
+    return null
   }
 
   /** Short symptom fixes: synthetic mini-plan, skip formal submit_plan. */
@@ -1218,7 +1223,9 @@ ${projectInfo}`
           emitLifecycle: false,
           planTracker: this.planTracker,
           opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
-          requireInGameVerify: Boolean(this.activeUserSymptom)
+          requireInGameVerify: Boolean(this.activeUserSymptom),
+          requireFeatureGuiVerify:
+            Boolean(this.activeUserSymptom) && isGuiFeatureSymptom(this.activeUserSymptom)
         }
       )
       this.onAgentStatus?.('')
