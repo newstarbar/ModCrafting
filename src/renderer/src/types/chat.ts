@@ -1,5 +1,6 @@
 import type { PlanStep } from '../components/TaskPlan'
 import type { UsageStats } from '../utils/usage'
+import type { MessageAttachment } from '../context/context-ingress'
 
 export interface PersistedChronoEntry {
   kind: 'reasoning' | 'text' | 'tool'
@@ -34,6 +35,7 @@ export interface PersistedMessage {
   timestamp?: number
   displayId?: string
   stateSnapshot?: any
+  attachments?: MessageAttachment[]
 }
 
 export interface ChatSession {

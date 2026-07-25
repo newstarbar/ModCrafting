@@ -495,6 +495,48 @@ const api = {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => callback(payload)
     ipcRenderer.on('opencode:event', handler)
     return () => ipcRenderer.removeListener('opencode:event', handler)
+  },
+
+  // Context ingress / attachments
+  setContextProjectPath: (projectPath: string | null): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('context:setProjectPath', projectPath),
+  saveAttachment: (opts: {
+    projectPath: string
+    sourcePath?: string
+    base64?: string
+    mimeType?: string
+    fileName?: string
+  }): Promise<
+    | { ok: true; path: string; mimeType: string; name: string }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('attachments:save', opts),
+  readAttachmentDataUrl: (
+    filePath: string
+  ): Promise<{ ok: true; dataUrl: string; mimeType: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('attachments:readDataUrl', filePath),
+  selectAttachmentFiles: (): Promise<string[]> =>
+    ipcRenderer.invoke('dialog:selectAttachmentFiles'),
+  onContextPush: (callback: (payload: {
+    kind: 'text' | 'image' | 'file'
+    text?: string
+    path?: string
+    mimeType?: string
+    name?: string
+    source?: string
+  }) => void): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      payload: {
+        kind: 'text' | 'image' | 'file'
+        text?: string
+        path?: string
+        mimeType?: string
+        name?: string
+        source?: string
+      }
+    ): void => callback(payload)
+    ipcRenderer.on('context:push', handler)
+    return () => ipcRenderer.removeListener('context:push', handler)
   }
 }
 

@@ -76,6 +76,18 @@ export const IconSend = (props: IconProps) => (
   </IconBase>
 )
 
+export const IconPaperclip = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+  </IconBase>
+)
+
+export const IconX = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M18 6L6 18M6 6l12 12" />
+  </IconBase>
+)
+
 export const IconHistory = (props: IconProps) => (
   <IconBase {...props}>
     <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />

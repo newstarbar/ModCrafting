@@ -1,7 +1,9 @@
 import type { PlanStep } from '../components/TaskPlan'
 import type { PersistedChronoEntry, PersistedMessage } from '../types/chat'
 import type { ChronoEntry } from '../types/display-message.ts'
+import type { ChatContentPart } from '../harness/chat-message.ts'
 import { collectExploreGroupKeys } from './tool-explore-group.ts'
+import { buildUserContent } from '../context/user-content.ts'
 
 export interface SerializableChronoEntry {
   kind: 'reasoning' | 'text' | 'tool'
@@ -38,6 +40,7 @@ export interface SerializableDisplayMessage {
   embeddedPlan?: PlanStep[]
   timestamp: number
   stateSnapshot?: any
+  attachments?: PersistedMessage['attachments']
 }
 
 export interface ActivePlanSnapshot {
@@ -65,7 +68,8 @@ export function serializeDisplayMessages(
       displayId: m.id,
       turnStatus: m.turnStatus,
       embeddedPlan: m.embeddedPlan,
-      stateSnapshot: m.stateSnapshot
+      stateSnapshot: m.stateSnapshot,
+      attachments: m.attachments
     }
 
     if (m.entries && m.entries.length > 0) {
@@ -147,7 +151,8 @@ export function deserializeToDisplay(
         embeddedPlan: m.embeddedPlan,
         timestamp: m.timestamp ?? Date.now(),
         isStreaming: false,
-        stateSnapshot: (m as any).stateSnapshot
+        stateSnapshot: (m as any).stateSnapshot,
+        attachments: m.attachments
       }
     })
 }
@@ -211,6 +216,46 @@ export function toControllerMessages(messages: PersistedMessage[]): Array<{ role
     } else {
       result.push({ role: m.role, content: m.content })
     }
+  }
+  return result
+}
+
+export async function toControllerMessagesWithAttachments(
+  messages: PersistedMessage[],
+  readDataUrl: (filePath: string) => Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }>
+): Promise<Array<{ role: string; content: string | ChatContentPart[] }>> {
+  const result: Array<{ role: string; content: string | ChatContentPart[] }> = []
+  for (const m of messages) {
+    if (m.role === 'system') {
+      result.push({ role: 'system', content: m.content })
+      continue
+    }
+    if (m.entries && m.entries.length > 0) {
+      const text = entriesToContent(m.entries)
+      result.push({ role: m.role, content: text.trim() || m.content })
+      continue
+    }
+    if (m.role === 'user' && m.attachments?.some((a) => a.kind === 'image')) {
+      const imageDataUrls = new Map<string, string>()
+      for (const att of m.attachments) {
+        if (att.kind !== 'image') continue
+        const loaded = await readDataUrl(att.path)
+        if (loaded.ok) imageDataUrls.set(att.path, loaded.dataUrl)
+      }
+      result.push({
+        role: 'user',
+        content: buildUserContent(m.content, m.attachments, imageDataUrls)
+      })
+      continue
+    }
+    if (m.role === 'user' && m.attachments?.length) {
+      result.push({
+        role: 'user',
+        content: buildUserContent(m.content, m.attachments, new Map())
+      })
+      continue
+    }
+    result.push({ role: m.role, content: m.content })
   }
   return result
 }

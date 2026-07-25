@@ -1628,6 +1628,114 @@ body,
 	image-rendering: pixelated;
 }
 
+.chat-input-composite--drag {
+	outline: 2px dashed var(--accent, #6c8cff);
+	outline-offset: -2px;
+}
+
+.chat-composer__attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 10px 12px 0;
+}
+
+.chat-composer__attachment {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	max-width: 160px;
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.06);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	overflow: hidden;
+}
+
+.chat-composer__attachment-thumb {
+	width: 56px;
+	height: 56px;
+	object-fit: cover;
+	display: block;
+}
+
+.chat-composer__attachment-name {
+	padding: 6px 28px 6px 10px;
+	font-size: 12px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.chat-composer__attachment-remove {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 20px;
+	height: 20px;
+	border: none;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.55);
+	color: #fff;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	padding: 0;
+}
+
+.chat-composer__vision-warn {
+	padding: 6px 12px 0;
+	font-size: 12px;
+	color: #e0a060;
+}
+
+.chat-composer__attach-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+	opacity: 0.7;
+	cursor: pointer;
+	padding: 0;
+}
+
+.chat-composer__attach-btn:hover:not(:disabled) {
+	opacity: 1;
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.chat-composer__attach-btn:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+
+.chat-bubble-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.chat-bubble-attachments img {
+	max-width: 180px;
+	max-height: 120px;
+	border-radius: 8px;
+	object-fit: cover;
+}
+
+.chat-bubble-attachments__file {
+	font-size: 12px;
+	opacity: 0.8;
+	padding: 4px 8px;
+	border-radius: 6px;
+	background: rgba(255, 255, 255, 0.06);
+}
+
 .chat-input-composite__goal-expanded {
 	padding: 6px 8px 0;
 	border-bottom: 1px solid var(--border-subtle);

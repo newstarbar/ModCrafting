@@ -1,9 +1,12 @@
-import React, { useState } from 'react'
-import { IconSend, IconSquare } from './Icon'
+import React, { useRef, useState } from 'react'
+import { IconSend, IconSquare, IconPaperclip, IconX } from './Icon'
 import QuickCreateBar from './QuickCreateBar'
 import ComposerModeMenu from './ComposerModeMenu'
 import ComposerModelMenu, { type ProviderModelSelection } from './ComposerModelMenu'
 import type { ComposerMode } from '../harness/turn-intent'
+import type { ComposerAttachment } from '../context/context-ingress'
+import { hasImageAttachment } from '../context/context-ingress'
+import { isVisionCapableModel } from '../harness/chat-message'
 
 export interface ChatComposerProps {
 	input: string
@@ -25,6 +28,11 @@ export interface ChatComposerProps {
 	onProviderModelChange: (selection: ProviderModelSelection) => void
 	onOpenApiSettings?: () => void
 	onQuickTemplateSelect?: (templateId: string, name: string) => void
+	attachments?: ComposerAttachment[]
+	onRemoveAttachment?: (id: string) => void
+	onAttachFiles?: () => void
+	onPasteFiles?: (items: DataTransferItemList) => void
+	onDropFiles?: (files: FileList) => void
 }
 
 const ChatComposer: React.FC<ChatComposerProps> = ({
@@ -47,18 +55,35 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 	onProviderModelChange,
 	onOpenApiSettings,
 	onQuickTemplateSelect,
+	attachments = [],
+	onRemoveAttachment,
+	onAttachFiles,
+	onPasteFiles,
+	onDropFiles,
 }) => {
 	const [goalExpanded, setGoalExpanded] = useState(false)
+	const [dragOver, setDragOver] = useState(false)
+	const compositeRef = useRef<HTMLDivElement>(null)
+
+	const hasImages = hasImageAttachment(attachments)
+	const visionOk = !hasImages || isVisionCapableModel(modelId, providerId)
+	const canSend =
+		!disabled &&
+		!isLoading &&
+		(Boolean(input.trim()) || attachments.length > 0) &&
+		visionOk
 
 	const placeholder = !toolchainReady
 		? '等待构建环境就绪…'
 		: !hasProject
 			? '请先打开项目'
-			: composerMode === 'ask'
-				? '提问或请求解释…'
-				: composerMode === 'plan'
-					? '描述功能，生成实施计划…'
-					: '描述功能或问题…'
+			: !visionOk
+				? '当前模型不支持图片，请移除图片或切换视觉模型…'
+				: composerMode === 'ask'
+					? '提问或请求解释…'
+					: composerMode === 'plan'
+						? '描述功能，生成实施计划…'
+						: '描述功能或问题…'
 
 	return (
 		<div className="chat-composer">
@@ -80,7 +105,71 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 				</div>
 			)}
 
-			<div className="chat-input-composite">
+			<div
+				ref={compositeRef}
+				className={`chat-input-composite${dragOver ? ' chat-input-composite--drag' : ''}`}
+				onDragEnter={(e) => {
+					e.preventDefault()
+					if (disabled || !onDropFiles) return
+					setDragOver(true)
+				}}
+				onDragOver={(e) => {
+					e.preventDefault()
+					if (disabled || !onDropFiles) return
+					setDragOver(true)
+				}}
+				onDragLeave={(e) => {
+					if (!compositeRef.current?.contains(e.relatedTarget as Node)) {
+						setDragOver(false)
+					}
+				}}
+				onDrop={(e) => {
+					e.preventDefault()
+					setDragOver(false)
+					if (disabled || !onDropFiles || !e.dataTransfer.files?.length) return
+					onDropFiles(e.dataTransfer.files)
+				}}
+			>
+				{attachments.length > 0 && (
+					<div className="chat-composer__attachments">
+						{attachments.map((att) => (
+							<div
+								key={att.id}
+								className={`chat-composer__attachment chat-composer__attachment--${att.kind}`}
+							>
+								{att.kind === 'image' ? (
+									att.previewUrl ? (
+										<img src={att.previewUrl} alt={att.name || '图片'} className="chat-composer__attachment-thumb" />
+									) : (
+										<span className="chat-composer__attachment-name">{att.name || '图片'}</span>
+									)
+								) : (
+									<span className="chat-composer__attachment-name" title={att.path}>
+										{att.name}
+									</span>
+								)}
+								{onRemoveAttachment && (
+									<button
+										type="button"
+										className="chat-composer__attachment-remove"
+										onClick={() => onRemoveAttachment(att.id)}
+										disabled={disabled}
+										aria-label="移除附件"
+									>
+										<IconX size="sm" />
+									</button>
+								)}
+							</div>
+						))}
+					</div>
+				)}
+
+				{!visionOk && (
+					<div className="chat-composer__vision-warn">
+						当前模型不支持图片理解，请移除图片或切换到视觉模型后再发送
+					</div>
+				)}
+
 				{goalExpanded && (
 					<div className="chat-input-composite__goal-expanded">
 						<textarea
@@ -99,10 +188,19 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 					placeholder={placeholder}
 					value={input}
 					onChange={(e) => onInputChange(e.target.value)}
+					onPaste={(e) => {
+						const items = e.clipboardData?.items
+						if (!items || !onPasteFiles) return
+						const hasFile = Array.from(items).some((it) => it.kind === 'file')
+						if (hasFile) {
+							e.preventDefault()
+							onPasteFiles(items)
+						}
+					}}
 					onKeyDown={(e) => {
 						if (e.key === 'Enter' && !e.shiftKey) {
 							e.preventDefault()
-							onSend()
+							if (canSend) onSend()
 						}
 					}}
 					disabled={disabled}
@@ -135,6 +233,18 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 						</button>
 					)}
 
+					{onAttachFiles && (
+						<button
+							type="button"
+							className="chat-composer__attach-btn"
+							onClick={onAttachFiles}
+							disabled={disabled || isLoading}
+							title="添加附件"
+						>
+							<IconPaperclip size="sm" />
+						</button>
+					)}
+
 					<ComposerModeMenu
 						value={composerMode}
 						onChange={onComposerModeChange}
@@ -161,7 +271,8 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 								type="button"
 								className="mc-btn mc-btn--primary chat-send-btn"
 								onClick={onSend}
-								disabled={disabled || !input.trim()}
+								disabled={!canSend}
+								title={!visionOk ? '当前模型不支持图片' : undefined}
 							>
 								<IconSend size="sm" />
 							</button>

@@ -1,3 +1,5 @@
+import { getCatalogVisionSupport } from '../../../shared/llm-providers.ts'
+
 export interface ChatToolCall {
   id: string
   type: 'function'
@@ -85,9 +87,26 @@ export function contentAsText(content: string | ChatContentPart[] | undefined | 
     .join('\n')
 }
 
-export function isVisionCapableModel(model: string | undefined | null): boolean {
+/**
+ * Whether a model can accept image inputs.
+ * Prefer the explicit `vision` flag in `LLM_PROVIDERS`; fall back to name heuristics
+ * only for unknown/custom model IDs.
+ */
+export function isVisionCapableModel(
+  model: string | undefined | null,
+  providerId?: string | null
+): boolean {
   if (!model) return false
+  const catalog = getCatalogVisionSupport(model, providerId ?? undefined)
+  if (catalog !== undefined) return catalog
+
   const m = model.toLowerCase()
+  // Explicit non-vision families (avoid false positives like "glm-4v" substring on glm-5)
+  if (m.startsWith('deepseek')) return false
+  if (/^glm-\d/.test(m) && !m.includes('glm-4v') && !/-v\b/.test(m) && !m.includes('vision')) {
+    return false
+  }
+
   return (
     m.includes('gpt-4o') ||
     m.includes('gpt-4.1') ||
@@ -96,12 +115,19 @@ export function isVisionCapableModel(model: string | undefined | null): boolean 
     m.includes('claude-4') ||
     m.includes('claude-sonnet') ||
     m.includes('claude-opus') ||
+    m.includes('claude-haiku') ||
     m.includes('gemini') ||
     m.includes('vision') ||
+    m.includes('-vl') ||
     m.includes('qwen-vl') ||
     m.includes('qwen2.5-vl') ||
+    m.includes('qwen3-vl') ||
+    m.includes('omni') ||
     m.includes('glm-4v') ||
-    m.includes('internvl')
+    m.includes('internvl') ||
+    m.includes('kimi-k2.5') ||
+    m.includes('kimi-k2.6') ||
+    m.includes('kimi-k2.7')
   )
 }
 

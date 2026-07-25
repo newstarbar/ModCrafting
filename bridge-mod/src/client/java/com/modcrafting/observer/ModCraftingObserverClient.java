@@ -42,6 +42,8 @@ public class ModCraftingObserverClient implements ClientModInitializer {
             }
         });
 
+        SendToAiHud.register();
+
         LOGGER.info("ModCrafting Observer client initialized");
     }
 }

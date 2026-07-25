@@ -2,6 +2,8 @@ export interface LlmModelDef {
 	id: string;
 	label: string;
 	contextWindow?: number;
+	/** Whether the model accepts image inputs (OpenAI-compatible multimodal). */
+	vision?: boolean;
 }
 
 export interface LlmProviderDef {
@@ -23,11 +25,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://platform.deepseek.com/api_keys",
 		keyHint: "在 DeepSeek 开放平台创建 API Key，填入上方密钥框。",
 		models: [
-			{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", contextWindow: 1_000_000 },
-			{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", contextWindow: 1_000_000 },
-			{ id: "deepseek-v3.2", label: "DeepSeek V3.2", contextWindow: 160_000 },
-			{ id: "deepseek-chat", label: "DeepSeek Chat (V3)", contextWindow: 128_000 },
-			{ id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", contextWindow: 64_000 }
+			{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", contextWindow: 1_000_000, vision: false },
+			{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", contextWindow: 1_000_000, vision: false },
+			{ id: "deepseek-v3.2", label: "DeepSeek V3.2", contextWindow: 160_000, vision: false },
+			{ id: "deepseek-chat", label: "DeepSeek Chat (V3)", contextWindow: 128_000, vision: false },
+			{ id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", contextWindow: 64_000, vision: false }
 		]
 	},
 	{
@@ -37,11 +39,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://bailian.console.aliyun.com/?tab=model#/api-key",
 		keyHint: "使用阿里云百炼 / DashScope API Key（sk- 开头）。",
 		models: [
-			{ id: "qwen3.7-max", label: "Qwen3.7 Max", contextWindow: 1_000_000 },
-			{ id: "qwen3.7-plus", label: "Qwen3.7 Plus", contextWindow: 1_000_000 },
-			{ id: "qwen3.6-flash", label: "Qwen3.6 Flash", contextWindow: 128_000 },
-			{ id: "qwen3.5-omni", label: "Qwen3.5 Omni", contextWindow: 128_000 },
-			{ id: "qwen3-235b-a22b", label: "Qwen3 235B", contextWindow: 128_000 }
+			{ id: "qwen3.7-max", label: "Qwen3.7 Max", contextWindow: 1_000_000, vision: true },
+			{ id: "qwen3.7-plus", label: "Qwen3.7 Plus", contextWindow: 1_000_000, vision: true },
+			{ id: "qwen3.6-flash", label: "Qwen3.6 Flash", contextWindow: 128_000, vision: false },
+			{ id: "qwen3.5-omni", label: "Qwen3.5 Omni", contextWindow: 128_000, vision: true },
+			{ id: "qwen3-235b-a22b", label: "Qwen3 235B", contextWindow: 128_000, vision: false }
 		]
 	},
 	{
@@ -51,11 +53,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://bigmodel.cn/apikey/platform",
 		keyHint: "在智谱开放平台创建 API Key。",
 		models: [
-			{ id: "glm-5.2", label: "GLM-5.2", contextWindow: 1_000_000 },
-			{ id: "glm-5.1", label: "GLM-5.1", contextWindow: 200_000 },
-			{ id: "glm-5", label: "GLM-5", contextWindow: 1_000_000 },
-			{ id: "glm-5-turbo", label: "GLM-5 Turbo", contextWindow: 128_000 },
-			{ id: "glm-4.9", label: "GLM-4.9", contextWindow: 128_000 }
+			{ id: "glm-5.2", label: "GLM-5.2", contextWindow: 1_000_000, vision: false },
+			{ id: "glm-5.1", label: "GLM-5.1", contextWindow: 200_000, vision: false },
+			{ id: "glm-5", label: "GLM-5", contextWindow: 1_000_000, vision: false },
+			{ id: "glm-5-turbo", label: "GLM-5 Turbo", contextWindow: 128_000, vision: true },
+			{ id: "glm-4.9", label: "GLM-4.9", contextWindow: 128_000, vision: false }
 		]
 	},
 	{
@@ -65,11 +67,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://platform.moonshot.cn/console/api-keys",
 		keyHint: "在 Moonshot 开放平台创建 API Key。",
 		models: [
-			{ id: "kimi-k2.6", label: "Kimi K2.6", contextWindow: 262_144 },
-			{ id: "kimi-k2.5", label: "Kimi K2.5", contextWindow: 262_144 },
-			{ id: "kimi-k2.7-code", label: "Kimi K2.7 Code", contextWindow: 262_144 },
-			{ id: "kimi-k2.7-code-highspeed", label: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
-			{ id: "moonshot-v1-128k", label: "Moonshot V1 128K", contextWindow: 128_000 }
+			{ id: "kimi-k2.6", label: "Kimi K2.6", contextWindow: 262_144, vision: true },
+			{ id: "kimi-k2.5", label: "Kimi K2.5", contextWindow: 262_144, vision: true },
+			{ id: "kimi-k2.7-code", label: "Kimi K2.7 Code", contextWindow: 262_144, vision: true },
+			{ id: "kimi-k2.7-code-highspeed", label: "Kimi K2.7 Code Highspeed", contextWindow: 262_144, vision: true },
+			{ id: "moonshot-v1-128k", label: "Moonshot V1 128K", contextWindow: 128_000, vision: false }
 		]
 	},
 	{
@@ -79,11 +81,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
 		keyHint: "火山方舟 API Key；可直接使用模型名称或在控制台创建的推理接入点 ID（ep- 开头）。",
 		models: [
-			{ id: "doubao-seed-2-1-pro-260628", label: "豆包 2.1 Pro", contextWindow: 256_000 },
-			{ id: "doubao-seed-2-1-turbo-260628", label: "豆包 2.1 Turbo", contextWindow: 256_000 },
-			{ id: "doubao-seed-evolving", label: "豆包 Evolving", contextWindow: 256_000 },
-			{ id: "doubao-seed-2-0-pro-260215", label: "豆包 2.0 Pro", contextWindow: 256_000 },
-			{ id: "doubao-seed-2-0-lite-260428", label: "豆包 2.0 Lite", contextWindow: 256_000 }
+			{ id: "doubao-seed-2-1-pro-260628", label: "豆包 2.1 Pro", contextWindow: 256_000, vision: true },
+			{ id: "doubao-seed-2-1-turbo-260628", label: "豆包 2.1 Turbo", contextWindow: 256_000, vision: true },
+			{ id: "doubao-seed-evolving", label: "豆包 Evolving", contextWindow: 256_000, vision: true },
+			{ id: "doubao-seed-2-0-pro-260215", label: "豆包 2.0 Pro", contextWindow: 256_000, vision: true },
+			{ id: "doubao-seed-2-0-lite-260428", label: "豆包 2.0 Lite", contextWindow: 256_000, vision: true }
 		]
 	},
 	{
@@ -93,11 +95,11 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		docsUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
 		keyHint: "在 MiniMax 开放平台创建 API Key。",
 		models: [
-			{ id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_000_000 },
-			{ id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800 },
-			{ id: "MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed", contextWindow: 204_800 },
-			{ id: "MiniMax-M2.5", label: "MiniMax M2.5", contextWindow: 204_800 },
-			{ id: "MiniMax-M2.1", label: "MiniMax M2.1", contextWindow: 204_800 }
+			{ id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_000_000, vision: true },
+			{ id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800, vision: false },
+			{ id: "MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed", contextWindow: 204_800, vision: false },
+			{ id: "MiniMax-M2.5", label: "MiniMax M2.5", contextWindow: 204_800, vision: false },
+			{ id: "MiniMax-M2.1", label: "MiniMax M2.1", contextWindow: 204_800, vision: false }
 		]
 	}
 ];
@@ -232,6 +234,26 @@ export function getModelContextWindow(modelId: string, providerId?: string): num
 		const model = provider.models.find((m) => m.id === modelId);
 		if (model?.contextWindow) return model.contextWindow;
 	}
+	return undefined;
+}
+
+/**
+ * Look up explicit vision support from the model catalog.
+ * Returns `undefined` when the model is not in the catalog (e.g. custom endpoint).
+ */
+export function getCatalogVisionSupport(modelId: string, providerId?: string): boolean | undefined {
+	const trimmed = modelId.trim();
+	if (!trimmed) return undefined;
+	if (providerId && providerId !== CUSTOM_PROVIDER_ID) {
+		const model = findModelInProvider(providerId, trimmed);
+		if (model) return Boolean(model.vision);
+	}
+	for (const provider of LLM_PROVIDERS) {
+		const model = provider.models.find((m) => m.id === trimmed);
+		if (model) return Boolean(model.vision);
+	}
+	// Doubao inference endpoint IDs are opaque; assume vision-capable seed family.
+	if (providerId === "doubao" && /^ep-[a-z0-9-]+$/i.test(trimmed)) return true;
 	return undefined;
 }
 

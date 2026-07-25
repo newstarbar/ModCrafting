@@ -4,7 +4,7 @@
 
 import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from './events'
 import { Agent } from './agent'
-import type { ChatMessage } from './chat-message'
+import { contentAsText, type ChatContentPart, type ChatMessage } from './chat-message'
 import { Registry } from './tools'
 import { PlanTracker } from './plan-tracker'
 import { parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from '../utils/plan-steps'
@@ -621,7 +621,7 @@ ${projectInfo}`
     this.messages = this.messages.filter((m, i) => {
       if (m.role !== 'system') return true
       if (i === 0) return true // base prompt
-      const content = m.content || ''
+      const content = contentAsText(m.content)
       // Injected system messages use these markers
       if (/^\[SYSTEM:/.test(content)) return false
       if (/^【系统/.test(content)) return false
@@ -779,7 +779,7 @@ ${projectInfo}`
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i]
       if (m.role !== 'user' || m.origin === 'harness') continue
-      const c = (m.content || '').trim()
+      const c = contentAsText(m.content).trim()
       if (!c || c === '用户请求游戏内测试/验证') continue
       if (isNarrowResumeInput(c)) continue
       // Structural crash/build dumps are always useful sticky symptoms.
@@ -829,22 +829,27 @@ ${projectInfo}`
     return this.runExecutePhase(streamCb)
   }
 
-  private async runTurn(input: string, options: { pushUser: boolean }): Promise<string> {
+  private async runTurn(
+    input: string | ChatContentPart[],
+    options: { pushUser: boolean }
+  ): Promise<string> {
     if (this._running) return ''
 
     this._running = true
     this.abortController = new AbortController()
     this.agent.resetRunState()
 
+    const inputText = contentAsText(input)
+
     this.onAgentStatus?.('意图分类...')
     const classified = await classifyUserTurn({
       apiConfig: this.apiConfig,
-      input,
+      input: inputText,
       ctx: this.intentContext(),
       stickySymptom: this.activeUserSymptom,
       abortSignal: this.abortController.signal
     })
-    this.applyClassificationSideEffects(classified, input)
+    this.applyClassificationSideEffects(classified, inputText)
 
     const intent = classified.intent
     this.lastTurnMode = intent === 'plan_only' ? 'plan_only' : intent
@@ -881,7 +886,7 @@ ${projectInfo}`
         this._phase === 'execute' &&
         this.planTracker &&
         !this.planTracker.allDone() &&
-        (classified.isErrorReport || isStructuralErrorReport(input))
+        (classified.isErrorReport || isStructuralErrorReport(inputText))
       ) {
         effectiveIntent = 'resume'
         this.lastTurnMode = 'resume'
@@ -944,12 +949,12 @@ ${projectInfo}`
             text: '短修复任务：跳过正式计划，直接进入执行与游戏内校验。'
           }
         })
-        const result = await this.beginSymptomFastExecute(streamCb, input)
+        const result = await this.beginSymptomFastExecute(streamCb, inputText)
         this.onAgentStatus?.('')
         return result
       }
 
-      if (intent === 'develop' && isQuickCreateGeneratedMessage(input)) {
+      if (intent === 'develop' && isQuickCreateGeneratedMessage(inputText)) {
         this.emitEvent({
           kind: EventKind.Notice,
           notice: { level: 'info', text: '快捷创建：模板已生成，跳过规划直接构建并运行。' }
@@ -969,7 +974,7 @@ ${projectInfo}`
       if (intent === 'develop' && this._phase === 'execute' && this.planTracker && !this.planTracker.allDone()) {
         // Only explicit replacement language starts a new task. Length-based guessing
         // previously discarded active plans for ordinary corrections and details.
-        const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(input)
+        const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(inputText)
         if (isNewRequest) {
           this.retainCurrentUserAsNewTask()
           this.planTracker = null
@@ -1019,7 +1024,7 @@ ${projectInfo}`
 
         if (!this.isActionablePlan(fullPlanText)) {
           // Retry once: inject corrective feedback and ask model to try again
-          if (!this.messages.some((m) => m.role === 'user' && (m.content || '').includes('请严格按照以下格式输出实施计划'))) {
+          if (!this.messages.some((m) => m.role === 'user' && contentAsText(m.content).includes('请严格按照以下格式输出实施计划'))) {
             this.messages.push({
               role: 'user',
               origin: 'harness',
@@ -1175,10 +1180,15 @@ ${projectInfo}`
   }
 
   // Send user message — main entry point
-  async send(input: string): Promise<string> {
+  async send(input: string | ChatContentPart[]): Promise<string> {
     if (this._running) {
       logger.agent('Queuing steer message')
-      this.messages.push({ role: 'user', content: '[mid-turn] ' + input, origin: 'user', taskId: this.taskId })
+      this.messages.push({
+        role: 'user',
+        content: typeof input === 'string' ? '[mid-turn] ' + input : input,
+        origin: 'user',
+        taskId: this.taskId
+      })
       return ''
     }
     return this.runTurn(input, { pushUser: true })
@@ -1191,7 +1201,7 @@ ${projectInfo}`
     this.trimTrailingAssistants()
     const lastUser = [...this.messages].reverse().find((m) =>
       m.role === 'user' && m.origin !== 'harness' &&
-      !/^(?:\[mid-turn\]|\[SYSTEM:|【系统|STOP EXPLORING)/.test(m.content || '')
+      !/^(?:\[mid-turn\]|\[SYSTEM:|【系统|STOP EXPLORING)/.test(contentAsText(m.content))
     )
     if (!lastUser) return ''
 
@@ -1368,12 +1378,12 @@ ${projectInfo}`
       if (m.role === 'system') continue
       if (m.role === 'user') {
         turn += 1
-        lines.push(`## 第 ${turn} 轮 · 用户`, '', (m.content || '').trim() || '_（无内容）_', '')
+        lines.push(`## 第 ${turn} 轮 · 用户`, '', contentAsText(m.content).trim() || '_（无内容）_', '')
         continue
       }
       if (m.role === 'assistant') {
         if (turn === 0) turn = 1
-        const content = (m.content || '').trim()
+        const content = contentAsText(m.content).trim()
         const clipped =
           content.length > 4000 ? `${content.slice(0, 4000)}\n\n... [截断]` : content
         lines.push(`## 第 ${turn} 轮 · 助手`, '', clipped || '_（无内容）_', '')
@@ -1381,7 +1391,7 @@ ${projectInfo}`
       }
       if (m.role === 'tool') {
         const name = m.name || 'tool'
-        const out = (m.content || '').trim()
+        const out = contentAsText(m.content).trim()
         const clipped = out.length > 800 ? `${out.slice(0, 800)}…` : out
         lines.push(`- \`${name}\`${clipped ? `: ${clipped}` : ''}`, '')
       }

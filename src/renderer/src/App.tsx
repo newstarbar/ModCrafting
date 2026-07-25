@@ -28,6 +28,7 @@ import {
 	type PhaseDevStatus
 } from "./types/dev-status";
 import type { ChatSession, PersistedMessage } from "./types/chat";
+import type { ContextPayload } from "./context/context-ingress";
 import {
 	loadSessionsWithMeta,
 	saveSessions,
@@ -64,7 +65,7 @@ interface AppState {
 	selectedFile: { path: string; name: string } | null;
 	fileContent: string | null;
 	rightPanelTab: RightPanelTab;
-	chatContext: string[];
+	contextQueue: ContextPayload[];
 	fileTreeRefreshKey: number;
 }
 
@@ -77,7 +78,7 @@ const App: React.FC = () => {
 		selectedFile: null,
 		fileContent: null,
 		rightPanelTab: "preview",
-		chatContext: [],
+		contextQueue: [],
 		fileTreeRefreshKey: 0
 	});
 	const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -362,6 +363,7 @@ const App: React.FC = () => {
 			setState((prev) => ({ ...prev, projectPath: dir, projectName: name, selectedFile: null, fileContent: null, fileTreeRefreshKey: prev.fileTreeRefreshKey + 1, rightPanelTab: "preview" }));
 			setAppView("workspace");
 			window.api.setTitle(`ModCrafting - ${name}`);
+			void window.api.setContextProjectPath(dir);
 			await window.api.saveRecentProject(dir);
 			await refreshRecentProjects();
 			await window.api.watchDirectory(dir);
@@ -687,11 +689,26 @@ const App: React.FC = () => {
 		setCurrentSessionId(id);
 		return id;
 	}, []);
-	const addToChatContext = useCallback((text: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, text] })), []);
-	const handleCrashToChat = useCallback((c: string) => setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 崩溃报告 ---\n${c}`], rightPanelTab: "game" })), []);
+	const enqueueContext = useCallback((payload: ContextPayload) => {
+		setState((prev) => ({ ...prev, contextQueue: [...prev.contextQueue, payload] }));
+	}, []);
+	const addToChatContext = useCallback((text: string) => {
+		enqueueContext({ kind: 'text', text, source: 'panel' });
+	}, [enqueueContext]);
+	const handleCrashToChat = useCallback((c: string) => {
+		setState((prev) => ({
+			...prev,
+			contextQueue: [...prev.contextQueue, { kind: 'text' as const, text: `--- 崩溃报告 ---\n${c}`, source: 'crash' }],
+			rightPanelTab: "game"
+		}));
+	}, []);
 	const handleContentClick = useCallback(async (type: string, name: string, className?: string) => {
 		if (!state.projectPath || !className) {
-			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`] }));
+			enqueueContext({
+				kind: 'text',
+				text: `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`,
+				source: 'code-explain'
+			});
 			return;
 		}
 		try {
@@ -716,22 +733,28 @@ const App: React.FC = () => {
 				if (entry.isDirectory) {
 					const found = await findFile(entry.path, [entry.name]);
 					if (found) {
-						setState((prev) => ({
-							...prev,
-							chatContext: [
-								...prev.chatContext,
-								`--- 代码解释 ---\n${name} (${type})\n文件: ${found.relPath}\n\`\`\`java\n${found.code}\n\`\`\``
-							]
-						}));
+						enqueueContext({
+							kind: 'text',
+							text: `--- 代码解释 ---\n${name} (${type})\n文件: ${found.relPath}\n\`\`\`java\n${found.code}\n\`\`\``,
+							source: 'code-explain'
+						});
 						return;
 					}
 				}
 			}
-			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n未找到源代码文件`] }));
+			enqueueContext({
+				kind: 'text',
+				text: `--- 代码解释 ---\n${name} (${type})\n未找到源代码文件`,
+				source: 'code-explain'
+			});
 		} catch {
-			setState((prev) => ({ ...prev, chatContext: [...prev.chatContext, `--- 代码解释 ---\n${name} (${type})\n读取源代码失败`] }));
+			enqueueContext({
+				kind: 'text',
+				text: `--- 代码解释 ---\n${name} (${type})\n读取源代码失败`,
+				source: 'code-explain'
+			});
 		}
-	}, [state.projectPath]);
+	}, [state.projectPath, enqueueContext]);
 
 	const lastProjectPath = recentProjects[0]?.path ?? null;
 
@@ -808,8 +831,8 @@ const App: React.FC = () => {
 								<ChatPanel
 									ref={chatPanelRef}
 									projectPath={state.projectPath}
-									contextFiles={state.chatContext}
-									setContextFiles={(f) => setState((p) => ({ ...p, chatContext: f }))}
+									contextQueue={state.contextQueue}
+									setContextQueue={(q) => setState((p) => ({ ...p, contextQueue: q }))}
 									selectedFile={state.selectedFile}
 									apiConfig={apiConfig}
 									ensureApiKey={ensureApiKey}

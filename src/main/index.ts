@@ -11,6 +11,11 @@ import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
 import { initUpdater } from './updater'
 import { stopGradleDaemonsOnExit } from './build-env'
 import { clearBadge, initAppBadge } from './app-badge'
+import {
+  setupContextIngressHandlers,
+  startContextIngressServer,
+  stopContextIngressServer
+} from './context-ingress-server'
 
 if (is.dev) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
@@ -24,6 +29,7 @@ initAppBadge(() => mainWindow)
 async function runShutdownCleanup(): Promise<void> {
   stopAllTerminalSessions()
   stopAllMcInstances()
+  stopContextIngressServer()
   await shutdownOpenCode()
   await stopGradleDaemonsOnExit()
 }
@@ -130,6 +136,8 @@ function createWindow(): void {
 app.whenReady().then(() => {
   setupMenu()
   setupIpcHandlers()
+  setupContextIngressHandlers()
+  startContextIngressServer()
   setupOpenCodeHandlers(() => mainWindow)
   setupTerminalHandlers()
   setupMcRuntimeHandlers()

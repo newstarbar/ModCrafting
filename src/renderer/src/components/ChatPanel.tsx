@@ -20,7 +20,7 @@ import {
   deserializeToDisplay,
   restoreActivePlan,
   buildRestoredCollapseState,
-  toControllerMessages
+  toControllerMessagesWithAttachments
 } from '../utils/chat-persist'
 import { groupMessagesIntoTurns } from '../utils/chat-turns'
 import type { ChatTurn } from '../utils/chat-turns'
@@ -50,11 +50,22 @@ import {
   shouldCancelTurnOnSessionLeave,
   shouldForceRestoreSnapshot
 } from '../utils/session-switch-guard'
+import type { ComposerAttachment, ContextPayload, MessageAttachment } from '../context/context-ingress'
+import {
+  attachmentToMessageAttachment,
+  hasImageAttachment,
+  isImagePath,
+  mimeFromPath,
+  newAttachmentId,
+  payloadToAttachment
+} from '../context/context-ingress'
+import { buildUserContent } from '../context/user-content'
+import { isVisionCapableModel } from '../harness/chat-message'
 
 interface ChatPanelProps {
   projectPath: string | null
-  contextFiles: string[]
-  setContextFiles: (files: string[]) => void
+  contextQueue: ContextPayload[]
+  setContextQueue: (queue: ContextPayload[]) => void
   selectedFile: { path: string; name: string } | null
   apiConfig: { endpoint: string; apiKey: string; model: string; providerId: string }
   ensureApiKey?: () => Promise<string | null>
@@ -110,6 +121,19 @@ function generateMessageId(): string {
 
 function uid(): string {
   return generateMessageId()
+}
+
+function UserAttachmentImage({ path, name }: { path: string; name?: string }) {
+  const [src, setSrc] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void window.api.readAttachmentDataUrl(path).then((r) => {
+      if (!cancelled && r.ok) setSrc(r.dataUrl)
+    })
+    return () => { cancelled = true }
+  }, [path])
+  if (!src) return <span className="chat-bubble-attachments__file">{name || '图片'}</span>
+  return <img src={src} alt={name || '附件图片'} />
 }
 
 // 工具中文名映射
@@ -184,9 +208,12 @@ interface ChatPanelRef {
   handleTemplateSelect: (templateId: string, name: string) => void
 }
 
-const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextFiles, setContextFiles, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings }, ref) {
+const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextQueue, setContextQueue, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings }, ref) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
   const [composerMode, setComposerMode] = useState<ComposerMode>('agent')
   const composerModeRef = useRef<ComposerMode>('agent')
   composerModeRef.current = composerMode
@@ -415,6 +442,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       }
       bumpTurnGeneration()
       resetTurnUiState()
+      setAttachments([])
     }
 
     if (!currentSessionId) {
@@ -460,17 +488,22 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setUsageAccum(restoredUsage)
     onUsageChangeRef.current?.(restoredUsage)
 
-    const persistedMsgs = toControllerMessages(session.messages)
+    const persistedMsgsPromise = toControllerMessagesWithAttachments(
+      session.messages,
+      (filePath) => window.api.readAttachmentDataUrl(filePath)
+    )
     const forceRestore = shouldForceRestoreSnapshot(previousSessionId, currentSessionId)
-    if (forceRestore) {
-      controllerRef.current?.restoreSnapshot(persistedMsgs)
-    } else {
-      // Same-session path (should not hit due to early return) — keep length guard.
-      const currentCtrlMsgs = controllerRef.current?.getSnapshot() ?? []
-      if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
+    void persistedMsgsPromise.then((persistedMsgs) => {
+      if (restoredSessionIdRef.current !== currentSessionId) return
+      if (forceRestore) {
         controllerRef.current?.restoreSnapshot(persistedMsgs)
+      } else {
+        const currentCtrlMsgs = controllerRef.current?.getSnapshot() ?? []
+        if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
+          controllerRef.current?.restoreSnapshot(persistedMsgs)
+        }
       }
-    }
+    })
     if (restoredPlan?.steps && restoredPlan.steps.length > 0) {
       controllerRef.current?.restorePlanTracker(restoredPlan.steps)
     } else {
@@ -484,27 +517,203 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
   }, [flushPersist])
 
-  // Watch for external context injected via "发送给AI" buttons (crash reports, build errors, etc.)
+  // Watch for external context injected via ContextIngress (crash, code explain, game HUD, …)
   const contextConsumedRef = useRef(0)
   useEffect(() => {
-    if (contextFiles.length > contextConsumedRef.current) {
-      const newItems = contextFiles.slice(contextConsumedRef.current)
-      contextConsumedRef.current = contextFiles.length
-      const text = newItems.join('\n\n')
-      if (newItems.some((item) => isCodeExplainInput(item))) {
+    if (contextQueue.length <= contextConsumedRef.current) return
+    const newItems = contextQueue.slice(contextConsumedRef.current)
+    contextConsumedRef.current = contextQueue.length
+
+    const textParts: string[] = []
+    const nextAtts: ComposerAttachment[] = []
+    for (const item of newItems) {
+      if (item.kind === 'text') {
+        textParts.push(item.text)
+      } else {
+        const att = payloadToAttachment(item, newAttachmentId())
+        if (att) nextAtts.push(att)
+      }
+    }
+    if (nextAtts.length) {
+      setAttachments((prev) => [...prev, ...nextAtts])
+    }
+    if (textParts.length) {
+      const text = textParts.join('\n\n')
+      if (textParts.some((item) => isCodeExplainInput(item))) {
         setComposerMode('ask')
         composerModeRef.current = 'ask'
         controllerRef.current?.setComposerMode('ask')
         persistComposerMeta({ composerMode: 'ask' })
       }
-      const prefix = newItems.some((item) => isCodeExplainInput(item)) && !text.includes('请解释')
+      const prefix = textParts.some((item) => isCodeExplainInput(item)) && !text.includes('请解释')
         ? '请解释以下代码：\n\n'
         : ''
       setInput((prev) => (prev ? `${prev}\n\n${prefix}${text}` : `${prefix}${text}`))
-      setContextFiles([])
-      contextConsumedRef.current = 0
     }
-  }, [contextFiles, setContextFiles, persistComposerMeta])
+    setContextQueue([])
+    contextConsumedRef.current = 0
+  }, [contextQueue, setContextQueue, persistComposerMeta])
+
+  // Game HUD / external push → ContextIngress
+  useEffect(() => {
+    if (!window.api?.onContextPush) return
+    return window.api.onContextPush((payload) => {
+      if (payload.kind === 'text' && payload.text) {
+        const text = payload.text
+        if (isCodeExplainInput(text)) {
+          setComposerMode('ask')
+          composerModeRef.current = 'ask'
+          controllerRef.current?.setComposerMode('ask')
+          persistComposerMeta({ composerMode: 'ask' })
+        }
+        setInput((prev) => (prev ? `${prev}\n\n${text}` : text))
+        return
+      }
+      if (payload.kind === 'image' && payload.path) {
+        const imagePath = payload.path
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: newAttachmentId(),
+            kind: 'image',
+            path: imagePath,
+            mimeType: payload.mimeType || mimeFromPath(imagePath),
+            name: payload.name,
+            previewUrl: undefined
+          }
+        ])
+        void window.api.readAttachmentDataUrl(imagePath).then((r) => {
+          if (!r.ok) return
+          setAttachments((prev) =>
+            prev.map((a) => (a.kind === 'image' && a.path === imagePath ? { ...a, previewUrl: r.dataUrl } : a))
+          )
+        })
+        return
+      }
+      if (payload.kind === 'file' && payload.path) {
+        const filePath = payload.path
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: newAttachmentId(),
+            kind: 'file',
+            path: filePath,
+            name: payload.name || filePath.split(/[/\\]/).pop() || 'file'
+          }
+        ])
+      }
+    })
+  }, [persistComposerMeta])
+
+  const addPathsAsAttachments = useCallback(async (paths: string[]) => {
+    if (!projectPath || paths.length === 0) return
+    for (const filePath of paths) {
+      if (isImagePath(filePath)) {
+        const saved = await window.api.saveAttachment({
+          projectPath,
+          sourcePath: filePath,
+          mimeType: mimeFromPath(filePath),
+          fileName: filePath.split(/[/\\]/).pop()
+        })
+        if (!saved.ok) continue
+        const preview = await window.api.readAttachmentDataUrl(saved.path)
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: newAttachmentId(),
+            kind: 'image',
+            path: saved.path,
+            mimeType: saved.mimeType,
+            name: saved.name,
+            previewUrl: preview.ok ? preview.dataUrl : undefined
+          }
+        ])
+      } else {
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: newAttachmentId(),
+            kind: 'file',
+            path: filePath,
+            name: filePath.split(/[/\\]/).pop() || 'file'
+          }
+        ])
+      }
+    }
+  }, [projectPath])
+
+  const handleAttachFiles = useCallback(async () => {
+    if (!projectPath) return
+    const paths = await window.api.selectAttachmentFiles()
+    await addPathsAsAttachments(paths)
+  }, [projectPath, addPathsAsAttachments])
+
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = String(reader.result || '')
+        const idx = result.indexOf(',')
+        resolve(idx >= 0 ? result.slice(idx + 1) : result)
+      }
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+
+  const ingestBrowserFiles = useCallback(async (files: File[]) => {
+    if (!projectPath || files.length === 0) return
+    for (const file of files) {
+      const electronPath = (file as File & { path?: string }).path
+      if (electronPath) {
+        await addPathsAsAttachments([electronPath])
+        continue
+      }
+      if (file.type.startsWith('image/') || isImagePath(file.name)) {
+        const base64 = await fileToBase64(file)
+        const saved = await window.api.saveAttachment({
+          projectPath,
+          base64,
+          mimeType: file.type || mimeFromPath(file.name),
+          fileName: file.name
+        })
+        if (!saved.ok) continue
+        const preview = await window.api.readAttachmentDataUrl(saved.path)
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: newAttachmentId(),
+            kind: 'image',
+            path: saved.path,
+            mimeType: saved.mimeType,
+            name: saved.name,
+            previewUrl: preview.ok ? preview.dataUrl : undefined
+          }
+        ])
+      } else {
+        // Non-image without path cannot be handed to agent as filesystem path
+        alert(`无法添加文件「${file.name}」：请使用附件按钮从本地选择，以便保留真实路径。`)
+      }
+    }
+  }, [projectPath, addPathsAsAttachments])
+
+  const handlePasteFiles = useCallback((items: DataTransferItemList) => {
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile()
+        if (f) files.push(f)
+      }
+    }
+    void ingestBrowserFiles(files)
+  }, [ingestBrowserFiles])
+
+  const handleDropFiles = useCallback((fileList: FileList) => {
+    void ingestBrowserFiles(Array.from(fileList))
+  }, [ingestBrowserFiles])
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id))
+  }, [])
 
   // Refresh display from turnRef
   const refreshDisplay = useCallback(() => {
@@ -1007,9 +1216,16 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   // Session helpers — delegated to App (single source of truth)
   const handleSend = useCallback(async () => {
-    if (!input.trim() || isLoading || !toolchainReady) return
+    const pendingAttachments = attachmentsRef.current
+    const hasText = Boolean(input.trim())
+    const hasAtt = pendingAttachments.length > 0
+    if ((!hasText && !hasAtt) || isLoading || !toolchainReady) return
     // Clarification answers go through ClarificationOverlay confirm — not the composer.
     if (clarificationPending) return
+    if (hasImageAttachment(pendingAttachments) && !isVisionCapableModel(apiConfig.model, apiConfig.providerId)) {
+      alert('当前模型不支持图片理解，请移除图片或切换到视觉模型后再发送')
+      return
+    }
 
     const ctrl = controllerRef.current
     if (!ctrl) return
@@ -1032,6 +1248,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
 
     const userMsg = input.trim()
+    const messageAttachments: MessageAttachment[] = pendingAttachments.map(attachmentToMessageAttachment)
+    const imageDataUrls = new Map<string, string>()
+    for (const att of messageAttachments) {
+      if (att.kind !== 'image') continue
+      const loaded = await window.api.readAttachmentDataUrl(att.path)
+      if (loaded.ok) imageDataUrls.set(att.path, loaded.dataUrl)
+    }
+    const sendContent = buildUserContent(userMsg, messageAttachments, imageDataUrls)
+
     const resumeLike = /^(继续|接着|往下|continue|执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i.test(userMsg)
     const planForTurn = resumeLike
       ? (activePlanRef.current || restoreActivePlan(displayMessagesRef.current, serializeDisplayMessages(displayMessagesRef.current, activePlanRef.current)))
@@ -1043,6 +1268,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
 
     setInput('')
+    setAttachments([])
     bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
@@ -1054,7 +1280,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setCompletionFlash('')
 
     if (!currentSessionId) {
-      const newId = onNewSession(userMsg)
+      const newId = onNewSession(userMsg || '（附件）')
       currentSessionIdRef.current = newId
       // Claim session before App re-renders so restore effect does not wipe this turn.
       restoredSessionIdRef.current = newId
@@ -1065,13 +1291,20 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         sessionGoal,
         activePlan: activePlanRef.current,
       })
-      setDisplayMessages([{ id: uid(), role: 'user', content: userMsg, timestamp: Date.now(), stateSnapshot: preSnapshot }])
+      setDisplayMessages([{
+        id: uid(),
+        role: 'user',
+        content: userMsg,
+        timestamp: Date.now(),
+        stateSnapshot: preSnapshot,
+        attachments: messageAttachments.length ? messageAttachments : undefined
+      }])
       ctrl.clearSession()
       ctrl.setComposerMode(composerMode)
       ctrl.setSessionGoal(sessionGoal)
       persistComposerMeta({ composerMode, sessionGoal })
     } else {
-      maybeRenameSessionForFirstMessage(currentSessionId, userMsg)
+      maybeRenameSessionForFirstMessage(currentSessionId, userMsg || '（附件）')
       setDisplayMessages((prev) => {
         const preSnapshot = buildPreTurnSnapshot({
           messageIndex: prev.length,
@@ -1080,7 +1313,14 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           sessionGoal,
           activePlan: activePlanRef.current,
         })
-        const next = [...prev, { id: uid(), role: 'user' as const, content: userMsg, timestamp: Date.now(), stateSnapshot: preSnapshot }]
+        const next = [...prev, {
+          id: uid(),
+          role: 'user' as const,
+          content: userMsg,
+          timestamp: Date.now(),
+          stateSnapshot: preSnapshot,
+          attachments: messageAttachments.length ? messageAttachments : undefined
+        }]
         flushPersist(next, resumeLike ? activePlanRef.current : null)
         return next
       })
@@ -1089,7 +1329,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     ctrl.setComposerMode(composerMode)
     ctrl.setSessionGoal(sessionGoal)
     try {
-      await ctrl.send(userMsg)
+      await ctrl.send(sendContent)
     } catch {
       setIsLoading(false)
       setAgentStatus('')
@@ -1177,7 +1417,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const handleTemplateFormConfirm = useCallback(async (result: { prompt: string; templateId: string; formData: Record<string, unknown> }) => {
     setShowTemplateForm(false)
-    setContextFiles([])
+    setContextQueue([])
 
     let prompt = result.prompt
     if (isQuickCreateTemplate(result.templateId) && projectPath) {
@@ -1247,7 +1487,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     })
-  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextFiles, projectPath, bindActiveTurnGeneration, persistComposerMeta])
+  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextQueue, projectPath, bindActiveTurnGeneration, persistComposerMeta])
 
   const handleTemplateFormCancel = useCallback(() => {
     setShowTemplateForm(false)
@@ -1346,9 +1586,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     flushPersist(truncated, null, { resetSystem: true })
 
     const serialized = serializeDisplayMessages(truncated, null)
-    controllerRef.current?.restoreSnapshot(
-      toControllerMessages(serialized)
-    )
+    void toControllerMessagesWithAttachments(serialized, (p) => window.api.readAttachmentDataUrl(p)).then((msgs) => {
+      controllerRef.current?.restoreSnapshot(msgs)
+    })
 
     const ctrl = controllerRef.current
     if (!ctrl) return
@@ -1480,8 +1720,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     const ctrl = controllerRef.current
     if (ctrl) {
-      ctrl.restoreSnapshot(toControllerMessages(serialized))
-      ctrl.restorePlanTracker([])
+      void toControllerMessagesWithAttachments(serialized, (p) => window.api.readAttachmentDataUrl(p)).then((msgs) => {
+        ctrl.restoreSnapshot(msgs)
+        ctrl.restorePlanTracker([])
+      })
     }
 
     flushPersist(next, nextPlan)
@@ -1528,7 +1770,22 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         </div>
         <div className="bubble-bd">
           {isUser && (
-            <div>{renderContent(msg.content)}</div>
+            <>
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="chat-bubble-attachments">
+                  {msg.attachments.map((att, i) =>
+                    att.kind === 'image' ? (
+                      <UserAttachmentImage key={`${att.path}-${i}`} path={att.path} name={att.name} />
+                    ) : (
+                      <span key={`${att.path}-${i}`} className="chat-bubble-attachments__file" title={att.path}>
+                        {att.name || att.path.split(/[/\\]/).pop()}
+                      </span>
+                    )
+                  )}
+                </div>
+              )}
+              {msg.content ? <div>{renderContent(msg.content)}</div> : null}
+            </>
           )}
           {!isUser && (
             <>
@@ -1862,6 +2119,11 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             onProviderModelChange={onProviderModelChange ?? (() => {})}
             onOpenApiSettings={onOpenApiSettings}
             onQuickTemplateSelect={handleTemplateSelect}
+            attachments={attachments}
+            onRemoveAttachment={handleRemoveAttachment}
+            onAttachFiles={handleAttachFiles}
+            onPasteFiles={handlePasteFiles}
+            onDropFiles={handleDropFiles}
           />
         )}
       </div>

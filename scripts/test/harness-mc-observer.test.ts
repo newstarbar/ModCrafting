@@ -74,6 +74,8 @@ describe('mc-observer helpers', () => {
     assert.equal(isVisionCapableModel('gpt-4o'), true)
     assert.equal(isVisionCapableModel('claude-sonnet-4'), true)
     assert.equal(isVisionCapableModel('deepseek-chat'), false)
+    assert.equal(isVisionCapableModel('qwen3.7-plus'), true)
+    assert.equal(isVisionCapableModel('glm-5.2'), false)
   })
 
   it('builds multimodal tool result for screenshots', () => {

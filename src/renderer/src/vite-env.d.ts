@@ -275,6 +275,29 @@ interface ModCraftingApi {
   }>
   opencodeSessionAbort: (sessionId: string) => Promise<{ success: boolean }>
   onOpenCodeEvent: (callback: (payload: unknown) => void) => () => void
+  setContextProjectPath: (projectPath: string | null) => Promise<{ ok: boolean }>
+  saveAttachment: (opts: {
+    projectPath: string
+    sourcePath?: string
+    base64?: string
+    mimeType?: string
+    fileName?: string
+  }) => Promise<
+    | { ok: true; path: string; mimeType: string; name: string }
+    | { ok: false; error: string }
+  >
+  readAttachmentDataUrl: (
+    filePath: string
+  ) => Promise<{ ok: true; dataUrl: string; mimeType: string } | { ok: false; error: string }>
+  selectAttachmentFiles: () => Promise<string[]>
+  onContextPush: (callback: (payload: {
+    kind: 'text' | 'image' | 'file'
+    text?: string
+    path?: string
+    mimeType?: string
+    name?: string
+    source?: string
+  }) => void) => () => void
 }
 
 declare global {

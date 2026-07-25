@@ -1,6 +1,7 @@
 import type { PlanStep } from '../components/TaskPlan'
 import type { ComposerMode } from '../harness/turn-intent'
 import type { ChatMessage } from '../harness/chat-message'
+import type { MessageAttachment } from '../context/context-ingress'
 
 export interface ActivePlan {
   steps: PlanStep[]
@@ -65,4 +66,5 @@ export interface DisplayMessage {
   embeddedPlan?: PlanStep[]
   timestamp: number
   stateSnapshot?: SessionStateSnapshot
+  attachments?: MessageAttachment[]
 }
