@@ -9,11 +9,14 @@ import {
 } from '../../src/renderer/src/context/context-ingress.ts'
 import { buildUserContent } from '../../src/renderer/src/context/user-content.ts'
 import { isVisionCapableModel } from '../../src/renderer/src/harness/chat-message.ts'
+import { buildCrossTurnDiagnosisRetain } from '../../src/renderer/src/harness/turn-intent.ts'
+import { buildSessionMarkdown } from '../../src/renderer/src/utils/session-export-md.ts'
 import {
   serializeDisplayMessages,
   deserializeToDisplay,
   toControllerMessagesWithAttachments
 } from '../../src/renderer/src/utils/chat-persist.ts'
+import { messagePlainText } from '../../src/renderer/src/utils/message-text.ts'
 
 test('mimeFromPath and isImagePath', () => {
   assert.equal(mimeFromPath('a.PNG'), 'image/png')
@@ -50,6 +53,8 @@ test('hasImageAttachment gates vision send', () => {
   assert.equal(isVisionCapableModel('qwen3.7-max', 'dashscope'), true)
   assert.equal(isVisionCapableModel('kimi-k2.5', 'moonshot'), true)
   assert.equal(isVisionCapableModel('glm-5.2', 'zhipu'), false)
+  assert.equal(isVisionCapableModel('glm-5-turbo', 'zhipu'), false)
+  assert.equal(isVisionCapableModel('glm-5v-turbo', 'zhipu'), true)
   assert.equal(isVisionCapableModel('deepseek-chat', 'deepseek'), false)
   assert.equal(isVisionCapableModel('MiniMax-M3', 'minimax'), true)
   assert.equal(isVisionCapableModel('MiniMax-M2.7', 'minimax'), false)
@@ -89,14 +94,87 @@ test('serialize/deserialize keeps attachments; restore rebuilds multimodal', asy
     null
   )
   assert.equal(persisted[0].attachments?.[0].kind, 'image')
+  assert.equal(persisted[0].attachments?.[0].path, '/tmp/shot.png')
 
-  const display = deserializeToDisplay(persisted, () => 'new-id')
+  // Round-trip through JSON (disk persistence path)
+  const fromDisk = JSON.parse(JSON.stringify(persisted)) as typeof persisted
+  assert.equal(fromDisk[0].attachments?.[0].path, '/tmp/shot.png')
+
+  const display = deserializeToDisplay(fromDisk, () => 'new-id')
   assert.equal(display[0].attachments?.[0].path, '/tmp/shot.png')
 
-  const restored = await toControllerMessagesWithAttachments(persisted, async () => ({
+  const restored = await toControllerMessagesWithAttachments(fromDisk, async () => ({
     ok: true as const,
     dataUrl: 'data:image/png;base64,zzz'
   }))
   assert.equal(restored[0].role, 'user')
   assert.ok(Array.isArray(restored[0].content))
+})
+
+test('buildSessionMarkdown tolerates multimodal controllerMessages', () => {
+  const huge = `data:image/png;base64,${'A'.repeat(2000)}`
+  const md = buildSessionMarkdown({
+    messages: [
+      {
+        id: 'u1',
+        role: 'user',
+        content: '看图',
+        timestamp: 1,
+        attachments: [{ kind: 'image', path: '/tmp/a.png', mimeType: 'image/png' }]
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '好的',
+        timestamp: 2,
+        entries: [{ kind: 'text', content: '好的' }]
+      }
+    ],
+    controllerMessages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '看图' },
+          { type: 'image_url', image_url: { url: huge } }
+        ]
+      },
+      { role: 'assistant', content: '好的' }
+    ]
+  })
+  assert.match(md, /附件: image/)
+  assert.match(md, /\[图片\]/)
+  assert.doesNotMatch(md, /AAAAAA/)
+})
+
+test('buildCrossTurnDiagnosisRetain keeps multimodal current user content', () => {
+  const parts = [
+    { type: 'text' as const, text: '参考图修复布局' },
+    { type: 'image_url' as const, image_url: { url: 'data:image/png;base64,abc' } }
+  ]
+  const out = buildCrossTurnDiagnosisRetain({
+    system: { role: 'system', content: 'sys', origin: 'harness' },
+    messages: [
+      { role: 'user', content: '之前反馈', origin: 'user' },
+      { role: 'assistant', content: '我已经尝试过一种方案但没修好，继续排查。' },
+      { role: 'user', content: parts, origin: 'user' }
+    ],
+    taskId: 'task_1'
+  })
+  const current = out.find((m) => m.role === 'user' && m.origin === 'user')
+  assert.ok(current)
+  assert.ok(Array.isArray(current!.content))
+  assert.equal((current!.content as typeof parts)[1].type, 'image_url')
+  assert.ok(out.some((m) => typeof m.content === 'string' && String(m.content).includes('跨轮诊断摘要')))
+})
+
+test('messagePlainText includes attachment paths for image-only user messages', () => {
+  const text = messagePlainText({
+    id: 'u',
+    role: 'user',
+    content: '',
+    timestamp: 1,
+    attachments: [{ kind: 'image', path: '/tmp/shot.png', mimeType: 'image/png' }]
+  })
+  assert.match(text, /\[图片\]/)
+  assert.match(text, /shot\.png/)
 })

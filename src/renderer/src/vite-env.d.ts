@@ -289,6 +289,10 @@ interface ModCraftingApi {
   readAttachmentDataUrl: (
     filePath: string
   ) => Promise<{ ok: true; dataUrl: string; mimeType: string } | { ok: false; error: string }>
+  saveAttachmentAs: (
+    sourcePath: string,
+    suggestedName?: string
+  ) => Promise<{ ok: true; path: string } | { ok: false; cancelled?: boolean; error?: string }>
   selectAttachmentFiles: () => Promise<string[]>
   onContextPush: (callback: (payload: {
     kind: 'text' | 'image' | 'file'

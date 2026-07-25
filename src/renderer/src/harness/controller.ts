@@ -4,7 +4,8 @@
 
 import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from './events'
 import { Agent } from './agent'
-import { contentAsText, type ChatContentPart, type ChatMessage } from './chat-message'
+import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMessage } from './chat-message'
+import { contentPartsAsClassifyText } from '../context/user-content.ts'
 import { Registry } from './tools'
 import { PlanTracker } from './plan-tracker'
 import { parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from '../utils/plan-steps'
@@ -274,6 +275,15 @@ export class Controller {
     }) as ChatMessage[]
   }
 
+  /** Synthetic one-shot plans must not lock later user turns when incomplete. */
+  private releaseIncompleteSyntheticPlan(): void {
+    if (this.planTracker?.synthetic && !this.planTracker.allDone()) {
+      this.planTracker = null
+      this._phase = 'plan'
+      this.planReadyAwaitingExecute = false
+    }
+  }
+
   private applyClassificationSideEffects(
     classified: ClassifyUserTurnResult,
     input: string
@@ -358,6 +368,22 @@ export class Controller {
 
   private planFailureNotice(fullPlanText: string, retried = false): string {
     const prefix = retried ? '两次尝试均未能生成可执行计划。' : '未能生成可执行计划。'
+    const empty = !fullPlanText.trim()
+    if (empty) {
+      const hasImages = this.messages.some(
+        (m) =>
+          m.role === 'user' &&
+          Array.isArray(m.content) &&
+          m.content.some((p) => p.type === 'image_url')
+      )
+      if (hasImages && !isVisionCapableModel(this.apiConfig.model)) {
+        return (
+          `${prefix}模型本轮无输出。当前模型「${this.apiConfig.model}」不支持图片理解；` +
+          '请切换到视觉模型（如 glm-5v-turbo）后再发送带图消息，或先移除图片。'
+        )
+      }
+      return `${prefix}模型本轮未返回任何内容。请重试，或换一个模型。`
+    }
     const detail = planHasActionableSteps(fullPlanText)
       ? '计划含编号步骤但缺少目标路径（如 src/main/java/...）。'
       : '未能解析出符合格式的编号步骤。'
@@ -698,6 +724,10 @@ ${projectInfo}`
       this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready' })
       return ''
     }
+    // Explicit execute/resume may retry failed steps; do not leave them stuck as error.
+    for (const step of this.planTracker.steps) {
+      if (step.status === 'error') step.status = 'pending'
+    }
     this.lastPlanCandidate = null
     const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
     this.messages.push({
@@ -738,7 +768,7 @@ ${projectInfo}`
     // Prefer fromSteps: compilePlanFromText historically stripped pure host terminals to [].
     this.planTracker = PlanTracker.fromSteps([
       { id: '1', description: '启动游戏进行真实测试（runClient）', status: 'pending' }
-    ])
+    ]).markSynthetic()
     this.emitPlanState(this.planTracker)
     this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
     if (this.activeVerifyTarget) {
@@ -771,7 +801,9 @@ ${projectInfo}`
       taskId: this.taskId,
       phase: 'execute'
     })
-    return this.runExecutePhase(streamCb, { forceFeatureGuiVerify: true })
+    const result = await this.runExecutePhase(streamCb, { forceFeatureGuiVerify: true })
+    this.releaseIncompleteSyntheticPlan()
+    return result
   }
 
   /** Prefer a real prior bug report over the generic「游戏测试」placeholder. */
@@ -809,7 +841,7 @@ ${projectInfo}`
       '1. [write] 针对用户症状定位并修复相关源码\n' +
       '2. 构建项目（gradlew build）\n' +
       '3. 启动游戏进行真实测试（runClient）'
-    this.planTracker = PlanTracker.fromPlanText(opsPlan)
+    this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic()
     this.emitPlanState(this.planTracker)
     this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
     const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
@@ -826,7 +858,9 @@ ${projectInfo}`
       taskId: this.taskId,
       phase: 'execute'
     })
-    return this.runExecutePhase(streamCb)
+    const result = await this.runExecutePhase(streamCb)
+    this.releaseIncompleteSyntheticPlan()
+    return result
   }
 
   private async runTurn(
@@ -839,7 +873,7 @@ ${projectInfo}`
     this.abortController = new AbortController()
     this.agent.resetRunState()
 
-    const inputText = contentAsText(input)
+    const inputText = contentPartsAsClassifyText(input)
 
     this.onAgentStatus?.('意图分类...')
     const classified = await classifyUserTurn({
@@ -963,10 +997,11 @@ ${projectInfo}`
         this._phase = 'execute'
         this.planReadyAwaitingExecute = false
         const opsPlan = '1. 构建项目（gradlew build）\n2. 启动游戏进行真实测试（runClient）'
-        this.planTracker = PlanTracker.fromPlanText(opsPlan)
+        this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic()
         this.emitPlanState(this.planTracker)
         this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
         const result = await this.beginExecuteFromTracker(streamCb)
+        this.releaseIncompleteSyntheticPlan()
         this.onAgentStatus?.('')
         return result
       }
@@ -975,13 +1010,23 @@ ${projectInfo}`
         // Only explicit replacement language starts a new task. Length-based guessing
         // previously discarded active plans for ordinary corrections and details.
         const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(inputText)
-        if (isNewRequest) {
+        // Stale synthetic / failed plans must not auto-resume and lock the session.
+        const stalePlan = this.planTracker.synthetic || this.planTracker.hasErrorStep()
+        if (isNewRequest || stalePlan) {
           this.retainCurrentUserAsNewTask()
           this.planTracker = null
           this.lastPlanCandidate = null
           this._phase = 'plan'
           this.planReadyAwaitingExecute = false
-          this.emitEvent({ kind: EventKind.Notice, notice: { level: 'info', text: '检测到新需求，已清除旧计划。正在重新规划...' } })
+          this.emitEvent({
+            kind: EventKind.Notice,
+            notice: {
+              level: 'info',
+              text: stalePlan && !isNewRequest
+                ? '检测到未完成的临时/失败计划，已清除。正在重新规划...'
+                : '检测到新需求，已清除旧计划。正在重新规划...'
+            }
+          })
           // Fall through to develop path below
         } else {
           const result = await this.runExecutePhase(streamCb)
@@ -1418,7 +1463,7 @@ ${projectInfo}`
       ...message,
       origin: message.origin || (
         message.role === 'system' ||
-        /^\[SYSTEM:|^【系统|^【注意】|^计划已确认。/.test(message.content || '')
+        /^\[SYSTEM:|^【系统|^【注意】|^计划已确认。/.test(contentAsText(message.content))
           ? 'harness'
           : message.role === 'user'
             ? 'user'
@@ -1451,14 +1496,15 @@ ${projectInfo}`
       this.planTracker = null
       return
     }
-    // Map UI/error statuses back to tracker statuses. Failed steps become pending
-    // so「继续」retries them instead of skipping to the next pending step.
+    // Preserve error so stale/failed plans do not auto-resume into a lock.
+    // Failed steps stay as error (not remapped to pending).
     this.planTracker = PlanTracker.fromSteps(steps.map((step) => ({
       ...step,
       status:
         step.status === 'completed' ? 'completed' as const
           : step.status === 'running' ? 'running' as const
-            : 'pending' as const
+            : step.status === 'error' ? 'error' as const
+              : 'pending' as const
     })))
     if (this.planTracker) {
       this._phase = 'execute'

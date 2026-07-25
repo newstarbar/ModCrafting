@@ -1,4 +1,6 @@
 import type { PlanTracker } from './plan-tracker.ts'
+import type { ChatContentPart } from './chat-message.ts'
+import { contentAsText } from './chat-message.ts'
 
 export type TurnIntent = 'chat' | 'resume' | 'develop' | 'plan_only'
 
@@ -73,26 +75,26 @@ export function buildUserSymptomBlock(symptom: string | null | undefined): strin
 
 /** Keep recent user feedback + short assistant notes when starting a follow-up task. */
 export function buildCrossTurnDiagnosisRetain(args: {
-  system?: { role: 'system'; content: string; origin?: string }
-  messages: Array<{ role: string; content?: string; origin?: string }>
+  system?: { role: 'system'; content: string | ChatContentPart[]; origin?: string }
+  messages: Array<{ role: string; content?: string | ChatContentPart[]; origin?: string }>
   taskId: string
   maxPriorUsers?: number
   maxAssistantNotes?: number
-}): Array<{ role: string; content: string; origin?: string; taskId?: string }> {
+}): Array<{ role: string; content: string | ChatContentPart[]; origin?: string; taskId?: string }> {
   const maxUsers = args.maxPriorUsers ?? 5
   const maxAssistants = args.maxAssistantNotes ?? 2
   const priorUsers = args.messages
     .filter((m) => m.role === 'user' && m.origin !== 'harness')
-    .map((m) => (m.content || '').trim())
+    .map((m) => contentAsText(m.content).trim())
     .filter(Boolean)
     .slice(-maxUsers)
   const currentUser = [...args.messages].reverse().find((m) => m.role === 'user' && m.origin !== 'harness')
   const assistantNotes = args.messages
-    .filter((m) => m.role === 'assistant' && (m.content || '').trim().length > 20)
-    .map((m) => (m.content || '').trim().slice(0, 1200))
+    .filter((m) => m.role === 'assistant' && contentAsText(m.content).trim().length > 20)
+    .map((m) => contentAsText(m.content).trim().slice(0, 1200))
     .slice(-maxAssistants)
 
-  const out: Array<{ role: string; content: string; origin?: string; taskId?: string }> = []
+  const out: Array<{ role: string; content: string | ChatContentPart[]; origin?: string; taskId?: string }> = []
   if (args.system) {
     out.push({ role: 'system', content: args.system.content, origin: 'harness' })
   }
@@ -110,9 +112,10 @@ export function buildCrossTurnDiagnosisRetain(args: {
     out.push({ role: 'assistant', content: note, origin: 'assistant', taskId: args.taskId })
   }
   if (currentUser) {
+    // Preserve multimodal content (image parts) — do not coerce to text.
     out.push({
       role: 'user',
-      content: currentUser.content || '',
+      content: currentUser.content ?? '',
       origin: 'user',
       taskId: args.taskId
     })

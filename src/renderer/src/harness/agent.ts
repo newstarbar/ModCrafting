@@ -760,6 +760,11 @@ export class Agent {
           }
           if (finalContent.trim()) {
             messages.push({ role: 'assistant', content: finalContent })
+          } else if (phase === 'execute' && toolCalls.length === 0) {
+            this.emit({
+              kind: EventKind.Notice,
+              notice: { level: 'warn', text: '模型本轮未返回任何内容，已结束' }
+            })
           }
           logger.agent('Final answer', { step, phase })
           this.finishRun(emitLifecycle)

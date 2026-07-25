@@ -675,15 +675,24 @@ const App: React.FC = () => {
 		? sessions.find((s) => s.id === pendingDeleteSessionId) ?? null
 		: null;
 
-	const handleNewSessionFromChat = useCallback((firstMessage?: string) => {
+	const handleNewSessionFromChat = useCallback((firstMessage?: string, attachments?: PersistedMessage["attachments"]) => {
 		const id = `session-${Date.now()}`;
 		const now = Date.now();
 		const msg = firstMessage?.trim() ?? "";
-		const initialMessages: PersistedMessage[] = msg
-			? [{ role: "user", content: msg, timestamp: now }]
-			: [];
+		const atts = attachments?.length ? attachments : undefined;
+		const initialMessages: PersistedMessage[] =
+			msg || atts
+				? [{
+					role: "user",
+					content: msg,
+					timestamp: now,
+					...(atts ? { attachments: atts } : {})
+				}]
+				: [];
 		setSessions((p) => {
-			const sessionName = msg ? sessionTitleFromMessage(msg) : nextDefaultSessionName(p.length);
+			const sessionName = msg
+				? sessionTitleFromMessage(msg)
+				: (atts ? "（附件）" : nextDefaultSessionName(p.length));
 			return sortSessionsByUpdatedAt([...p, { id, name: sessionName, messages: initialMessages, createdAt: now, updatedAt: now }]);
 		});
 		setCurrentSessionId(id);

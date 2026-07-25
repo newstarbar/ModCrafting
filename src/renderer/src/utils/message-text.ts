@@ -13,7 +13,14 @@ export function formatMessageTime(ts: number): string {
 }
 
 export function messagePlainText(msg: DisplayMessage): string {
-  if (msg.role === 'user') return msg.content.trim()
+  if (msg.role === 'user') {
+    const text = msg.content.trim()
+    if (!msg.attachments?.length) return text
+    const attLines = msg.attachments.map((a) =>
+      a.kind === 'image' ? `[图片] ${a.path}` : `[文件] ${a.path}`
+    )
+    return [text, ...attLines].filter(Boolean).join('\n').trim()
+  }
 
   if (msg.entries && msg.entries.length > 0) {
     return msg.entries

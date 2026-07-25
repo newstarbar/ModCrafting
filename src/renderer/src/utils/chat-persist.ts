@@ -69,7 +69,10 @@ export function serializeDisplayMessages(
       turnStatus: m.turnStatus,
       embeddedPlan: m.embeddedPlan,
       stateSnapshot: m.stateSnapshot,
-      attachments: m.attachments
+      // Clone so later UI mutations cannot drop persisted attachment metadata.
+      attachments: m.attachments?.length
+        ? m.attachments.map((a) => ({ ...a }))
+        : undefined
     }
 
     if (m.entries && m.entries.length > 0) {
@@ -152,7 +155,9 @@ export function deserializeToDisplay(
         timestamp: m.timestamp ?? Date.now(),
         isStreaming: false,
         stateSnapshot: (m as any).stateSnapshot,
-        attachments: m.attachments
+        attachments: m.attachments?.length
+          ? m.attachments.map((a) => ({ ...a }))
+          : undefined
       }
     })
 }

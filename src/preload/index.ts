@@ -514,6 +514,11 @@ const api = {
     filePath: string
   ): Promise<{ ok: true; dataUrl: string; mimeType: string } | { ok: false; error: string }> =>
     ipcRenderer.invoke('attachments:readDataUrl', filePath),
+  saveAttachmentAs: (
+    sourcePath: string,
+    suggestedName?: string
+  ): Promise<{ ok: true; path: string } | { ok: false; cancelled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('attachments:saveAs', sourcePath, suggestedName),
   selectAttachmentFiles: (): Promise<string[]> =>
     ipcRenderer.invoke('dialog:selectAttachmentFiles'),
   onContextPush: (callback: (payload: {

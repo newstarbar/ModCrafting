@@ -193,6 +193,13 @@ export function microCompact(
       // reset between turns and previously made old session results immortal.
       const age = assistantTurnsSeen
       if (age >= MICRO_COMPACT_AGE) {
+        // Preserve multimodal tool results (e.g. mc_screenshot image_url parts).
+        if (
+          Array.isArray(messages[i].content) &&
+          messages[i].content.some((p) => p.type === 'image_url')
+        ) {
+          continue
+        }
         const existing = contentAsText(messages[i].content)
         // Already compacted — leave stable so prompt-cache prefixes don't thrash.
         if (existing.startsWith('[已压缩:')) continue

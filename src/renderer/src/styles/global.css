@@ -1721,11 +1721,28 @@ body,
 	margin-bottom: 8px;
 }
 
+.chat-bubble-attachments__img-btn {
+	padding: 0;
+	border: none;
+	background: transparent;
+	cursor: zoom-in;
+	border-radius: 8px;
+	overflow: hidden;
+	line-height: 0;
+}
+
+.chat-bubble-attachments__img-btn:hover img {
+	opacity: 0.92;
+	outline: 2px solid rgba(120, 170, 255, 0.45);
+	outline-offset: 1px;
+}
+
 .chat-bubble-attachments img {
 	max-width: 180px;
 	max-height: 120px;
 	border-radius: 8px;
 	object-fit: cover;
+	display: block;
 }
 
 .chat-bubble-attachments__file {
@@ -1734,6 +1751,108 @@ body,
 	padding: 4px 8px;
 	border-radius: 6px;
 	background: rgba(255, 255, 255, 0.06);
+}
+
+.attachment-ctx-menu {
+	position: fixed;
+	z-index: 12000;
+	min-width: 148px;
+	padding: 4px;
+	border-radius: 8px;
+	background: var(--bg-elevated, #1e1e22);
+	border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.attachment-ctx-menu button {
+	appearance: none;
+	border: none;
+	background: transparent;
+	color: var(--text-primary, #eee);
+	text-align: left;
+	padding: 7px 10px;
+	border-radius: 6px;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.attachment-ctx-menu button:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.attachment-toast,
+.image-lightbox__toast {
+	position: fixed;
+	left: 50%;
+	bottom: 72px;
+	transform: translateX(-50%);
+	z-index: 13000;
+	padding: 8px 14px;
+	border-radius: 8px;
+	background: rgba(20, 20, 24, 0.92);
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	color: #fff;
+	font-size: 13px;
+	pointer-events: none;
+}
+
+.image-lightbox {
+	position: fixed;
+	inset: 0;
+	z-index: 12500;
+	background: rgba(0, 0, 0, 0.78);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+}
+
+.image-lightbox__stage {
+	max-width: 92vw;
+	max-height: 78vh;
+	overflow: auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.image-lightbox__img {
+	max-width: 90vw;
+	max-height: 76vh;
+	object-fit: contain;
+	transform-origin: center center;
+	transition: transform 0.08s linear;
+	border-radius: 6px;
+	user-select: none;
+}
+
+.image-lightbox__toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 8px 12px;
+	border-radius: 10px;
+	background: rgba(24, 24, 28, 0.92);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.image-lightbox__toolbar button {
+	appearance: none;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	background: rgba(255, 255, 255, 0.06);
+	color: #eee;
+	border-radius: 7px;
+	padding: 6px 12px;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.image-lightbox__toolbar button:hover {
+	background: rgba(255, 255, 255, 0.12);
 }
 
 .chat-input-composite__goal-expanded {

@@ -286,6 +286,39 @@ export function stopContextIngressServer(): void {
   clearDiscovery()
 }
 
+export async function saveAttachmentAs(
+  sourcePath: string,
+  suggestedName?: string
+): Promise<{ ok: true; path: string } | { ok: false; cancelled?: boolean; error?: string }> {
+  try {
+    if (typeof sourcePath !== 'string' || !sourcePath.trim()) {
+      return { ok: false, error: '无效路径' }
+    }
+    const resolved = path.resolve(sourcePath)
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      return { ok: false, error: '文件不存在' }
+    }
+    const { dialog, BrowserWindow } = await import('electron')
+    const win = BrowserWindow.getFocusedWindow()
+    const defaultName = suggestedName || path.basename(resolved)
+    const saveOpts = {
+      title: '另存为',
+      defaultPath: defaultName,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }]
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, saveOpts)
+      : await dialog.showSaveDialog(saveOpts)
+    if (result.canceled || !result.filePath) {
+      return { ok: false, cancelled: true }
+    }
+    fs.copyFileSync(resolved, result.filePath)
+    return { ok: true, path: result.filePath }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export function setupContextIngressHandlers(): void {
   ipcMain.handle('context:setProjectPath', async (_e, projectPath: string | null) => {
     setIngressProjectPath(projectPath)
@@ -307,6 +340,11 @@ export function setupContextIngressHandlers(): void {
   )
 
   ipcMain.handle('attachments:readDataUrl', async (_e, filePath: string) => readAttachmentDataUrl(filePath))
+
+  ipcMain.handle(
+    'attachments:saveAs',
+    async (_e, sourcePath: string, suggestedName?: string) => saveAttachmentAs(sourcePath, suggestedName)
+  )
 
   ipcMain.handle('dialog:selectAttachmentFiles', async () => {
     const { dialog } = await import('electron')

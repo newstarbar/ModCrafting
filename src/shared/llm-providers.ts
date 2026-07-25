@@ -56,7 +56,8 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 			{ id: "glm-5.2", label: "GLM-5.2", contextWindow: 1_000_000, vision: false },
 			{ id: "glm-5.1", label: "GLM-5.1", contextWindow: 200_000, vision: false },
 			{ id: "glm-5", label: "GLM-5", contextWindow: 1_000_000, vision: false },
-			{ id: "glm-5-turbo", label: "GLM-5 Turbo", contextWindow: 128_000, vision: true },
+			{ id: "glm-5-turbo", label: "GLM-5 Turbo", contextWindow: 200_000, vision: false },
+			{ id: "glm-5v-turbo", label: "GLM-5V Turbo", contextWindow: 200_000, vision: true },
 			{ id: "glm-4.9", label: "GLM-4.9", contextWindow: 128_000, vision: false }
 		]
 	},

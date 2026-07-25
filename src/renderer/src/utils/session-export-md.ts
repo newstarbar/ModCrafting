@@ -1,5 +1,6 @@
 import type { ChronoEntry, DisplayMessage } from '../types/display-message'
-import type { ChatMessage } from '../harness/chat-message'
+import type { ChatMessage } from '../harness/chat-message.ts'
+import { contentAsText } from '../harness/chat-message.ts'
 import type { PlanStep } from '../components/TaskPlan'
 
 const TOOL_OUTPUT_LIMIT = 48_000
@@ -188,7 +189,8 @@ function controllerAppendix(messages: ChatMessage[] | undefined): string[] {
       lines.push(jsonBlock(m.tool_calls, TOOL_ARGS_LIMIT))
       lines.push('')
     }
-    const content = (m.content || '').trim()
+    // Multimodal parts → text with [图片] placeholders (never dump base64).
+    const content = contentAsText(m.content).replace(/\[image\]/g, '[图片]').trim()
     if (content) {
       lines.push(fence('text', clip(content, CTRL_CONTENT_LIMIT)))
       lines.push('')
@@ -279,8 +281,13 @@ export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string 
       lines.push('')
       lines.push(`- messageId: \`${msg.id}\``)
       lines.push(`- timestamp: ${msg.timestamp ? new Date(msg.timestamp).toISOString() : '（无）'}`)
+      if (msg.attachments?.length) {
+        for (const att of msg.attachments) {
+          lines.push(`- 附件: ${att.kind} · \`${att.path}\``)
+        }
+      }
       lines.push('')
-      lines.push(escapeMd(msg.content?.trim() || '_（无内容）_'))
+      lines.push(escapeMd(msg.content?.trim() || (msg.attachments?.length ? '_（仅附件）_' : '_（无内容）_')))
       lines.push('')
       if (msg.stateSnapshot) {
         const snap = msg.stateSnapshot

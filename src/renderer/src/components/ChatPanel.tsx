@@ -28,6 +28,7 @@ import { isDefaultSessionName, sessionTitleFromMessage } from '../utils/session-
 import type { DisplayMessage, ChronoEntry } from '../types/display-message'
 import ChatComposer from './ChatComposer'
 import type { ComposerMode } from '../harness/turn-intent'
+import ImageLightbox, { copyImageToClipboard } from './ImageLightbox'
 import MarkdownContent from './MarkdownContent'
 import MessageFooter from './MessageFooter'
 import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
@@ -73,9 +74,9 @@ interface ChatPanelProps {
   onRunningChange?: (running: boolean) => void
   currentSessionId: string | null
   sessions: ChatSession[]
-  onPersistSession: (sessionId: string, messages: PersistedMessage[]) => void
-  onNewSession: (firstMessage?: string) => string
-  onRenameSession: (id: string, name: string) => void
+	onPersistSession: (sessionId: string, messages: PersistedMessage[]) => void
+	onNewSession: (firstMessage?: string, attachments?: MessageAttachment[]) => string
+	onRenameSession: (id: string, name: string) => void
   toolchainReady?: boolean
   onUpdateSessionMeta?: (sessionId: string, meta: { composerMode?: ComposerMode; sessionGoal?: string }) => void
   onTemplateSelect?: (templateId: string, name: string) => void
@@ -125,6 +126,10 @@ function uid(): string {
 
 function UserAttachmentImage({ path, name }: { path: string; name?: string }) {
   const [src, setSrc] = useState<string | null>(null)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [toast, setToast] = useState('')
+
   useEffect(() => {
     let cancelled = false
     void window.api.readAttachmentDataUrl(path).then((r) => {
@@ -132,8 +137,112 @@ function UserAttachmentImage({ path, name }: { path: string; name?: string }) {
     })
     return () => { cancelled = true }
   }, [path])
+
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [menu])
+
+  const flash = useCallback((text: string) => {
+    setToast(text)
+    window.setTimeout(() => setToast(''), 1600)
+  }, [])
+
   if (!src) return <span className="chat-bubble-attachments__file">{name || '图片'}</span>
-  return <img src={src} alt={name || '附件图片'} />
+
+  return (
+    <>
+      <button
+        type="button"
+        className="chat-bubble-attachments__img-btn"
+        title="点击放大预览"
+        onClick={() => setLightboxOpen(true)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setMenu({ x: e.clientX, y: e.clientY })
+        }}
+      >
+        <img src={src} alt={name || '附件图片'} />
+      </button>
+      {lightboxOpen && (
+        <ImageLightbox
+          src={src}
+          path={path}
+          name={name}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
+      {menu && (
+        <div
+          className="attachment-ctx-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setMenu(null)
+              setLightboxOpen(true)
+            }}
+          >
+            放大预览
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMenu(null)
+              void copyImageToClipboard(src).then((ok) => flash(ok ? '已复制图片' : '复制失败'))
+            }}
+          >
+            复制图片
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMenu(null)
+              void navigator.clipboard.writeText(path).then(
+                () => flash('已复制路径'),
+                () => flash('复制失败')
+              )
+            }}
+          >
+            复制路径
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMenu(null)
+              void window.api.saveAttachmentAs(path, name).then((r) => {
+                if (r.cancelled) return
+                flash(r.ok ? '已保存' : (r.error || '保存失败'))
+              })
+            }}
+          >
+            另存为
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMenu(null)
+              void window.api.showItemInFolder(path).then((r) => {
+                flash(r.success ? '已打开所在文件夹' : (r.error || '打开失败'))
+              })
+            }}
+          >
+            在文件夹中显示
+          </button>
+        </div>
+      )}
+      {toast ? <div className="attachment-toast">{toast}</div> : null}
+    </>
+  )
 }
 
 // 工具中文名映射
@@ -1280,7 +1389,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setCompletionFlash('')
 
     if (!currentSessionId) {
-      const newId = onNewSession(userMsg || '（附件）')
+      const newId = onNewSession(
+        userMsg || (messageAttachments.length ? '（附件）' : ''),
+        messageAttachments.length ? messageAttachments : undefined
+      )
       currentSessionIdRef.current = newId
       // Claim session before App re-renders so restore effect does not wipe this turn.
       restoredSessionIdRef.current = newId
@@ -1291,14 +1403,17 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         sessionGoal,
         activePlan: activePlanRef.current,
       })
-      setDisplayMessages([{
+      const firstUser: DisplayMessage = {
         id: uid(),
         role: 'user',
         content: userMsg,
         timestamp: Date.now(),
         stateSnapshot: preSnapshot,
         attachments: messageAttachments.length ? messageAttachments : undefined
-      }])
+      }
+      setDisplayMessages([firstUser])
+      // Persist immediately so reopen keeps image paths (do not wait for TurnDone).
+      flushPersistTo(newId, [firstUser], null)
       ctrl.clearSession()
       ctrl.setComposerMode(composerMode)
       ctrl.setSessionGoal(sessionGoal)
@@ -1347,7 +1462,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         })
       }
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending, bindActiveTurnGeneration, persistComposerMeta])
+  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, flushPersistTo, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending, bindActiveTurnGeneration, persistComposerMeta])
 
   const handleClarificationConfirm = useCallback(async (answer: string) => {
     const trimmed = answer.trim()

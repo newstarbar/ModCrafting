@@ -2,7 +2,7 @@ import { compilePlanFromText, compiledStepsToParsed, type CompiledPlanStep } fro
 import { validateCompiledSteps, formatPlanValidationIssues } from './plan-validator.ts'
 import { isOpsOnlyPlan, type ParsedPlanStep } from '../utils/plan-steps.ts'
 
-export type PlanStepStatus = 'pending' | 'running' | 'completed'
+export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'error'
 
 export interface PlanStepState {
   id: string
@@ -18,6 +18,8 @@ export interface PlanStepState {
 export class PlanTracker {
   steps: PlanStepState[]
   currentIndex: number
+  /** One-shot ops plan (in-game verify / symptom fast / quick-create). Must not lock later turns. */
+  synthetic = false
 
   private constructor(steps: PlanStepState[]) {
     this.steps = steps
@@ -58,6 +60,11 @@ export class PlanTracker {
     return tracker
   }
 
+  markSynthetic(): this {
+    this.synthetic = true
+    return this
+  }
+
   get currentStep(): PlanStepState | null {
     if (this.currentIndex < 0 || this.currentIndex >= this.steps.length) return null
     return this.steps[this.currentIndex]
@@ -67,13 +74,18 @@ export class PlanTracker {
     return this.steps.length > 0 && this.steps.every((s) => s.status === 'completed')
   }
 
+  hasErrorStep(): boolean {
+    return this.steps.some((s) => s.status === 'error')
+  }
+
   isOpsOnly(): boolean {
     return isOpsOnlyPlan(this.steps as ParsedPlanStep[])
   }
 
+  /** Only promote pending → running; never silently reset error steps. */
   markRunning(): void {
     const cur = this.currentStep
-    if (cur) cur.status = 'running'
+    if (cur && cur.status === 'pending') cur.status = 'running'
   }
 
   private completeCurrent(): { ok: boolean; message: string } {
@@ -119,7 +131,11 @@ export class PlanTracker {
   toContextBlock(): string {
     if (this.steps.length === 0) return '（无计划步骤）'
     const lines = this.steps.map((s) => {
-      const mark = s.status === 'completed' ? '✓' : s.status === 'running' ? '→' : '○'
+      const mark =
+        s.status === 'completed' ? '✓'
+          : s.status === 'running' ? '→'
+            : s.status === 'error' ? '✕'
+              : '○'
       return `${mark} #${s.id} ${s.description} [${s.status}]`
     })
     const cur = this.currentStep

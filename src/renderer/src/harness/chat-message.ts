@@ -124,6 +124,7 @@ export function isVisionCapableModel(
     m.includes('qwen3-vl') ||
     m.includes('omni') ||
     m.includes('glm-4v') ||
+    m.includes('glm-5v') ||
     m.includes('internvl') ||
     m.includes('kimi-k2.5') ||
     m.includes('kimi-k2.6') ||
