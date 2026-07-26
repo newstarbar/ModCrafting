@@ -134,6 +134,7 @@ const CLASSIFY_SYSTEM_PROMPT = `你是 ModCrafting 桌面应用的回合路由�
 8. 用户确认已修好 → isSymptomResolved=true，intent=chat 或 develop 均可但不要 skipFormalPlan。
 9. 问候/纯问答 → intent=chat；明确要创建/修改功能 → intent=develop。
 10. isInGameVerifyRequest 与 skipFormalPlan 互斥（验证请求不要 skipFormalPlan）。
+11. 用户输入含模糊、不专业的游戏术语（如"会爆炸的绿色怪物"、"挖矿掉的红色石头"、"那个能发光的方块"）时，仍按上述规则判定 intent（通常为 develop 或 plan_only），不要因术语模糊而判定为 chat；执行阶段会由 mc_wiki_search 工具解析需求。
 不要背诵词表；按语义判断。rationale 用一句中文。`
 
 function asBool(v: unknown, fallback = false): boolean {

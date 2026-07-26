@@ -595,7 +595,10 @@ export const fabricJavadocLookupTool: Tool = {
 // ── vanilla_mc_wiki_query ──
 export const vanillaMcWikiQueryTool: Tool = {
 	name: "vanilla_mc_wiki_query",
-	description: "Return official Minecraft Wiki query entry points for vanilla blocks, items, entities, loot, and mechanics. Read-only.",
+	description:
+		"检索内置中文 MC 百科向量知识库，返回原版方块/物品/实体/掉落/机制的准确词条解释。只读、不联网。" +
+		"模糊术语（钻石矿、苦力怕、红石电路）请用本工具；模组 API/注册/事件优先用 fabric_docs_search；" +
+		"需要标准 ID 与属性参数（硬度、爆炸抗性等）请用 minecraft_data_lookup。",
 	schema: {
 		type: "object",
 		properties: {
@@ -1782,6 +1785,7 @@ export const askClarificationTool: Tool = {
 import { Registry } from "./tools";
 import { logger } from "../utils/logger";
 import { MC_OBSERVER_TOOLS } from "./mc-observer-tools";
+import { minecraftDataLookupTool, mcWikiSearchTool } from "./mc-data-tool";
 
 export function registerModCraftingTools(registry: Registry, options?: { disabledTools?: string[] }): void {
 	const disabled = new Set(options?.disabledTools || []);
@@ -1794,6 +1798,8 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		fabricDocsSearchTool,
 		fabricJavadocLookupTool,
 		vanillaMcWikiQueryTool,
+		minecraftDataLookupTool,
+		mcWikiSearchTool,
 		fabricMetaVersionCheckTool,
 		fabricModJsonValidateTool,
 		createRecipeTool,

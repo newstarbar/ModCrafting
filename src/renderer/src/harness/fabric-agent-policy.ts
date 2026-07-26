@@ -11,6 +11,22 @@ export interface FabricKnowledgeSource {
 
 export const FABRIC_KNOWLEDGE_SOURCES: FabricKnowledgeSource[] = [
   {
+    id: 'minecraft-data-local',
+    title: '本地 minecraft-data 结构化数据集',
+    url: 'resources/minecraft-data/<version>/index.json',
+    kind: 'api',
+    trust: 'official',
+    useFor: '原版方块/物品/实体/附魔/配方的标准 ID 与属性参数（硬度、爆炸抗性、堆叠、工具、耐久等）。通过 minecraft_data_lookup 工具查询。'
+  },
+  {
+    id: 'mc-wiki-zh-local',
+    title: '中文 MC 百科向量知识库（内置）',
+    url: 'resources/mc-wiki-zh/',
+    kind: 'wiki',
+    trust: 'community',
+    useFor: '完整中文 MC 游戏百科离线文档，覆盖所有游戏机制、红石、生物、模组基础术语。通过 mc_wiki_search 或 vanilla_mc_wiki_query 工具检索。'
+  },
+  {
     id: 'fabric-wiki-zh',
     title: 'Fabric 中文 Wiki',
     url: 'https://wiki.fabricmc.net/zh_cn/',
@@ -60,11 +76,11 @@ export const FABRIC_KNOWLEDGE_SOURCES: FabricKnowledgeSource[] = [
   },
   {
     id: 'minecraft-wiki-zh',
-    title: 'Minecraft Wiki 中文站',
+    title: 'Minecraft Wiki 中文站（外链）',
     url: 'https://zh.minecraft.wiki/',
     kind: 'wiki',
     trust: 'community',
-    useFor: '原版物品、方块、实体、机制和数据包行为'
+    useFor: '原版物品、方块、实体、机制和数据包行为（仅在外部浏览时使用，运行时不联网）'
   },
   {
     id: 'minecraft-wiki-api',
@@ -93,7 +109,10 @@ const COMMON_GUARDRAILS = [
   '资源 JSON 必须使用原版格式并保持路径一致：assets/<modid>/... 与 data/<modid>/...。',
   '生成 Mixin 或 Access Widener 时必须提示冲突风险，并优先说明为何不能用 Fabric API 替代。',
   '构建验证优先走产品内 trigger_build；写入资源或 DataGen 后要通过构建或 runDatagen 验证。',
-  'runClient 出现 MC_PHASE:ready 后，若用户描述了游戏内症状，必须用 mc_inspect / mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验，禁止仅凭 ready 宣称修复。'
+  'runClient 出现 MC_PHASE:ready 后，若用户描述了游戏内症状，必须用 mc_inspect / mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验，禁止仅凭 ready 宣称修复。',
+  '编写 Fabric 方块/物品/实体/附魔注册代码前，必须先调用 minecraft_data_lookup 查询标准 ID（minecraft:diamond_ore）与原版属性（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等），禁止凭记忆填写原版参数。',
+  '用户输入模糊、不专业的游戏描述（"会爆炸的绿色怪物"、"挖矿掉的红色石头"）时，必须先用 mc_wiki_search 检索中文 MC 百科向量知识库解析需求，再结合 minecraft_data_lookup 生成 Fabric 代码。',
+  '原版机制/红石/生物/术语解释优先用 mc_wiki_search 或 vanilla_mc_wiki_query；Fabric API/注册/事件/迁移用 fabric_docs_search；标准 ID 与属性参数用 minecraft_data_lookup。'
 ]
 
 const BEHAVIOR_GUARDRAILS = [
@@ -151,10 +170,27 @@ export function buildFabricAgentPolicyPrompt(mode: FabricAgentPromptMode): strin
     .map((source) => `- ${source.title}: ${source.url}`)
     .join('\n')
 
+  // 突出本地知识库的使用优先级，便于 Agent 在编码前正确选择查询入口
+  const localKnowledgeBlock = [
+    '### 内置本地知识库（离线、不联网）',
+    '- **minecraft_data_lookup**（结构化数据集）：查询原版方块/物品/实体/附魔的标准 ID + 全部属性参数（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等）。',
+    '  - 使用时机：编写 Fabric 注册代码前（FabricBlockSettings / Item.Settings / 实体属性 / 附魔配置）必查，避免 ID 与参数错误。',
+    '  - 输入：标准 ID（minecraft:diamond_ore）、英文 name（diamond_ore）或中文口语名（钻石矿石、苦力怕）。',
+    '- **mc_wiki_search**（中文 MC 百科向量检索）：处理模糊、不专业的游戏描述，返回准确词条解释与游戏机制背景。',
+    '  - 使用时机：用户输入"会爆炸的绿色怪物"、"挖矿掉的红色石头"等模糊术语时，先检索解析需求再生成代码。',
+    '  - 输入：自然语言查询，可包含口语化描述。',
+    '- **vanilla_mc_wiki_query**：与 mc_wiki_search 等价的兼容入口，用于原版机制/红石/生物/术语解释。',
+    '- **fabric_docs_search**：Fabric 官方中文文档 + Yarn/源码签名，用于 API/事件/注册/迁移查询（与本地知识库互补）。',
+    '',
+    '查询优先级：模糊术语 → mc_wiki_search 解析 → minecraft_data_lookup 取标准 ID 与参数 → fabric_docs_search 查 Fabric API → 生成代码。'
+  ].join('\n')
+
   return `## Fabric 专业策略
 
 ### 行为规范（最高优先级）
 ${behavior}
+
+${localKnowledgeBlock}
 
 ### 开发硬约束
 ${guardrails}

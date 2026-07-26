@@ -635,12 +635,53 @@ export function buildFabricJavadocLookupUrl(fabricApiVersion: string, keyword: s
 
 export async function buildVanillaWikiQuerySummary(keyword: string, _lang: 'zh_cn' | 'en_us' = 'zh_cn'): Promise<string> {
   const normalized = normalizeKeyword(keyword)
+
+  // 优先检索内置中文 MC 百科向量知识库（若已构建）
+  if (typeof window !== 'undefined' && window.api?.mcWikiSearch) {
+    try {
+      const info = await window.api.mcWikiInfo()
+      if (info.ready || (info.chunkCount === 0 && !info.error)) {
+        // 已就绪或尚未尝试初始化 → 实际发起一次检索
+        const res = await window.api.mcWikiSearch(normalized, 3)
+        if (res.ok && res.results.length > 0) {
+          const trails: KnowledgeHitTrail[] = res.results.map((r) => ({
+            kind: '百科',
+            category: r.category,
+            doc: r.title,
+            section: r.heading || r.standardId || ''
+          }))
+          const lines: string[] = [
+            `Minecraft 原版机制查询（本地中文 MC 百科向量知识库）`,
+            `关键词：${normalized}`,
+            `命中：${res.results.length} 条`,
+            ''
+          ]
+          for (let i = 0; i < res.results.length; i++) {
+            const r = res.results[i]
+            lines.push(`【#${i + 1} · ${r.category} · ${r.title}${r.standardId ? ` (${r.standardId})` : ''}】`)
+            if (r.heading) lines.push(`段落：${r.heading}`)
+            lines.push(`相似度：${r.score.toFixed(4)}`)
+            lines.push(r.snippet)
+            lines.push('')
+          }
+          lines.push(`摘要：查「${normalized}」→ ${trails.slice(0, 3).map((t) => `${t.category}:${t.doc}`).join('；')}`)
+          for (const trail of trails.slice(0, 3)) {
+            lines.push(formatKnowledgeHitLine(trail))
+          }
+          return lines.join('\n')
+        }
+      }
+    } catch {
+      // 落到下方 fallback 文案
+    }
+  }
+
   return [
     `Minecraft 原版机制查询（只读）`,
     `关键词：${normalized}`,
-    `说明：本产品知识库不捆绑 Minecraft Wiki；运行时不联网抓取。`,
-    `建议：模组 API / 注册 / 事件请改用 fabric_docs_search（本地官方文档 + Yarn/源码）。`,
-    `摘要：查「${normalized}」→ 本地无 Wiki 正文（未抓取）`,
-    formatKnowledgeHitLine({ kind: 'Wiki', category: '未捆绑', doc: normalized.slice(0, 32), section: '无正文' })
+    `说明：内置中文 MC 百科向量知识库尚未构建或为空。`,
+    `建议：1) 运行 npm run knowledge:build-all 构建知识库；2) 改用 mc_wiki_search 工具检索；3) 模组 API/注册/事件可用 fabric_docs_search。`,
+    `摘要：查「${normalized}」→ 本地百科未就绪`,
+    formatKnowledgeHitLine({ kind: 'Wiki', category: '未构建', doc: normalized.slice(0, 32), section: '空索引' })
   ].join('\n')
 }

@@ -45,6 +45,22 @@ import {
   readKnowledgeFile,
   saveKnowledgeFile
 } from './knowledge-service'
+import {
+  lookupBlockById,
+  lookupBlockByName,
+  lookupItemById,
+  lookupItemByName,
+  lookupEntityById,
+  lookupEntityByName,
+  lookupEnchantment,
+  searchRecipes,
+  getLoadedVersionInfo
+} from './minecraft-data-service'
+import {
+  initWikiVectorService,
+  searchMcWiki,
+  getWikiIndexInfo
+} from './mc-wiki-vector-service'
 import { openExternalWithFallback } from './external-url'
 import { clearBadge, notifyTaskComplete } from './app-badge'
 import {
@@ -565,6 +581,68 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('knowledge:searchLocalSources', async (_event, keyword: string, maxResults?: number) =>
     searchLocalFabricSources(keyword, maxResults ?? 5)
   )
+
+  // ── Minecraft structured dataset (minecraft-data) ──
+  ipcMain.handle('mcdata:lookupBlock', async (_event, query: string, version?: string) => {
+    if (!query || typeof query !== 'string') return { found: false, source: 'block' }
+    const byId = lookupBlockById(query, version)
+    if (byId) return { found: true, source: 'block', data: byId }
+    const byName = lookupBlockByName(query, version)
+    return { found: Boolean(byName), source: 'block', data: byName || null }
+  })
+
+  ipcMain.handle('mcdata:lookupItem', async (_event, query: string, version?: string) => {
+    if (!query || typeof query !== 'string') return { found: false, source: 'item' }
+    const byId = lookupItemById(query, version)
+    if (byId) return { found: true, source: 'item', data: byId }
+    const byName = lookupItemByName(query, version)
+    return { found: Boolean(byName), source: 'item', data: byName || null }
+  })
+
+  ipcMain.handle('mcdata:lookupEntity', async (_event, query: string, version?: string) => {
+    if (!query || typeof query !== 'string') return { found: false, source: 'entity' }
+    const byId = lookupEntityById(query, version)
+    if (byId) return { found: true, source: 'entity', data: byId }
+    const byName = lookupEntityByName(query, version)
+    return { found: Boolean(byName), source: 'entity', data: byName || null }
+  })
+
+  ipcMain.handle('mcdata:lookupEnchantment', async (_event, query: string, version?: string) => {
+    if (!query || typeof query !== 'string') return { found: false, source: 'enchantment' }
+    const result = lookupEnchantment(query, version)
+    return { found: Boolean(result), source: 'enchantment', data: result || null }
+  })
+
+  ipcMain.handle('mcdata:searchRecipes', async (_event, itemId: string, version?: string) => {
+    if (!itemId || typeof itemId !== 'string') return { found: false, recipes: [] }
+    const recipes = searchRecipes(itemId, version)
+    return { found: recipes.length > 0, recipes }
+  })
+
+  ipcMain.handle('mcdata:getVersionInfo', async () => getLoadedVersionInfo())
+
+  // ── Chinese MC Wiki vector search ──
+  ipcMain.handle('mcwiki:search', async (_event, query: string, topK?: number) => {
+    if (!query || typeof query !== 'string') return { ok: false, results: [] }
+    try {
+      const results = await searchMcWiki(query, topK ?? 5)
+      return { ok: true, results }
+    } catch (err) {
+      return { ok: false, results: [], error: String(err) }
+    }
+  })
+
+  ipcMain.handle('mcwiki:info', async () => getWikiIndexInfo())
+
+  ipcMain.handle('mcwiki:init', async () => {
+    try {
+      await initWikiVectorService()
+      const info = getWikiIndexInfo()
+      return { ok: !info.error }
+    } catch (err) {
+      return { ok: false, error: String(err) }
+    }
+  })
 
   // Chat sessions — persisted under userData (survives Vite port / origin changes)
   ipcMain.handle('sessions:load', async (_event, projectPath: string | null) =>

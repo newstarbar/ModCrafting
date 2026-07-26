@@ -97,6 +97,9 @@ const REPAIR_EXTRA_TOOLS = [
   'read_error_log',
   'fabric_log_debugger',
   'fabric_docs_search',
+  'minecraft_data_lookup',
+  'mc_wiki_search',
+  'vanilla_mc_wiki_query',
   'fabric_mixin_target_lookup',
   'fabric_mixin_scaffold',
   'fabric_mixin_register',
@@ -313,6 +316,8 @@ const KNOWLEDGE_TOOLS = new Set([
   'fabric_docs_search',
   'fabric_javadoc_lookup',
   'vanilla_mc_wiki_query',
+  'minecraft_data_lookup',
+  'mc_wiki_search',
   'fabric_meta_version_check',
   'fabric_mod_json_validate'
 ])

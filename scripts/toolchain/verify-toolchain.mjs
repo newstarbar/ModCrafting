@@ -2,7 +2,7 @@
  * Quick verification of toolchain module and bundled JDK.
  * Run: node scripts/verify-toolchain.mjs
  */
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { validateSeedIntegrity } from './gradle-seed-utils.mjs'
@@ -63,5 +63,71 @@ if (existsSync(seedMarker)) {
   }
 }
 check('gradle-home-seed (offline deps)', seedOk, seedHint)
+
+// ── Minecraft 知识库资源检查（可选增强，缺失时 agent 会返回服务不可用提示）──
+let mcVersion = '1.21.4'
+try {
+  const versions = JSON.parse(readFileSync(fabricVersions, 'utf-8'))
+  if (versions.minecraft_version) mcVersion = versions.minecraft_version
+} catch { /* use default */ }
+
+const mcDataIndex = path.join(root, 'resources', 'minecraft-data', mcVersion, 'index.json')
+let mcDataOk = false
+let mcDataHint = 'run: npm run knowledge:build-data-index'
+try {
+  if (existsSync(mcDataIndex)) {
+    const idx = JSON.parse(readFileSync(mcDataIndex, 'utf-8'))
+    mcDataOk = idx.version === mcVersion &&
+      typeof idx.counts === 'object' && idx.counts !== null &&
+      (idx.counts.blocks || 0) > 0
+    mcDataHint = mcDataOk
+      ? `blocks=${idx.counts.blocks}, items=${idx.counts.items}, entities=${idx.counts.entities}`
+      : 'index.json version/counts mismatch'
+  }
+} catch (err) {
+  mcDataHint = String(err)
+}
+check(`minecraft-data index (${mcVersion})`, mcDataOk, mcDataHint)
+
+const wikiManifest = path.join(root, 'resources', 'mc-wiki-zh-index', 'manifest.json')
+let wikiOk = false
+let wikiHint = 'run: npm run knowledge:build-wiki-embeddings'
+try {
+  if (existsSync(wikiManifest)) {
+    const manifest = JSON.parse(readFileSync(wikiManifest, 'utf-8'))
+    wikiOk = manifest.chunkCount > 0 && manifest.dimension === 384
+    wikiHint = wikiOk
+      ? `${manifest.chunkCount} chunks × ${manifest.dimension}d (model: ${manifest.model})`
+      : 'manifest invalid'
+  }
+} catch (err) {
+  wikiHint = String(err)
+}
+check('mc-wiki-zh vector index', wikiOk, wikiHint)
+
+const wikiModelDir = path.join(root, 'resources', 'mc-wiki-model')
+let modelOk = false
+let modelHint = 'run: npm run knowledge:cache-model'
+try {
+  if (existsSync(wikiModelDir)) {
+    // 模型目录应包含 onnx 权重文件
+    const entries = []
+    const walk = (dir) => {
+      for (const name of readdirSync(dir)) {
+        const full = path.join(dir, name)
+        let stat
+        try { stat = statSync(full) } catch { continue }
+        if (stat.isDirectory()) walk(full)
+        else if (name.endsWith('.onnx') || name.endsWith('.json')) entries.push(name)
+      }
+    }
+    walk(wikiModelDir)
+    modelOk = entries.some((n) => n.endsWith('.onnx'))
+    modelHint = modelOk ? `${entries.length} files` : 'missing .onnx file'
+  }
+} catch (err) {
+  modelHint = String(err)
+}
+check('mc-wiki transformers model', modelOk, modelHint)
 
 process.exit(ok ? 0 : 1)

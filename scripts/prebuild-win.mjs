@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const target = process.argv.includes('--target') ? process.argv[process.argv.indexOf('--target') + 1] : 'full'
+const skipKnowledge = process.argv.includes('--skip-knowledge')
 
 function run(cmd, args, label) {
   console.log(`[prebuild] ${label}`)
@@ -24,6 +25,24 @@ function nodeScript(rel, label) {
   run('node', [path.join(root, rel)], label)
 }
 
+// 知识库构建失败时仅警告但不中断 prebuild（知识库为可选增强，缺失时 agent 会返回服务不可用提示）
+function tryKnowledgeBuild() {
+  if (skipKnowledge) {
+    console.log('[prebuild] 跳过知识库构建（--skip-knowledge）')
+    return
+  }
+  console.log('[prebuild] build minecraft knowledge bases (minecraft-data + mc-wiki-zh)')
+  const result = spawnSync('npm', ['run', 'knowledge:build-all'], {
+    stdio: 'inherit',
+    cwd: root,
+    shell: process.platform === 'win32'
+  })
+  if (result.status !== 0) {
+    console.warn('[prebuild][warn] 知识库构建失败，agent 将在运行时返回"服务不可用"提示。')
+    console.warn('[prebuild][warn] 可稍后手动运行 `npm run knowledge:build-all` 重新构建。')
+  }
+}
+
 if (target === 'portable') {
   nodeScript('scripts/assets/generate-icon-ico.mjs', 'generate icons')
   nodeScript('scripts/packaging/verify-portable-resources.mjs', 'verify portable resources')
@@ -40,3 +59,4 @@ nodeScript('scripts/toolchain/prepare-seed-for-packaging.mjs', 'prepare seed for
 nodeScript('scripts/toolchain/archive-gradle-home-seed.mjs', 'archive gradle home seed')
 nodeScript('scripts/packaging/setup-nsisbi.mjs', 'setup nsisbi')
 nodeScript('scripts/packaging/patch-nsis-install-ui.mjs', 'patch nsis install ui')
+tryKnowledgeBuild()

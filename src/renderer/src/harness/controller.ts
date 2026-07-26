@@ -585,6 +585,8 @@ ${mode === "plan" ? "## 当前：输出计划阶段\n需求歧义时可用 ask_c
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**
+- **写 Fabric 方块/物品/实体/附魔注册代码前，必须先用 minecraft_data_lookup 查询原版标准 ID 与属性参数（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等），禁止凭记忆填写原版参数。**
+- **用户输入模糊或不专业的游戏描述时（如"会爆炸的绿色怪物"），先用 mc_wiki_search 检索中文 MC 百科向量知识库解析需求，再结合 minecraft_data_lookup 生成 Fabric 代码。**
 - 使用 Yarn mappings。主类→ModInitializer，客户端→ClientModInitializer。${extraRules}
 
 ${goalBlock}

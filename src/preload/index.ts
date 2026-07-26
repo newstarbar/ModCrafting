@@ -59,6 +59,95 @@ export interface RecentProject {
   openedAt: string
 }
 
+// ── Minecraft structured dataset types ──
+export interface McBlockProperties {
+  id: string
+  name: string
+  zhName?: string
+  hardness?: number
+  resistance?: number
+  stackSize: number
+  tool?: string
+  transparent?: boolean
+  emitLight?: number
+  filterLight?: number
+  defaultState?: unknown
+  states?: unknown
+  drops?: unknown
+}
+
+export interface McItemProperties {
+  id: string
+  name: string
+  zhName?: string
+  stackSize: number
+  maxDurability?: number
+  enchantCategory?: unknown
+}
+
+export interface McEntityProperties {
+  id: string
+  internalId?: number
+  name: string
+  zhName?: string
+  type?: string
+  category?: string
+  width?: number
+  height?: number
+  health?: number
+  attack?: number
+  passive?: boolean
+}
+
+export interface McEnchantmentProperties {
+  id: string
+  name: string
+  zhName?: string
+  maxLevel: number
+  minLevel?: number
+  applicableTo?: unknown
+  weight?: number
+}
+
+export interface McDataVersionInfo {
+  version: string | null
+  counts: Record<string, number> | null
+}
+
+export type McDataLookupResult<T> =
+  | { found: true; source: 'block' | 'item' | 'entity' | 'enchantment'; data: T }
+  | { found: false; source: 'block' | 'item' | 'entity' | 'enchantment'; data: null }
+
+export interface McRecipeSearchResult {
+  found: boolean
+  recipes: unknown[]
+}
+
+// ── Chinese MC Wiki vector search types ──
+export interface McWikiSearchResult {
+  title: string
+  category: string
+  standardId?: string
+  heading?: string
+  snippet: string
+  score: number
+  sourceFile?: string
+}
+
+export interface McWikiSearchResponse {
+  ok: boolean
+  results: McWikiSearchResult[]
+  error?: string
+}
+
+export interface McWikiIndexInfo {
+  ready: boolean
+  chunkCount: number
+  dimension: number
+  model: string
+  error?: string
+}
+
 export interface FileResult {
   success: boolean
   content?: string
@@ -428,6 +517,28 @@ const api = {
   // Local Fabric source search (Yarn mappings + Fabric API sources)
   searchLocalSources: (keyword: string, maxResults?: number): Promise<string> =>
     ipcRenderer.invoke('knowledge:searchLocalSources', keyword, maxResults),
+
+  // ── Minecraft structured dataset (minecraft-data) ──
+  mcDataLookupBlock: (query: string, version?: string): Promise<McDataLookupResult<McBlockProperties>> =>
+    ipcRenderer.invoke('mcdata:lookupBlock', query, version),
+  mcDataLookupItem: (query: string, version?: string): Promise<McDataLookupResult<McItemProperties>> =>
+    ipcRenderer.invoke('mcdata:lookupItem', query, version),
+  mcDataLookupEntity: (query: string, version?: string): Promise<McDataLookupResult<McEntityProperties>> =>
+    ipcRenderer.invoke('mcdata:lookupEntity', query, version),
+  mcDataLookupEnchantment: (query: string, version?: string): Promise<McDataLookupResult<McEnchantmentProperties>> =>
+    ipcRenderer.invoke('mcdata:lookupEnchantment', query, version),
+  mcDataSearchRecipes: (itemId: string, version?: string): Promise<McRecipeSearchResult> =>
+    ipcRenderer.invoke('mcdata:searchRecipes', itemId, version),
+  mcDataGetVersionInfo: (): Promise<McDataVersionInfo> =>
+    ipcRenderer.invoke('mcdata:getVersionInfo'),
+
+  // ── Chinese MC Wiki vector search ──
+  mcWikiSearch: (query: string, topK?: number): Promise<McWikiSearchResponse> =>
+    ipcRenderer.invoke('mcwiki:search', query, topK),
+  mcWikiInfo: (): Promise<McWikiIndexInfo> =>
+    ipcRenderer.invoke('mcwiki:info'),
+  mcWikiInit: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('mcwiki:init'),
 
   // Session export
   sessionExport: (payload: string, suggestedName?: string): Promise<{

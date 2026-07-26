@@ -49,7 +49,14 @@
 		"render:release-notes": "npm run release:notes",
 		"sync:gitee": "npm run release:sync-gitee",
 		"push:gitee": "npm run release:push-gitee",
-		"postinstall": "node scripts/lib/ensure-native-deps.mjs"
+		"postinstall": "node scripts/lib/ensure-native-deps.mjs",
+		"knowledge:fetch-data": "node scripts/knowledge/fetch-minecraft-data.mjs",
+		"knowledge:fetch-wiki": "node scripts/knowledge/fetch-mc-wiki-zh.mjs",
+		"knowledge:build-data-index": "node scripts/knowledge/build-mc-data-index.mjs",
+		"knowledge:build-wiki-embeddings": "node scripts/knowledge/build-wiki-embeddings.mjs",
+		"knowledge:cache-model": "node scripts/knowledge/cache-transformer-model.mjs",
+		"knowledge:build-all": "node scripts/knowledge/build-all.mjs",
+		"knowledge:prefetch": "npm run knowledge:build-all"
 	},
 	"dependencies": {
 		"@electron-toolkit/utils": "^4.0.0",
@@ -69,6 +76,7 @@
 		"@types/react": "^19.1.2",
 		"@types/react-dom": "^19.1.2",
 		"@vitejs/plugin-react": "^6.0.2",
+		"@xenova/transformers": "^2.17.2",
 		"electron": "^42.4.1",
 		"electron-builder": "^26.0.0",
 		"electron-vite": "^6.0.0-beta.1",
@@ -130,6 +138,35 @@
 				"to": "_base_mods",
 				"filter": [
 					"**/*.jar"
+				]
+			},
+			{
+				"from": "resources/minecraft-data",
+				"to": "minecraft-data",
+				"filter": [
+					"**/*.json"
+				]
+			},
+			{
+				"from": "resources/mc-wiki-zh",
+				"to": "mc-wiki-zh",
+				"filter": [
+					"**/*.md"
+				]
+			},
+			{
+				"from": "resources/mc-wiki-zh-index",
+				"to": "mc-wiki-zh-index",
+				"filter": [
+					"**/*.bin",
+					"**/*.json"
+				]
+			},
+			{
+				"from": "resources/mc-wiki-model",
+				"to": "mc-wiki-model",
+				"filter": [
+					"**/*"
 				]
 			}
 		],
