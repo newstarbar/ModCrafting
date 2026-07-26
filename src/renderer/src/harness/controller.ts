@@ -503,14 +503,10 @@ export class Controller {
 
 		const fabricPolicy = buildFabricAgentPolicyPrompt(mode);
 		const goalBlock = [buildSessionGoalBlock(this.sessionGoal), buildUserSymptomBlock(this.activeUserSymptom), formatVerifyTargetBlock(this.activeVerifyTarget)].filter(Boolean).join("\n\n");
-		// projectInfo is injected into the execute-entry user message (not system)
-		// so writing files / phase switches do not invalidate the system prompt cache prefix.
-		const projectInfo = mode === "execute" ? "" : await this.buildProjectInfo();
-		if (mode === "execute") {
-			this.lastProjectInfo = await this.buildProjectInfo();
-		} else {
-			this.lastProjectInfo = projectInfo;
-		}
+		// projectInfo 注入到 system prompt，确保 execute 阶段每轮都能看到项目结构，避免重复 list_directory/read_file 探索。
+		// 同 mode 下 updateSystemPrompt 不重建 system prompt（cache 友好）；mode 切换时才重新扫描。
+		const projectInfo = await this.buildProjectInfo();
+		this.lastProjectInfo = projectInfo;
 
 		if (mode === "chat") {
 			return `# ModCrafting AI 助手
@@ -553,7 +549,7 @@ submit_plan 参数要求：
 - 示例：\`{"steps":[{"kind":"mixin","description":"实现、注册并验证二段跳 Mixin","targetPath":"src/main/java/.../JumpMixin.java","evidence":"fabric_mixin_validate 通过"}]}\`
 
 计划必须精简：
-- **禁止写构建/运行步骤**（主机会自动追加 gradlew build 与 runClient）。
+- **禁止写构建/运行/测试步骤**。主机会自动在计划末尾追加：① 构建项目（gradlew build）② 启动游戏（runClient）③ 进入测试世界（mc_ensure_test_world + mc_ensure_cheats）④ 验证功能效果（mc_screenshot/mc_inspect）。Agent 只需写代码实现步骤（write/mixin/recipe/inspect）。
 - **禁止空泛步骤**（确保无错、测试功能、输出总结）。
 - **每步只做一件事**；最多 6 步。
 - **禁止重复步骤。**
@@ -692,6 +688,19 @@ ${projectInfo}`;
 		for (const step of this.planTracker.steps) {
 			if (step.status === "error") step.status = "pending";
 		}
+		// 自动追加测试步骤：确保计划末尾有"进入世界 + 触发场景 + 验证功能效果"。
+		// 系统提示词声称"主机会自动追加 gradlew build 与 runClient"，这里真正实现追加逻辑。
+		const appended = this.ensureTestVerificationSteps();
+		if (appended > 0) {
+			this.emitPlanState(this.planTracker);
+			this.emitEvent({
+				kind: EventKind.Notice,
+				notice: {
+					level: "info",
+					text: `已自动追加 ${appended} 个测试步骤（进入世界 / 触发场景 / 验证功能效果）。Agent 必须执行完所有步骤才能结束会话。`
+				}
+			});
+		}
 		this.lastPlanCandidate = null;
 		const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom);
 		this.messages.push({
@@ -702,6 +711,57 @@ ${projectInfo}`;
 			phase: "execute"
 		});
 		return this.runExecutePhase(streamCb);
+	}
+
+	/**
+	 * 自动追加测试步骤到 planTracker。
+	 * - 如果计划没有 build/run 步骤，追加"构建 + 启动游戏"
+	 * - 如果有 build 但没 run，追加"启动游戏"
+	 * - 追加"进入测试世界 + 触发功能场景"步骤（如果没有）
+	 * - 追加"验证功能效果"步骤（如果没有）
+	 * @returns 追加的步骤数量
+	 */
+	private ensureTestVerificationSteps(): number {
+		if (!this.planTracker) return 0;
+		const steps = this.planTracker.steps;
+		if (steps.length === 0) return 0;
+
+		const hasBuild = steps.some((s) => /gradlew|trigger_build.*build|构建项目|编译/i.test(s.description));
+		const hasRun = steps.some((s) => /runclient|启动游戏|运行游戏/i.test(s.description));
+		const hasEnterWorld = steps.some((s) => /mc_ensure_test_world|进入世界|进入测试世界/i.test(s.description));
+		const hasVerify = steps.some((s) => /mc_screenshot|mc_inspect|验证功能|验证效果/i.test(s.description));
+
+		let appended = 0;
+		const pushStep = (description: string) => {
+			steps.push({
+				id: String(steps.length + 1),
+				description,
+				status: "pending"
+			});
+			appended++;
+		};
+
+		// 追加构建/运行步骤（如果缺失）
+		if (!hasBuild && !hasRun) {
+			pushStep("构建项目（gradlew build / trigger_build build）");
+			pushStep("启动游戏进行真实测试（runClient）");
+		} else if (hasBuild && !hasRun) {
+			pushStep("启动游戏进行真实测试（runClient）");
+		}
+
+		// 追加"进入测试世界 + 触发功能场景"步骤
+		if (!hasEnterWorld) {
+			pushStep(
+				"进入测试世界并执行功能场景（mc_ensure_test_world 进入世界 → mc_ensure_cheats 确保作弊权限 → mc_command/mc_input 触发待测功能）"
+			);
+		}
+
+		// 追加"验证功能效果"步骤
+		if (!hasVerify) {
+			pushStep("验证功能效果（mc_screenshot/mc_inspect 客观校验，禁止仅凭 MC_PHASE:menu 宣称完成）");
+		}
+
+		return appended;
 	}
 
 	/** After plan allDone: verify in-game without clearing tracker into a new submit_plan cycle. */

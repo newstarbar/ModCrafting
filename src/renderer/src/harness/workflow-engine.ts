@@ -498,6 +498,48 @@ export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
       `本步为勘察（inspect）：请立即调用 ${readHint} 完成勘察后 complete_step()，不要只输出旁白。`
     )
   }
+  if (step.kind === 'build') {
+    return (
+      `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
+      `本步为构建（build）：请立即调用 trigger_build(task="build") 构建项目，不要只输出旁白。`
+    )
+  }
+  if (step.kind === 'run') {
+    const title = step.title || ''
+    // 根据 step 描述推断应该调用哪个工具
+    if (/mc_ensure_test_world|进入世界|进入测试世界/.test(title)) {
+      return (
+        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+        `本步为进入测试世界：请立即调用 mc_ensure_test_world 进入游戏世界。` +
+        `禁止仅凭 MC_PHASE:menu 宣称完成，禁止只输出旁白。`
+      )
+    }
+    if (/mc_ensure_cheats|作弊权限/.test(title)) {
+      return (
+        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+        `本步为确保作弊权限：请立即调用 mc_ensure_cheats 开启作弊权限。`
+      )
+    }
+    if (/mc_screenshot|mc_inspect|验证功能|验证效果/.test(title)) {
+      return (
+        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+        `本步为验证功能效果：请立即调用 mc_screenshot 截图和/或 mc_inspect 检视当前状态，客观校验功能是否生效。` +
+        `禁止只输出"测试通过"等旁白而没有客观证据。`
+      )
+    }
+    if (/runclient|启动游戏|运行游戏/.test(title)) {
+      return (
+        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+        `本步为启动游戏：请立即调用 trigger_build(task="runClient") 启动游戏客户端。`
+      )
+    }
+    // 通用 run 步骤指令
+    return (
+      `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+      `本步为游戏内测试：请调用 mc_ensure_test_world / mc_ensure_cheats / mc_command / mc_input / mc_screenshot / mc_inspect 等工具完成测试场景。` +
+      `禁止只输出旁白。`
+    )
+  }
   const targetHint = step.targetPath
     ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)`
     : 'write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)'
