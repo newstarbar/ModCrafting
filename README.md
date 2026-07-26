@@ -39,12 +39,16 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 
 | 能力 | 说明 |
 |------|------|
-| **Vibecoding 对话开发** | 基于 Plan → Execute 的 Agent 循环；简单问答自动走 Chat 模式，复杂模组任务走完整工具链 |
+| **三模式智能路由** | 每轮独立 LLM 分类，自动分流至 **Chat**（概念问答）/ **Plan**（结构化计划）/ **Execute**（逐步执行）；同时识别错误报告、用户症状、游戏内验证请求等侧面信号 |
+| **Vibecoding 对话开发** | Plan → Execute 双阶段 Agent 循环；计划阶段只读探索上限 3 轮即锁定强制提交；执行阶段每步独立循环 + 修复模式 |
 | **Fabric 项目向导** | 图形化新建项目：Mod ID、包名、作者、版本；自动生成 `build.gradle`、`fabric.mod.json`、入口类 |
-| **内置 AI 工具** | `read_file` · `write_file` · `list_directory` · `run_command` · `trigger_build` · `read_error_log` · `complete_step` |
-| **图形化游戏测试** | 多实例、阶段进度条、人话摘要；独立 `gameDir` 与 Gradle 隔离，支持联机 mod 多开 |
-| **崩溃 → AI 修复** | 自动检测崩溃报告，一键附加到对话上下文 |
-| **离线优先工具链** | 捆绑 JDK / Gradle / 依赖种子；启动遮罩 + 进度条，环境未就绪前锁定构建 |
+| **模板快速创建** | 7 种内置模板（自定义方块 / 物品 / 食物 / 实体 / 工具 / 护甲 / 配方），表单填写后跳过 Plan 阶段，直接由 `fabric_template_generate` 工具透传生成 |
+| **30+ 内置 AI 工具** | 文件读写（先读后写门控）· 目录列举 · 命令执行 · 触发构建 · 读取错误日志 · `mc_inspect` / `mc_screenshot` 游戏内客观校验 · `ask_clarification` 严格澄清 · `submit_plan` 结构化计划 · `complete_step` 验收推进 |
+| **防御性工程护栏** | ACI 读门控、重复成功守卫、空构建检测、JSON 截断恢复、迁移批量门控、推理长度软/硬限制（6k / 12k 字符） |
+| **上下文压缩** | 老旧工具结果微压缩 + 接近 token 上限触发 LLM 摘要 + 跨轮诊断保留（近期 5 条用户反馈 + 2 条助手摘要） |
+| **图形化游戏测试** | 多实例、阶段进度条、人话摘要；独立 `gameDir` 与 Gradle 守护进程隔离，支持联机 mod 多开 |
+| **崩溃 → AI 修复** | 自动检测崩溃报告，一键附加到对话上下文；构建失败进入修复模式，先改码再构建 |
+| **离线优先工具链** | 捆绑 JDK 21 / Gradle 9.5 / 依赖种子；启动遮罩 + 进度条，环境未就绪前锁定构建 |
 | **高级开发者区** | 编译检查、可折叠构建日志、可展开 xterm、调试日志面板 |
 | **API 密钥本地加密** | 支持 DeepSeek 等 OpenAI 兼容端点；密钥仅存本机，不进仓库 |
 
@@ -106,11 +110,11 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 
 ```
 ┌──────────────┬────────────────────────────┬─────────────────┐
-│  会话 / 设置  │      AI 对话（Vibecoding）   │   🎮 游戏        │
-│  文件树      │      计划 · 执行 · 流式输出   │   ⚙️ 高级        │
+│  会话 / 设置  │      AI 对话（Vibecoding）   │   游戏           │
+│  文件树      │      计划 · 执行 · 流式输出   │   高级           │
 │  最近项目    │                            │  （构建/终端）    │
 └──────────────┴────────────────────────────┴─────────────────┘
-│                        状态栏：模型 · Token · 工具链              │
+│                  状态栏：模型 · Token · 工具链                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,7 +127,25 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 ```mermaid
 flowchart TB
   subgraph ui [Renderer - React]
-    Chat[ChatPanel + Agent]
+    Chat[ChatPanel]
+    subgraph harness [Vibecoding Harness]
+      Classifier[turn-classifier<br/>意图分类]
+      Controller[controller<br/>三模式系统提示词]
+      Agent[agent<br/>LLM 循环]
+      PlanGate[plan-phase-gate<br/>只读门控]
+      Workflow[workflow-engine<br/>执行 + 修复模式]
+      Policy[fabric-agent-policy<br/>领域护栏]
+      Tools[30+ Tool Definitions]
+    end
+    Chat --> Classifier
+    Classifier --> Controller
+    Controller --> Agent
+    Agent --> PlanGate
+    PlanGate --> Workflow
+    Workflow --> Agent
+    Policy -.-> Controller
+    Policy -.-> Workflow
+    Tools -.-> Agent
     Game[McRuntimePanel]
     Adv[BottomPanel / DevLog]
   end
@@ -133,7 +155,7 @@ flowchart TB
     McRT[mc-runtime: 多实例 runClient]
     Term[terminal-handler]
   end
-  Chat --> IPC
+  Agent --> IPC
   Game --> IPC
   Adv --> IPC
   IPC --> BuildEnv
@@ -232,20 +254,23 @@ npm run build:win:portable
 
 ---
 
-## AI 配置
+## AI 配置与 Vibecoding 流程
 
 在应用左侧「设置」中配置：
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | API Endpoint | `https://api.deepseek.com/v1` | OpenAI 兼容接口地址 |
-| Model | `deepseek-v4-flash` | 可按提供商文档更换 |
+| Model | `opencode/deepseek-v4-flash-free` | 可按提供商文档更换 |
 | API Key | （用户填写） | 本地加密存储，**切勿提交到 Git** |
 
-Agent 会根据用户输入自动分流：
+Agent 每轮独立分类用户消息，自动分流至三种模式：
 
-- **Chat 模式**：概念问答、简单说明，跳过 Plan → Execute
-- **开发模式**：创建/修改模组、多文件重构，启用完整工具调用与步骤计划
+- **Chat 模式**：概念问答、方案说明，禁用写入/执行工具，直接给最佳方案不做比较
+- **Plan 模式**：输出结构化 `submit_plan`（write / recipe / mixin / inspect 四种 kind，1-6 步），最多 3 轮只读探索后强制提交
+- **Execute 模式**：逐步执行计划，每轮必调工具，旁白 ≤2 句，构建失败自动进入修复模式
+
+模式切换由 `turn-classifier` 完成，同时识别「错误报告 / 用户症状 / 游戏内验证请求」等侧面信号并注入到目标块中。澄清工具 `ask_clarification` 仅允许用于产品偏好与需求歧义，代码事实（API 命名、类名、mixin 路径等）必须走工具勘察。
 
 ---
 
@@ -378,7 +403,7 @@ ModCrafting/
 
 <div align="center">
 
-**如果觉得 ModCrafting 有帮助，欢迎 Star ⭐**
+**如果觉得 ModCrafting 有帮助，欢迎 Star**
 
 Built by [@newstarbar](https://github.com/newstarbar) and contributors
 
@@ -394,11 +419,13 @@ Built by [@newstarbar](https://github.com/newstarbar) and contributors
 
 ### Highlights
 
-- Vibecoding agent with plan/execute loop and tool calling  
-- Fabric project wizard (MC 1.21.4, Loom, Java 21)  
-- Bundled offline toolchain (JDK, Gradle, dependency seed)  
-- Graphical game test panel with multi-instance support  
-- Crash reports → one-click send to AI for repair  
+- Three-mode routing (Chat / Plan / Execute) via per-turn LLM classification
+- Vibecoding agent with Plan → Execute loop, 30+ tools, and defensive guardrails (read-before-write, repeat-success guard, empty-build detection, JSON-truncation recovery)
+- Fabric project wizard + 7 built-in quick-create templates (block / item / food / entity / tool / armor / recipe)
+- Context compaction: micro-compact old tool results, LLM summary near token limit, cross-turn diagnosis retention
+- Bundled offline toolchain (JDK 21, Gradle 9.5, dependency seed)
+- Graphical game test panel with multi-instance support
+- Crash reports → one-click send to AI for repair; build failures enter automatic repair mode
 
 ### Quick start (developers)
 

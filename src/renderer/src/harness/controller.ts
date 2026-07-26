@@ -2,537 +2,518 @@
 // Ported from Reasonix internal/control/controller.go
 // Session management, plan/execute phases, approval gates
 
-import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from './events'
-import { Agent } from './agent'
-import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMessage } from './chat-message'
-import { contentPartsAsClassifyText } from '../context/user-content.ts'
-import { Registry } from './tools'
-import { PlanTracker } from './plan-tracker'
-import { parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from '../utils/plan-steps'
-import { logger } from '../utils/logger'
-import { buildFabricAgentPolicyPrompt } from './fabric-agent-policy'
-import { isRetryableFetchError } from './fetch-retry'
-import {
-  type ComposerMode,
-  buildSessionGoalBlock,
-  isNarrowResumeInput,
-  isStructuralErrorReport,
-  buildUserSymptomBlock,
-  buildCrossTurnDiagnosisRetain
-} from './turn-intent'
-import {
-  classifyUserTurn,
-  type ClassifyUserTurnResult
-} from './turn-classifier.ts'
-import { isQuickCreateGeneratedMessage } from '../project/template-params.ts'
-import { OpenCodeAdapter } from './opencode-adapter.ts'
-import type { WorkflowStep } from './workflow-types.ts'
-import { TOOL_LABELS_ZH } from './tool-labels'
-import {
-  defaultVerifyTarget,
-  formatVerifyTargetBlock,
-  verifyTargetFromClassification,
-  type VerifyTarget
-} from './verify-target.ts'
-import {
-  formatGradleSummary,
-  formatJavaFileList,
-  parseGradleProperties,
-  scanJavaSourceTree
-} from './project-info.ts'
+import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from "./events";
+import { Agent } from "./agent";
+import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMessage } from "./chat-message";
+import { contentPartsAsClassifyText } from "../context/user-content.ts";
+import { Registry } from "./tools";
+import { PlanTracker } from "./plan-tracker";
+import { parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from "../utils/plan-steps";
+import { logger } from "../utils/logger";
+import { buildFabricAgentPolicyPrompt } from "./fabric-agent-policy";
+import { isRetryableFetchError } from "./fetch-retry";
+import { type ComposerMode, buildSessionGoalBlock, isNarrowResumeInput, isStructuralErrorReport, buildUserSymptomBlock, buildCrossTurnDiagnosisRetain } from "./turn-intent";
+import { classifyUserTurn, type ClassifyUserTurnResult } from "./turn-classifier.ts";
+import { isQuickCreateGeneratedMessage } from "../project/template-params.ts";
+import { OpenCodeAdapter } from "./opencode-adapter.ts";
+import type { WorkflowStep } from "./workflow-types.ts";
+import { TOOL_LABELS_ZH } from "./tool-labels";
+import { defaultVerifyTarget, formatVerifyTargetBlock, verifyTargetFromClassification, type VerifyTarget } from "./verify-target.ts";
+import { formatGradleSummary, formatJavaFileList, parseGradleProperties, scanJavaSourceTree } from "./project-info.ts";
 
 export interface ControllerOptions {
-  registry: Registry
-  projectPath: string | null
-  apiConfig: { endpoint: string; apiKey: string; model: string }
-  onEvent?: (event: Event) => void
-  onAgentStatus?: (status: string) => void
-  onStreamUpdate?: (text: string, reasoning?: string) => void
+	registry: Registry;
+	projectPath: string | null;
+	apiConfig: { endpoint: string; apiKey: string; model: string };
+	onEvent?: (event: Event) => void;
+	onAgentStatus?: (status: string) => void;
+	onStreamUpdate?: (text: string, reasoning?: string) => void;
 }
 
 export class Controller {
-  private agent: Agent
-  private registry: Registry
-  private sink: Sink
-  private _projectPath: string | null
+	private agent: Agent;
+	private registry: Registry;
+	private sink: Sink;
+	private _projectPath: string | null;
 
-  apiConfig: { endpoint: string; apiKey: string; model: string }
+	apiConfig: { endpoint: string; apiKey: string; model: string };
 
-  // Session
-  messages: ChatMessage[] = []
-  private _running = false
-  private abortController: AbortController | null = null
+	// Session
+	messages: ChatMessage[] = [];
+	private _running = false;
+	private abortController: AbortController | null = null;
 
-  private _phase: 'plan' | 'execute' = 'plan'
-  private planTracker: PlanTracker | null = null
-  private pendingApproval: { id: string; resolve: (allow: boolean) => void } | null = null
-  private composerMode: ComposerMode = 'agent'
-  private sessionGoal = ''
-  /** Sticky user-reported bug/symptom; runClient ready alone must not clear it. */
-  private activeUserSymptom: string | null = null
-  /** Derived from classifier: which screen/hotkey must be hit for in-game verify. */
-  private activeVerifyTarget: VerifyTarget | null = null
-  /** Last classifier: symptom is GUI/hotkey/preview related. */
-  private lastGuiFeatureSymptom = false
-  /** Cached project scan for execute-entry user message (kept out of system prompt). */
-  private lastProjectInfo = ''
-  private planReadyAwaitingExecute = false
-  /** Last plan text that had parseable steps (even if hard-validation failed). Used by 继续. */
-  private lastPlanCandidate: string | null = null
-  private lastTurnMode: 'chat' | 'develop' | 'plan_only' | 'resume' = 'chat'
-  /** Last mode written into messages[0]; skip rewrite when unchanged (prompt-cache). */
-  private lastSystemMode: 'chat' | 'plan' | 'execute' | null = null
-  private useOpenCodeDelegate = false
-  private openCodeModel = 'opencode/deepseek-v4-flash-free'
-  private openCodeAdapter: OpenCodeAdapter | null = null
-  private taskId = `task_${Date.now().toString(36)}`
+	private _phase: "plan" | "execute" = "plan";
+	private planTracker: PlanTracker | null = null;
+	private pendingApproval: { id: string; resolve: (allow: boolean) => void } | null = null;
+	private composerMode: ComposerMode = "agent";
+	private sessionGoal = "";
+	/** Sticky user-reported bug/symptom; runClient ready alone must not clear it. */
+	private activeUserSymptom: string | null = null;
+	/** Derived from classifier: which screen/hotkey must be hit for in-game verify. */
+	private activeVerifyTarget: VerifyTarget | null = null;
+	/** Last classifier: symptom is GUI/hotkey/preview related. */
+	private lastGuiFeatureSymptom = false;
+	/** Cached project scan for execute-entry user message (kept out of system prompt). */
+	private lastProjectInfo = "";
+	private planReadyAwaitingExecute = false;
+	/** Last plan text that had parseable steps (even if hard-validation failed). Used by 继续. */
+	private lastPlanCandidate: string | null = null;
+	private lastTurnMode: "chat" | "develop" | "plan_only" | "resume" = "chat";
+	/** Last mode written into messages[0]; skip rewrite when unchanged (prompt-cache). */
+	private lastSystemMode: "chat" | "plan" | "execute" | null = null;
+	private useOpenCodeDelegate = false;
+	private openCodeModel = "opencode/deepseek-v4-flash-free";
+	private openCodeAdapter: OpenCodeAdapter | null = null;
+	private taskId = `task_${Date.now().toString(36)}`;
 
-  // Callbacks
-  onEvent?: (event: Event) => void
-  onAgentStatus?: (status: string) => void
-  onStreamUpdate?: (text: string, reasoning?: string) => void
+	// Callbacks
+	onEvent?: (event: Event) => void;
+	onAgentStatus?: (status: string) => void;
+	onStreamUpdate?: (text: string, reasoning?: string) => void;
 
-  constructor(opts: ControllerOptions) {
-    this.registry = opts.registry
-    this._projectPath = opts.projectPath
-    this.apiConfig = opts.apiConfig
-    this.onEvent = opts.onEvent
-    this.onAgentStatus = opts.onAgentStatus
-    this.onStreamUpdate = opts.onStreamUpdate
+	constructor(opts: ControllerOptions) {
+		this.registry = opts.registry;
+		this._projectPath = opts.projectPath;
+		this.apiConfig = opts.apiConfig;
+		this.onEvent = opts.onEvent;
+		this.onAgentStatus = opts.onAgentStatus;
+		this.onStreamUpdate = opts.onStreamUpdate;
 
-    this.sink = new LoggerSink(
-      new FuncSink((event) => {
-        this.onEvent?.(event)
-      })
-    )
+		this.sink = new LoggerSink(
+			new FuncSink((event) => {
+				this.onEvent?.(event);
+			})
+		);
 
-    this.agent = new Agent({
-      registry: this.registry,
-      sink: this.sink,
-      onToolDispatch: (name) => {
-        this.onAgentStatus?.(`执行: ${name}...`)
-      },
-      onToolResult: (name, _id, output) => {
-        this.onAgentStatus?.(`${name} 完成`)
-        logger.tool(`${name} completed`, output.slice(0, 100))
-      }
-    })
+		this.agent = new Agent({
+			registry: this.registry,
+			sink: this.sink,
+			onToolDispatch: (name) => {
+				this.onAgentStatus?.(`执行: ${name}...`);
+			},
+			onToolResult: (name, _id, output) => {
+				this.onAgentStatus?.(`${name} 完成`);
+				logger.tool(`${name} completed`, output.slice(0, 100));
+			}
+		});
 
-    this.openCodeAdapter = new OpenCodeAdapter({
-      sink: this.sink,
-      onStatus: (status) => this.onAgentStatus?.(status),
-      getModel: () => this.openCodeModel
-    })
+		this.openCodeAdapter = new OpenCodeAdapter({
+			sink: this.sink,
+			onStatus: (status) => this.onAgentStatus?.(status),
+			getModel: () => this.openCodeModel
+		});
 
-    void this.refreshOpenCodeSettings()
-  }
+		void this.refreshOpenCodeSettings();
+	}
 
-  async refreshOpenCodeSettings(): Promise<void> {
-    try {
-      const cfg = await window.api.loadAgentConfig()
-      const prefer = cfg.useOpenCodeDelegate === true
-      this.openCodeModel = cfg.openCodeModel || 'opencode/deepseek-v4-flash-free'
-      if (!prefer) {
-        this.useOpenCodeDelegate = false
-        return
-      }
-      const detect = await window.api.opencodeDetect()
-      this.useOpenCodeDelegate = detect.installed === true
-    } catch {
-      this.useOpenCodeDelegate = false
-    }
-  }
+	async refreshOpenCodeSettings(): Promise<void> {
+		try {
+			const cfg = await window.api.loadAgentConfig();
+			const prefer = cfg.useOpenCodeDelegate === true;
+			this.openCodeModel = cfg.openCodeModel || "opencode/deepseek-v4-flash-free";
+			if (!prefer) {
+				this.useOpenCodeDelegate = false;
+				return;
+			}
+			const detect = await window.api.opencodeDetect();
+			this.useOpenCodeDelegate = detect.installed === true;
+		} catch {
+			this.useOpenCodeDelegate = false;
+		}
+	}
 
-  private buildOpenCodeDelegate():
-    | ((step: WorkflowStep, instruction: string) => Promise<{
-      ok: boolean
-      output?: string
-      error?: string
-      evidenceOk?: boolean
-      changedPaths?: string[]
-    }>)
-    | undefined {
-    if (!this.useOpenCodeDelegate || !this.openCodeAdapter || !this._projectPath) return undefined
-    return async (step, instruction) =>
-      this.openCodeAdapter!.delegateWriteTask(
-        this._projectPath!,
-        instruction,
-        step.targetPaths?.length ? step.targetPaths : (step.targetPath ? [step.targetPath] : undefined)
-      )
-  }
+	private buildOpenCodeDelegate():
+		| ((
+				step: WorkflowStep,
+				instruction: string
+		  ) => Promise<{
+				ok: boolean;
+				output?: string;
+				error?: string;
+				evidenceOk?: boolean;
+				changedPaths?: string[];
+		  }>)
+		| undefined {
+		if (!this.useOpenCodeDelegate || !this.openCodeAdapter || !this._projectPath) return undefined;
+		return async (step, instruction) =>
+			this.openCodeAdapter!.delegateWriteTask(this._projectPath!, instruction, step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : undefined);
+	}
 
-  private emitPlanValidationNotice(planText: string): void {
-    const issuesText = PlanTracker.formatValidationIssues(planText)
-    if (!issuesText) return
-    this.emitEvent({
-      kind: EventKind.Notice,
-      notice: {
-        level: 'info',
-        text: `计划校验提示（可继续执行）：\n${issuesText}`
-      }
-    })
-  }
+	private emitPlanValidationNotice(planText: string): void {
+		const issuesText = PlanTracker.formatValidationIssues(planText);
+		if (!issuesText) return;
+		this.emitEvent({
+			kind: EventKind.Notice,
+			notice: {
+				level: "info",
+				text: `计划校验提示（可继续执行）：\n${issuesText}`
+			}
+		});
+	}
 
-  get running(): boolean { return this._running }
-  get projectPath(): string | null { return this._projectPath }
-  get phase(): 'plan' | 'execute' { return this._phase }
-  get isPlanReady(): boolean { return this.planReadyAwaitingExecute }
-  get lastTurnModeSnapshot(): typeof this.lastTurnMode { return this.lastTurnMode }
-  get composerModeSnapshot(): ComposerMode { return this.composerMode }
+	get running(): boolean {
+		return this._running;
+	}
+	get projectPath(): string | null {
+		return this._projectPath;
+	}
+	get phase(): "plan" | "execute" {
+		return this._phase;
+	}
+	get isPlanReady(): boolean {
+		return this.planReadyAwaitingExecute;
+	}
+	get lastTurnModeSnapshot(): typeof this.lastTurnMode {
+		return this.lastTurnMode;
+	}
+	get composerModeSnapshot(): ComposerMode {
+		return this.composerMode;
+	}
 
-  setComposerMode(mode: ComposerMode): void {
-    this.composerMode = mode
-  }
+	setComposerMode(mode: ComposerMode): void {
+		this.composerMode = mode;
+	}
 
-  setSessionGoal(goal: string): void {
-    this.sessionGoal = goal.trim()
-  }
+	setSessionGoal(goal: string): void {
+		this.sessionGoal = goal.trim();
+	}
 
-  getSessionGoal(): string {
-    return this.sessionGoal
-  }
+	getSessionGoal(): string {
+		return this.sessionGoal;
+	}
 
-  setProjectPath(p: string | null): void {
-    this._projectPath = p
-  }
+	setProjectPath(p: string | null): void {
+		this._projectPath = p;
+	}
 
-  setApiConfig(config: { endpoint: string; apiKey: string; model: string }): void {
-    this.apiConfig = config
-  }
+	setApiConfig(config: { endpoint: string; apiKey: string; model: string }): void {
+		this.apiConfig = config;
+	}
 
-  setRegistry(registry: Registry): void {
-    this.registry = registry
-    this.agent.setRegistry(registry)
-  }
+	setRegistry(registry: Registry): void {
+		this.registry = registry;
+		this.agent.setRegistry(registry);
+	}
 
-  private emitEvent(event: Event): void {
-    this.sink.emit(event)
-  }
+	private emitEvent(event: Event): void {
+		this.sink.emit(event);
+	}
 
-  private intentContext() {
-    return {
-      phase: this._phase,
-      planTracker: this.planTracker,
-      hasProject: Boolean(this._projectPath),
-      composerMode: this.composerMode,
-      hasPlanCandidate: Boolean(this.lastPlanCandidate)
-    }
-  }
+	private intentContext() {
+		return {
+			phase: this._phase,
+			planTracker: this.planTracker,
+			hasProject: Boolean(this._projectPath),
+			composerMode: this.composerMode,
+			hasPlanCandidate: Boolean(this.lastPlanCandidate)
+		};
+	}
 
-  private rememberPlanCandidate(planText: string): void {
-    if (planHasActionableSteps(planText) || isActionablePlanText(planText)) {
-      this.lastPlanCandidate = planText
-    }
-  }
+	private rememberPlanCandidate(planText: string): void {
+		if (planHasActionableSteps(planText) || isActionablePlanText(planText)) {
+			this.lastPlanCandidate = planText;
+		}
+	}
 
-  private adoptPlanCandidateIfNeeded(): boolean {
-    if (this.planTracker) return true
-    if (!this.lastPlanCandidate || !this.isActionablePlan(this.lastPlanCandidate)) return false
-    this.planTracker = PlanTracker.fromPlanText(this.lastPlanCandidate)
-    this.emitPlanState(this.planTracker)
-    return true
-  }
+	private adoptPlanCandidateIfNeeded(): boolean {
+		if (this.planTracker) return true;
+		if (!this.lastPlanCandidate || !this.isActionablePlan(this.lastPlanCandidate)) return false;
+		this.planTracker = PlanTracker.fromPlanText(this.lastPlanCandidate);
+		this.emitPlanState(this.planTracker);
+		return true;
+	}
 
-  /** Skip execute when plan has no concrete steps.
-   *  Missing evidence is advisory only (see emitPlanValidationNotice); the compiler
-   *  fills defaults. Hard-blocking on evidence left sessions stuck at plan_failed. */
-  private isActionablePlan(planText: string): boolean {
-    if (!isActionablePlanText(planText)) return false
-    return !PlanTracker.validationIssuesFromText(planText).some((issue) =>
-      issue.field === 'description' || issue.field === 'kind' ||
-      issue.field === 'targetPath'
-    )
-  }
+	/** Skip execute when plan has no concrete steps.
+	 *  Missing evidence is advisory only (see emitPlanValidationNotice); the compiler
+	 *  fills defaults. Hard-blocking on evidence left sessions stuck at plan_failed. */
+	private isActionablePlan(planText: string): boolean {
+		if (!isActionablePlanText(planText)) return false;
+		return !PlanTracker.validationIssuesFromText(planText).some((issue) => issue.field === "description" || issue.field === "kind" || issue.field === "targetPath");
+	}
 
-  private buildExecuteConfirmMessage(tracker: PlanTracker): string {
-    const current = tracker.currentStep
-    if (!current) {
-      return '计划已确认。全部步骤已完成，请输出总结。'
-    }
-    let content =
-      `计划已确认。当前执行步骤 #${current.id}：${current.description}\n` +
-      `串行工作流：执行当前步骤所需工具；主机会根据工具结果自动推进到下一步。` +
-      `禁止重复已成功工具，禁止跳过步骤。\n` +
-      tracker.toContextBlock()
-    if (tracker.isOpsOnly()) {
-      content += '\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。'
-    }
-    if (this.lastProjectInfo.trim()) {
-      content += `\n\n${this.lastProjectInfo.trim()}`
-    }
-    return content
-  }
+	private buildExecuteConfirmMessage(tracker: PlanTracker): string {
+		const current = tracker.currentStep;
+		if (!current) {
+			return "计划已确认。全部步骤已完成，请输出总结。";
+		}
+		let content =
+			`计划已确认。当前执行步骤 #${current.id}：${current.description}\n` +
+			`串行工作流：执行当前步骤所需工具；主机会根据工具结果自动推进到下一步。` +
+			`禁止重复已成功工具，禁止跳过步骤。\n` +
+			tracker.toContextBlock();
+		if (tracker.isOpsOnly()) {
+			content += "\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。";
+		}
+		if (this.lastProjectInfo.trim()) {
+			content += `\n\n${this.lastProjectInfo.trim()}`;
+		}
+		return content;
+	}
 
-  private retainCurrentUserAsNewTask(): void {
-    const system = this.messages.find((message) => message.role === 'system')
-    this.taskId = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
-    // Keep recent user feedback + short assistant notes so follow-up bugfix
-    // rounds do not start with only system+1 user (diag showed controllerMessages: 2).
-    this.messages = buildCrossTurnDiagnosisRetain({
-      system: system ? { role: 'system', content: system.content || '', origin: 'harness' } : undefined,
-      messages: this.messages,
-      taskId: this.taskId
-    }) as ChatMessage[]
-  }
+	private retainCurrentUserAsNewTask(): void {
+		const system = this.messages.find((message) => message.role === "system");
+		this.taskId = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+		// Keep recent user feedback + short assistant notes so follow-up bugfix
+		// rounds do not start with only system+1 user (diag showed controllerMessages: 2).
+		this.messages = buildCrossTurnDiagnosisRetain({
+			system: system ? { role: "system", content: system.content || "", origin: "harness" } : undefined,
+			messages: this.messages,
+			taskId: this.taskId
+		}) as ChatMessage[];
+	}
 
-  /** Synthetic one-shot plans must not lock later user turns when incomplete. */
-  private releaseIncompleteSyntheticPlan(): void {
-    if (this.planTracker?.synthetic && !this.planTracker.allDone()) {
-      this.planTracker = null
-      this._phase = 'plan'
-      this.planReadyAwaitingExecute = false
-    }
-  }
+	/** Synthetic one-shot plans must not lock later user turns when incomplete. */
+	private releaseIncompleteSyntheticPlan(): void {
+		if (this.planTracker?.synthetic && !this.planTracker.allDone()) {
+			this.planTracker = null;
+			this._phase = "plan";
+			this.planReadyAwaitingExecute = false;
+		}
+	}
 
-  private applyClassificationSideEffects(
-    classified: ClassifyUserTurnResult,
-    input: string
-  ): void {
-    this.lastGuiFeatureSymptom = classified.isGuiFeatureSymptom
-    if (classified.isSymptomResolved) {
-      this.activeUserSymptom = null
-      this.activeVerifyTarget = null
-      this.lastGuiFeatureSymptom = false
-      return
-    }
-    if (classified.isUserSymptom || classified.isErrorReport) {
-      this.activeUserSymptom = input.trim().slice(0, 400)
-    }
-    const fromClass = verifyTargetFromClassification(classified.verifyTarget)
-    if (fromClass) {
-      this.activeVerifyTarget = fromClass
-    } else if (
-      classified.isGuiFeatureSymptom ||
-      classified.isInGameVerifyRequest
-    ) {
-      if (!this.activeVerifyTarget) {
-        this.activeVerifyTarget = defaultVerifyTarget()
-      }
-    }
-  }
+	private applyClassificationSideEffects(classified: ClassifyUserTurnResult, input: string): void {
+		this.lastGuiFeatureSymptom = classified.isGuiFeatureSymptom;
+		if (classified.isSymptomResolved) {
+			this.activeUserSymptom = null;
+			this.activeVerifyTarget = null;
+			this.lastGuiFeatureSymptom = false;
+			return;
+		}
+		if (classified.isUserSymptom || classified.isErrorReport) {
+			this.activeUserSymptom = input.trim().slice(0, 400);
+		}
+		const fromClass = verifyTargetFromClassification(classified.verifyTarget);
+		if (fromClass) {
+			this.activeVerifyTarget = fromClass;
+		} else if (classified.isGuiFeatureSymptom || classified.isInGameVerifyRequest) {
+			if (!this.activeVerifyTarget) {
+				this.activeVerifyTarget = defaultVerifyTarget();
+			}
+		}
+	}
 
-  private ensureVerifyTargetForGui(): void {
-    if (!this.activeVerifyTarget) {
-      this.activeVerifyTarget = defaultVerifyTarget()
-    }
-  }
+	private ensureVerifyTargetForGui(): void {
+		if (!this.activeVerifyTarget) {
+			this.activeVerifyTarget = defaultVerifyTarget();
+		}
+	}
 
-  private maybeEmitSymptomConfirmNotice(): void {
-    if (!this.activeUserSymptom || !this.planTracker?.allDone()) return
-    const targetHint = this.activeVerifyTarget
-      ? `检测目标「${this.activeVerifyTarget.label}」是否已在游戏内确认？`
-      : ''
-    this.emitEvent({
-      kind: EventKind.Notice,
-      notice: {
-        level: 'warn',
-        text:
-          `游戏已启动/计划步骤已跑完，但用户症状仍待确认：「${this.activeUserSymptom.slice(0, 100)}」。` +
-          (targetHint ? targetHint : '') +
-          `若问题仍在，请直接描述现象（不要只发「继续」）。若已解决可回复「好了」。`
-      }
-    })
-  }
+	private maybeEmitSymptomConfirmNotice(): void {
+		if (!this.activeUserSymptom || !this.planTracker?.allDone()) return;
+		const targetHint = this.activeVerifyTarget ? `检测目标「${this.activeVerifyTarget.label}」是否已在游戏内确认？` : "";
+		this.emitEvent({
+			kind: EventKind.Notice,
+			notice: {
+				level: "warn",
+				text:
+					`游戏已启动/计划步骤已跑完，但用户症状仍待确认：「${this.activeUserSymptom.slice(0, 100)}」。` +
+					(targetHint ? targetHint : "") +
+					`若问题仍在，请直接描述现象（不要只发「继续」）。若已解决可回复「好了」。`
+			}
+		});
+	}
 
-  private emitPlanState(tracker: PlanTracker): void {
-    this.emitEvent({
-      kind: EventKind.PlanState,
-      planSteps: tracker.snapshot()
-    })
-  }
+	private emitPlanState(tracker: PlanTracker): void {
+		this.emitEvent({
+			kind: EventKind.PlanState,
+			planSteps: tracker.snapshot()
+		});
+	}
 
-  private emitPlanDonePhase(
-    planStreamReasoning: string,
-    planStreamText: string,
-    planResult: string
-  ): string {
-    const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult)
-    const visiblePlanText = selectVisiblePlanText(planStreamText, planResult)
-    const actionable = this.isActionablePlan(fullPlanText)
-    this.rememberPlanCandidate(fullPlanText)
-    logger.agent('Plan merged', {
-      steps: parsePlanSteps(fullPlanText).length,
-      visibleSteps: parsePlanSteps(visiblePlanText).length,
-      actionable
-    })
-    this.emitEvent({
-      kind: EventKind.Phase,
-      phase: 'plan_done',
-      text: visiblePlanText,
-      planActionable: actionable
-    })
-    this.emitEvent({ kind: EventKind.Phase, phase: 'plan_stream_end' })
-    this.emitPlanValidationNotice(fullPlanText)
-    return fullPlanText
-  }
+	private emitPlanDonePhase(planStreamReasoning: string, planStreamText: string, planResult: string): string {
+		const fullPlanText = selectPlanText(planStreamReasoning, planStreamText, planResult);
+		const visiblePlanText = selectVisiblePlanText(planStreamText, planResult);
+		const actionable = this.isActionablePlan(fullPlanText);
+		this.rememberPlanCandidate(fullPlanText);
+		logger.agent("Plan merged", {
+			steps: parsePlanSteps(fullPlanText).length,
+			visibleSteps: parsePlanSteps(visiblePlanText).length,
+			actionable
+		});
+		this.emitEvent({
+			kind: EventKind.Phase,
+			phase: "plan_done",
+			text: visiblePlanText,
+			planActionable: actionable
+		});
+		this.emitEvent({ kind: EventKind.Phase, phase: "plan_stream_end" });
+		this.emitPlanValidationNotice(fullPlanText);
+		return fullPlanText;
+	}
 
-  private planFailureNotice(fullPlanText: string, retried = false): string {
-    const prefix = retried ? '两次尝试均未能生成可执行计划。' : '未能生成可执行计划。'
-    const empty = !fullPlanText.trim()
-    if (empty) {
-      const hasImages = this.messages.some(
-        (m) =>
-          m.role === 'user' &&
-          Array.isArray(m.content) &&
-          m.content.some((p) => p.type === 'image_url')
-      )
-      if (hasImages && !isVisionCapableModel(this.apiConfig.model)) {
-        return (
-          `${prefix}模型本轮无输出。当前模型「${this.apiConfig.model}」不支持图片理解；` +
-          '请切换到视觉模型（如 glm-5v-turbo）后再发送带图消息，或先移除图片。'
-        )
-      }
-      return `${prefix}模型本轮未返回任何内容。请重试，或换一个模型。`
-    }
-    const detail = planHasActionableSteps(fullPlanText)
-      ? '计划含编号步骤但缺少目标路径（如 src/main/java/...）。'
-      : '未能解析出符合格式的编号步骤。'
-    return (
-      `${prefix}${detail}请直接发送计划，例如：\n` +
-      '1. [inspect] 确认 API — fabric_docs_search\n' +
-      '2. [write] src/main/java/com/example/my_mod/Handler.java — 功能实现\n' +
-      '3. [write] src/main/java/com/example/my_mod/MyMod.java — 注册入口'
-    )
-  }
+	private planFailureNotice(fullPlanText: string, retried = false): string {
+		const prefix = retried ? "两次尝试均未能生成可执行计划。" : "未能生成可执行计划。";
+		const empty = !fullPlanText.trim();
+		if (empty) {
+			const hasImages = this.messages.some((m) => m.role === "user" && Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"));
+			if (hasImages && !isVisionCapableModel(this.apiConfig.model)) {
+				return `${prefix}模型本轮无输出。当前模型「${this.apiConfig.model}」不支持图片理解；` + "请切换到视觉模型（如 glm-5v-turbo）后再发送带图消息，或先移除图片。";
+			}
+			return `${prefix}模型本轮未返回任何内容。请重试，或换一个模型。`;
+		}
+		const detail = planHasActionableSteps(fullPlanText) ? "计划含编号步骤但缺少目标路径（如 src/main/java/...）。" : "未能解析出符合格式的编号步骤。";
+		return (
+			`${prefix}${detail}请直接发送计划，例如：\n` +
+			"1. [inspect] 确认 API — fabric_docs_search\n" +
+			"2. [write] src/main/java/com/example/my_mod/Handler.java — 功能实现\n" +
+			"3. [write] src/main/java/com/example/my_mod/MyMod.java — 注册入口"
+		);
+	}
 
-  private async buildProjectInfo(): Promise<string> {
-    let projectInfo = ''
-    if (!this._projectPath) return projectInfo
+	private async buildProjectInfo(): Promise<string> {
+		let projectInfo = "";
+		if (!this._projectPath) return projectInfo;
 
-    const projectPath = this._projectPath
-    const listDirectory = (absPath: string) => window.api.listDirectory(absPath)
-    projectInfo = `## 项目信息\n项目路径：${projectPath}\n`
+		const projectPath = this._projectPath;
+		const listDirectory = (absPath: string) => window.api.listDirectory(absPath);
+		projectInfo = `## 项目信息\n项目路径：${projectPath}\n`;
 
-    // 1. Scan main Java packages + file inventory
-    try {
-      const mainJava = `${projectPath}/src/main/java`
-      const { packages, javaFiles } = await scanJavaSourceTree(mainJava, projectPath, listDirectory)
-      if (packages.length > 0) {
-        projectInfo += `源码包路径：${packages.join(', ')}\n`
-      }
-      projectInfo += formatJavaFileList(javaFiles, '主源码 Java 文件')
-    } catch { /* ignore scan errors */ }
+		// 1. Scan main Java packages + file inventory
+		try {
+			const mainJava = `${projectPath}/src/main/java`;
+			const { packages, javaFiles } = await scanJavaSourceTree(mainJava, projectPath, listDirectory);
+			if (packages.length > 0) {
+				projectInfo += `源码包路径：${packages.join(", ")}\n`;
+			}
+			projectInfo += formatJavaFileList(javaFiles, "主源码 Java 文件");
+		} catch {
+			/* ignore scan errors */
+		}
 
-    // 2. Scan client Java packages + file inventory
-    try {
-      const clientJava = `${projectPath}/src/client/java`
-      const { packages, javaFiles } = await scanJavaSourceTree(clientJava, projectPath, listDirectory)
-      if (packages.length > 0 || javaFiles.length > 0) {
-        projectInfo += `客户端源码目录：src/client/java\n`
-        if (packages.length > 0) {
-          projectInfo += `客户端包路径：${packages.join(', ')}\n`
-        }
-        projectInfo += formatJavaFileList(javaFiles, '客户端 Java 文件')
-      }
-    } catch { /* ignore */ }
+		// 2. Scan client Java packages + file inventory
+		try {
+			const clientJava = `${projectPath}/src/client/java`;
+			const { packages, javaFiles } = await scanJavaSourceTree(clientJava, projectPath, listDirectory);
+			if (packages.length > 0 || javaFiles.length > 0) {
+				projectInfo += `客户端源码目录：src/client/java\n`;
+				if (packages.length > 0) {
+					projectInfo += `客户端包路径：${packages.join(", ")}\n`;
+				}
+				projectInfo += formatJavaFileList(javaFiles, "客户端 Java 文件");
+			}
+		} catch {
+			/* ignore */
+		}
 
-    // 3. Gradle properties summary
-    try {
-      const gradleProps = await window.api.readFile(`${projectPath}/gradle.properties`)
-      if (gradleProps.success && gradleProps.content) {
-        projectInfo += formatGradleSummary(parseGradleProperties(gradleProps.content))
-      }
-    } catch { /* ignore */ }
+		// 3. Gradle properties summary
+		try {
+			const gradleProps = await window.api.readFile(`${projectPath}/gradle.properties`);
+			if (gradleProps.success && gradleProps.content) {
+				projectInfo += formatGradleSummary(parseGradleProperties(gradleProps.content));
+			}
+		} catch {
+			/* ignore */
+		}
 
-    // 4. Read fabric.mod.json (mod id, entrypoints, mixin ref)
-    try {
-      const modJsonPath = `${projectPath}/src/main/resources/fabric.mod.json`
-      const modJson = await window.api.readFile(modJsonPath)
-      if (modJson.success && modJson.content) {
-        const parsed = JSON.parse(modJson.content)
-        const modId = parsed.id || ''
-        if (modId) {
-          projectInfo += `Mod ID：${modId}\n`
-          if (parsed.entrypoints?.main?.length) {
-            projectInfo += `入口点：${parsed.entrypoints.main.join(', ')}\n`
-          }
-          if (parsed.entrypoints?.client?.length) {
-            projectInfo += `客户端入口：${parsed.entrypoints.client.join(', ')}\n`
-          }
-          if (parsed.mixins?.length) {
-            projectInfo += `Mixin 配置：${parsed.mixins.join(', ')}\n`
-          }
-        }
-      }
-    } catch { /* file may not exist */ }
+		// 4. Read fabric.mod.json (mod id, entrypoints, mixin ref)
+		try {
+			const modJsonPath = `${projectPath}/src/main/resources/fabric.mod.json`;
+			const modJson = await window.api.readFile(modJsonPath);
+			if (modJson.success && modJson.content) {
+				const parsed = JSON.parse(modJson.content);
+				const modId = parsed.id || "";
+				if (modId) {
+					projectInfo += `Mod ID：${modId}\n`;
+					if (parsed.entrypoints?.main?.length) {
+						projectInfo += `入口点：${parsed.entrypoints.main.join(", ")}\n`;
+					}
+					if (parsed.entrypoints?.client?.length) {
+						projectInfo += `客户端入口：${parsed.entrypoints.client.join(", ")}\n`;
+					}
+					if (parsed.mixins?.length) {
+						projectInfo += `Mixin 配置：${parsed.mixins.join(", ")}\n`;
+					}
+				}
+			}
+		} catch {
+			/* file may not exist */
+		}
 
-    // 5. List resources directory (assets, data, actual mixin config filename)
-    try {
-      const resourcesDir = `${projectPath}/src/main/resources`
-      const resEntries = await window.api.listDirectory(resourcesDir)
-      const topItems = resEntries.map((e) => e.name).join(', ')
-      if (topItems) {
-        projectInfo += `资源目录：${topItems}\n`
-      }
-    } catch { /* ignore */ }
+		// 5. List resources directory (assets, data, actual mixin config filename)
+		try {
+			const resourcesDir = `${projectPath}/src/main/resources`;
+			const resEntries = await window.api.listDirectory(resourcesDir);
+			const topItems = resEntries.map((e) => e.name).join(", ");
+			if (topItems) {
+				projectInfo += `资源目录：${topItems}\n`;
+			}
+		} catch {
+			/* ignore */
+		}
 
-    // 6. Read mixin configs for existing entries
-    try {
-      const resourcesDir = `${projectPath}/src/main/resources`
-      const resEntries = await window.api.listDirectory(resourcesDir)
-      for (const e of resEntries) {
-        if (e.name.endsWith('.mixins.json')) {
-          try {
-            const mixinPath = `${projectPath}/src/main/resources/${e.name}`
-            const mixinFile = await window.api.readFile(mixinPath)
-            if (!mixinFile.success || !mixinFile.content) continue
-            const parsed = JSON.parse(mixinFile.content)
-            const pkg = parsed.package || ''
-            const mixins = parsed.mixins || []
-            const client = parsed.client || []
-            const allMixins = [...new Set([...mixins, ...client])]
-            if (allMixins.length > 0) {
-              projectInfo +=
-                `已注册 Mixin（${e.name}，包 ${pkg || '无'}）：${allMixins.join(', ')}\n`
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
-    } catch { /* ignore */ }
+		// 6. Read mixin configs for existing entries
+		try {
+			const resourcesDir = `${projectPath}/src/main/resources`;
+			const resEntries = await window.api.listDirectory(resourcesDir);
+			for (const e of resEntries) {
+				if (e.name.endsWith(".mixins.json")) {
+					try {
+						const mixinPath = `${projectPath}/src/main/resources/${e.name}`;
+						const mixinFile = await window.api.readFile(mixinPath);
+						if (!mixinFile.success || !mixinFile.content) continue;
+						const parsed = JSON.parse(mixinFile.content);
+						const pkg = parsed.package || "";
+						const mixins = parsed.mixins || [];
+						const client = parsed.client || [];
+						const allMixins = [...new Set([...mixins, ...client])];
+						if (allMixins.length > 0) {
+							projectInfo += `已注册 Mixin（${e.name}，包 ${pkg || "无"}）：${allMixins.join(", ")}\n`;
+						}
+					} catch {
+						/* skip malformed */
+					}
+				}
+			}
+		} catch {
+			/* ignore */
+		}
 
-    // 7. List resource subdirectories
-    try {
-      const assetsDir = `${projectPath}/src/main/resources/assets`
-      const assets = await window.api.listDirectory(assetsDir)
-      if (assets.length > 0) {
-        projectInfo += `资源命名空间：${assets.map((e) => e.name).join(', ')}\n`
-      }
-    } catch { /* ignore */ }
+		// 7. List resource subdirectories
+		try {
+			const assetsDir = `${projectPath}/src/main/resources/assets`;
+			const assets = await window.api.listDirectory(assetsDir);
+			if (assets.length > 0) {
+				projectInfo += `资源命名空间：${assets.map((e) => e.name).join(", ")}\n`;
+			}
+		} catch {
+			/* ignore */
+		}
 
-    return projectInfo
-  }
+		return projectInfo;
+	}
 
-  // Build system prompt with tool descriptions and Fabric knowledge
-  private async buildSystemPrompt(mode: 'chat' | 'plan' | 'execute'): Promise<string> {
-    const toolNameMap: Record<string, string> = { ...TOOL_LABELS_ZH }
-    const toolDescs = this.registry.names().filter((name) => {
-      if (name === 'complete_step') return false
-      const tool = this.registry.get(name)
-      return mode !== 'plan' || Boolean(tool?.readOnly())
-    }).map((name) => {
-      const t = this.registry.get(name)
-      const cn = toolNameMap[name] || name
-      const kind = t?.readOnly() ? '（只读）' : '（写入）'
-      return t ? `- **${cn}** (\`${t.name}\`): ${t.description} ${kind}` : ''
-    }).join('\n')
+	// Build system prompt with tool descriptions and Fabric knowledge
+	private async buildSystemPrompt(mode: "chat" | "plan" | "execute"): Promise<string> {
+		const toolNameMap: Record<string, string> = { ...TOOL_LABELS_ZH };
+		const toolDescs = this.registry
+			.names()
+			.filter((name) => {
+				if (name === "complete_step") return false;
+				const tool = this.registry.get(name);
+				return mode !== "plan" || Boolean(tool?.readOnly());
+			})
+			.map((name) => {
+				const t = this.registry.get(name);
+				const cn = toolNameMap[name] || name;
+				const kind = t?.readOnly() ? "（只读）" : "（写入）";
+				return t ? `- **${cn}** (\`${t.name}\`): ${t.description} ${kind}` : "";
+			})
+			.join("\n");
 
-    const fabricPolicy = buildFabricAgentPolicyPrompt(mode)
-    const goalBlock = [
-      buildSessionGoalBlock(this.sessionGoal),
-      buildUserSymptomBlock(this.activeUserSymptom),
-      formatVerifyTargetBlock(this.activeVerifyTarget)
-    ].filter(Boolean).join('\n\n')
-    // projectInfo is injected into the execute-entry user message (not system)
-    // so writing files / phase switches do not invalidate the system prompt cache prefix.
-    const projectInfo = mode === 'execute' ? '' : await this.buildProjectInfo()
-    if (mode === 'execute') {
-      this.lastProjectInfo = await this.buildProjectInfo()
-    } else {
-      this.lastProjectInfo = projectInfo
-    }
+		const fabricPolicy = buildFabricAgentPolicyPrompt(mode);
+		const goalBlock = [buildSessionGoalBlock(this.sessionGoal), buildUserSymptomBlock(this.activeUserSymptom), formatVerifyTargetBlock(this.activeVerifyTarget)].filter(Boolean).join("\n\n");
+		// projectInfo is injected into the execute-entry user message (not system)
+		// so writing files / phase switches do not invalidate the system prompt cache prefix.
+		const projectInfo = mode === "execute" ? "" : await this.buildProjectInfo();
+		if (mode === "execute") {
+			this.lastProjectInfo = await this.buildProjectInfo();
+		} else {
+			this.lastProjectInfo = projectInfo;
+		}
 
-    if (mode === 'chat') {
-      return `# ModCrafting AI 助手
+		if (mode === "chat") {
+			return `# ModCrafting AI 助手
 
 ## 对话模式
 
@@ -551,11 +532,12 @@ ${goalBlock}
 
 ${fabricPolicy}
 
-${projectInfo}`
-    }
+${projectInfo}`;
+		}
 
-    const phaseHeader = mode === 'plan'
-      ? `## 📋 第一阶段：制定计划
+		const phaseHeader =
+			mode === "plan"
+				? `## 第一阶段：制定计划
 
 输出风格硬约束：
 - 禁止方案对比推演。选定技术路线后不再回头讨论替代方案。
@@ -578,7 +560,7 @@ submit_plan 参数要求：
 - **不确定路径/类名时先 grep/read_file，禁止用 ask_clarification 代替勘察，禁止方案对比长文。**
 - **用户已通过模板表单提交完整需求时，禁止先探索项目；直接输出计划。**
 - **用户消息含【结构化参数 JSON】时，执行阶段须调用 \`fabric_template_generate\` 并传入完整 \`formFields\`（勿省略硬度、饱食度等表单参数）。**`
-      : `## 🔧 第二阶段：执行计划
+				: `## 第二阶段：执行计划
 
 规则（优先级从高到低）：
 1. 只执行当前步骤。不确定路径/类名/包名时先 read_file/grep；仅用户偏好才 ask_clarification，禁止猜需求。
@@ -587,13 +569,11 @@ submit_plan 参数要求：
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
 6. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
-7. 若存在【用户待验证症状】：MC_PHASE:ready ≠ 症状已修复；必须针对症状做可验证代码修改，禁止空改/假完成。`
+7. 若存在【用户待验证症状】：MC_PHASE:ready ≠ 症状已修复；必须针对症状做可验证代码修改，禁止空改/假完成。`;
 
-    const extraRules = mode === 'execute'
-      ? ''
-      : '\n- **仅需求歧义时可用 ask_clarification（短问题+短选项）；代码事实先勘察。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。'
+		const extraRules = mode === "execute" ? "" : "\n- **仅需求歧义时可用 ask_clarification（短问题+短选项）；代码事实先勘察。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。";
 
-    return `# ModCrafting AI 助手
+		return `# ModCrafting AI 助手
 ${phaseHeader}
 
 你是 Minecraft Fabric 模组开发助手。用中文回答。Java/JSON 代码保持英文。
@@ -601,7 +581,7 @@ ${phaseHeader}
 ## 可用工具
 ${toolDescs}
 
-${mode === 'plan' ? '## 当前：输出计划阶段\n需求歧义时可用 ask_clarification（短选项）；标识符用 grep/read_file 勘察，收集完后调用 submit_plan。' : '## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。工程冲突默认选更干净一致的方案，不要把实现细节丢给用户选。'}
+${mode === "plan" ? "## 当前：输出计划阶段\n需求歧义时可用 ask_clarification（短选项）；标识符用 grep/read_file 勘察，收集完后调用 submit_plan。" : "## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。最后 trigger_build 构建并启动游戏测试。工程冲突默认选更干净一致的方案，不要把实现细节丢给用户选。"}
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**
@@ -611,905 +591,823 @@ ${goalBlock}
 
 ${fabricPolicy}
 
-${projectInfo}`
-  }
-
-  private async updateSystemPrompt(mode: 'chat' | 'plan' | 'execute'): Promise<void> {
-    const sysIdx = this.messages.findIndex((m) => m.role === 'system' && m.origin === 'harness')
-    if (this.lastSystemMode === mode && sysIdx >= 0) {
-      // Same mode: keep messages[0] stable for prompt cache; still refresh project scan for execute entry.
-      if (mode === 'execute') {
-        this.lastProjectInfo = await this.buildProjectInfo()
-      }
-      return
-    }
-    const prompt = await this.buildSystemPrompt(mode)
-    if (sysIdx >= 0) {
-      this.messages[sysIdx] = { role: 'system', content: prompt, origin: 'harness' }
-    } else {
-      this.messages.unshift({ role: 'system', content: prompt, origin: 'harness' })
-    }
-    this.lastSystemMode = mode
-  }
-
-  private trimTrailingAssistants(): void {
-    while (this.messages.length > 0) {
-      const last = this.messages[this.messages.length - 1]
-      if (last.role === 'assistant') {
-        this.messages.pop()
-        continue
-      }
-      break
-    }
-    // Also remove stale injected system messages (instructions, error notices)
-    // that were added by appendToolRoundHistory or error handlers.
-    // Keep only the base system prompt at position 0.
-    this.messages = this.messages.filter((m, i) => {
-      if (m.role !== 'system') return true
-      if (i === 0) return true // base prompt
-      const content = contentAsText(m.content)
-      // Injected system messages use these markers
-      if (/^\[SYSTEM:/.test(content)) return false
-      if (/^【系统/.test(content)) return false
-      if (/^【注意】/.test(content)) return false
-      if (/^【系统警告】/.test(content)) return false
-      return true
-    })
-  }
-
-  private async runChatTurn(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
-    await this.updateSystemPrompt('chat')
-    const result = await this.agent.run(
-      this.apiConfig.endpoint,
-      this.apiConfig.apiKey,
-      this.apiConfig.model,
-      this.messages,
-      this._projectPath,
-      this.abortController!.signal,
-      streamCb,
-      { phase: 'plan', emitLifecycle: true, turnMode: 'chat', composerMode: this.composerMode }
-    )
-    return result
-  }
-
-  private async runExecutePhase(
-    streamCb: (text: string, reasoning?: string) => void,
-    options?: { forceFeatureGuiVerify?: boolean }
-  ): Promise<string> {
-    await this.refreshOpenCodeSettings()
-    await this.updateSystemPrompt('execute')
-    this._phase = 'execute'
-    this.planReadyAwaitingExecute = false
-    if (this.planTracker && this.planTracker.steps.length > 0) {
-      this.planTracker.markRunning()
-      this.emitPlanState(this.planTracker)
-    }
-    this.emitEvent({ kind: EventKind.Phase, phase: 'execute_start' })
-    this.onAgentStatus?.('执行中...')
-
-    const requireFeatureGuiVerify =
-      Boolean(options?.forceFeatureGuiVerify) ||
-      (Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom)
-    if (options?.forceFeatureGuiVerify) {
-      this.ensureVerifyTargetForGui()
-    }
-
-    const result = await this.agent.run(
-      this.apiConfig.endpoint,
-      this.apiConfig.apiKey,
-      this.apiConfig.model,
-      this.messages,
-      this._projectPath,
-      this.abortController!.signal,
-      streamCb,
-      {
-        phase: 'execute',
-        emitLifecycle: true,
-        planTracker: this.planTracker,
-        opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
-        requireInGameVerify: Boolean(this.activeUserSymptom) || Boolean(options?.forceFeatureGuiVerify),
-        requireFeatureGuiVerify,
-        verifyTarget: this.activeVerifyTarget,
-        openCodeDelegate: this.buildOpenCodeDelegate()
-      }
-    )
-    this.maybeEmitSymptomConfirmNotice()
-    return result
-  }
-
-  private async beginExecuteFromTracker(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
-    this.adoptPlanCandidateIfNeeded()
-    if (!this.planTracker || this.planTracker.steps.length === 0) {
-      this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: '没有可执行的计划' } })
-      this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready' })
-      return ''
-    }
-    // Explicit execute/resume may retry failed steps; do not leave them stuck as error.
-    for (const step of this.planTracker.steps) {
-      if (step.status === 'error') step.status = 'pending'
-    }
-    this.lastPlanCandidate = null
-    const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
-    this.messages.push({
-      role: 'user',
-      content: [this.buildExecuteConfirmMessage(this.planTracker), symptomBlock].filter(Boolean).join('\n\n'),
-      origin: 'harness',
-      taskId: this.taskId,
-      phase: 'execute'
-    })
-    return this.runExecutePhase(streamCb)
-  }
-
-  /** After plan allDone: verify in-game without clearing tracker into a new submit_plan cycle. */
-  private async beginInGameVerifyExecute(
-    streamCb: (text: string, reasoning?: string) => void
-  ): Promise<string> {
-    this.emitEvent({
-      kind: EventKind.Notice,
-      notice: {
-        level: 'info',
-        text: '进入游戏内校验：跳过计划阶段，直接 runClient + 打开待测功能 + mc_inspect/mc_screenshot。'
-      }
-    })
-    const recovered = this.recoverActiveSymptomFromHistory()
-    if (
-      !this.activeUserSymptom ||
-      this.activeUserSymptom === '用户请求游戏内测试/验证'
-    ) {
-      this.activeUserSymptom = recovered || '用户请求游戏内测试/验证'
-    }
-    this.ensureVerifyTargetForGui()
-    // Drop any stale plan/candidate so we never fall back into submit_plan.
-    this.lastPlanCandidate = null
-    this.planReadyAwaitingExecute = false
-    await this.updateSystemPrompt('execute')
-    this._phase = 'execute'
-    const opsPlan = '1. 启动游戏进行真实测试（runClient）'
-    // Prefer fromSteps: compilePlanFromText historically stripped pure host terminals to [].
-    this.planTracker = PlanTracker.fromSteps([
-      { id: '1', description: '启动游戏进行真实测试（runClient）', status: 'pending' }
-    ]).markSynthetic()
-    this.emitPlanState(this.planTracker)
-    this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
-    if (this.activeVerifyTarget) {
-      this.emitEvent({
-        kind: EventKind.Notice,
-        notice: {
-          level: 'info',
-          text: `检测目标：${this.activeVerifyTarget.label}`
-        }
-      })
-    }
-    const hotkey =
-      this.activeVerifyTarget?.hotkey ||
-      (this.activeUserSymptom.match(/\bF(\d{1,2})\b/i) || [])[0]?.toLowerCase() ||
-      'f6'
-    const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
-    const targetBlock = formatVerifyTargetBlock(this.activeVerifyTarget)
-    this.messages.push({
-      role: 'user',
-      content: [
-        '用户要求游戏内测试。禁止 submit_plan / 重新规划。',
-        '当前为执行阶段：若游戏未运行则 trigger_build task=runClient。',
-        targetBlock ||
-          `ready 后按 ${hotkey.toUpperCase()} 打开待测界面，用 mc_inspect 确认已进入目标屏后再截图。`,
-        symptomBlock
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      origin: 'harness',
-      taskId: this.taskId,
-      phase: 'execute'
-    })
-    const result = await this.runExecutePhase(streamCb, { forceFeatureGuiVerify: true })
-    this.releaseIncompleteSyntheticPlan()
-    return result
-  }
-
-  /** Prefer a real prior bug report over the generic「游戏测试」placeholder. */
-  private recoverActiveSymptomFromHistory(): string | null {
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      const m = this.messages[i]
-      if (m.role !== 'user' || m.origin === 'harness') continue
-      const c = contentAsText(m.content).trim()
-      if (!c || c === '用户请求游戏内测试/验证') continue
-      if (isNarrowResumeInput(c)) continue
-      // Structural crash/build dumps are always useful sticky symptoms.
-      if (isStructuralErrorReport(c)) return c.slice(0, 400)
-      // Prefer substantive prior user text over short verify/resume commands.
-      if (c.length >= 12 && c.length <= 800) return c.slice(0, 400)
-    }
-    return null
-  }
-
-  /** Short symptom fixes: synthetic mini-plan, skip formal submit_plan. */
-  private async beginSymptomFastExecute(
-    streamCb: (text: string, reasoning?: string) => void,
-    input: string
-  ): Promise<string> {
-    if (!this.activeUserSymptom) {
-      this.activeUserSymptom = input.trim().slice(0, 400)
-    }
-    if (this.lastGuiFeatureSymptom) {
-      this.ensureVerifyTargetForGui()
-    }
-    await this.updateSystemPrompt('execute')
-    this._phase = 'execute'
-    this.planReadyAwaitingExecute = false
-    this.lastPlanCandidate = null
-    const opsPlan =
-      '1. [write] 针对用户症状定位并修复相关源码\n' +
-      '2. 构建项目（gradlew build）\n' +
-      '3. 启动游戏进行真实测试（runClient）'
-    this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic()
-    this.emitPlanState(this.planTracker)
-    this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
-    const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom)
-    this.messages.push({
-      role: 'user',
-      content: [
-        '短修复：已跳过正式 submit_plan。按上方合成步骤直接改码、构建、runClient。',
-        'ready 后必须 mc_inspect / mc_screenshot 验证症状。',
-        symptomBlock
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      origin: 'harness',
-      taskId: this.taskId,
-      phase: 'execute'
-    })
-    const result = await this.runExecutePhase(streamCb)
-    this.releaseIncompleteSyntheticPlan()
-    return result
-  }
-
-  private async runTurn(
-    input: string | ChatContentPart[],
-    options: { pushUser: boolean }
-  ): Promise<string> {
-    if (this._running) return ''
-
-    this._running = true
-    this.abortController = new AbortController()
-    this.agent.resetRunState()
-
-    const inputText = contentPartsAsClassifyText(input)
-
-    this.onAgentStatus?.('意图分类...')
-    const classified = await classifyUserTurn({
-      apiConfig: this.apiConfig,
-      input: inputText,
-      ctx: this.intentContext(),
-      stickySymptom: this.activeUserSymptom,
-      abortSignal: this.abortController.signal
-    })
-    this.applyClassificationSideEffects(classified, inputText)
-
-    const intent = classified.intent
-    this.lastTurnMode = intent === 'plan_only' ? 'plan_only' : intent
-
-    if (options.pushUser) {
-      this.messages.push({ role: 'user', content: input, origin: 'user', taskId: this.taskId })
-    }
-    this.onAgentStatus?.('思考中...')
-
-    let planStreamReasoning = ''
-    let planStreamText = ''
-    const streamCb = (text: string, reasoning?: string) => {
-      if (text) planStreamText = text
-      if (reasoning) planStreamReasoning = reasoning
-      this.onStreamUpdate?.(text, reasoning)
-    }
-
-    try {
-      if (classified.usedFallback) {
-        this.emitEvent({
-          kind: EventKind.Notice,
-          notice: {
-            level: 'warn',
-            text: `意图分类失败，已用兜底：${classified.rationale}`
-          }
-        })
-      }
-
-      // Guard: crash/error dumps must not steal into chat while execute is still active —
-      // that would overwrite messages[0] with "对话模式 / 不要调用任何工具".
-      let effectiveIntent = intent
-      if (
-        intent === 'chat' &&
-        this._phase === 'execute' &&
-        this.planTracker &&
-        !this.planTracker.allDone() &&
-        (classified.isErrorReport || isStructuralErrorReport(inputText))
-      ) {
-        effectiveIntent = 'resume'
-        this.lastTurnMode = 'resume'
-      }
-
-      // In-game verify: do not depend on planTracker (often null after allDone).
-      // Must run before chat — otherwise a misclassified chat turn locks tools out.
-      if (
-        this.composerMode === 'agent' &&
-        Boolean(this._projectPath) &&
-        classified.isInGameVerifyRequest
-      ) {
-        const result = await this.beginInGameVerifyExecute(streamCb)
-        this.onAgentStatus?.('')
-        return result
-      }
-
-      if (effectiveIntent === 'chat') {
-        const result = await this.runChatTurn(streamCb)
-        this.onAgentStatus?.('')
-        return result
-      }
-
-      if (effectiveIntent === 'resume') {
-        this.adoptPlanCandidateIfNeeded()
-        if (!this.planTracker) {
-          this.onAgentStatus?.('')
-          const missing =
-            '没有可恢复的计划。请重新描述需求，或确认会话中仍有未完成的任务进度后再发送「继续」。'
-          this.messages.push({ role: 'assistant', content: missing, origin: 'assistant', taskId: this.taskId })
-          this.emitEvent({ kind: EventKind.TurnStarted, turnMode: 'resume', composerMode: this.composerMode })
-          this.emitEvent({ kind: EventKind.Text, text: missing })
-          this.emitEvent({
-            kind: EventKind.Notice,
-            notice: { level: 'warn', text: missing }
-          })
-          this.emitEvent({ kind: EventKind.TurnDone, phase: 'resume_missing_plan', turnMode: 'resume', composerMode: this.composerMode })
-          return missing
-        }
-        const result = await this.beginExecuteFromTracker(streamCb)
-        this.onAgentStatus?.('')
-        return result
-      }
-
-      // 短症状/修复：agent 模式跳过正式 submit_plan。
-      if (
-        intent === 'develop' &&
-        this.composerMode === 'agent' &&
-        (!this.planTracker || this.planTracker.allDone()) &&
-        classified.skipFormalPlan
-      ) {
-        if (this.planTracker?.allDone()) {
-          this.retainCurrentUserAsNewTask()
-          this.planTracker = null
-        }
-        this.emitEvent({
-          kind: EventKind.Notice,
-          notice: {
-            level: 'info',
-            text: '短修复任务：跳过正式计划，直接进入执行与游戏内校验。'
-          }
-        })
-        const result = await this.beginSymptomFastExecute(streamCb, inputText)
-        this.onAgentStatus?.('')
-        return result
-      }
-
-      if (intent === 'develop' && isQuickCreateGeneratedMessage(inputText)) {
-        this.emitEvent({
-          kind: EventKind.Notice,
-          notice: { level: 'info', text: '快捷创建：模板已生成，跳过规划直接构建并运行。' }
-        })
-        await this.updateSystemPrompt('execute')
-        this._phase = 'execute'
-        this.planReadyAwaitingExecute = false
-        const opsPlan = '1. 构建项目（gradlew build）\n2. 启动游戏进行真实测试（runClient）'
-        this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic()
-        this.emitPlanState(this.planTracker)
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_done', text: opsPlan, planActionable: true })
-        const result = await this.beginExecuteFromTracker(streamCb)
-        this.releaseIncompleteSyntheticPlan()
-        this.onAgentStatus?.('')
-        return result
-      }
-
-      if (intent === 'develop' && this._phase === 'execute' && this.planTracker && !this.planTracker.allDone()) {
-        // Only explicit replacement language starts a new task. Length-based guessing
-        // previously discarded active plans for ordinary corrections and details.
-        const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(inputText)
-        // Stale synthetic / failed plans must not auto-resume and lock the session.
-        const stalePlan = this.planTracker.synthetic || this.planTracker.hasErrorStep()
-        if (isNewRequest || stalePlan) {
-          this.retainCurrentUserAsNewTask()
-          this.planTracker = null
-          this.lastPlanCandidate = null
-          this._phase = 'plan'
-          this.planReadyAwaitingExecute = false
-          this.emitEvent({
-            kind: EventKind.Notice,
-            notice: {
-              level: 'info',
-              text: stalePlan && !isNewRequest
-                ? '检测到未完成的临时/失败计划，已清除。正在重新规划...'
-                : '检测到新需求，已清除旧计划。正在重新规划...'
-            }
-          })
-          // Fall through to develop path below
-        } else {
-          const result = await this.runExecutePhase(streamCb)
-          this.onAgentStatus?.('')
-          return result
-        }
-      }
-
-      if (intent === 'develop' || intent === 'plan_only') {
-        if (intent === 'develop' && this.planTracker?.allDone()) {
-          this.retainCurrentUserAsNewTask()
-          this.planTracker = null
-        }
-        if (intent === 'plan_only') {
-          this._phase = 'plan'
-          this.planTracker = null
-          this.lastPlanCandidate = null
-          this.planReadyAwaitingExecute = false
-        }
-
-        await this.updateSystemPrompt('plan')
-        this.emitEvent({ kind: EventKind.Phase, phase: 'plan_start' })
-
-        const planResult = await this.agent.run(
-          this.apiConfig.endpoint,
-          this.apiConfig.apiKey,
-          this.apiConfig.model,
-          this.messages,
-          this._projectPath,
-          this.abortController.signal,
-          streamCb,
-          { phase: 'plan', emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
-        )
-
-        if (this.agent.clarificationPending) {
-          return planResult
-        }
-
-        const fullPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, planResult)
-
-        if (!this.isActionablePlan(fullPlanText)) {
-          // Retry once: inject corrective feedback and ask model to try again
-          if (!this.messages.some((m) => m.role === 'user' && contentAsText(m.content).includes('请严格按照以下格式输出实施计划'))) {
-            this.messages.push({
-              role: 'user',
-              origin: 'harness',
-              phase: 'plan',
-              content:
-                '你刚才的回复不符合计划格式要求。请严格按照以下格式输出实施计划：\n\n' +
-                '方式 A（推荐编号行）：\n' +
-                'N. [kind] 简短标题 — 目标路径\n\n' +
-                '方式 B（JSON）：\n' +
-                '```json\n[{"kind":"write","description":"...","targetPath":"src/..."},...]\n```\n\n' +
-                '其中 kind 必须是 write、recipe、mixin 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence。最多 6 步。\n' +
-                '不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。'
-            })
-            this.onAgentStatus?.('重新生成计划...')
-            planStreamReasoning = ''
-            planStreamText = ''
-            const retryResult = await this.agent.run(
-              this.apiConfig.endpoint,
-              this.apiConfig.apiKey,
-              this.apiConfig.model,
-              this.messages,
-              this._projectPath,
-              this.abortController.signal,
-              streamCb,
-              { phase: 'plan', emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
-            )
-            if (this.agent.clarificationPending) return retryResult
-            const retryPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, retryResult)
-            if (!this.isActionablePlan(retryPlanText)) {
-              this.onAgentStatus?.('')
-              this.emitEvent({
-                kind: EventKind.Notice,
-                notice: {
-                  level: 'warn',
-                  text: this.planFailureNotice(retryPlanText, true)
-                }
-              })
-              if (intent !== 'plan_only') {
-                this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_failed' })
-              }
-              return retryResult
-            }
-            // Retry succeeded — continue with retry plan
-            this.planTracker = PlanTracker.fromPlanText(retryPlanText)
-            this.emitPlanState(this.planTracker)
-            if (intent === 'plan_only') {
-              this._phase = 'plan'
-              this.planReadyAwaitingExecute = true
-              this.onAgentStatus?.('')
-              this.emitEvent({ kind: EventKind.Phase, phase: 'plan_ready' })
-              this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready', composerMode: this.composerMode })
-              return retryResult
-            }
-            const execResult = await this.beginExecuteFromTracker(streamCb)
-            this.onAgentStatus?.('')
-            return execResult || retryResult
-          }
-
-          // Already retried, give up
-          this.onAgentStatus?.('')
-          this.emitEvent({
-            kind: EventKind.Notice,
-            notice: {
-              level: 'warn',
-              text: this.planFailureNotice(fullPlanText)
-            }
-          })
-          if (intent !== 'plan_only') {
-            this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_failed' })
-          }
-          return planResult
-        }
-
-        this.planTracker = PlanTracker.fromPlanText(fullPlanText)
-        this.emitPlanState(this.planTracker)
-
-        if (intent === 'plan_only') {
-          this._phase = 'plan'
-          this.planReadyAwaitingExecute = true
-          this.onAgentStatus?.('')
-          this.emitEvent({ kind: EventKind.Phase, phase: 'plan_ready' })
-          this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready', composerMode: this.composerMode })
-          return planResult
-        }
-
-        const execResult = await this.beginExecuteFromTracker(streamCb)
-        this.onAgentStatus?.('')
-        return execResult || planResult
-      }
-
-      const result = await this.runExecutePhase(streamCb)
-      this.onAgentStatus?.('')
-      return result
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      logger.error('Controller send error', errMsg)
-      const incompletePlan = this.planTracker && !this.planTracker.allDone()
-      if (incompletePlan && isRetryableFetchError(err)) {
-        this.messages.push({
-          role: 'system',
-          content:
-            `【系统】执行因网络错误中断：${errMsg}。计划未完成，发送「继续」可从当前步骤恢复。`
-        })
-        this.emitEvent({
-          kind: EventKind.Notice,
-          notice: {
-            level: 'warn',
-            text: `网络请求失败：${errMsg}。计划未完成，可发送「继续」恢复执行。`
-          }
-        })
-      } else {
-        this.onAgentStatus?.(`错误: ${errMsg}`)
-      }
-      this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
-      return `Error: ${errMsg}`
-    } finally {
-      this._running = false
-      this.abortController = null
-      void this.openCodeAdapter?.stopServer()
-    }
-  }
-
-  async startExecuteFromPlan(): Promise<string> {
-    if (this._running) return ''
-    this.adoptPlanCandidateIfNeeded()
-    if (!this.planTracker || this.planTracker.steps.length === 0) {
-      this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: '没有可执行的计划' } })
-      return ''
-    }
-
-    this._running = true
-    this.abortController = new AbortController()
-    this.agent.resetRunState()
-    this.onAgentStatus?.('执行中...')
-
-    const streamCb = (text: string, reasoning?: string) => {
-      this.onStreamUpdate?.(text, reasoning)
-    }
-
-    try {
-      const result = await this.beginExecuteFromTracker(streamCb)
-      this.onAgentStatus?.('')
-      return result
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
-      return `Error: ${errMsg}`
-    } finally {
-      this._running = false
-      this.abortController = null
-      void this.openCodeAdapter?.stopServer()
-    }
-  }
-
-  // Send user message — main entry point
-  async send(input: string | ChatContentPart[]): Promise<string> {
-    if (this._running) {
-      logger.agent('Queuing steer message')
-      this.messages.push({
-        role: 'user',
-        content: typeof input === 'string' ? '[mid-turn] ' + input : input,
-        origin: 'user',
-        taskId: this.taskId
-      })
-      return ''
-    }
-    return this.runTurn(input, { pushUser: true })
-  }
-
-  /** Re-run the last user turn without duplicating the user message */
-  async retryFromUser(): Promise<string> {
-    if (this._running) return ''
-
-    this.trimTrailingAssistants()
-    const lastUser = [...this.messages].reverse().find((m) =>
-      m.role === 'user' && m.origin !== 'harness' &&
-      !/^(?:\[mid-turn\]|\[SYSTEM:|【系统|STOP EXPLORING)/.test(contentAsText(m.content))
-    )
-    if (!lastUser) return ''
-
-    // Drop injected execute-confirm prompts so plan phase can run again
-    while (this.messages.length > 0) {
-      const last = this.messages[this.messages.length - 1]
-      if (last.role === 'user' && last !== lastUser) {
-        this.messages.pop()
-        continue
-      }
-      break
-    }
-
-    this._phase = 'plan'
-    this.planTracker = null
-    return this.runTurn(lastUser.content, { pushUser: false })
-  }
-
-  /** Resume execution after a clarification question was answered. */
-  async answerClarification(answer: string): Promise<string> {
-    if (!this.agent.clarificationPending) return ''
-    if (this._running) return ''
-
-    this.agent.clarificationPending = false
-
-    this.messages.push({ role: 'user', content: answer, origin: 'user', taskId: this.taskId })
-
-    this._running = true
-    this.abortController = new AbortController()
-    this.agent.resetRunState()
-
-    this.onAgentStatus?.('思考中...')
-    this.emitEvent({ kind: EventKind.Phase, phase: 'clarification_resume' })
-
-    let planStreamText = ''
-    let planStreamReasoning = ''
-    const streamCb = (text: string, reasoning?: string) => {
-      if (text) planStreamText = text
-      if (reasoning) planStreamReasoning = reasoning
-      this.onStreamUpdate?.(text, reasoning)
-    }
-
-    try {
-      if (this._phase === 'plan' || !this.planTracker) {
-        // Resume plan phase — regenerate plan with clarified requirements
-        await this.updateSystemPrompt('plan')
-
-        const planResult = await this.agent.run(
-          this.apiConfig.endpoint,
-          this.apiConfig.apiKey,
-          this.apiConfig.model,
-          this.messages,
-          this._projectPath,
-          this.abortController!.signal,
-          streamCb,
-          { phase: 'plan', emitLifecycle: false, turnMode: 'develop', composerMode: this.composerMode }
-        )
-
-        if (this.agent.clarificationPending) return planResult
-
-        const fullPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, planResult)
-
-        if (!this.isActionablePlan(fullPlanText)) {
-          this.onAgentStatus?.('')
-          this.emitEvent({
-            kind: EventKind.Notice,
-            notice: {
-              level: 'warn',
-              text: this.planFailureNotice(fullPlanText)
-            }
-          })
-          this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_failed' })
-          return planResult
-        }
-
-        this.planTracker = PlanTracker.fromPlanText(fullPlanText)
-        this.emitPlanState(this.planTracker)
-
-        if (this.composerMode === 'plan' || this.lastTurnMode === 'plan_only') {
-          this._phase = 'plan'
-          this.planReadyAwaitingExecute = true
-          this.onAgentStatus?.('')
-          this.emitEvent({ kind: EventKind.Phase, phase: 'plan_ready' })
-          this.emitEvent({ kind: EventKind.TurnDone, phase: 'plan_ready', composerMode: this.composerMode })
-          return planResult
-        }
-
-        const execResult = await this.beginExecuteFromTracker(streamCb)
-        this.onAgentStatus?.('')
-        return execResult || planResult
-      }
-
-      // Resume execute phase — rebuild execute system prompt (may have been overwritten by a chat turn).
-      await this.updateSystemPrompt('execute')
-      const result = await this.agent.run(
-        this.apiConfig.endpoint,
-        this.apiConfig.apiKey,
-        this.apiConfig.model,
-        this.messages,
-        this._projectPath,
-        this.abortController!.signal,
-        streamCb,
-        {
-          phase: 'execute',
-          emitLifecycle: false,
-          planTracker: this.planTracker,
-          opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
-          requireInGameVerify: Boolean(this.activeUserSymptom),
-          requireFeatureGuiVerify:
-            Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom,
-          verifyTarget: this.activeVerifyTarget
-        }
-      )
-      this.onAgentStatus?.('')
-      return result
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      logger.error('Clarification resume error', errMsg)
-      this.onAgentStatus?.(`错误: ${errMsg}`)
-      this.emitEvent({ kind: EventKind.TurnDone, error: errMsg })
-      return `Error: ${errMsg}`
-    } finally {
-      this._running = false
-      this.abortController = null
-      void this.openCodeAdapter?.stopServer()
-    }
-  }
-
-  cancel(): void {
-    if (this.abortController) {
-      this.abortController.abort()
-      this._running = false
-      this.agent.clarificationPending = false
-      logger.agent('Turn cancelled')
-    }
-    void this.openCodeAdapter?.abort()
-  }
-
-  approve(id: string, allow: boolean): void {
-    if (this.pendingApproval && this.pendingApproval.id === id) {
-      this.pendingApproval.resolve(allow)
-      this.pendingApproval = null
-    }
-  }
-
-  clearSession(): void {
-    this.messages = []
-    this._phase = 'plan'
-    this.planTracker = null
-    this.planReadyAwaitingExecute = false
-    this.lastSystemMode = null
-    this.agent.resetRunState()
-    this.agent.clarificationPending = false
-    logger.agent('Session cleared')
-  }
-
-  /** Export current session messages to a Markdown file via Save dialog. */
-  async exportSession(): Promise<string> {
-    const lines: string[] = [
-      '# ModCrafting 会话导出',
-      '',
-      `- 导出时间：${new Date().toISOString()}`,
-      `- 会话目标：${this.sessionGoal || '（未设定）'}`,
-      `- 阶段：${this._phase}`,
-      `- 模型：${this.apiConfig.model}`,
-      `- 消息数：${this.messages.length}`,
-      '',
-      '---',
-      '',
-    ]
-
-    let turn = 0
-    for (const m of this.messages) {
-      if (m.role === 'system') continue
-      if (m.role === 'user') {
-        turn += 1
-        lines.push(`## 第 ${turn} 轮 · 用户`, '', contentAsText(m.content).trim() || '_（无内容）_', '')
-        continue
-      }
-      if (m.role === 'assistant') {
-        if (turn === 0) turn = 1
-        const content = contentAsText(m.content).trim()
-        const clipped =
-          content.length > 4000 ? `${content.slice(0, 4000)}\n\n... [截断]` : content
-        lines.push(`## 第 ${turn} 轮 · 助手`, '', clipped || '_（无内容）_', '')
-        continue
-      }
-      if (m.role === 'tool') {
-        const name = m.name || 'tool'
-        const out = contentAsText(m.content).trim()
-        const clipped = out.length > 800 ? `${out.slice(0, 800)}…` : out
-        lines.push(`- \`${name}\`${clipped ? `: ${clipped}` : ''}`, '')
-      }
-    }
-
-    const md = lines.join('\n').replace(/\n{3,}/g, '\n\n')
-    const result = await window.api.sessionExport(md, 'mc-session')
-    if (result.cancelled) {
-      throw new Error('用户取消导出')
-    }
-    if (result.success) {
-      logger.agent('Session exported', result.path)
-      return result.path
-    }
-    throw new Error('导出失败')
-  }
-
-  getSnapshot(): ChatMessage[] {
-    return [...this.messages]
-  }
-
-  restoreSnapshot(messages: ChatMessage[]): void {
-    this.messages = messages.map((message) => ({
-      ...message,
-      origin: message.origin || (
-        message.role === 'system' ||
-        /^\[SYSTEM:|^【系统|^【注意】|^计划已确认。/.test(contentAsText(message.content))
-          ? 'harness'
-          : message.role === 'user'
-            ? 'user'
-            : message.role === 'tool'
-              ? 'tool'
-              : 'assistant'
-      )
-    }))
-    this._phase = messages.some((m) => m.role === 'user' || m.role === 'assistant') ? 'execute' : 'plan'
-    this.lastSystemMode = null
-    this.agent.resetRunState()
-    // Rebuild system prompt so reload does not keep a stale "对话模式" prefix.
-    if (this._phase === 'execute') {
-      void this.updateSystemPrompt('execute')
-    }
-  }
-
-  /** Rebuild the plan tracker from persisted plan steps, so the workflow
-   *  engine can resume execution after a session reload. */
-  restorePlanTracker(steps: Array<{
-    id: string
-    description: string
-    status: string
-    kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
-    targetPath?: string
-    targetPaths?: string[]
-    evidence?: string
-  }>): void {
-    if (!steps || steps.length === 0) {
-      this.planTracker = null
-      return
-    }
-    // Preserve error so stale/failed plans do not auto-resume into a lock.
-    // Failed steps stay as error (not remapped to pending).
-    this.planTracker = PlanTracker.fromSteps(steps.map((step) => ({
-      ...step,
-      status:
-        step.status === 'completed' ? 'completed' as const
-          : step.status === 'running' ? 'running' as const
-            : step.status === 'error' ? 'error' as const
-              : 'pending' as const
-    })))
-    if (this.planTracker) {
-      this._phase = 'execute'
-      this.lastSystemMode = null
-      void this.updateSystemPrompt('execute')
-    }
-  }
+${projectInfo}`;
+	}
+
+	private async updateSystemPrompt(mode: "chat" | "plan" | "execute"): Promise<void> {
+		const sysIdx = this.messages.findIndex((m) => m.role === "system" && m.origin === "harness");
+		if (this.lastSystemMode === mode && sysIdx >= 0) {
+			// Same mode: keep messages[0] stable for prompt cache; still refresh project scan for execute entry.
+			if (mode === "execute") {
+				this.lastProjectInfo = await this.buildProjectInfo();
+			}
+			return;
+		}
+		const prompt = await this.buildSystemPrompt(mode);
+		if (sysIdx >= 0) {
+			this.messages[sysIdx] = { role: "system", content: prompt, origin: "harness" };
+		} else {
+			this.messages.unshift({ role: "system", content: prompt, origin: "harness" });
+		}
+		this.lastSystemMode = mode;
+	}
+
+	private trimTrailingAssistants(): void {
+		while (this.messages.length > 0) {
+			const last = this.messages[this.messages.length - 1];
+			if (last.role === "assistant") {
+				this.messages.pop();
+				continue;
+			}
+			break;
+		}
+		// Also remove stale injected system messages (instructions, error notices)
+		// that were added by appendToolRoundHistory or error handlers.
+		// Keep only the base system prompt at position 0.
+		this.messages = this.messages.filter((m, i) => {
+			if (m.role !== "system") return true;
+			if (i === 0) return true; // base prompt
+			const content = contentAsText(m.content);
+			// Injected system messages use these markers
+			if (/^\[SYSTEM:/.test(content)) return false;
+			if (/^【系统/.test(content)) return false;
+			if (/^【注意】/.test(content)) return false;
+			if (/^【系统警告】/.test(content)) return false;
+			return true;
+		});
+	}
+
+	private async runChatTurn(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+		await this.updateSystemPrompt("chat");
+		const result = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController!.signal, streamCb, {
+			phase: "plan",
+			emitLifecycle: true,
+			turnMode: "chat",
+			composerMode: this.composerMode
+		});
+		return result;
+	}
+
+	private async runExecutePhase(streamCb: (text: string, reasoning?: string) => void, options?: { forceFeatureGuiVerify?: boolean }): Promise<string> {
+		await this.refreshOpenCodeSettings();
+		await this.updateSystemPrompt("execute");
+		this._phase = "execute";
+		this.planReadyAwaitingExecute = false;
+		if (this.planTracker && this.planTracker.steps.length > 0) {
+			this.planTracker.markRunning();
+			this.emitPlanState(this.planTracker);
+		}
+		this.emitEvent({ kind: EventKind.Phase, phase: "execute_start" });
+		this.onAgentStatus?.("执行中...");
+
+		const requireFeatureGuiVerify = Boolean(options?.forceFeatureGuiVerify) || (Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom);
+		if (options?.forceFeatureGuiVerify) {
+			this.ensureVerifyTargetForGui();
+		}
+
+		const result = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController!.signal, streamCb, {
+			phase: "execute",
+			emitLifecycle: true,
+			planTracker: this.planTracker,
+			opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
+			requireInGameVerify: Boolean(this.activeUserSymptom) || Boolean(options?.forceFeatureGuiVerify),
+			requireFeatureGuiVerify,
+			verifyTarget: this.activeVerifyTarget,
+			openCodeDelegate: this.buildOpenCodeDelegate()
+		});
+		this.maybeEmitSymptomConfirmNotice();
+		return result;
+	}
+
+	private async beginExecuteFromTracker(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+		this.adoptPlanCandidateIfNeeded();
+		if (!this.planTracker || this.planTracker.steps.length === 0) {
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "warn", text: "没有可执行的计划" } });
+			this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_ready" });
+			return "";
+		}
+		// Explicit execute/resume may retry failed steps; do not leave them stuck as error.
+		for (const step of this.planTracker.steps) {
+			if (step.status === "error") step.status = "pending";
+		}
+		this.lastPlanCandidate = null;
+		const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom);
+		this.messages.push({
+			role: "user",
+			content: [this.buildExecuteConfirmMessage(this.planTracker), symptomBlock].filter(Boolean).join("\n\n"),
+			origin: "harness",
+			taskId: this.taskId,
+			phase: "execute"
+		});
+		return this.runExecutePhase(streamCb);
+	}
+
+	/** After plan allDone: verify in-game without clearing tracker into a new submit_plan cycle. */
+	private async beginInGameVerifyExecute(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+		this.emitEvent({
+			kind: EventKind.Notice,
+			notice: {
+				level: "info",
+				text: "进入游戏内校验：跳过计划阶段，直接 runClient + 打开待测功能 + mc_inspect/mc_screenshot。"
+			}
+		});
+		const recovered = this.recoverActiveSymptomFromHistory();
+		if (!this.activeUserSymptom || this.activeUserSymptom === "用户请求游戏内测试/验证") {
+			this.activeUserSymptom = recovered || "用户请求游戏内测试/验证";
+		}
+		this.ensureVerifyTargetForGui();
+		// Drop any stale plan/candidate so we never fall back into submit_plan.
+		this.lastPlanCandidate = null;
+		this.planReadyAwaitingExecute = false;
+		await this.updateSystemPrompt("execute");
+		this._phase = "execute";
+		const opsPlan = "1. 启动游戏进行真实测试（runClient）";
+		// Prefer fromSteps: compilePlanFromText historically stripped pure host terminals to [].
+		this.planTracker = PlanTracker.fromSteps([{ id: "1", description: "启动游戏进行真实测试（runClient）", status: "pending" }]).markSynthetic();
+		this.emitPlanState(this.planTracker);
+		this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: opsPlan, planActionable: true });
+		if (this.activeVerifyTarget) {
+			this.emitEvent({
+				kind: EventKind.Notice,
+				notice: {
+					level: "info",
+					text: `检测目标：${this.activeVerifyTarget.label}`
+				}
+			});
+		}
+		const hotkey = this.activeVerifyTarget?.hotkey || (this.activeUserSymptom.match(/\bF(\d{1,2})\b/i) || [])[0]?.toLowerCase() || "f6";
+		const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom);
+		const targetBlock = formatVerifyTargetBlock(this.activeVerifyTarget);
+		this.messages.push({
+			role: "user",
+			content: [
+				"用户要求游戏内测试。禁止 submit_plan / 重新规划。",
+				"当前为执行阶段：若游戏未运行则 trigger_build task=runClient。",
+				targetBlock || `ready 后按 ${hotkey.toUpperCase()} 打开待测界面，用 mc_inspect 确认已进入目标屏后再截图。`,
+				symptomBlock
+			]
+				.filter(Boolean)
+				.join("\n\n"),
+			origin: "harness",
+			taskId: this.taskId,
+			phase: "execute"
+		});
+		const result = await this.runExecutePhase(streamCb, { forceFeatureGuiVerify: true });
+		this.releaseIncompleteSyntheticPlan();
+		return result;
+	}
+
+	/** Prefer a real prior bug report over the generic「游戏测试」placeholder. */
+	private recoverActiveSymptomFromHistory(): string | null {
+		for (let i = this.messages.length - 1; i >= 0; i--) {
+			const m = this.messages[i];
+			if (m.role !== "user" || m.origin === "harness") continue;
+			const c = contentAsText(m.content).trim();
+			if (!c || c === "用户请求游戏内测试/验证") continue;
+			if (isNarrowResumeInput(c)) continue;
+			// Structural crash/build dumps are always useful sticky symptoms.
+			if (isStructuralErrorReport(c)) return c.slice(0, 400);
+			// Prefer substantive prior user text over short verify/resume commands.
+			if (c.length >= 12 && c.length <= 800) return c.slice(0, 400);
+		}
+		return null;
+	}
+
+	/** Short symptom fixes: synthetic mini-plan, skip formal submit_plan. */
+	private async beginSymptomFastExecute(streamCb: (text: string, reasoning?: string) => void, input: string): Promise<string> {
+		if (!this.activeUserSymptom) {
+			this.activeUserSymptom = input.trim().slice(0, 400);
+		}
+		if (this.lastGuiFeatureSymptom) {
+			this.ensureVerifyTargetForGui();
+		}
+		await this.updateSystemPrompt("execute");
+		this._phase = "execute";
+		this.planReadyAwaitingExecute = false;
+		this.lastPlanCandidate = null;
+		const opsPlan = "1. [write] 针对用户症状定位并修复相关源码\n" + "2. 构建项目（gradlew build）\n" + "3. 启动游戏进行真实测试（runClient）";
+		this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic();
+		this.emitPlanState(this.planTracker);
+		this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: opsPlan, planActionable: true });
+		const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom);
+		this.messages.push({
+			role: "user",
+			content: ["短修复：已跳过正式 submit_plan。按上方合成步骤直接改码、构建、runClient。", "ready 后必须 mc_inspect / mc_screenshot 验证症状。", symptomBlock].filter(Boolean).join("\n\n"),
+			origin: "harness",
+			taskId: this.taskId,
+			phase: "execute"
+		});
+		const result = await this.runExecutePhase(streamCb);
+		this.releaseIncompleteSyntheticPlan();
+		return result;
+	}
+
+	private async runTurn(input: string | ChatContentPart[], options: { pushUser: boolean }): Promise<string> {
+		if (this._running) return "";
+
+		this._running = true;
+		this.abortController = new AbortController();
+		this.agent.resetRunState();
+
+		const inputText = contentPartsAsClassifyText(input);
+
+		this.onAgentStatus?.("意图分类...");
+		const classified = await classifyUserTurn({
+			apiConfig: this.apiConfig,
+			input: inputText,
+			ctx: this.intentContext(),
+			stickySymptom: this.activeUserSymptom,
+			abortSignal: this.abortController.signal
+		});
+		this.applyClassificationSideEffects(classified, inputText);
+
+		const intent = classified.intent;
+		this.lastTurnMode = intent === "plan_only" ? "plan_only" : intent;
+
+		if (options.pushUser) {
+			this.messages.push({ role: "user", content: input, origin: "user", taskId: this.taskId });
+		}
+		this.onAgentStatus?.("思考中...");
+
+		let planStreamReasoning = "";
+		let planStreamText = "";
+		const streamCb = (text: string, reasoning?: string) => {
+			if (text) planStreamText = text;
+			if (reasoning) planStreamReasoning = reasoning;
+			this.onStreamUpdate?.(text, reasoning);
+		};
+
+		try {
+			if (classified.usedFallback) {
+				this.emitEvent({
+					kind: EventKind.Notice,
+					notice: {
+						level: "warn",
+						text: `意图分类失败，已用兜底：${classified.rationale}`
+					}
+				});
+			}
+
+			// Guard: crash/error dumps must not steal into chat while execute is still active —
+			// that would overwrite messages[0] with "对话模式 / 不要调用任何工具".
+			let effectiveIntent = intent;
+			if (intent === "chat" && this._phase === "execute" && this.planTracker && !this.planTracker.allDone() && (classified.isErrorReport || isStructuralErrorReport(inputText))) {
+				effectiveIntent = "resume";
+				this.lastTurnMode = "resume";
+			}
+
+			// In-game verify: do not depend on planTracker (often null after allDone).
+			// Must run before chat — otherwise a misclassified chat turn locks tools out.
+			if (this.composerMode === "agent" && Boolean(this._projectPath) && classified.isInGameVerifyRequest) {
+				const result = await this.beginInGameVerifyExecute(streamCb);
+				this.onAgentStatus?.("");
+				return result;
+			}
+
+			if (effectiveIntent === "chat") {
+				const result = await this.runChatTurn(streamCb);
+				this.onAgentStatus?.("");
+				return result;
+			}
+
+			if (effectiveIntent === "resume") {
+				this.adoptPlanCandidateIfNeeded();
+				if (!this.planTracker) {
+					this.onAgentStatus?.("");
+					const missing = "没有可恢复的计划。请重新描述需求，或确认会话中仍有未完成的任务进度后再发送「继续」。";
+					this.messages.push({ role: "assistant", content: missing, origin: "assistant", taskId: this.taskId });
+					this.emitEvent({ kind: EventKind.TurnStarted, turnMode: "resume", composerMode: this.composerMode });
+					this.emitEvent({ kind: EventKind.Text, text: missing });
+					this.emitEvent({
+						kind: EventKind.Notice,
+						notice: { level: "warn", text: missing }
+					});
+					this.emitEvent({ kind: EventKind.TurnDone, phase: "resume_missing_plan", turnMode: "resume", composerMode: this.composerMode });
+					return missing;
+				}
+				const result = await this.beginExecuteFromTracker(streamCb);
+				this.onAgentStatus?.("");
+				return result;
+			}
+
+			// 短症状/修复：agent 模式跳过正式 submit_plan。
+			if (intent === "develop" && this.composerMode === "agent" && (!this.planTracker || this.planTracker.allDone()) && classified.skipFormalPlan) {
+				if (this.planTracker?.allDone()) {
+					this.retainCurrentUserAsNewTask();
+					this.planTracker = null;
+				}
+				this.emitEvent({
+					kind: EventKind.Notice,
+					notice: {
+						level: "info",
+						text: "短修复任务：跳过正式计划，直接进入执行与游戏内校验。"
+					}
+				});
+				const result = await this.beginSymptomFastExecute(streamCb, inputText);
+				this.onAgentStatus?.("");
+				return result;
+			}
+
+			if (intent === "develop" && isQuickCreateGeneratedMessage(inputText)) {
+				this.emitEvent({
+					kind: EventKind.Notice,
+					notice: { level: "info", text: "快捷创建：模板已生成，跳过规划直接构建并运行。" }
+				});
+				await this.updateSystemPrompt("execute");
+				this._phase = "execute";
+				this.planReadyAwaitingExecute = false;
+				const opsPlan = "1. 构建项目（gradlew build）\n2. 启动游戏进行真实测试（runClient）";
+				this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic();
+				this.emitPlanState(this.planTracker);
+				this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: opsPlan, planActionable: true });
+				const result = await this.beginExecuteFromTracker(streamCb);
+				this.releaseIncompleteSyntheticPlan();
+				this.onAgentStatus?.("");
+				return result;
+			}
+
+			if (intent === "develop" && this._phase === "execute" && this.planTracker && !this.planTracker.allDone()) {
+				// Only explicit replacement language starts a new task. Length-based guessing
+				// previously discarded active plans for ordinary corrections and details.
+				const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(inputText);
+				// Stale synthetic / failed plans must not auto-resume and lock the session.
+				const stalePlan = this.planTracker.synthetic || this.planTracker.hasErrorStep();
+				if (isNewRequest || stalePlan) {
+					this.retainCurrentUserAsNewTask();
+					this.planTracker = null;
+					this.lastPlanCandidate = null;
+					this._phase = "plan";
+					this.planReadyAwaitingExecute = false;
+					this.emitEvent({
+						kind: EventKind.Notice,
+						notice: {
+							level: "info",
+							text: stalePlan && !isNewRequest ? "检测到未完成的临时/失败计划，已清除。正在重新规划..." : "检测到新需求，已清除旧计划。正在重新规划..."
+						}
+					});
+					// Fall through to develop path below
+				} else {
+					const result = await this.runExecutePhase(streamCb);
+					this.onAgentStatus?.("");
+					return result;
+				}
+			}
+
+			if (intent === "develop" || intent === "plan_only") {
+				if (intent === "develop" && this.planTracker?.allDone()) {
+					this.retainCurrentUserAsNewTask();
+					this.planTracker = null;
+				}
+				if (intent === "plan_only") {
+					this._phase = "plan";
+					this.planTracker = null;
+					this.lastPlanCandidate = null;
+					this.planReadyAwaitingExecute = false;
+				}
+
+				await this.updateSystemPrompt("plan");
+				this.emitEvent({ kind: EventKind.Phase, phase: "plan_start" });
+
+				const planResult = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController.signal, streamCb, {
+					phase: "plan",
+					emitLifecycle: false,
+					turnMode: intent,
+					composerMode: this.composerMode
+				});
+
+				if (this.agent.clarificationPending) {
+					return planResult;
+				}
+
+				const fullPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, planResult);
+
+				if (!this.isActionablePlan(fullPlanText)) {
+					// Retry once: inject corrective feedback and ask model to try again
+					if (!this.messages.some((m) => m.role === "user" && contentAsText(m.content).includes("请严格按照以下格式输出实施计划"))) {
+						this.messages.push({
+							role: "user",
+							origin: "harness",
+							phase: "plan",
+							content:
+								"你刚才的回复不符合计划格式要求。请严格按照以下格式输出实施计划：\n\n" +
+								"方式 A（推荐编号行）：\n" +
+								"N. [kind] 简短标题 — 目标路径\n\n" +
+								"方式 B（JSON）：\n" +
+								'```json\n[{"kind":"write","description":"...","targetPath":"src/..."},...]\n```\n\n' +
+								"其中 kind 必须是 write、recipe、mixin 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence。最多 6 步。\n" +
+								"不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。"
+						});
+						this.onAgentStatus?.("重新生成计划...");
+						planStreamReasoning = "";
+						planStreamText = "";
+						const retryResult = await this.agent.run(
+							this.apiConfig.endpoint,
+							this.apiConfig.apiKey,
+							this.apiConfig.model,
+							this.messages,
+							this._projectPath,
+							this.abortController.signal,
+							streamCb,
+							{ phase: "plan", emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
+						);
+						if (this.agent.clarificationPending) return retryResult;
+						const retryPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, retryResult);
+						if (!this.isActionablePlan(retryPlanText)) {
+							this.onAgentStatus?.("");
+							this.emitEvent({
+								kind: EventKind.Notice,
+								notice: {
+									level: "warn",
+									text: this.planFailureNotice(retryPlanText, true)
+								}
+							});
+							if (intent !== "plan_only") {
+								this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_failed" });
+							}
+							return retryResult;
+						}
+						// Retry succeeded — continue with retry plan
+						this.planTracker = PlanTracker.fromPlanText(retryPlanText);
+						this.emitPlanState(this.planTracker);
+						if (intent === "plan_only") {
+							this._phase = "plan";
+							this.planReadyAwaitingExecute = true;
+							this.onAgentStatus?.("");
+							this.emitEvent({ kind: EventKind.Phase, phase: "plan_ready" });
+							this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_ready", composerMode: this.composerMode });
+							return retryResult;
+						}
+						const execResult = await this.beginExecuteFromTracker(streamCb);
+						this.onAgentStatus?.("");
+						return execResult || retryResult;
+					}
+
+					// Already retried, give up
+					this.onAgentStatus?.("");
+					this.emitEvent({
+						kind: EventKind.Notice,
+						notice: {
+							level: "warn",
+							text: this.planFailureNotice(fullPlanText)
+						}
+					});
+					if (intent !== "plan_only") {
+						this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_failed" });
+					}
+					return planResult;
+				}
+
+				this.planTracker = PlanTracker.fromPlanText(fullPlanText);
+				this.emitPlanState(this.planTracker);
+
+				if (intent === "plan_only") {
+					this._phase = "plan";
+					this.planReadyAwaitingExecute = true;
+					this.onAgentStatus?.("");
+					this.emitEvent({ kind: EventKind.Phase, phase: "plan_ready" });
+					this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_ready", composerMode: this.composerMode });
+					return planResult;
+				}
+
+				const execResult = await this.beginExecuteFromTracker(streamCb);
+				this.onAgentStatus?.("");
+				return execResult || planResult;
+			}
+
+			const result = await this.runExecutePhase(streamCb);
+			this.onAgentStatus?.("");
+			return result;
+		} catch (err: unknown) {
+			const errMsg = err instanceof Error ? err.message : String(err);
+			logger.error("Controller send error", errMsg);
+			const incompletePlan = this.planTracker && !this.planTracker.allDone();
+			if (incompletePlan && isRetryableFetchError(err)) {
+				this.messages.push({
+					role: "system",
+					content: `【系统】执行因网络错误中断：${errMsg}。计划未完成，发送「继续」可从当前步骤恢复。`
+				});
+				this.emitEvent({
+					kind: EventKind.Notice,
+					notice: {
+						level: "warn",
+						text: `网络请求失败：${errMsg}。计划未完成，可发送「继续」恢复执行。`
+					}
+				});
+			} else {
+				this.onAgentStatus?.(`错误: ${errMsg}`);
+			}
+			this.emitEvent({ kind: EventKind.TurnDone, error: errMsg });
+			return `Error: ${errMsg}`;
+		} finally {
+			this._running = false;
+			this.abortController = null;
+			void this.openCodeAdapter?.stopServer();
+		}
+	}
+
+	async startExecuteFromPlan(): Promise<string> {
+		if (this._running) return "";
+		this.adoptPlanCandidateIfNeeded();
+		if (!this.planTracker || this.planTracker.steps.length === 0) {
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "warn", text: "没有可执行的计划" } });
+			return "";
+		}
+
+		this._running = true;
+		this.abortController = new AbortController();
+		this.agent.resetRunState();
+		this.onAgentStatus?.("执行中...");
+
+		const streamCb = (text: string, reasoning?: string) => {
+			this.onStreamUpdate?.(text, reasoning);
+		};
+
+		try {
+			const result = await this.beginExecuteFromTracker(streamCb);
+			this.onAgentStatus?.("");
+			return result;
+		} catch (err: unknown) {
+			const errMsg = err instanceof Error ? err.message : String(err);
+			this.emitEvent({ kind: EventKind.TurnDone, error: errMsg });
+			return `Error: ${errMsg}`;
+		} finally {
+			this._running = false;
+			this.abortController = null;
+			void this.openCodeAdapter?.stopServer();
+		}
+	}
+
+	// Send user message — main entry point
+	async send(input: string | ChatContentPart[]): Promise<string> {
+		if (this._running) {
+			logger.agent("Queuing steer message");
+			this.messages.push({
+				role: "user",
+				content: typeof input === "string" ? "[mid-turn] " + input : input,
+				origin: "user",
+				taskId: this.taskId
+			});
+			return "";
+		}
+		return this.runTurn(input, { pushUser: true });
+	}
+
+	/** Re-run the last user turn without duplicating the user message */
+	async retryFromUser(): Promise<string> {
+		if (this._running) return "";
+
+		this.trimTrailingAssistants();
+		const lastUser = [...this.messages].reverse().find((m) => m.role === "user" && m.origin !== "harness" && !/^(?:\[mid-turn\]|\[SYSTEM:|【系统|STOP EXPLORING)/.test(contentAsText(m.content)));
+		if (!lastUser) return "";
+
+		// Drop injected execute-confirm prompts so plan phase can run again
+		while (this.messages.length > 0) {
+			const last = this.messages[this.messages.length - 1];
+			if (last.role === "user" && last !== lastUser) {
+				this.messages.pop();
+				continue;
+			}
+			break;
+		}
+
+		this._phase = "plan";
+		this.planTracker = null;
+		return this.runTurn(lastUser.content, { pushUser: false });
+	}
+
+	/** Resume execution after a clarification question was answered. */
+	async answerClarification(answer: string): Promise<string> {
+		if (!this.agent.clarificationPending) return "";
+		if (this._running) return "";
+
+		this.agent.clarificationPending = false;
+
+		this.messages.push({ role: "user", content: answer, origin: "user", taskId: this.taskId });
+
+		this._running = true;
+		this.abortController = new AbortController();
+		this.agent.resetRunState();
+
+		this.onAgentStatus?.("思考中...");
+		this.emitEvent({ kind: EventKind.Phase, phase: "clarification_resume" });
+
+		let planStreamText = "";
+		let planStreamReasoning = "";
+		const streamCb = (text: string, reasoning?: string) => {
+			if (text) planStreamText = text;
+			if (reasoning) planStreamReasoning = reasoning;
+			this.onStreamUpdate?.(text, reasoning);
+		};
+
+		try {
+			if (this._phase === "plan" || !this.planTracker) {
+				// Resume plan phase — regenerate plan with clarified requirements
+				await this.updateSystemPrompt("plan");
+
+				const planResult = await this.agent.run(
+					this.apiConfig.endpoint,
+					this.apiConfig.apiKey,
+					this.apiConfig.model,
+					this.messages,
+					this._projectPath,
+					this.abortController!.signal,
+					streamCb,
+					{ phase: "plan", emitLifecycle: false, turnMode: "develop", composerMode: this.composerMode }
+				);
+
+				if (this.agent.clarificationPending) return planResult;
+
+				const fullPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, planResult);
+
+				if (!this.isActionablePlan(fullPlanText)) {
+					this.onAgentStatus?.("");
+					this.emitEvent({
+						kind: EventKind.Notice,
+						notice: {
+							level: "warn",
+							text: this.planFailureNotice(fullPlanText)
+						}
+					});
+					this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_failed" });
+					return planResult;
+				}
+
+				this.planTracker = PlanTracker.fromPlanText(fullPlanText);
+				this.emitPlanState(this.planTracker);
+
+				if (this.composerMode === "plan" || this.lastTurnMode === "plan_only") {
+					this._phase = "plan";
+					this.planReadyAwaitingExecute = true;
+					this.onAgentStatus?.("");
+					this.emitEvent({ kind: EventKind.Phase, phase: "plan_ready" });
+					this.emitEvent({ kind: EventKind.TurnDone, phase: "plan_ready", composerMode: this.composerMode });
+					return planResult;
+				}
+
+				const execResult = await this.beginExecuteFromTracker(streamCb);
+				this.onAgentStatus?.("");
+				return execResult || planResult;
+			}
+
+			// Resume execute phase — rebuild execute system prompt (may have been overwritten by a chat turn).
+			await this.updateSystemPrompt("execute");
+			const result = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController!.signal, streamCb, {
+				phase: "execute",
+				emitLifecycle: false,
+				planTracker: this.planTracker,
+				opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
+				requireInGameVerify: Boolean(this.activeUserSymptom),
+				requireFeatureGuiVerify: Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom,
+				verifyTarget: this.activeVerifyTarget
+			});
+			this.onAgentStatus?.("");
+			return result;
+		} catch (err: unknown) {
+			const errMsg = err instanceof Error ? err.message : String(err);
+			logger.error("Clarification resume error", errMsg);
+			this.onAgentStatus?.(`错误: ${errMsg}`);
+			this.emitEvent({ kind: EventKind.TurnDone, error: errMsg });
+			return `Error: ${errMsg}`;
+		} finally {
+			this._running = false;
+			this.abortController = null;
+			void this.openCodeAdapter?.stopServer();
+		}
+	}
+
+	cancel(): void {
+		if (this.abortController) {
+			this.abortController.abort();
+			this._running = false;
+			this.agent.clarificationPending = false;
+			logger.agent("Turn cancelled");
+		}
+		void this.openCodeAdapter?.abort();
+	}
+
+	approve(id: string, allow: boolean): void {
+		if (this.pendingApproval && this.pendingApproval.id === id) {
+			this.pendingApproval.resolve(allow);
+			this.pendingApproval = null;
+		}
+	}
+
+	clearSession(): void {
+		this.messages = [];
+		this._phase = "plan";
+		this.planTracker = null;
+		this.planReadyAwaitingExecute = false;
+		this.lastSystemMode = null;
+		this.agent.resetRunState();
+		this.agent.clarificationPending = false;
+		logger.agent("Session cleared");
+	}
+
+	/** Export current session messages to a Markdown file via Save dialog. */
+	async exportSession(): Promise<string> {
+		const lines: string[] = [
+			"# ModCrafting 会话导出",
+			"",
+			`- 导出时间：${new Date().toISOString()}`,
+			`- 会话目标：${this.sessionGoal || "（未设定）"}`,
+			`- 阶段：${this._phase}`,
+			`- 模型：${this.apiConfig.model}`,
+			`- 消息数：${this.messages.length}`,
+			"",
+			"---",
+			""
+		];
+
+		let turn = 0;
+		for (const m of this.messages) {
+			if (m.role === "system") continue;
+			if (m.role === "user") {
+				turn += 1;
+				lines.push(`## 第 ${turn} 轮 · 用户`, "", contentAsText(m.content).trim() || "_（无内容）_", "");
+				continue;
+			}
+			if (m.role === "assistant") {
+				if (turn === 0) turn = 1;
+				const content = contentAsText(m.content).trim();
+				const clipped = content.length > 4000 ? `${content.slice(0, 4000)}\n\n... [截断]` : content;
+				lines.push(`## 第 ${turn} 轮 · 助手`, "", clipped || "_（无内容）_", "");
+				continue;
+			}
+			if (m.role === "tool") {
+				const name = m.name || "tool";
+				const out = contentAsText(m.content).trim();
+				const clipped = out.length > 800 ? `${out.slice(0, 800)}…` : out;
+				lines.push(`- \`${name}\`${clipped ? `: ${clipped}` : ""}`, "");
+			}
+		}
+
+		const md = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+		const result = await window.api.sessionExport(md, "mc-session");
+		if (result.cancelled) {
+			throw new Error("用户取消导出");
+		}
+		if (result.success) {
+			logger.agent("Session exported", result.path);
+			return result.path;
+		}
+		throw new Error("导出失败");
+	}
+
+	getSnapshot(): ChatMessage[] {
+		return [...this.messages];
+	}
+
+	restoreSnapshot(messages: ChatMessage[]): void {
+		this.messages = messages.map((message) => ({
+			...message,
+			origin:
+				message.origin ||
+				(message.role === "system" || /^\[SYSTEM:|^【系统|^【注意】|^计划已确认。/.test(contentAsText(message.content))
+					? "harness"
+					: message.role === "user"
+						? "user"
+						: message.role === "tool"
+							? "tool"
+							: "assistant")
+		}));
+		this._phase = messages.some((m) => m.role === "user" || m.role === "assistant") ? "execute" : "plan";
+		this.lastSystemMode = null;
+		this.agent.resetRunState();
+		// Rebuild system prompt so reload does not keep a stale "对话模式" prefix.
+		if (this._phase === "execute") {
+			void this.updateSystemPrompt("execute");
+		}
+	}
+
+	/** Rebuild the plan tracker from persisted plan steps, so the workflow
+	 *  engine can resume execution after a session reload. */
+	restorePlanTracker(
+		steps: Array<{
+			id: string;
+			description: string;
+			status: string;
+			kind?: "inspect" | "write" | "recipe" | "mixin";
+			targetPath?: string;
+			targetPaths?: string[];
+			evidence?: string;
+		}>
+	): void {
+		if (!steps || steps.length === 0) {
+			this.planTracker = null;
+			return;
+		}
+		// Preserve error so stale/failed plans do not auto-resume into a lock.
+		// Failed steps stay as error (not remapped to pending).
+		this.planTracker = PlanTracker.fromSteps(
+			steps.map((step) => ({
+				...step,
+				status: step.status === "completed" ? ("completed" as const) : step.status === "running" ? ("running" as const) : step.status === "error" ? ("error" as const) : ("pending" as const)
+			}))
+		);
+		if (this.planTracker) {
+			this._phase = "execute";
+			this.lastSystemMode = null;
+			void this.updateSystemPrompt("execute");
+		}
+	}
 }
