@@ -22,6 +22,11 @@
     {
       "from": "packaging/gitee-config.json",
       "to": "gitee-config.json"
+    },
+    {
+      "from": "resources/overlay",
+      "to": "overlay",
+      "filter": ["**/*"]
     }
   ],
   "portable": {

@@ -89,6 +89,16 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
       const unsubCrash = window.api.onMcCrashed((id, code, crashReportPath) => {
         setCrashMessage({ id, code, path: crashReportPath })
+        // MC 崩溃时隐藏输入保护覆盖窗口
+        void window.api.mcInputGuardHide?.()
+      })
+
+      // MC 状态变化时检测是否退出世界 → 隐藏覆盖窗口
+      const unsubStateForGuard = window.api.onMcStateChanged((_id, state) => {
+        const s = state as { status?: string }
+        if (s?.status && s.status !== 'running' && s.status !== 'starting') {
+          void window.api.mcInputGuardHide?.()
+        }
       })
 
       window.api.mcListInstances().then((list) => {
@@ -97,6 +107,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
       return () => {
         unsubState()
+        unsubStateForGuard()
         unsubLog()
         unsubCrash()
       }
@@ -176,6 +187,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
     const handleStop = useCallback(async (id: string) => {
       await window.api.mcStop(id)
+      // 手动停止游戏时隐藏输入保护覆盖窗口
+      void window.api.mcInputGuardHide?.()
     }, [])
 
     const handleDelete = useCallback(async (id: string) => {
@@ -230,6 +243,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
     const stopAllRunning = useCallback(async () => {
       await window.api.mcStopAll()
+      // 停止所有游戏时隐藏输入保护覆盖窗口
+      void window.api.mcInputGuardHide?.()
     }, [])
 
     useImperativeHandle(ref, () => ({

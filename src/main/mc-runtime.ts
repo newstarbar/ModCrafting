@@ -1,4 +1,4 @@
-﻿import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -545,7 +545,8 @@ function serializeInstance(instance: McInstance): object {
     logLength: instance.logBuffer.reduce((acc, s) => acc + s.length, 0),
     gameDir: instance.gameDir,
     bridgeReady: Boolean(instance.bridge),
-    bridgePort: instance.bridge?.port ?? null
+    bridgePort: instance.bridge?.port ?? null,
+    pid: instance.process?.pid ?? null
   }
 }
 

@@ -319,6 +319,16 @@ const api = {
     return () => ipcRenderer.removeListener('mc:crashed', handler)
   },
 
+  // MC Input Guard — AI 自测期间覆盖 MC 窗口，拦截玩家鼠标输入
+  mcInputGuardShow: (pid: number): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('mc-input-guard:show', pid),
+  mcInputGuardHide: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('mc-input-guard:hide'),
+  mcInputGuardSetLocked: (locked: boolean): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('mc-input-guard:setLocked', locked),
+  mcInputGuardIsActive: (): Promise<{ active: boolean; locked: boolean }> =>
+    ipcRenderer.invoke('mc-input-guard:isActive'),
+
   // Recent projects
   saveRecentProject: (projectPath: string): Promise<WriteResult> =>
     ipcRenderer.invoke('app:saveRecentProject', projectPath),

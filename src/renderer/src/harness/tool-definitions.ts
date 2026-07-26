@@ -829,6 +829,24 @@ function stripHtmlToText(html: string): string {
 		.join("\n");
 }
 
+/**
+ * AI 自测期间显示输入保护覆盖窗口。
+ * 通过 MC 实例 ID 获取 PID，然后调用主进程创建覆盖窗口。
+ * 非关键功能，失败不影响主流程。
+ */
+async function showInputGuardForInstance(instanceId: string): Promise<void> {
+  try {
+    if (!instanceId || typeof window === 'undefined' || !window.api?.mcGetInstance) return
+    const instance = (await window.api.mcGetInstance(instanceId)) as { pid?: number | null } | null
+    const pid = instance?.pid
+    if (typeof pid === 'number' && pid > 0 && window.api.mcInputGuardShow) {
+      await window.api.mcInputGuardShow(pid)
+    }
+  } catch {
+    // 输入保护是非关键功能，失败不影响主流程
+  }
+}
+
 function buildLogTail(text: string, maxChars = 8000): string {
 	const normalized = text.trim();
 	if (normalized.length <= maxChars) return normalized;
@@ -927,6 +945,8 @@ export const triggerBuildTool: Tool = {
 					if (!res.ok) {
 						return `游戏启动失败：${res.error || "unknown error"}\n[MC_PHASE:error]`;
 					}
+					// AI 自测期间显示输入保护覆盖窗口
+					void showInputGuardForInstance(res.instanceId);
 					return [
 						`游戏已启动并进入主菜单（实例 ${res.instanceId}）。[MC_PHASE:menu]`,
 						'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
@@ -946,6 +966,8 @@ export const triggerBuildTool: Tool = {
 					const tail = wait.logTail ? `\n\n--- 游戏日志（末尾）---\n${wait.logTail}` : "";
 					return `游戏启动失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`;
 				}
+				// AI 自测期间显示输入保护覆盖窗口
+				void showInputGuardForInstance(instanceId);
 				return [
 					`游戏已启动并进入主菜单（实例 ${instanceId}）。[MC_PHASE:menu]`,
 					'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
