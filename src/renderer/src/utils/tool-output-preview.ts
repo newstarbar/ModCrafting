@@ -57,7 +57,8 @@ export function extractPreview(toolName: string, output: string, args?: Record<s
       return timeMatch ? `BUILD SUCCESSFUL (${timeMatch[1]}s)` : 'BUILD SUCCESSFUL'
     }
     if (output.includes('BUILD FAILED')) return 'BUILD FAILED'
-    if (output.includes('MC_PHASE:ready') || output.includes('稳定观察')) return '游戏测试通过'
+    if (output.includes('MC_PHASE:menu') || output.includes('进入主菜单')) return '游戏已启动（主菜单）'
+    if (output.includes('MC_PHASE:ready') || output.includes('稳定观察')) return '游戏已启动（主菜单）'
     if (output.includes('MC_PHASE:playing') || output.includes('已启动游戏')) return '游戏运行中'
     const exitMatch = output.match(/\[exit code: (\d+)\]|\[退出码: (\d+)\]/)
     const exitCode = exitMatch?.[1] ?? exitMatch?.[2]

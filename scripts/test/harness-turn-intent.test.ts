@@ -55,11 +55,12 @@ test('buildSessionGoalBlock includes goal', () => {
   assert.match(buildSessionGoalBlock('做二段跳'), /二段跳/)
 })
 
-test('buildUserSymptomBlock reminds ready ≠ fixed', () => {
+test('buildUserSymptomBlock reminds menu ≠ fixed', () => {
   const block = buildUserSymptomBlock('还是模糊的')
   assert.match(block, /用户待验证症状/)
-  assert.match(block, /MC_PHASE:ready/)
+  assert.match(block, /MC_PHASE:menu/)
   assert.match(block, /不代表该症状已修复/)
+  assert.match(block, /mc_ensure_test_world/)
   assert.equal(buildUserSymptomBlock(null), '')
 })
 

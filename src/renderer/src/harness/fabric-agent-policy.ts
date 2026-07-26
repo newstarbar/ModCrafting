@@ -109,7 +109,8 @@ const COMMON_GUARDRAILS = [
   '资源 JSON 必须使用原版格式并保持路径一致：assets/<modid>/... 与 data/<modid>/...。',
   '生成 Mixin 或 Access Widener 时必须提示冲突风险，并优先说明为何不能用 Fabric API 替代。',
   '构建验证优先走产品内 trigger_build；写入资源或 DataGen 后要通过构建或 runDatagen 验证。',
-  'runClient 出现 MC_PHASE:ready 后，若用户描述了游戏内症状，必须用 mc_inspect / mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验，禁止仅凭 ready 宣称修复。',
+  'runClient 出现 MC_PHASE:menu 后，必须调用 mc_ensure_test_world 进入游戏世界（不能停在主菜单）。功能在游戏内的（HUD/方块/物品/实体/命令/事件）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ 根据功能类型设计测试场景（用 mc_command 生成生物/给予物品/切换模式、用 mc_input 移动玩家/触发交互） ④ mc_screenshot/mc_inspect 验证功能效果。禁止仅凭 MC_PHASE:menu 宣称功能完成。',
+  '若用户描述了游戏内症状（bug/修复场景），进入世界后必须用 mc_inspect / mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验，禁止仅凭 menu 宣称修复。',
   '编写 Fabric 方块/物品/实体/附魔注册代码前，必须先调用 minecraft_data_lookup 查询标准 ID（minecraft:diamond_ore）与原版属性（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等），禁止凭记忆填写原版参数。',
   '用户输入模糊、不专业的游戏描述（"会爆炸的绿色怪物"、"挖矿掉的红色石头"）时，必须先用 mc_wiki_search 检索中文 MC 百科向量知识库解析需求，再结合 minecraft_data_lookup 生成 Fabric 代码。',
   '原版机制/红石/生物/术语解释优先用 mc_wiki_search 或 vanilla_mc_wiki_query；Fabric API/注册/事件/迁移用 fabric_docs_search；标准 ID 与属性参数用 minecraft_data_lookup。'

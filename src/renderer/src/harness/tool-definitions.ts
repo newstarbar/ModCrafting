@@ -925,9 +925,13 @@ export const triggerBuildTool: Tool = {
 				if (isPanelBridgeRegistered()) {
 					const res = await startGameViaPanel();
 					if (!res.ok) {
-						return `游戏测试失败：${res.error || "unknown error"}\n[MC_PHASE:error]`;
+						return `游戏启动失败：${res.error || "unknown error"}\n[MC_PHASE:error]`;
 					}
-					return `游戏已进入主菜单并完成稳定观察（实例 ${res.instanceId}）。[MC_PHASE:ready]`;
+					return [
+						`游戏已启动并进入主菜单（实例 ${res.instanceId}）。[MC_PHASE:menu]`,
+						'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
+						'下一步：调用 mc_ensure_test_world 进入游戏世界，再根据功能类型设计测试场景（mc_command/mc_input），最后用 mc_screenshot/mc_inspect 验证效果。'
+					].join('\n');
 				}
 				const start = await window.api.mcStartOrCreate(ctx.projectPath);
 				if (!start.success) {
@@ -940,9 +944,13 @@ export const triggerBuildTool: Tool = {
 				const wait = await waitForMcRunReady({ instanceId });
 				if (!wait.ok) {
 					const tail = wait.logTail ? `\n\n--- 游戏日志（末尾）---\n${wait.logTail}` : "";
-					return `游戏测试失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`;
+					return `游戏启动失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`;
 				}
-				return `游戏已进入主菜单并完成稳定观察（实例 ${instanceId}）。[MC_PHASE:ready]`;
+				return [
+					`游戏已启动并进入主菜单（实例 ${instanceId}）。[MC_PHASE:menu]`,
+					'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
+					'下一步：调用 mc_ensure_test_world 进入游戏世界，再根据功能类型设计测试场景（mc_command/mc_input），最后用 mc_screenshot/mc_inspect 验证效果。'
+				].join('\n');
 			} catch (err) {
 				return `Error starting game: ${err}\n[MC_PHASE:error]`;
 			}

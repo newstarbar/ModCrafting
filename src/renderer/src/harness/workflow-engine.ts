@@ -71,7 +71,7 @@ export interface WorkflowEngineOptions {
   /** When true, attach mc_screenshot base64 as multimodal tool content. */
   visionModel?: boolean
   /**
-   * When true (sticky user symptom), run step needs MC_PHASE:ready AND a successful
+   * When true (sticky user symptom), run step needs MC_PHASE:menu AND a successful
    * mc_inspect / mc_screenshot before auto-completing.
    */
   requireInGameVerify?: boolean
@@ -111,7 +111,9 @@ const REPAIR_EXTRA_TOOLS = [
   'mc_world',
   'mc_chat',
   'mc_command',
-  'mc_input'
+  'mc_input',
+  'mc_ensure_test_world',
+  'mc_ensure_cheats'
 ] as const
 
 const REPAIR_DIAG_DEDUP_TOOLS = new Set(['read_error_log', 'fabric_log_debugger'])
@@ -1706,8 +1708,8 @@ export class WorkflowEngine {
                     '必须进入症状相关界面后再检视/截图。'
                   ].join('\n')
                 : [
-                    '【游戏内校验未完成】MC_PHASE:ready 仅表示进了主菜单。',
-                    '必须打开待测功能界面后再校验，禁止只看标题屏就结束。'
+                    '【游戏内校验未完成】MC_PHASE:menu 仅表示进了主菜单。',
+                    '必须调用 mc_ensure_test_world 进入世界，再打开待测功能界面后校验，禁止只看标题屏就结束。'
                   ].join('\n')
             roundInstruction = [roundInstruction, titleHint].filter(Boolean).join('\n')
           }

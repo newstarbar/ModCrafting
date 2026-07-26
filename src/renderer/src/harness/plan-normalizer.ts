@@ -39,7 +39,7 @@ function inferKind(
   if (parsed.kind) return parsed.kind
 
   const d = parsed.body.toLowerCase()
-  if (/runclient|启动游戏|运行游戏/.test(d)) return 'run'
+  if (/runclient|启动游戏|运行游戏|进入测试世界|进入世界|执行功能测试|验证功能效果|mc_ensure_test_world|mc_ensure_cheats/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
   if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
   if (/mixin|@mixin|mixins?\.json/.test(d)) return 'mixin'
@@ -177,7 +177,9 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'mc_world',
         'mc_chat',
         'mc_command',
-        'mc_input'
+        'mc_input',
+        'mc_ensure_test_world',
+        'mc_ensure_cheats'
       ]
     case 'answer':
       return ['complete_step', 'explain_code', 'read_file', 'ask_clarification']

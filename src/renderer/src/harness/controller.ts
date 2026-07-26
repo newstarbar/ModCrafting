@@ -566,10 +566,10 @@ submit_plan 参数要求：
 1. 只执行当前步骤。不确定路径/类名/包名时先 read_file/grep；仅用户偏好才 ask_clarification，禁止猜需求。
 2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。禁止 Wait/Hmm 式反复自我否定与超长推理；想清后立即调工具。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
-4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient。
+4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient → mc_ensure_test_world 进入世界 → 根据功能类型设计测试场景 → mc_screenshot/mc_inspect 验证效果。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
 6. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
-7. 若存在【用户待验证症状】：MC_PHASE:ready ≠ 症状已修复；必须针对症状做可验证代码修改，禁止空改/假完成。`;
+7. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ 根据功能类型设计测试场景（生成生物/给予物品/触发事件） ④ mc_screenshot/mc_inspect 验证效果。禁止仅凭 menu 宣称完成。`;
 
 		const extraRules = mode === "execute" ? "" : "\n- **仅需求歧义时可用 ask_clarification（短问题+短选项）；代码事实先勘察。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。";
 
@@ -723,9 +723,13 @@ ${projectInfo}`;
 		this.planReadyAwaitingExecute = false;
 		await this.updateSystemPrompt("execute");
 		this._phase = "execute";
-		const opsPlan = "1. 启动游戏进行真实测试（runClient）";
+		const opsPlan = "1. 启动游戏并进入测试世界（runClient + mc_ensure_test_world）\n2. 执行功能测试场景（mc_ensure_cheats + mc_command/mc_input 触发功能）\n3. 验证功能效果（mc_screenshot/mc_inspect 客观校验）";
 		// Prefer fromSteps: compilePlanFromText historically stripped pure host terminals to [].
-		this.planTracker = PlanTracker.fromSteps([{ id: "1", description: "启动游戏进行真实测试（runClient）", status: "pending" }]).markSynthetic();
+		this.planTracker = PlanTracker.fromSteps([
+			{ id: "1", description: "启动游戏并进入测试世界（runClient + mc_ensure_test_world）", status: "pending" },
+			{ id: "2", description: "执行功能测试场景（mc_ensure_cheats + mc_command/mc_input 触发功能）", status: "pending" },
+			{ id: "3", description: "验证功能效果（mc_screenshot/mc_inspect 客观校验）", status: "pending" }
+		]).markSynthetic();
 		this.emitPlanState(this.planTracker);
 		this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: opsPlan, planActionable: true });
 		if (this.activeVerifyTarget) {
@@ -744,8 +748,8 @@ ${projectInfo}`;
 			role: "user",
 			content: [
 				"用户要求游戏内测试。禁止 submit_plan / 重新规划。",
-				"当前为执行阶段：若游戏未运行则 trigger_build task=runClient。",
-				targetBlock || `ready 后按 ${hotkey.toUpperCase()} 打开待测界面，用 mc_inspect 确认已进入目标屏后再截图。`,
+				"当前为执行阶段：若游戏未运行则 trigger_build task=runClient，然后 mc_ensure_test_world 进入世界。",
+				targetBlock || `进入世界后按 ${hotkey.toUpperCase()} 打开待测界面，用 mc_inspect 确认已进入目标屏后再截图。`,
 				symptomBlock
 			]
 				.filter(Boolean)
@@ -787,14 +791,14 @@ ${projectInfo}`;
 		this._phase = "execute";
 		this.planReadyAwaitingExecute = false;
 		this.lastPlanCandidate = null;
-		const opsPlan = "1. [write] 针对用户症状定位并修复相关源码\n" + "2. 构建项目（gradlew build）\n" + "3. 启动游戏进行真实测试（runClient）";
+		const opsPlan = "1. [write] 针对用户症状定位并修复相关源码\n" + "2. 构建项目（gradlew build）\n" + "3. 启动游戏并进入测试世界（runClient + mc_ensure_test_world）\n" + "4. 执行功能测试场景（mc_ensure_cheats + mc_command/mc_input）\n" + "5. 验证功能效果（mc_screenshot/mc_inspect 客观校验）";
 		this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic();
 		this.emitPlanState(this.planTracker);
 		this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: opsPlan, planActionable: true });
 		const symptomBlock = buildUserSymptomBlock(this.activeUserSymptom);
 		this.messages.push({
 			role: "user",
-			content: ["短修复：已跳过正式 submit_plan。按上方合成步骤直接改码、构建、runClient。", "ready 后必须 mc_inspect / mc_screenshot 验证症状。", symptomBlock].filter(Boolean).join("\n\n"),
+			content: ["短修复：已跳过正式 submit_plan。按上方合成步骤直接改码、构建、runClient。", "menu 后必须 mc_ensure_test_world 进入世界，再 mc_inspect / mc_screenshot 验证症状。", symptomBlock].filter(Boolean).join("\n\n"),
 			origin: "harness",
 			taskId: this.taskId,
 			phase: "execute"
@@ -918,7 +922,7 @@ ${projectInfo}`;
 				await this.updateSystemPrompt("execute");
 				this._phase = "execute";
 				this.planReadyAwaitingExecute = false;
-				const opsPlan = "1. 构建项目（gradlew build）\n2. 启动游戏进行真实测试（runClient）";
+				const opsPlan = "1. 构建项目（gradlew build）\n2. 启动游戏并进入测试世界（runClient + mc_ensure_test_world）\n3. 执行功能测试场景（mc_ensure_cheats + mc_command/mc_input）\n4. 验证功能效果（mc_screenshot/mc_inspect 客观校验）";
 				this.planTracker = PlanTracker.fromPlanText(opsPlan).markSynthetic();
 				this.emitPlanState(this.planTracker);
 				this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: opsPlan, planActionable: true });
