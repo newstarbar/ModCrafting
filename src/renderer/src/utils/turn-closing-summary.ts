@@ -17,6 +17,7 @@ export interface BuildClosingSummaryOptions {
 
 const NUMBERED_LINE_RE = /^\s*\d+[.\、\s]+/
 const PLAN_PLACEHOLDER_RE = /^已制定实施计划/
+const CLOSING_MARKERS_RE = /^(本轮已停止|本轮异常结束|本轮部分完成|本轮任务已完成|## 任务总结分析|本轮已结束)/
 
 function isNumberedPlanText(content: string): boolean {
   const lines = content.split('\n').map((l) => l.trim()).filter(Boolean)
@@ -47,6 +48,13 @@ export function hasReadableClosingText(entries: ChronoEntry[]): boolean {
     if (!t) return false
     if (isNumberedPlanText(t)) return false
     return true
+  })
+}
+
+function hasClosingSummaryText(entries: ChronoEntry[]): boolean {
+  return entries.some((e) => {
+    if (e.kind !== 'text') return false
+    return CLOSING_MARKERS_RE.test(e.content.trim())
   })
 }
 
@@ -85,7 +93,6 @@ export function buildTurnClosingSummary(opts: BuildClosingSummaryOptions): strin
 
   if (opts.reason === 'completed') {
     const parts: string[] = []
-    // 检查是否有验证相关步骤
     const verifySteps = opts.steps?.filter(s =>
       /验证|测试|screenshot|inspect|截图/i.test(s.description)
     ) || []
@@ -118,13 +125,36 @@ export function buildTurnClosingSummary(opts: BuildClosingSummaryOptions): strin
   return '本轮已结束。'
 }
 
-/** 若缺少可读正文则追加总结；已有正文则原样返回 */
+/**
+ * 追加收尾总结：
+ * - error / cancelled / partial：始终追加（即使已有旁白）
+ * - completed：若尚无「任务总结」类收尾则追加
+ * - 其它：仅在缺少可读正文时追加
+ */
 export function ensureClosingSummaryEntry(
   entries: ChronoEntry[],
   opts: BuildClosingSummaryOptions
 ): ChronoEntry[] {
+  const forceAppend =
+    opts.reason === 'error'
+    || opts.reason === 'cancelled'
+    || opts.reason === 'partial'
+
+  if (forceAppend) {
+    if (hasClosingSummaryText(entries)) return entries
+    const summary = buildTurnClosingSummary(opts)
+    if (!summary.trim()) return entries
+    return [...entries, { kind: 'text', content: summary }]
+  }
+
+  if (opts.reason === 'completed') {
+    if (hasClosingSummaryText(entries)) return entries
+    const summary = buildTurnClosingSummary(opts)
+    if (!summary.trim()) return entries
+    return [...entries, { kind: 'text', content: summary }]
+  }
+
   if (hasReadableClosingText(entries)) {
-    // plan_ready 路径可能已有计划占位，对 planned 视为足够
     if (opts.reason === 'planned') {
       const hasPlanPlaceholder = entries.some(
         (e) => e.kind === 'text' && PLAN_PLACEHOLDER_RE.test(e.content.trim())

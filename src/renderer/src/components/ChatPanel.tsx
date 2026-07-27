@@ -1294,6 +1294,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
           completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
           void window.api.notifyTaskComplete?.()
+        } else if (hasError || turnStatus === 'error') {
+          setCompletionFlash('异常结束')
+          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
         } else if (!hasError && turnStatus === 'planned') {
           setCompletionFlash('计划已就绪')
           setPlanReady(true)
@@ -1301,6 +1305,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
         } else if (!hasError && turnStatus === 'answered') {
           setCompletionFlash('')
+        } else if (!hasError && turnStatus === 'partial') {
+          setCompletionFlash('任务部分完成')
+          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
         } else if (!hasError && !finalPlanDone && finalSteps?.length) {
           setCompletionFlash('任务部分完成')
           if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
@@ -1764,6 +1772,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setIsLoading(false)
     setAgentStatus('')
     onRunningChangeRef.current?.(false)
+    setCompletionFlash('已停止')
+    if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+    completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
 
     const anchorId = planSnapshot?.anchorMsgId || t.msgId
 
@@ -2155,7 +2166,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                           )}
                         </div>
                       )}
-                      {!isCollapsed && (displayOutput || entry.status === 'running') && (
+                      {!isCollapsed && (displayOutput || entry.status === 'running' || entry.imageBase64) && (
                         <div
                           className="tool-line-output"
                           ref={(el) => {
@@ -2168,29 +2179,31 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                               <KnowledgeHitTags output={displayOutput} maxTrails={4} />
                             </div>
                           )}
-                          <pre className={entry.status === 'error' ? 'is-error' : undefined}>
-                            {displayOutput || '正在执行，等待实时日志…'}
-                          </pre>
-                        </div>
-                      )}
-                      {entry.imageBase64 && entry.status === 'done' && (
-                        <div className="tool-screenshot-preview">
-                          <button
-                            type="button"
-                            className="tool-screenshot-preview__btn"
-                            title="点击放大预览"
-                            onClick={() => setToolScreenshotLightbox({
-                              src: `data:${entry.imageMimeType || 'image/png'};base64,${entry.imageBase64}`,
-                              name: `${displayName || entry.name} 截图`
-                            })}
-                          >
-                            <img
-                              src={`data:${entry.imageMimeType || 'image/png'};base64,${entry.imageBase64}`}
-                              alt="测试截图"
-                              className="tool-screenshot-preview__img"
-                            />
-                            <span className="tool-screenshot-preview__hint">点击放大</span>
-                          </button>
+                          {(displayOutput || entry.status === 'running') && (
+                            <pre className={entry.status === 'error' ? 'is-error' : undefined}>
+                              {displayOutput || '正在执行，等待实时日志…'}
+                            </pre>
+                          )}
+                          {entry.imageBase64 && entry.status === 'done' && (
+                            <div className="tool-screenshot-preview">
+                              <button
+                                type="button"
+                                className="tool-screenshot-preview__btn"
+                                title="点击放大预览"
+                                onClick={() => setToolScreenshotLightbox({
+                                  src: `data:${entry.imageMimeType || 'image/png'};base64,${entry.imageBase64}`,
+                                  name: `${displayName || entry.name} 截图`
+                                })}
+                              >
+                                <img
+                                  src={`data:${entry.imageMimeType || 'image/png'};base64,${entry.imageBase64}`}
+                                  alt="测试截图"
+                                  className="tool-screenshot-preview__img"
+                                />
+                                <span className="tool-screenshot-preview__hint">点击放大</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

@@ -13,14 +13,15 @@ import org.lwjgl.glfw.GLFW;
  * In-game tip / status for {@link InputGuard}.
  * Drawn only inside the game framebuffer (never covers the OS title bar).
  * <p>
- * Locked + cursor free: tip card on hover; restore button clickable.<br>
- * Locked + cursor grabbed: corner status only (ESC to pause, then restore).<br>
+ * Locked: always show corner chip; tip card only while hovering the chip (or the tip itself).
+ * When locked, cursor is unlocked so hover works in-world while mixins still block gameplay input.<br>
  * Unlocked: corner "手动模式" chip; click to re-lock.
  */
 public final class InputGuardHud {
     private static final int PAD = 10;
     private static final int BTN_H = 20;
     private static final int INDICATOR_H = 16;
+    private static final int HOT_PAD = 4;
 
     private static boolean mouseWasDown;
     private static int restoreBtnX;
@@ -29,9 +30,18 @@ public final class InputGuardHud {
     private static int indicatorX;
     private static int indicatorY;
     private static int indicatorW;
+    private static int tipCardX;
+    private static int tipCardY;
+    private static int tipCardW;
+    private static int tipCardH;
     private static boolean tipVisible;
     private static boolean restoreHitValid;
     private static boolean indicatorHitValid;
+    /** Previous-frame tip bounds so the pointer can move from chip → card without flicker. */
+    private static int prevTipX;
+    private static int prevTipY;
+    private static int prevTipW;
+    private static int prevTipH;
 
     private InputGuardHud() {}
 
@@ -39,7 +49,7 @@ public final class InputGuardHud {
         HudRenderCallback.EVENT.register(InputGuardHud::renderHud);
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             ScreenEvents.afterRender(screen).register((scr, context, mouseX, mouseY, delta) -> {
-                render(context, client, mouseX, mouseY, true);
+                render(context, client, mouseX, mouseY);
             });
         });
         ClientTickEvents.END_CLIENT_TICK.register(InputGuardHud::tick);
@@ -50,37 +60,55 @@ public final class InputGuardHud {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.currentScreen != null) return;
         double[] mouse = scaledMouse(client);
-        render(context, client, mouse[0], mouse[1], false);
+        render(context, client, mouse[0], mouse[1]);
     }
 
-    private static void render(DrawContext context, MinecraftClient client, double mouseX, double mouseY, boolean cursorVisibleHint) {
+    private static void render(DrawContext context, MinecraftClient client, double mouseX, double mouseY) {
         tipVisible = false;
         restoreHitValid = false;
         indicatorHitValid = false;
         restoreBtnW = 0;
         indicatorW = 0;
 
-        if (!InputGuard.isActive() || client == null || client.getWindow() == null) return;
+        if (!InputGuard.isActive() || client == null || client.getWindow() == null) {
+            prevTipW = 0;
+            prevTipH = 0;
+            return;
+        }
 
         int sw = client.getWindow().getScaledWidth();
         int sh = client.getWindow().getScaledHeight();
-        boolean cursorFree = client.currentScreen != null || !client.mouse.isCursorLocked() || cursorVisibleHint;
 
         if (InputGuard.isLocked()) {
-            // Corner status always
             drawIndicator(context, client, sw, sh, "AI 自测", 0xFF4A90D9);
-
-            if (cursorFree) {
-                boolean hovering = mouseX >= 0 && mouseY >= 0 && mouseX < sw && mouseY < sh;
-                if (hovering) {
-                    tipVisible = true;
-                    drawTipCard(context, client, sw, sh);
-                }
+            boolean overChip = hit(mouseX, mouseY, indicatorX - HOT_PAD, indicatorY - HOT_PAD,
+                    indicatorW + HOT_PAD * 2, INDICATOR_H + HOT_PAD * 2);
+            boolean overPrevTip = prevTipW > 0 && hit(mouseX, mouseY, prevTipX, prevTipY, prevTipW, prevTipH);
+            if (overChip || overPrevTip) {
+                tipVisible = true;
+                drawTipCard(context, client, sw, sh);
+                prevTipX = tipCardX;
+                prevTipY = tipCardY;
+                prevTipW = tipCardW;
+                prevTipH = tipCardH;
+            } else {
+                tipCardW = 0;
+                tipCardH = 0;
+                prevTipW = 0;
+                prevTipH = 0;
             }
         } else {
+            tipCardW = 0;
+            tipCardH = 0;
+            prevTipW = 0;
+            prevTipH = 0;
             drawIndicator(context, client, sw, sh, "手动模式", 0xFF5BCA6B);
             indicatorHitValid = true;
         }
+    }
+
+    private static boolean hit(double mx, double my, int x, int y, int w, int h) {
+        return w > 0 && h > 0 && mx >= x && mx <= x + w && my >= y && my <= y + h;
     }
 
     private static void drawIndicator(DrawContext context, MinecraftClient client, int sw, int sh, String label, int border) {
@@ -116,19 +144,23 @@ public final class InputGuardHud {
 
         int cardH = PAD + 12 + 6 + line1H + 4 + line2H + 12 + BTN_H + PAD;
         int cardX = (sw - cardW) / 2;
-        int cardY = (sh - cardH) / 2;
+        int cardY = Math.max(12, (sh - cardH) / 2 - 20);
 
-        // Soft dim behind card only (not full opaque OS overlay)
-        context.fill(0, 0, sw, sh, 0x22000000);
-        context.fill(cardX - 1, cardY - 1, cardX + cardW + 1, cardY + cardH + 1, 0x44FFFFFF);
-        context.fill(cardX, cardY, cardX + cardW, cardY + cardH, 0xD214161C);
+        tipCardX = cardX;
+        tipCardY = cardY;
+        tipCardW = cardW;
+        tipCardH = cardH;
+
+        // Light translucent white card (no full-screen dim)
+        context.fill(cardX - 1, cardY - 1, cardX + cardW + 1, cardY + cardH + 1, 0x66FFFFFF);
+        context.fill(cardX, cardY, cardX + cardW, cardY + cardH, 0xB8F5F7FA);
 
         int ty = cardY + PAD;
-        context.drawText(client.textRenderer, Text.literal(title), cardX + (cardW - titleW) / 2, ty, 0xFFFFFFFF, false);
+        context.drawText(client.textRenderer, Text.literal(title), cardX + (cardW - titleW) / 2, ty, 0xFF1A1D24, false);
         ty += 18;
-        ty = drawWrapped(context, client, line1, cardX + PAD, ty, textMax, 0xC7F0F2F5);
+        ty = drawWrapped(context, client, line1, cardX + PAD, ty, textMax, 0xE01A1D24);
         ty += 4;
-        ty = drawWrapped(context, client, line2, cardX + PAD, ty, textMax, 0xC7F0F2F5);
+        ty = drawWrapped(context, client, line2, cardX + PAD, ty, textMax, 0xC01A1D24);
         ty += 12;
 
         restoreBtnX = cardX + (cardW - restoreBtnW) / 2;
@@ -191,23 +223,27 @@ public final class InputGuardHud {
             mouseWasDown = false;
             return;
         }
+
+        // Keep cursor free while locked so player can hover the tip chip in-world.
+        // Mixins still block camera / keybinds / mouse buttons for gameplay.
+        if (InputGuard.isLocked() && client.currentScreen == null && client.mouse.isCursorLocked()) {
+            client.mouse.unlockCursor();
+        }
+
         long handle = client.getWindow().getHandle();
         boolean down = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
         if (down && !mouseWasDown) {
-            boolean mouseFree = client.currentScreen != null || !client.mouse.isCursorLocked();
-            if (mouseFree) {
-                double[] m = scaledMouse(client);
-                double mx = m[0];
-                double my = m[1];
-                if (restoreHitValid && tipVisible && restoreBtnW > 0
-                        && mx >= restoreBtnX && mx <= restoreBtnX + restoreBtnW
-                        && my >= restoreBtnY && my <= restoreBtnY + BTN_H) {
-                    InputGuard.setLocked(false);
-                } else if (indicatorHitValid && indicatorW > 0
-                        && mx >= indicatorX && mx <= indicatorX + indicatorW
-                        && my >= indicatorY && my <= indicatorY + INDICATOR_H) {
-                    InputGuard.setLocked(true);
-                }
+            double[] m = scaledMouse(client);
+            double mx = m[0];
+            double my = m[1];
+            if (restoreHitValid && tipVisible && restoreBtnW > 0
+                    && mx >= restoreBtnX && mx <= restoreBtnX + restoreBtnW
+                    && my >= restoreBtnY && my <= restoreBtnY + BTN_H) {
+                InputGuard.setLocked(false);
+            } else if (indicatorHitValid && indicatorW > 0
+                    && mx >= indicatorX && mx <= indicatorX + indicatorW
+                    && my >= indicatorY && my <= indicatorY + INDICATOR_H) {
+                InputGuard.setLocked(true);
             }
         }
         mouseWasDown = down;

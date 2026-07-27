@@ -45,9 +45,15 @@ function sliceWithExpand<T>(items: T[], expanded: boolean, max: number): { visib
   return { visible: items.slice(0, max), hidden: items.length - max }
 }
 
+function progressCounts(steps: PlanStep[]): { completedCount: number; total: number } {
+  return {
+    completedCount: steps.filter((s) => s.status === 'completed').length,
+    total: steps.length
+  }
+}
+
 function progressLabel(steps: PlanStep[]): string {
-  const total = steps.length
-  const completedCount = steps.filter((s) => s.status === 'completed').length
+  const { completedCount, total } = progressCounts(steps)
   const hasError = steps.some((s) => s.status === 'error')
   const running = steps.find((s) => s.status === 'running')
   const allDone = total > 0 && completedCount === total
@@ -56,6 +62,29 @@ function progressLabel(steps: PlanStep[]): string {
   if (allDone) return '全部完成'
   if (running) return `进行中 · #${running.id} · 已完成 ${completedCount}/${total}`
   return `已完成 ${completedCount}/${total}`
+}
+
+/** 折叠态展示的当前步骤：running 优先，否则下一条 pending，再否则最近 error */
+function currentFocusStep(steps: PlanStep[]): PlanStep | null {
+  return (
+    steps.find((s) => s.status === 'running')
+    || steps.find((s) => s.status === 'pending')
+    || steps.find((s) => s.status === 'error')
+    || null
+  )
+}
+
+function focusTone(step: PlanStep | null, steps: PlanStep[]): 'pending' | 'running' | 'completed' | 'error' {
+  if (steps.some((s) => s.status === 'error') && (!step || step.status !== 'running')) return 'error'
+  if (!step) {
+    const allDone = steps.length > 0 && steps.every((s) => s.status === 'completed')
+    return allDone ? 'completed' : 'pending'
+  }
+  return step.status
+}
+
+function plainDescription(text: string): string {
+  return text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 const TaskPlan: React.FC<TaskPlanProps> = ({
@@ -72,6 +101,9 @@ const TaskPlan: React.FC<TaskPlanProps> = ({
 
   const { active, done } = useMemo(() => partitionSteps(steps), [steps])
   const summarySuffix = useMemo(() => progressLabel(steps), [steps])
+  const focus = useMemo(() => currentFocusStep(steps), [steps])
+  const tone = useMemo(() => focusTone(focus, steps), [focus, steps])
+  const { completedCount, total } = useMemo(() => progressCounts(steps), [steps])
 
   if (steps.length === 0) return null
 
@@ -99,9 +131,11 @@ const TaskPlan: React.FC<TaskPlanProps> = ({
     </div>
   )
 
+  const focusDesc = focus ? plainDescription(focus.description) : ''
+
   return (
     <div className={`task-plan task-plan--${variant}${collapsed ? ' task-plan--collapsed' : ''}`}>
-      <div className="task-plan-header">
+      <div className={`task-plan-header${collapsed ? ' task-plan-header--collapsed' : ''}`}>
         <button
           type="button"
           className="task-plan-header-toggle"
@@ -110,9 +144,26 @@ const TaskPlan: React.FC<TaskPlanProps> = ({
           aria-label={collapsed ? '展开实施计划' : '收起实施计划'}
         >
           <span className="task-plan-collapsed-icon">{collapsed ? '▸' : '▾'}</span>
-          <span>实施计划</span>
+          <span className="task-plan-title">实施计划</span>
         </button>
-        <span className="task-plan-progress">{summarySuffix}</span>
+
+        {collapsed ? (
+          <>
+            {focusDesc ? (
+              <span className="task-plan-focus-desc" title={focusDesc}>
+                {focus ? `#${focus.id} ` : ''}{focusDesc}
+              </span>
+            ) : (
+              <span className="task-plan-focus-desc task-plan-focus-desc--empty">等待开始</span>
+            )}
+            <span className={`task-plan-status-pill task-plan-status-pill--${tone}`}>
+              {tone === 'error' ? '失败' : tone === 'running' ? '进行中' : tone === 'completed' ? '完成' : '待办'}
+            </span>
+            <span className="task-plan-count">{completedCount}/{total}</span>
+          </>
+        ) : (
+          <span className="task-plan-progress">{summarySuffix}</span>
+        )}
       </div>
 
       {!collapsed && active.length > 0 && (

@@ -23,6 +23,20 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+const STATUS_ICON: Record<string, string> = {
+  completed: '✓',
+  running: '●',
+  error: '✕',
+  pending: '○'
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  completed: '完成',
+  running: '进行中',
+  error: '失败',
+  pending: '待办'
+}
+
 const MessageFooter: React.FC<MessageFooterProps> = ({
   role,
   message,
@@ -76,10 +90,24 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
     <div className="bubble-ft">
       {hasPlan && (
         <>
-          <div className="bubble-ft__task-status bubble-ft__task-status--summary">
+          <div className="bubble-ft__task-status">
             <div className="bubble-ft__task-header">
               <span className="bubble-ft__task-title">任务进度</span>
               <span className="bubble-ft__task-count">{doneCount}/{totalCount} 已完成</span>
+            </div>
+            <div className="bubble-ft__task-steps">
+              {plan!.map((step) => {
+                const status = step.status || 'pending'
+                const desc = (step.description || '').replace(/\n/g, ' ').trim()
+                return (
+                  <div key={step.id} className={`bubble-ft__step bubble-ft__step--${status}`}>
+                    <span className="bubble-ft__step-id">#{step.id}</span>
+                    <span className="bubble-ft__step-icon">{STATUS_ICON[status] || '○'}</span>
+                    <span className="bubble-ft__step-desc" title={desc}>{desc}</span>
+                    <span className="bubble-ft__step-status">{STATUS_LABEL[status] || status}</span>
+                  </div>
+                )
+              })}
             </div>
           </div>
           <div className="bubble-ft__separator" />

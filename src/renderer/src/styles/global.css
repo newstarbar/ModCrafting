@@ -790,6 +790,13 @@ body,
 	margin-bottom: 4px;
 }
 
+.bubble-ft__task-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
 .bubble-ft__task-title {
 	font-size: 11px;
 	font-weight: 600;
@@ -1821,8 +1828,10 @@ body,
 }
 
 .image-lightbox__img {
-	width: 90vw;
-	height: 76vh;
+	width: auto;
+	height: auto;
+	max-width: min(92vw, 1280px);
+	max-height: 78vh;
 	object-fit: contain;
 	transform-origin: center center;
 	transition: transform 0.08s linear;
@@ -2853,19 +2862,19 @@ body,
 	top: 0;
 	z-index: 2;
 	margin-bottom: 8px;
-	background: var(--bg-primary);
-	padding-bottom: 4px;
-	border-bottom: 1px solid var(--border-subtle);
+	background: transparent;
+	padding-bottom: 0;
+	border-bottom: none;
 }
 
 .chat-plan-sticky .task-plan {
 	margin: 0;
-	max-height: 200px;
+	max-height: min(40vh, 280px);
 }
 
 .chat-plan-sticky .task-plan--collapsed {
-	margin-left: auto;
-	margin-right: auto;
+	max-height: none;
+	overflow: visible;
 }
 
 /* ── Tool calls inline ── */
@@ -3134,11 +3143,13 @@ body,
 	margin: 0 auto 8px;
 	padding: 10px 12px;
 	flex-shrink: 0;
-	max-height: 220px;
+	max-height: min(40vh, 280px);
 	max-width: min(100%, 680px);
-	overflow: hidden;
+	overflow-x: hidden;
+	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
+	height: auto;
 }
 
 .task-plan--summary {
@@ -3152,23 +3163,22 @@ body,
 
 .task-plan--anchored {
 	margin: 0 auto 10px;
-	max-height: 220px;
-	overflow-y: auto;
 }
 
 .task-plan--pinned {
-	max-height: 180px;
-	overflow-y: auto;
+	max-height: min(36vh, 240px);
 }
 
 .task-plan--collapsed {
 	max-height: none;
-	overflow-y: visible;
-	padding: 10px 12px;
+	overflow: visible;
+	padding: 8px 12px;
 }
 
 .task-plan--collapsed .task-plan-header {
 	margin-bottom: 0;
+	padding-bottom: 0;
+	border-bottom: none;
 }
 
 .task-plan-collapsed-icon {
@@ -3184,16 +3194,24 @@ body,
 	padding: 0;
 	border: none;
 	background: transparent;
-	color: inherit;
+	color: var(--text-secondary);
 	font: inherit;
 	font-weight: 600;
+	font-size: 12px;
 	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.task-plan-title {
+	font-weight: 600;
+	color: var(--text-secondary);
 }
 
 .task-plan-header {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	gap: 8px;
 	font-size: 12px;
 	font-weight: 600;
 	color: var(--text-secondary);
@@ -3201,12 +3219,72 @@ body,
 	padding-bottom: 6px;
 	border-bottom: 1px solid var(--border-color);
 	flex-shrink: 0;
+	min-width: 0;
+}
+
+.task-plan-header--collapsed {
+	align-items: center;
+}
+
+.task-plan-focus-desc {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-primary);
+	line-height: 1.35;
+}
+
+.task-plan-focus-desc--empty {
+	color: var(--text-muted);
+	font-weight: 400;
+}
+
+.task-plan-status-pill {
+	flex-shrink: 0;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 1.5;
+}
+
+.task-plan-status-pill--running {
+	color: #4a9eff;
+	background: rgba(74, 158, 255, 0.16);
+}
+
+.task-plan-status-pill--error {
+	color: var(--error);
+	background: rgba(220, 80, 80, 0.16);
+}
+
+.task-plan-status-pill--completed {
+	color: var(--success, #5bca6b);
+	background: rgba(91, 202, 107, 0.14);
+}
+
+.task-plan-status-pill--pending {
+	color: var(--text-muted);
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.task-plan-count {
+	flex-shrink: 0;
+	font-size: 11px;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
 }
 
 .task-plan-progress {
 	font-size: 11px;
 	font-weight: 500;
 	color: var(--text-muted);
+	flex-shrink: 0;
 }
 
 .task-plan-done {
