@@ -140,7 +140,10 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
   if (call.name === 'trigger_build') {
     const task = String(call.args.task || 'build')
     if (step.kind === 'build') return task === 'build'
-    if (step.kind === 'run') return task === 'runClient'
+    // run 步骤允许 build（重建修复后的代码）和 runClient（启动游戏）。
+    // 此前仅允许 runClient，导致 AI 在 run 步骤中发现编译错误后无法重建，
+    // 连续被拒绝 ≥3 次后遭会话级封禁，最终导致会话中断。
+    if (step.kind === 'run') return task === 'build' || task === 'runClient'
   }
   return true
 }
@@ -234,7 +237,13 @@ export function createRejectedToolResult(
         ? ' 请先调用 trigger_build({"task":"build"})；构建失败后会自动进入修复模式，那时才允许 edit_file。'
         : ' 请先调用 trigger_build({"task":"runClient"})；运行失败后会自动进入修复模式，那时才允许 edit_file。'
   } else if (call.name === 'trigger_build') {
-    output += ` 当前步骤类型为 ${step.kind}，trigger_build 仅在 build/run 步骤允许。请先 complete_step 推进到构建/运行步骤。`
+    const task = String(call.args.task || 'build')
+    if (step.kind === 'build' || step.kind === 'run') {
+      // 理论上不会走到这里（commandAllowedForStep 已放行），但防御性提示
+      output += ` 当前步骤类型为 ${step.kind}，task="${task}" 不被允许。build 步骤仅允许 task="build"；run 步骤允许 task="build" 或 task="runClient"。`
+    } else {
+      output += ` 当前步骤类型为 ${step.kind}，trigger_build 仅在 build/run 步骤允许。请先 complete_step 推进到构建/运行步骤。`
+    }
   } else if (call.name === 'run_command') {
     const allowedHint = step.kind === 'run'
       ? ' runClient 或文件检查命令（dir/ls/cat/type/Get-Content/Get-ChildItem/Test-Path 等）'

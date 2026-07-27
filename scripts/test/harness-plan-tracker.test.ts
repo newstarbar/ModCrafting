@@ -303,13 +303,16 @@ test('build and run steps allow matching trigger_build tasks only', () => {
     isToolAllowedForStep(buildStep, { name: 'trigger_build', args: { task: 'runClient' } }),
     false
   )
+  // run 步骤允许 runClient（启动游戏）和 build（重建修复后的代码）。
+  // 此前仅允许 runClient，导致 AI 在 run 步骤中发现编译错误后无法重建，
+  // 连续被拒绝 ≥3 次后遭会话级封禁，最终导致会话中断。
   assert.equal(
     isToolAllowedForStep(runStep, { name: 'trigger_build', args: { task: 'runClient' } }),
     true
   )
   assert.equal(
     isToolAllowedForStep(runStep, { name: 'trigger_build', args: { task: 'build' } }),
-    false
+    true
   )
 })
 
