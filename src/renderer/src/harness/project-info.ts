@@ -28,11 +28,12 @@ export function toProjectRelativePath(absPath: string, projectPath: string): str
 export function formatJavaFileList(
   relPaths: string[],
   label: string,
-  max = MAX_JAVA_FILES_IN_PROMPT
+  max = MAX_JAVA_FILES_IN_PROMPT,
+  tagger?: (relPath: string) => string
 ): string {
   if (relPaths.length === 0) return `${label}：（无 .java 文件）\n`
   const sorted = [...relPaths].sort((a, b) => a.localeCompare(b))
-  const shown = sorted.slice(0, max)
+  const shown = sorted.slice(0, max).map((p) => (tagger ? `${p}${tagger(p)}` : p))
   let out = `${label}（${sorted.length}）：${shown.join(', ')}\n`
   if (sorted.length > max) {
     out += `…另有 ${sorted.length - max} 个未列出\n`

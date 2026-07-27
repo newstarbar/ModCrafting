@@ -16,22 +16,18 @@
       -webkit-user-select: none;
     }
 
-    /* 遮罩层：默认隐藏，鼠标进入时显示 */
+    /* 锁定状态遮罩：overlay 有焦点，始终可见 */
     .overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
       background: rgba(255, 255, 255, 0.12);
-      display: flex;
+      display: none;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      opacity: 0;
-      transition: opacity 0.25s ease;
-      pointer-events: none;
     }
     .overlay.visible {
-      opacity: 1;
-      pointer-events: auto;
+      display: flex;
     }
 
     /* 提示卡片 */
@@ -91,7 +87,6 @@
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       border: 1px solid rgba(255, 255, 255, 0.06);
-      pointer-events: auto;
       cursor: pointer;
     }
     .status-indicator.visible { display: flex; }
@@ -101,10 +96,6 @@
       border-radius: 50%;
       background: #5bca6b;
       box-shadow: 0 0 6px rgba(91, 202, 107, 0.6);
-    }
-    .status-indicator.locked .dot {
-      background: #e8a73a;
-      box-shadow: 0 0 6px rgba(232, 167, 58, 0.6);
     }
   </style>
 </head>
@@ -131,21 +122,21 @@
       const overlay = document.getElementById('overlay');
       const restoreBtn = document.getElementById('restoreBtn');
       const statusIndicator = document.getElementById('statusIndicator');
-      const statusText = document.getElementById('statusText');
 
       let isLocked = true;
 
-      // 鼠标进入窗口区域时显示遮罩
-      document.body.addEventListener('mouseenter', () => {
-        if (isLocked) overlay.classList.add('visible');
-      });
-      document.body.addEventListener('mouseleave', () => {
-        overlay.classList.remove('visible');
-      });
-      // 鼠标移动时也确保遮罩显示（覆盖窗口可能不触发 mouseenter）
-      document.body.addEventListener('mousemove', () => {
-        if (isLocked) overlay.classList.add('visible');
-      });
+      // 锁定状态：显示全屏遮罩 + 恢复按钮（overlay 有焦点，按钮直接可点击）
+      // 解锁状态：显示状态指示器（overlay 穿透，需 hover-to-click 模式）
+      function setLocked(locked) {
+        isLocked = locked;
+        if (locked) {
+          overlay.classList.add('visible');
+          statusIndicator.classList.remove('visible');
+        } else {
+          overlay.classList.remove('visible');
+          statusIndicator.classList.add('visible');
+        }
+      }
 
       // 点击恢复按钮 → 切换到解锁状态
       restoreBtn.addEventListener('click', (e) => {
@@ -154,24 +145,25 @@
         ipcRenderer.send('mc-input-guard:restore');
       });
 
+      // 解锁状态下 hover-to-click：鼠标进入指示器区域时临时关闭穿透
+      statusIndicator.addEventListener('mouseenter', () => {
+        if (!isLocked) {
+          // 临时关闭穿透以接收点击
+          // 注意：此 API 仅在 Electron 主进程生效，这里通过 IPC 请求
+          ipcRenderer.send('mc-input-guard:hover-start');
+        }
+      });
+      statusIndicator.addEventListener('mouseleave', () => {
+        if (!isLocked) {
+          ipcRenderer.send('mc-input-guard:hover-end');
+        }
+      });
+
       // 点击状态指示器 → 重新锁定
       statusIndicator.addEventListener('click', () => {
         setLocked(true);
         ipcRenderer.send('mc-input-guard:lock');
       });
-
-      function setLocked(locked) {
-        isLocked = locked;
-        if (locked) {
-          overlay.classList.remove('visible');
-          statusIndicator.classList.remove('visible');
-        } else {
-          overlay.classList.remove('visible');
-          statusIndicator.classList.add('visible');
-          statusIndicator.classList.remove('locked');
-          statusText.textContent = '手动模式';
-        }
-      }
 
       // 接收主进程状态变更
       ipcRenderer.on('mc-input-guard:state', (_event, state) => {
@@ -181,6 +173,9 @@
           setLocked(false);
         }
       });
+
+      // 初始为锁定状态
+      setLocked(true);
     })();
   </script>
 </body>

@@ -891,7 +891,9 @@ export class Agent {
           onPlanStateChange: (steps) => {
             this.emit({ kind: EventKind.PlanState, planSteps: steps })
           },
-          onGuiLayoutPreview: this.onGuiLayoutPreview
+          onGuiLayoutPreview: this.onGuiLayoutPreview,
+          guiPreviewCompletedForStep: false,
+          currentStepRequiresGuiPreview: false
         }
 
         const results = blockedResults

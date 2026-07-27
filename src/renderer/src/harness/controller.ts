@@ -20,6 +20,8 @@ import type { WorkflowStep } from "./workflow-types.ts";
 import { TOOL_LABELS_ZH } from "./tool-labels";
 import { defaultVerifyTarget, formatVerifyTargetBlock, verifyTargetFromClassification, type VerifyTarget } from "./verify-target.ts";
 import { formatGradleSummary, formatJavaFileList, parseGradleProperties, scanJavaSourceTree } from "./project-info.ts";
+import { isGuiFilePath, stepRequiresGuiPreview } from "./plan-normalizer.ts";
+import { registerKnownProjectPaths } from "./tool-definitions.ts";
 
 export interface ControllerOptions {
 	registry: Registry;
@@ -251,6 +253,13 @@ export class Controller {
 		if (tracker.isOpsOnly()) {
 			content += "\n本项目为构建/运行任务，无需 list_directory/read_file 探索。直接从当前步骤开始执行。";
 		}
+		// 语义增强：当前步骤涉及 GUI 代码时，追加 GUI 预览提醒
+		if (stepRequiresGuiPreview(current.description, current.targetPath)) {
+			content += "\n\n## 当前步骤 GUI 预览提醒\n" +
+				"当前步骤涉及 GUI 代码修改，必须先调用 gui_layout_preview 生成布局预览供用户确认。\n" +
+				"禁止跳过预览直接 edit_file/write_file GUI 文件（工具层会硬性拦截并返回引导）。\n" +
+				"layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。";
+		}
 		if (this.lastProjectInfo.trim()) {
 			content += `\n\n${this.lastProjectInfo.trim()}`;
 		}
@@ -375,6 +384,11 @@ export class Controller {
 		const listDirectory = (absPath: string) => window.api.listDirectory(absPath);
 		projectInfo = `## 项目信息\n项目路径：${projectPath}\n`;
 
+		// GUI 文件标注器：匹配 *Screen.java / *Hud*.java / *Gui*.java 追加 [GUI]
+		const guiTagger = (relPath: string): string => (isGuiFilePath(relPath) ? " [GUI]" : "");
+		// 收集所有扫描到的相对路径，结束后注入 knownProjectPaths 供模糊建议
+		const scannedRelPaths: string[] = [];
+
 		// 1. Scan main Java packages + file inventory
 		try {
 			const mainJava = `${projectPath}/src/main/java`;
@@ -382,7 +396,8 @@ export class Controller {
 			if (packages.length > 0) {
 				projectInfo += `源码包路径：${packages.join(", ")}\n`;
 			}
-			projectInfo += formatJavaFileList(javaFiles, "主源码 Java 文件");
+			projectInfo += formatJavaFileList(javaFiles, "主源码 Java 文件", undefined, guiTagger);
+			scannedRelPaths.push(...javaFiles);
 		} catch {
 			/* ignore scan errors */
 		}
@@ -396,7 +411,8 @@ export class Controller {
 				if (packages.length > 0) {
 					projectInfo += `客户端包路径：${packages.join(", ")}\n`;
 				}
-				projectInfo += formatJavaFileList(javaFiles, "客户端 Java 文件");
+				projectInfo += formatJavaFileList(javaFiles, "客户端 Java 文件", undefined, guiTagger);
+				scannedRelPaths.push(...javaFiles);
 			}
 		} catch {
 			/* ignore */
@@ -413,6 +429,7 @@ export class Controller {
 		}
 
 		// 4. Read fabric.mod.json (mod id, entrypoints, mixin ref)
+		let parsedModId: string | null = null;
 		try {
 			const modJsonPath = `${projectPath}/src/main/resources/fabric.mod.json`;
 			const modJson = await window.api.readFile(modJsonPath);
@@ -420,7 +437,13 @@ export class Controller {
 				const parsed = JSON.parse(modJson.content);
 				const modId = parsed.id || "";
 				if (modId) {
+					parsedModId = modId;
 					projectInfo += `Mod ID：${modId}\n`;
+					// modid 歧义警示：明确 assets 路径必须用 modid
+					if (modId.includes("_") || modId.includes("-")) {
+						const sep = modId.includes("_") ? "下划线" : "连字符";
+						projectInfo += `注意：modid 使用${sep}（${modId}），assets 路径必须为 assets/${modId}/（禁止用 ${modId.replace(/_/g, "-")} 或 ${modId.replace(/-/g, "_")}）\n`;
+					}
 					if (parsed.entrypoints?.main?.length) {
 						projectInfo += `入口点：${parsed.entrypoints.main.join(", ")}\n`;
 					}
@@ -444,6 +467,7 @@ export class Controller {
 			if (topItems) {
 				projectInfo += `资源目录：${topItems}\n`;
 			}
+			scannedRelPaths.push(...resEntries.map((e) => `src/main/resources/${e.name}`));
 		} catch {
 			/* ignore */
 		}
@@ -475,15 +499,40 @@ export class Controller {
 			/* ignore */
 		}
 
-		// 7. List resource subdirectories
+		// 7. List resource subdirectories (assets/<modid>/...)
 		try {
 			const assetsDir = `${projectPath}/src/main/resources/assets`;
 			const assets = await window.api.listDirectory(assetsDir);
 			if (assets.length > 0) {
 				projectInfo += `资源命名空间：${assets.map((e) => e.name).join(", ")}\n`;
+				// 注册命名空间到已知路径
+				for (const a of assets) scannedRelPaths.push(`src/main/resources/assets/${a.name}`);
+				// 若 modid 已知，列出 assets/<modid>/lang 下的语言文件
+				if (parsedModId) {
+					try {
+						const langDir = `${projectPath}/src/main/resources/assets/${parsedModId}/lang`;
+						const langEntries = await window.api.listDirectory(langDir);
+						const langFiles = langEntries.map((e) => e.name).filter((n) => n.endsWith(".json"));
+						if (langFiles.length > 0) {
+							projectInfo += `语言文件：assets/${parsedModId}/lang/${langFiles.join(", ")}\n`;
+							for (const lf of langFiles) {
+								scannedRelPaths.push(`src/main/resources/assets/${parsedModId}/lang/${lf}`);
+							}
+						}
+					} catch {
+						/* lang dir may not exist */
+					}
+				}
 			}
 		} catch {
 			/* ignore */
+		}
+
+		// 将扫描到的路径注入 knownProjectPaths，供 tool-definitions 的模糊建议使用
+		try {
+			registerKnownProjectPaths(scannedRelPaths);
+		} catch {
+			/* registerKnownProjectPaths 不应抛错，但保守处理 */
 		}
 
 		return projectInfo;
@@ -603,9 +652,22 @@ ${projectInfo}`;
 	private async updateSystemPrompt(mode: "chat" | "plan" | "execute"): Promise<void> {
 		const sysIdx = this.messages.findIndex((m) => m.role === "system" && m.origin === "harness");
 		if (this.lastSystemMode === mode && sysIdx >= 0) {
-			// Same mode: keep messages[0] stable for prompt cache; still refresh project scan for execute entry.
+			// Same mode: keep messages[sysIdx] stable for prompt cache.
+			// 但 execute 阶段需要每轮刷新项目结构信息（文件可能已被创建/修改/删除）。
+			// 通过独立的 project-info system 消息注入最新结构，不修改 cache 友好的 messages[sysIdx]。
 			if (mode === "execute") {
-				this.lastProjectInfo = await this.buildProjectInfo();
+				const freshInfo = await this.buildProjectInfo();
+				// 语义增强：当前步骤涉及 GUI 代码时，在项目信息后追加 GUI 预览提醒
+				const cur = this.planTracker?.currentStep;
+				if (cur && stepRequiresGuiPreview(cur.description, cur.targetPath)) {
+					this.lastProjectInfo = freshInfo + "\n## 当前步骤 GUI 预览提醒\n" +
+						"当前步骤涉及 GUI 代码修改，必须先调用 gui_layout_preview 生成布局预览。\n" +
+						"禁止跳过预览直接 edit_file/write_file GUI 文件（工具层会硬性拦截）。\n" +
+						"layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。";
+				} else {
+					this.lastProjectInfo = freshInfo;
+				}
+				this.refreshProjectInfoMessage(this.lastProjectInfo);
 			}
 			return;
 		}
@@ -615,7 +677,35 @@ ${projectInfo}`;
 		} else {
 			this.messages.unshift({ role: "system", content: prompt, origin: "harness" });
 		}
+		// mode 切换时清除旧的 project-info 消息（新 system prompt 已内含项目信息）
+		this.removeProjectInfoMessage();
 		this.lastSystemMode = mode;
+	}
+
+	/** 更新或追加独立的 project-info system 消息（保持 messages[0] cache 友好）。 */
+	private refreshProjectInfoMessage(info: string): void {
+		if (!info) return;
+		const content = `## 项目结构（实时刷新）\n${info}`;
+		// 查找已有的 project-info 消息
+		const infoIdx = this.messages.findIndex(
+			(m) => m.role === "system" && typeof m.content === "string" && m.content.startsWith("## 项目结构（实时刷新）")
+		);
+		if (infoIdx >= 0) {
+			this.messages[infoIdx] = { role: "system", content, origin: "harness" };
+		} else {
+			// 追加在 harness system 消息之后
+			const harnessIdx = this.messages.findIndex((m) => m.role === "system" && m.origin === "harness");
+			if (harnessIdx >= 0) {
+				this.messages.splice(harnessIdx + 1, 0, { role: "system", content, origin: "harness" });
+			}
+		}
+	}
+
+	/** 移除独立的 project-info system 消息（mode 切换时调用）。 */
+	private removeProjectInfoMessage(): void {
+		this.messages = this.messages.filter(
+			(m) => !(m.role === "system" && typeof m.content === "string" && m.content.startsWith("## 项目结构（实时刷新）"))
+		);
 	}
 
 	private trimTrailingAssistants(): void {

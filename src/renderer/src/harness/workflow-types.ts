@@ -19,6 +19,8 @@ export interface WorkflowStep {
   allowedTools: string[]
   maxAttempts: number
   validation?: StepValidation
+  /** 步骤是否涉及GUI布局变更，需要先调用 gui_layout_preview 预览 */
+  requiresGuiPreview?: boolean
 }
 
 export interface WorkflowRunResult {

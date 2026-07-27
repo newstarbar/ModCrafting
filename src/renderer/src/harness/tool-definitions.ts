@@ -18,6 +18,7 @@ import { validateFileEditGate } from "./edit-gate.ts";
 import { guardedWriteFile } from "./guarded-write.ts";
 import { grepInProject, findFilesByBasename } from "./grep-search.ts";
 import { formatClarificationOutput, validateClarificationArgs } from "./clarify-validation.ts";
+import { isGuiFilePath } from "./plan-normalizer.ts";
 import {
 	generateModBlockEntitiesRegistrationClass,
 	generateModBlocksRegistrationClass,
@@ -46,6 +47,120 @@ async function resolveMcVersion(args: Record<string, unknown>): Promise<string> 
 }
 
 const VANILLA_ITEM_IDS = new Set(minecraftItems.map((item) => item.id));
+
+// ── 失败路径负缓存 ──
+// 同一路径60秒内探测失败直接返回缓存错误，避免 AI 反复探测同一错误路径（如 frame-cover vs frame_cover）。
+const failedPathCache = new Map<string, { timestamp: number; error: string }>();
+const FAILED_PATH_CACHE_TTL = 60_000;
+
+function checkFailedPathCache(path: string): string | null {
+	const entry = failedPathCache.get(path);
+	if (entry && Date.now() - entry.timestamp < FAILED_PATH_CACHE_TTL) {
+		const ageSec = Math.round((Date.now() - entry.timestamp) / 1000);
+		const remainSec = Math.ceil((FAILED_PATH_CACHE_TTL - (Date.now() - entry.timestamp)) / 1000);
+		return `路径 "${path}" 在 ${ageSec}秒前探测失败：${entry.error}（负缓存，避免重复探测；如确信已新建请等待 ${remainSec}秒或换路径）`;
+	}
+	return null;
+}
+
+function recordFailedPath(path: string, error: string): void {
+	if (!path) return;
+	failedPathCache.set(path, { timestamp: Date.now(), error });
+}
+
+function recordSuccessPath(path: string): void {
+	if (!path) return;
+	failedPathCache.delete(path);
+	// 清除父目录负缓存（子路径存在说明父目录也存在）
+	const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+	for (let i = parts.length - 1; i > 0; i--) {
+		failedPathCache.delete(parts.slice(0, i).join("/"));
+	}
+}
+
+// ── 已知路径缓存 + 模糊建议 ──
+// 成功访问过的路径 + buildProjectInfo 扫描结果，用于路径不存在时提供"你是否想找..."建议。
+const knownProjectPaths = new Set<string>();
+
+function recordKnownPath(path: string): void {
+	if (!path) return;
+	knownProjectPaths.add(path.replace(/\\/g, "/"));
+}
+
+/** 接收 buildProjectInfo 扫描到的路径列表，批量注册到 knownProjectPaths */
+export function registerKnownProjectPaths(paths: string[]): void {
+	for (const p of paths) recordKnownPath(p);
+}
+
+function levenshtein(a: string, b: string): number {
+	const m = a.length;
+	const n = b.length;
+	if (!m) return n;
+	if (!n) return m;
+	const prev = new Array<number>(n + 1);
+	const curr = new Array<number>(n + 1);
+	for (let j = 0; j <= n; j++) prev[j] = j;
+	for (let i = 1; i <= m; i++) {
+		curr[0] = i;
+		for (let j = 1; j <= n; j++) {
+			curr[j] = a[i - 1] === b[j - 1]
+				? prev[j - 1]
+				: 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+		}
+		for (let j = 0; j <= n; j++) prev[j] = curr[j];
+	}
+	return prev[n];
+}
+
+/** 对失败路径给出"你是否想找..."建议 */
+function suggestSimilarPaths(failedPath: string): string[] {
+	const normalized = failedPath.replace(/\\/g, "/");
+	const suggestions: string[] = [];
+
+	// 1. 下划线/连字符互换（frame-cover ↔ frame_cover）
+	const altSep = normalized.replace(/[-_]/g, (m) => (m === "-" ? "_" : "-"));
+	for (const known of knownProjectPaths) {
+		if (known === altSep || (altSep && known.includes(altSep))) {
+			if (!suggestions.includes(known)) suggestions.push(known);
+		}
+	}
+
+	// 2. 末段（文件名）相同
+	const failedSegments = normalized.split("/").filter((s) => s && s !== ".");
+	const failedLast = failedSegments[failedSegments.length - 1];
+	if (failedLast) {
+		for (const known of knownProjectPaths) {
+			const knownSegments = known.split("/").filter((s) => s && s !== ".");
+			if (knownSegments[knownSegments.length - 1] === failedLast) {
+				if (!suggestions.includes(known)) suggestions.push(known);
+			}
+		}
+	}
+
+	// 3. 简单编辑距离（Levenshtein < 3）
+	for (const known of knownProjectPaths) {
+		if (levenshtein(normalized, known) < 3 && !suggestions.includes(known)) {
+			suggestions.push(known);
+		}
+	}
+
+	return suggestions.slice(0, 3);
+}
+
+/** 构造"未找到 + 建议"错误文本 */
+function buildPathNotFoundError(requestedRel: string, triedMsg: string): string {
+	const suggestions = suggestSimilarPaths(requestedRel);
+	let msg = `Error: 未找到 ${requestedRel}（已尝试 ${triedMsg}）。`;
+	if (suggestions.length > 0) {
+		msg += `\n你是否想找：\n` + suggestions.map((s) => `- ${s}`).join("\n");
+		// 若失败路径含连字符但建议路径含下划线，追加 modid 提示
+		if (requestedRel.includes("-") && suggestions.some((s) => s.includes("_"))) {
+			msg += `\n提示：modid 通常使用下划线（如 frame_cover），assets 路径必须与 modid 一致。`;
+		}
+	}
+	msg += `\n请用 grep 或 list_directory 确认真实路径。`;
+	return msg;
+}
 
 async function readProjectModId(projectPath: string): Promise<string | undefined> {
 	try {
@@ -128,6 +243,10 @@ export const readFileTool: Tool & Previewer = {
 		const projectPath = ctx.projectPath;
 		const requestedRel = String(args.path || "").replace(/\\/g, "/");
 
+		// 失败路径负缓存：60秒内同路径直接返回缓存错误
+		const cached = checkFailedPathCache(requestedRel);
+		if (cached) return cached;
+
 		const renderContent = (relPath: string, content: string, note?: string): string => {
 			if (!content) return note ? `${note}\n(空文件)` : "(空文件)";
 			const lines = content.split("\n");
@@ -155,7 +274,11 @@ export const readFileTool: Tool & Previewer = {
 		};
 
 		const primary = await tryRead(requestedRel);
-		if (primary.ok) return renderContent(requestedRel, primary.content || "");
+		if (primary.ok) {
+			recordSuccessPath(requestedRel);
+			recordKnownPath(requestedRel);
+			return renderContent(requestedRel, primary.content || "");
+		}
 
 		// Fix 4: ENOENT fallback — a wrong package path or src/main ↔ src/client mix-up
 		// should still resolve instead of failing with raw ENOENT.
@@ -168,6 +291,8 @@ export const readFileTool: Tool & Previewer = {
 		if (swapped && swapped !== requestedRel) {
 			const alt = await tryRead(swapped);
 			if (alt.ok) {
+				recordSuccessPath(swapped);
+				recordKnownPath(swapped);
 				return renderContent(swapped, alt.content || "", `（原路径 ${requestedRel} 不存在，已定位到 ${swapped}）`);
 			}
 		}
@@ -181,9 +306,13 @@ export const readFileTool: Tool & Previewer = {
 				if (distinct.length === 1) {
 					const only = await tryRead(distinct[0]);
 					if (only.ok) {
+						recordSuccessPath(distinct[0]);
+						recordKnownPath(distinct[0]);
 						return renderContent(distinct[0], only.content || "", `（原路径 ${requestedRel} 不存在，已定位到 ${distinct[0]}）`);
 					}
 				} else if (distinct.length > 1) {
+					// 多处同名文件：注册到已知路径，便于后续建议
+					for (const m of distinct) recordKnownPath(m);
 					return (
 						`Error: 未找到 ${requestedRel}。项目内存在同名文件多处，请用准确路径重试：\n` +
 						distinct.map((m) => `- ${m}`).join("\n")
@@ -194,7 +323,9 @@ export const readFileTool: Tool & Previewer = {
 			}
 		}
 
-		return `Error: 未找到文件 ${requestedRel}（已尝试 main/client 源集互换与按文件名全局检索）。请用 grep 或 list_directory 确认真实路径。`;
+		// 所有 fallback 均失败：记录负缓存 + 返回带建议的错误
+		recordFailedPath(requestedRel, "文件不存在");
+		return buildPathNotFoundError(requestedRel, "main/client 源集互换与按文件名全局检索");
 	},
 	preview: () => null
 };
@@ -242,6 +373,10 @@ export const writeFileTool: Tool & Previewer = {
 		const relPath = String(args.path || "");
 		const content = String(args.content || "");
 		const overwrite = args.overwrite === true;
+
+		// GUI 智能守卫：修改 GUI 文件前必须先调用 gui_layout_preview
+		const guiGuard = checkGuiPreviewGuard(ctx, relPath, content);
+		if (guiGuard) return guiGuard;
 
 		if (overwrite && ctx.fileSession && !ctx.fileSession.hasRead(relPath)) {
 			return (
@@ -325,6 +460,10 @@ export const editFileTool: Tool & Previewer = {
 		const replaceAll = args.replace_all === true;
 
 		if (!oldStr) return "Error: old_string 不能为空";
+
+		// GUI 智能守卫：修改 GUI 文件前必须先调用 gui_layout_preview
+		const guiGuard = checkGuiPreviewGuard(ctx, relPath, newStr);
+		if (guiGuard) return guiGuard;
 
 		if (ctx.fileSession && !ctx.fileSession.hasRead(relPath)) {
 			return (
@@ -451,8 +590,14 @@ export const grepTool: Tool = {
 	},
 	readOnly: () => true,
 	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		// 失败路径负缓存：若 list_directory/read_file 已探测过该路径失败，直接返回缓存错误
+		const pathArg = args.path ? String(args.path) : "";
+		if (pathArg) {
+			const cached = checkFailedPathCache(pathArg);
+			if (cached) return cached;
+		}
 		return grepInProject(ctx, String(args.pattern || ""), {
-			path: args.path ? String(args.path) : undefined,
+			path: pathArg || undefined,
 			glob: args.glob ? String(args.glob) : undefined,
 			maxMatches: typeof args.max_matches === "number" ? args.max_matches : undefined,
 			caseInsensitive: args.case_sensitive !== true
@@ -767,6 +912,13 @@ export const listDirectoryTool: Tool = {
 		if (!ctx.projectPath) return "No project open";
 		const relPath = typeof args.path === "string" ? args.path : "";
 		const dirPath = relPath ? `${ctx.projectPath}/${relPath}` : ctx.projectPath;
+
+		// 失败路径负缓存：60秒内同路径直接返回缓存错误
+		if (relPath) {
+			const cached = checkFailedPathCache(relPath);
+			if (cached) return cached;
+		}
+
 		try {
 			const entries = await window.api.listDirectory(dirPath);
 			if (entries.length === 0 && relPath) {
@@ -775,9 +927,24 @@ export const listDirectoryTool: Tool = {
 					return listDirectoryEmptyFileMessage(relPath);
 				}
 			}
+			// 成功：记录已知路径 + 清除负缓存
+			if (relPath) {
+				recordSuccessPath(relPath);
+				recordKnownPath(relPath);
+			}
+			// 子项也注册到已知路径，便于后续 read_file 建议匹配
+			for (const e of entries) {
+				const childRel = relPath ? `${relPath}/${e.name}` : e.name;
+				recordKnownPath(childRel);
+			}
 			const lines = entries.map((e: { name: string; isDirectory: boolean }) => (e.isDirectory ? `${e.name}/` : e.name));
 			return lines.join("\n") || "(empty directory)";
 		} catch (err) {
+			// 失败：记录负缓存 + 返回带建议的错误
+			if (relPath) {
+				recordFailedPath(relPath, `目录不存在: ${err}`);
+				return buildPathNotFoundError(relPath, "listDirectory");
+			}
 			return `Error listing directory: ${err}`;
 		}
 	}
@@ -811,6 +978,58 @@ export const runCommandTool: Tool = {
 		}
 	}
 };
+
+/** 推断 GUI 布局类型（基于文件名和内容） */
+function inferGuiLayoutType(filePath: string, content: string): GuiLayoutType {
+	const lower = content.toLowerCase()
+	if (/optionlist|simpleoption|optionlistwidget/.test(lower)) return 'option-list'
+	if (/configscreen/.test(filePath.toLowerCase())) return 'option-list'
+	if (/hud/.test(filePath.toLowerCase()) || /hudrendercallback/.test(lower)) return 'hud-overlay'
+	return 'custom-screen'
+}
+
+/** 生成 GUI 预览引导文本（非简单报错，而是提供参数建议） */
+function buildGuiPreviewGuidance(filePath: string, content: string): string {
+	const layoutType = inferGuiLayoutType(filePath, content)
+	const fileName = filePath.split('/').pop() || filePath
+	const title = fileName.replace(/\.java$/i, '')
+
+	const layoutTypeDesc: Record<GuiLayoutType, string> = {
+		'option-list': '设置列表（SimpleOption + OptionListWidget 自动布局）',
+		'custom-screen': '自定义界面（Screen + 相对坐标 this.width/2, this.height/2）',
+		'hud-overlay': 'HUD 覆盖层（HudRenderCallback + 相对坐标）'
+	}
+
+	return [
+		`此文件 ${filePath} 是 GUI 文件，修改前必须先调用 gui_layout_preview 生成布局预览供用户确认。`,
+		'',
+		`建议参数：`,
+		`  - layoutType: "${layoutType}" (${layoutTypeDesc[layoutType]})`,
+		`  - title: "${title}"`,
+		`  - html: 包含 1280x720 画布和 absolute 定位元素的 HTML`,
+		`  - elements: 每个控件元素的 id/type/label/x/y/width/height`,
+		'',
+		'请先调用 gui_layout_preview 工具，用户确认布局 JSON 后再修改此文件。'
+	].join('\n')
+}
+
+/** GUI 智能守卫：检测是否在未完成预览的情况下修改 GUI 文件 */
+function checkGuiPreviewGuard(
+	ctx: ToolContext,
+	filePath: string,
+	content: string
+): string | null {
+	// 不满足以下任一条件则不拦截：
+	// 1. 文件是 GUI 文件 OR 当前步骤标记了 requiresGuiPreview
+	// 2. 步骤尚未完成 GUI 预览
+	const isGuiFile = isGuiFilePath(filePath)
+	const stepRequiresPreview = ctx.currentStepRequiresGuiPreview === true
+
+	if (!isGuiFile && !stepRequiresPreview) return null
+	if (ctx.guiPreviewCompletedForStep === true) return null
+
+	return buildGuiPreviewGuidance(filePath, content)
+}
 
 // ── read_error_log ──
 

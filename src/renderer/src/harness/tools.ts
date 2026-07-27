@@ -60,6 +60,11 @@ export interface ToolContext {
     html: string
     elements: GuiLayoutElement[]
   }) => Promise<string>
+  /** 当前步骤是否已完成 GUI 布局预览（用户确认过布局 JSON）。
+   *  edit_file/write_file 在写 GUI 文件前检查此标志，未完成则拦截并引导调用 gui_layout_preview。 */
+  guiPreviewCompletedForStep?: boolean
+  /** 当前步骤是否需要 GUI 布局预览（由 plan-normalizer 语义检测设置） */
+  currentStepRequiresGuiPreview?: boolean
 }
 
 const MAX_TOOL_OUTPUT = 32 * 1024 // 32KB max output

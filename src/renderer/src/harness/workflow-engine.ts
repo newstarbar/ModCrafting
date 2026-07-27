@@ -834,6 +834,9 @@ export class WorkflowEngine {
 	private inGameVerified = false;
 	private lastVerifyWasTitleScreen = false;
 	private lastVerifyMismatch = "";
+	/** GUI 布局预览状态：当前步骤是否已完成预览（用户确认过布局 JSON） */
+	private guiPreviewCompletedForStep = false;
+	private lastPreviewStepId: string | null = null;
 
 	constructor(options: WorkflowEngineOptions) {
 		this.steps = options.steps;
@@ -974,6 +977,13 @@ export class WorkflowEngine {
 
 	private async executeAllowedCalls(step: WorkflowStep, calls: ToolCallWithId[]): Promise<Map<string, ToolResult>> {
 		if (calls.length === 0) return new Map();
+
+		// 步骤切换时重置 GUI 预览状态
+		if (this.lastPreviewStepId !== step.id) {
+			this.guiPreviewCompletedForStep = false;
+			this.lastPreviewStepId = step.id;
+		}
+
 		const ctx: ToolContext = {
 			projectPath: this.projectPath,
 			callId: `workflow_${step.id}`,
@@ -982,6 +992,17 @@ export class WorkflowEngine {
 			fileSession: this.fileSession,
 			onPlanStateChange: () => this.emitPlanState(),
 			onGuiLayoutPreview: this.onGuiLayoutPreview
+				? async (payload) => {
+						const result = await this.onGuiLayoutPreview!(payload);
+						// 用户确认（非取消）后标记预览完成
+						if (!result.includes('"cancelled": true')) {
+							this.guiPreviewCompletedForStep = true;
+						}
+						return result;
+					}
+				: undefined,
+			guiPreviewCompletedForStep: this.guiPreviewCompletedForStep,
+			currentStepRequiresGuiPreview: step.requiresGuiPreview === true
 		};
 		return executeBatch(
 			calls,

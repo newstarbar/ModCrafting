@@ -67,6 +67,21 @@ function targetPathFromDescription(description: string): string | undefined {
   return path.startsWith('src/') ? path : `src/main/resources/${path}`
 }
 
+/** GUI 语义关键词：用于检测步骤是否涉及 GUI 布局变更 */
+const GUI_KEYWORD_RE = /Screen|HUD|ConfigScreen|GuiScreen|界面|布局|GUI|渲染|drawMock|drawWidget|renderWidget|addRenderableWidget|HudRender|overlay|标题|按钮|拖拽/i
+
+/** 检测文件路径是否为 GUI 文件 */
+export function isGuiFilePath(path: string): boolean {
+  return /(?:Screen|Hud|Gui)\w*\.java$/i.test(path)
+}
+
+/** 检测步骤是否需要 GUI 布局预览 */
+export function stepRequiresGuiPreview(description: string, targetPath?: string): boolean {
+  if (GUI_KEYWORD_RE.test(description)) return true
+  if (targetPath && isGuiFilePath(targetPath)) return true
+  return false
+}
+
 function defaultAllowedTools(kind: StepKind): string[] {
   switch (kind) {
     case 'inspect':
@@ -118,6 +133,8 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_docs_search',
         'fabric_javadoc_lookup',
         'fabric_log_debugger',
+        // GUI 布局预览：Mixin 修改GUI渲染逻辑时需要
+        'gui_layout_preview',
         'read_error_log'
       ]
     case 'write':
@@ -160,7 +177,9 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'ask_clarification',
         'fabric_log_debugger',
         'fabric_docs_search',
-        'read_error_log'
+        'read_error_log',
+        // GUI 布局预览：修复场景需要编辑GUI文件时可用
+        'gui_layout_preview'
       ]
     case 'run':
       return [
@@ -181,7 +200,9 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'mc_command',
         'mc_input',
         'mc_ensure_test_world',
-        'mc_ensure_cheats'
+        'mc_ensure_cheats',
+        // GUI 布局预览：测试失败修复GUI时可用
+        'gui_layout_preview'
       ]
     case 'answer':
       return ['complete_step', 'explain_code', 'read_file', 'ask_clarification']
@@ -246,6 +267,7 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
   const explicitPath = step.targetPath || targetPathFromDescription(step.description)
   const targetPath = explicitPath || (kind === 'recipe' ? recipePath('<modid>', 'generated_recipe') : undefined)
   const targetPaths = step.targetPaths?.length ? [...step.targetPaths] : (targetPath ? [targetPath] : undefined)
+  const requiresGuiPreview = stepRequiresGuiPreview(step.description, targetPath)
   return {
     id: step.id,
     title: step.description,
@@ -256,6 +278,7 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
     ...(step.evidence ? { evidence: step.evidence } : {}),
     allowedTools: defaultAllowedTools(kind),
     maxAttempts: defaultMaxAttempts(kind),
+    ...(requiresGuiPreview ? { requiresGuiPreview } : {}),
     validation: kind === 'recipe'
       ? { type: 'recipe_validated', path: targetPath }
       : kind === 'mixin'
