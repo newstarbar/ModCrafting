@@ -12,6 +12,7 @@ import { parsePlanSteps, isActionablePlanText } from '../utils/plan-steps'
 import { resolveTurnDoneStatus } from '../utils/turn-status'
 import { ensureClosingSummaryEntry, type ClosingReason } from '../utils/turn-closing-summary'
 import { buildSessionMarkdown } from '../utils/session-export-md'
+import SessionExportPanel from './SessionExportPanel'
 import { buildPreTurnSnapshot, enrichUserSnapshotAfterTurnDone, type TurnFileChange } from '../utils/rollback-snapshot'
 import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, normalizeSessionUsage, type UsageStats } from '../utils/usage'
 import type { ChatSession, PersistedMessage } from '../types/chat'
@@ -358,6 +359,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationPending, setClarificationPending] = useState(false)
   const [clarificationQuestion, setClarificationQuestion] = useState('')
   const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
+  const [showExportPanel, setShowExportPanel] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [showTemplateForm, setShowTemplateForm] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
@@ -2296,50 +2299,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         <div className="chat-header-right">
           <button
             className="chat-header-export-btn"
-            title="导出诊断用 Markdown（含工具参数/输出/计划步骤）"
-            onClick={async () => {
-              try {
-                const goal =
-                  sessionGoalRef.current.trim() ||
-                  (activePlan?.steps?.length
-                    ? activePlan.steps.map((s) => s.description).join('；')
-                    : '')
-                const ctrl = controllerRef.current
-                const latestEmbeddedPlan = [...displayMessages]
-                  .reverse()
-                  .find((m) => m.role === 'assistant' && m.embeddedPlan && m.embeddedPlan.length > 0)
-                  ?.embeddedPlan
-                const md = buildSessionMarkdown({
-                  messages: displayMessages,
-                  sessionGoal: goal,
-                  projectPath,
-                  model: apiConfig.model,
-                  endpoint: apiConfig.endpoint,
-                  providerId: apiConfig.providerId,
-                  composerMode,
-                  phase: ctrl?.phase,
-                  activePlanSteps: activePlan?.steps?.length
-                    ? activePlan.steps
-                    : latestEmbeddedPlan,
-                  controllerMessages: ctrl?.getSnapshot(),
-                })
-                const result = await window.api.sessionExport(md, 'mc-session-diag')
-                if (result.cancelled) return
-                if (result.success) {
-                  setCompletionFlash(`已导出: ${result.name}`)
-                  if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-                  completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-                } else {
-                  setCompletionFlash('导出失败')
-                  if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-                  completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-                }
-              } catch {
-                setCompletionFlash('导出失败')
-                if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-                completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-              }
-            }}
+            title="导出诊断用 Markdown（勾选轮次，由近到远）"
+            onClick={() => setShowExportPanel(true)}
           >导出</button>
           {completionFlash ? (
             <span className="chat-header-status chat-header-status--done">{completionFlash}</span>
@@ -2441,6 +2402,68 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         path=""
         name={toolScreenshotLightbox.name}
         onClose={() => setToolScreenshotLightbox(null)}
+      />
+    )}
+    {showExportPanel && (
+      <SessionExportPanel
+        turns={groupMessagesIntoTurns(displayMessages)}
+        disabled={exportBusy}
+        onCancel={() => {
+          if (exportBusy) return
+          setShowExportPanel(false)
+        }}
+        onConfirm={async (selectedTurnIds) => {
+          setExportBusy(true)
+          try {
+            const allTurns = groupMessagesIntoTurns(displayMessages)
+            const idSet = new Set(selectedTurnIds)
+            const selectedTurns = allTurns.filter((t) => idSet.has(t.id))
+            const goal =
+              sessionGoalRef.current.trim() ||
+              (activePlan?.steps?.length
+                ? activePlan.steps.map((s) => s.description).join('；')
+                : '')
+            const ctrl = controllerRef.current
+            const latestEmbeddedPlan = [...displayMessages]
+              .reverse()
+              .find((m) => m.role === 'assistant' && m.embeddedPlan && m.embeddedPlan.length > 0)
+              ?.embeddedPlan
+            const md = buildSessionMarkdown({
+              messages: displayMessages,
+              turns: selectedTurns,
+              order: 'newest-first',
+              sessionGoal: goal,
+              projectPath,
+              model: apiConfig.model,
+              endpoint: apiConfig.endpoint,
+              providerId: apiConfig.providerId,
+              composerMode,
+              phase: ctrl?.phase,
+              activePlanSteps: activePlan?.steps?.length
+                ? activePlan.steps
+                : latestEmbeddedPlan,
+              controllerMessages: ctrl?.getSnapshot(),
+            })
+            const result = await window.api.sessionExport(md, 'mc-session-diag')
+            if (result.cancelled) return
+            if (result.success) {
+              setShowExportPanel(false)
+              setCompletionFlash(`已导出: ${result.name}`)
+              if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+              completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+            } else {
+              setCompletionFlash('导出失败')
+              if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+              completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+            }
+          } catch {
+            setCompletionFlash('导出失败')
+            if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
+            completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
+          } finally {
+            setExportBusy(false)
+          }
+        }}
       />
     )}
     </>

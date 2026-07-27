@@ -944,7 +944,8 @@ export class WorkflowEngine {
 			(step.kind === "build" || step.kind === "run") && !repairMode
 				? step.kind === "build"
 					? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
-					: '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n'
+					: '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n' +
+						"【禁止 complete_step】run 步不提供 complete_step；请用 mc_inspect/mc_screenshot 验收，验证成功后等待系统自动推进，或继续 mc_* 操作。\n"
 				: "";
 		const migrationHint = migrationPending && pendingMigration ? formatMigrationChecklist(pendingMigration) : "";
 		const ephemeral = ephemeralInstruction?.trim() ? `\n${ephemeralInstruction.trim()}\n` : "";
@@ -1275,6 +1276,12 @@ export class WorkflowEngine {
 
 				const validation = validateToolCalls(allCalls, allowedTools);
 				// execute 阶段误调 submit_plan → 无害提示，避免 0ms 失败噪音与死循环
+				// run/build 误调 complete_step：可操作拒绝；若 run 验收已满足则视为推进信号
+				const runGatesSatisfied =
+					step.kind === "run" &&
+					((this.requireInGameVerify && this.runClientReady && this.inGameVerified) ||
+						(!this.requireInGameVerify && this.runClientReady));
+				let completeStepAdvanceSignal = false;
 				for (const [id, rejected] of validation.rejected) {
 					if (rejected.toolName === "submit_plan" || (rejected.errorKind === "tool_not_offered" && /submit_plan/.test(rejected.output || ""))) {
 						const soft: ToolResult = {
@@ -1289,10 +1296,68 @@ export class WorkflowEngine {
 						this.emitRejected(id, soft);
 						continue;
 					}
+					if (rejected.toolName === "complete_step" && (step.kind === "run" || step.kind === "build")) {
+						if (step.kind === "run" && runGatesSatisfied) {
+							const soft: ToolResult = {
+								output:
+									`run 步骤验收已满足，无需 complete_step；系统将自动推进步骤 #${step.id}。` +
+									`（提示：run/build 步禁止随意 complete_step，请用 mc_inspect/mc_screenshot 验收。）`,
+								durationMs: 0,
+								ok: true,
+								toolName: "complete_step",
+								args: rejected.args,
+								exitCode: null
+							};
+							validation.rejected.set(id, soft);
+							this.emitRejected(id, soft);
+							completeStepAdvanceSignal = true;
+							continue;
+						}
+						const guidedOutput =
+							step.kind === "run"
+								? `blocked: [tool_not_offered] run 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
+									`请用 mc_inspect / mc_screenshot 完成验收；满足验收后系统会自动推进。勿再调用 complete_step。`
+								: `blocked: [tool_not_offered] build 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
+									`请调用 trigger_build({"task":"build"})；构建成功后系统会自动推进。`;
+						const guided: ToolResult = {
+							output: guidedOutput,
+							error: guidedOutput,
+							durationMs: 0,
+							ok: false,
+							toolName: "complete_step",
+							args: rejected.args,
+							exitCode: null,
+							errorKind: "tool_not_offered"
+						};
+						validation.rejected.set(id, guided);
+						this.emitRejected(id, guided);
+						continue;
+					}
 					this.emitRejected(id, rejected);
 				}
 				const calls = validation.accepted;
 				if (calls.length === 0) {
+					if (completeStepAdvanceSignal && step.kind === "run" && runGatesSatisfied) {
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							validation.rejected,
+							`run 步骤验收已满足，已根据 complete_step 信号自动推进 #${step.id}。`
+						);
+						step.status = "completed";
+						this.planTracker.advanceCurrent("complete_step_after_verify");
+						completed = true;
+						this.emitPlanState();
+						this.emit({
+							kind: EventKind.Notice,
+							notice: {
+								level: "info",
+								text: `步骤 #${step.id} 游戏内验收已满足，已自动推进（忽略 complete_step）。`
+							}
+						});
+						break;
+					}
 					const onlySoftSubmit = [...validation.rejected.values()].every((r) => r.toolName === "submit_plan" && r.ok);
 					if (onlySoftSubmit) {
 						pendingEphemeralInstruction = this.appendToolRound(
@@ -1313,12 +1378,25 @@ export class WorkflowEngine {
 					}
 					const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values());
 					const truncHint = writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : undefined;
+					const completeStepHint =
+						step.kind === "run" &&
+						[...validation.rejected.values()].some((r) => r.toolName === "complete_step" && !r.ok)
+							? "run 步禁止 complete_step：请用 mc_inspect/mc_screenshot 验收，满足后系统自动推进。"
+							: undefined;
 					pendingEphemeralInstruction = this.appendToolRound(
 						baseMessages,
 						modelResult.text || streamText,
 						allCalls,
 						validation.rejected,
-						[onlyKnowledgeRejected ? buildEmptyToolCallInstruction(step) : "所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。", truncHint].filter(Boolean).join("\n\n")
+						[
+							onlyKnowledgeRejected
+								? buildEmptyToolCallInstruction(step)
+								: "所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。",
+							completeStepHint,
+							truncHint
+						]
+							.filter(Boolean)
+							.join("\n\n")
 					);
 					if (!onlyKnowledgeRejected) attempt++;
 					continue;
@@ -1584,7 +1662,8 @@ export class WorkflowEngine {
 				const decisiveResult = orderedResults.find((result) => isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence, runGate));
 				const success =
 					(decisiveResult ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate) : false) ||
-					(step.kind === "run" && this.requireInGameVerify && this.runClientReady && this.inGameVerified);
+					(step.kind === "run" && this.requireInGameVerify && this.runClientReady && this.inGameVerified) ||
+					(step.kind === "run" && completeStepAdvanceSignal && runGatesSatisfied);
 				let roundInstruction: string | undefined;
 				if (stripKnowledgeForTruncation) {
 					roundInstruction = LARGE_FILE_REWRITE_RECOVERY;
@@ -1659,6 +1738,8 @@ export class WorkflowEngine {
 
 				// Write/inspect: once evidence exists, stop burning budget on re-reads and
 				// auto-complete if the model keeps stalling without complete_step.
+				// Run: once in-game verify gates are satisfied, auto-advance if the model
+				// keeps calling tools / complete_step instead of waiting for host advance.
 				if (stepHasEvidence && (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin")) {
 					evidenceIdleRounds++;
 					roundInstruction = [roundInstruction, `【验收证据已满足】请立即调用 complete_step({"stepId":"${step.id}"}) 推进下一步，禁止继续重复 read_file/edit_file。`]
@@ -1675,6 +1756,34 @@ export class WorkflowEngine {
 							notice: {
 								level: "info",
 								text: `步骤 #${step.id} 验收证据已满足，已自动推进（模型未及时 complete_step）。`
+							}
+						});
+						break;
+					}
+				} else if (
+					step.kind === "run" &&
+					!(decisiveResult && isTerminalFailure(step, decisiveResult)) &&
+					((this.requireInGameVerify && this.runClientReady && this.inGameVerified) ||
+						(!this.requireInGameVerify && this.runClientReady))
+				) {
+					evidenceIdleRounds++;
+					roundInstruction = [
+						roundInstruction,
+						`【run 验收已满足】禁止 complete_step；系统将自动推进步骤 #${step.id}。请停止重复 mc_* / 探索工具。`
+					]
+						.filter(Boolean)
+						.join("\n\n");
+					if (evidenceIdleRounds >= 1) {
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+						step.status = "completed";
+						this.planTracker.advanceCurrent("auto_complete_after_evidence");
+						completed = true;
+						this.emitPlanState();
+						this.emit({
+							kind: EventKind.Notice,
+							notice: {
+								level: "info",
+								text: `步骤 #${step.id} 游戏内验收已满足，已自动推进。`
 							}
 						});
 						break;

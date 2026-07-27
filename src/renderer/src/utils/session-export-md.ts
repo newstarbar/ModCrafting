@@ -2,6 +2,8 @@ import type { ChronoEntry, DisplayMessage } from '../types/display-message'
 import type { ChatMessage } from '../harness/chat-message.ts'
 import { contentAsText } from '../harness/chat-message.ts'
 import type { PlanStep } from '../components/TaskPlan'
+import type { ChatTurn } from './chat-turns'
+import { groupMessagesIntoTurns } from './chat-turns'
 
 const TOOL_OUTPUT_LIMIT = 48_000
 const TOOL_ARGS_LIMIT = 16_000
@@ -202,8 +204,14 @@ function controllerAppendix(messages: ChatMessage[] | undefined): string[] {
   return lines
 }
 
+export type SessionExportOrder = 'newest-first' | 'oldest-first'
+
 export interface BuildSessionMarkdownOptions {
   messages: DisplayMessage[]
+  /** 若提供，仅导出这些轮次（按 turns 顺序再按 order 排序）。未提供则导出全部 messages。 */
+  turns?: ChatTurn[]
+  /** 导出正文时间线顺序；默认 newest-first。未传 turns 且未显式指定时保持 oldest-first 兼容旧行为。 */
+  order?: SessionExportOrder
   sessionGoal?: string
   sessionName?: string
   exportedAt?: string
@@ -222,15 +230,90 @@ function maskEndpoint(endpoint?: string): string {
   return endpoint.replace(/\/\/[^@/\s]+@/, '//***@')
 }
 
+function resolveExportTurns(opts: BuildSessionMarkdownOptions): {
+  turns: ChatTurn[]
+  order: SessionExportOrder
+  exportMessages: DisplayMessage[]
+} {
+  const allTurns = opts.turns ?? groupMessagesIntoTurns(opts.messages)
+  const order: SessionExportOrder =
+    opts.order ?? (opts.turns ? 'newest-first' : 'oldest-first')
+  const ordered =
+    order === 'newest-first' ? [...allTurns].reverse() : allTurns
+  const exportMessages: DisplayMessage[] = []
+  for (const turn of ordered) {
+    if (turn.user) exportMessages.push(turn.user)
+    if (turn.assistant) exportMessages.push(turn.assistant)
+  }
+  return { turns: ordered, order, exportMessages }
+}
+
+function appendUserMessageSection(lines: string[], msg: DisplayMessage, turnLabel: string): void {
+  lines.push(`## ${turnLabel} · 用户`)
+  lines.push('')
+  lines.push(`- messageId: \`${msg.id}\``)
+  lines.push(`- timestamp: ${msg.timestamp ? new Date(msg.timestamp).toISOString() : '（无）'}`)
+  if (msg.attachments?.length) {
+    for (const att of msg.attachments) {
+      lines.push(`- 附件: ${att.kind} · \`${att.path}\``)
+    }
+  }
+  lines.push('')
+  lines.push(escapeMd(msg.content?.trim() || (msg.attachments?.length ? '_（仅附件）_' : '_（无内容）_')))
+  lines.push('')
+  if (msg.stateSnapshot) {
+    const snap = msg.stateSnapshot
+    lines.push('<details>')
+    lines.push('<summary>用户消息 stateSnapshot（回滚快照摘要）</summary>')
+    lines.push('')
+    lines.push(`- phase: ${snap.phase}`)
+    lines.push(`- composerMode: ${snap.composerMode}`)
+    lines.push(`- sessionGoal: ${snap.sessionGoal || '（空）'}`)
+    lines.push(`- messageIndex: ${snap.messageIndex}`)
+    lines.push(`- controllerMessages: ${snap.controllerMessages?.length ?? 0}`)
+    lines.push(`- fileSnapshots: ${snap.fileSnapshots?.length ?? 0}`)
+    if (snap.planTrackerSteps?.length) {
+      lines.push('')
+      lines.push(...planStepsSection(snap.planTrackerSteps, '快照内计划步骤'))
+    }
+    if (snap.fileSnapshots?.length) {
+      lines.push('文件快照路径：')
+      for (const fs of snap.fileSnapshots) {
+        lines.push(`- \`${fs.path}\` @ ${new Date(fs.timestamp).toISOString()} (${fs.content.length} chars)`)
+      }
+      lines.push('')
+    }
+    lines.push('</details>')
+    lines.push('')
+  }
+}
+
+function appendAssistantMessageSection(lines: string[], msg: DisplayMessage, turnLabel: string): void {
+  lines.push(`## ${turnLabel} · 助手`)
+  lines.push('')
+  lines.push(`- messageId: \`${msg.id}\``)
+  lines.push(`- timestamp: ${msg.timestamp ? new Date(msg.timestamp).toISOString() : '（无）'}`)
+  if (msg.turnStatus) lines.push(`- turnStatus: \`${msg.turnStatus}\``)
+  lines.push('')
+
+  if (msg.embeddedPlan?.length) {
+    lines.push(...planStepsSection(msg.embeddedPlan, '本轮嵌入计划步骤'))
+  }
+
+  lines.push(entriesToMarkdown(msg.entries, msg.content))
+  lines.push('')
+}
+
 /** 将会话导出为可供诊断的完整 Markdown 文档 */
 export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string {
   const exportedAt = opts.exportedAt ?? new Date().toISOString()
   const goal = opts.sessionGoal?.trim() || '（未设定）'
   const title = opts.sessionName?.trim() || 'ModCrafting 会话诊断导出'
+  const { turns, order, exportMessages } = resolveExportTurns(opts)
 
   const failedTools: string[] = []
   let toolCount = 0
-  for (const msg of opts.messages) {
+  for (const msg of exportMessages) {
     for (const e of msg.entries || []) {
       if (e.kind !== 'tool') continue
       toolCount++
@@ -251,7 +334,9 @@ export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string 
     `- 导出时间：${exportedAt}`,
     `- 项目路径：${opts.projectPath || '（未知）'}`,
     `- 会话目标：${goal}`,
-    `- 消息数：${opts.messages.length}`,
+    `- 消息数：${exportMessages.length}`,
+    `- 导出轮次数：${turns.length}`,
+    `- 时间线顺序：${order === 'newest-first' ? '由近到远（最新在前）' : '由旧到新'}`,
     `- 工具调用数：${toolCount}`,
     `- 失败工具数：${failedTools.length}`,
     `- 模型：${opts.model || '（未知）'}`,
@@ -272,66 +357,19 @@ export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string 
   lines.push(...planStepsSection(opts.activePlanSteps, '当前实施计划（完整步骤）'))
 
   lines.push('---', '', '## 对话时间线', '')
+  if (order === 'newest-first') {
+    lines.push('_正文按由近到远排列，降低诊断阅读时的上下文距离。_', '')
+  }
 
-  let turn = 0
-  for (const msg of opts.messages) {
-    if (msg.role === 'user') {
-      turn += 1
-      lines.push(`## 第 ${turn} 轮 · 用户`)
-      lines.push('')
-      lines.push(`- messageId: \`${msg.id}\``)
-      lines.push(`- timestamp: ${msg.timestamp ? new Date(msg.timestamp).toISOString() : '（无）'}`)
-      if (msg.attachments?.length) {
-        for (const att of msg.attachments) {
-          lines.push(`- 附件: ${att.kind} · \`${att.path}\``)
-        }
-      }
-      lines.push('')
-      lines.push(escapeMd(msg.content?.trim() || (msg.attachments?.length ? '_（仅附件）_' : '_（无内容）_')))
-      lines.push('')
-      if (msg.stateSnapshot) {
-        const snap = msg.stateSnapshot
-        lines.push('<details>')
-        lines.push('<summary>用户消息 stateSnapshot（回滚快照摘要）</summary>')
-        lines.push('')
-        lines.push(`- phase: ${snap.phase}`)
-        lines.push(`- composerMode: ${snap.composerMode}`)
-        lines.push(`- sessionGoal: ${snap.sessionGoal || '（空）'}`)
-        lines.push(`- messageIndex: ${snap.messageIndex}`)
-        lines.push(`- controllerMessages: ${snap.controllerMessages?.length ?? 0}`)
-        lines.push(`- fileSnapshots: ${snap.fileSnapshots?.length ?? 0}`)
-        if (snap.planTrackerSteps?.length) {
-          lines.push('')
-          lines.push(...planStepsSection(snap.planTrackerSteps, '快照内计划步骤'))
-        }
-        if (snap.fileSnapshots?.length) {
-          lines.push('文件快照路径：')
-          for (const fs of snap.fileSnapshots) {
-            lines.push(`- \`${fs.path}\` @ ${new Date(fs.timestamp).toISOString()} (${fs.content.length} chars)`)
-          }
-          lines.push('')
-        }
-        lines.push('</details>')
-        lines.push('')
-      }
-      continue
-    }
+  // chronIndex：在完整会话中的轮次编号（1-based，按旧→新）
+  const allChronTurns = groupMessagesIntoTurns(opts.messages)
+  const chronIndexById = new Map(allChronTurns.map((t, i) => [t.id, i + 1]))
 
-    // assistant
-    if (turn === 0) turn = 1
-    lines.push(`## 第 ${turn} 轮 · 助手`)
-    lines.push('')
-    lines.push(`- messageId: \`${msg.id}\``)
-    lines.push(`- timestamp: ${msg.timestamp ? new Date(msg.timestamp).toISOString() : '（无）'}`)
-    if (msg.turnStatus) lines.push(`- turnStatus: \`${msg.turnStatus}\``)
-    lines.push('')
-
-    if (msg.embeddedPlan?.length) {
-      lines.push(...planStepsSection(msg.embeddedPlan, '本轮嵌入计划步骤'))
-    }
-
-    lines.push(entriesToMarkdown(msg.entries, msg.content))
-    lines.push('')
+  for (const turn of turns) {
+    const chron = chronIndexById.get(turn.id) ?? 0
+    const turnLabel = chron > 0 ? `第 ${chron} 轮` : '轮次'
+    if (turn.user) appendUserMessageSection(lines, turn.user, turnLabel)
+    if (turn.assistant) appendAssistantMessageSection(lines, turn.assistant, turnLabel)
   }
 
   lines.push(...controllerAppendix(opts.controllerMessages))

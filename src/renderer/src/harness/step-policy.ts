@@ -207,7 +207,14 @@ export function createRejectedToolResult(
     return rejectedRepairWriteResult(step, call, options)
   }
   let output = `blocked: [tool_not_allowed] 当前步骤 #${step.id}（${step.title}）不允许调用 "${call.name}"。`
-  if (
+  if (call.name === 'complete_step' && (step.kind === 'build' || step.kind === 'run')) {
+    output =
+      step.kind === 'run'
+        ? `blocked: [tool_not_allowed] run 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
+          `请用 mc_inspect / mc_screenshot 完成验收；满足验收后系统会自动推进。勿再调用 complete_step。`
+        : `blocked: [tool_not_allowed] build 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
+          `请调用 trigger_build({"task":"build"})；构建成功后系统会自动推进。`
+  } else if (
     (step.kind === 'build' || step.kind === 'run') &&
     !options?.repairMode &&
     (call.name === 'edit_file' || call.name === 'write_file')
