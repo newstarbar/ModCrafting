@@ -174,6 +174,8 @@ export class Agent {
   // Rounds with no file writes and no build/run progress
   private consecutiveIdleRounds = 0
   private runLifecycleMeta: Pick<RunOptions, 'turnMode' | 'composerMode'> = {}
+  /** 最近一次 runWorkflow 收集的 mc_screenshot 截图（供 Controller 任务总结使用） */
+  lastCollectedScreenshots: Array<{ base64: string; mimeType: string; toolId: string; timestamp: number }> = []
   // Context compaction
   private assistantTurnCount = 0
   compactionTranscripts: CompactionResult[] = []
@@ -405,6 +407,8 @@ export class Agent {
     try {
       const result = await engine.run(messages)
       this.clarificationCount = clarificationGate.count
+      // 收集截图供 Controller 任务总结使用
+      this.lastCollectedScreenshots = result.collectedScreenshots || []
 
       if (result.needsClarification) {
         this.clarificationPending = true

@@ -837,6 +837,8 @@ export class WorkflowEngine {
 	/** GUI 布局预览状态：当前步骤是否已完成预览（用户确认过布局 JSON） */
 	private guiPreviewCompletedForStep = false;
 	private lastPreviewStepId: string | null = null;
+	/** 本次运行收集的 mc_screenshot 截图（供任务总结展示） */
+	private collectedScreenshots: Array<{ base64: string; mimeType: string; toolId: string; timestamp: number }> = [];
 
 	constructor(options: WorkflowEngineOptions) {
 		this.steps = options.steps;
@@ -1016,8 +1018,28 @@ export class WorkflowEngine {
 			(name, id, result) => {
 				this.emit({
 					kind: EventKind.ToolResult,
-					tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff }
+					tool: {
+						id,
+						name,
+						args: JSON.stringify(result.args || {}),
+						output: result.output,
+						error: result.error,
+						durationMs: result.durationMs,
+						fileDiff: result.fileDiff,
+						// 始终携带截图数据供 UI 展示（不依赖 visionModel）
+						imageBase64: result.imageBase64,
+						imageMimeType: result.imageMimeType
+					}
 				});
+				// 收集截图用于任务总结
+				if (result.imageBase64 && name === "mc_screenshot") {
+					this.collectedScreenshots.push({
+						base64: result.imageBase64,
+						mimeType: result.imageMimeType || "image/png",
+						toolId: id,
+						timestamp: Date.now()
+					});
+				}
 				this.onToolResult?.(name, id, result.output);
 			},
 			(id, chunk) => {
@@ -1040,6 +1062,8 @@ export class WorkflowEngine {
 
 	async run(baseMessages: ChatMessage[]): Promise<WorkflowRunResult> {
 		let finalContent = "";
+		// 重置截图收集（每次 run 独立）
+		this.collectedScreenshots = [];
 		// Fix 3: run-level guard — did any real write happen anywhere this run?
 		// Used to detect no-op builds (all UP-TO-DATE + zero writes) → surface instead of silent success.
 		let anyWriteThisRun = false;
@@ -1889,7 +1913,8 @@ export class WorkflowEngine {
 			finalContent: finalContent || (allDone ? "全部计划步骤已完成。" : "工作流已停止。"),
 			allDone,
 			partial: !allDone,
-			steps: this.steps
+			steps: this.steps,
+			collectedScreenshots: this.collectedScreenshots
 		};
 	}
 }

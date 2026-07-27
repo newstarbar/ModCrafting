@@ -31,6 +31,8 @@ export interface WorkflowRunResult {
   needsClarification?: boolean
   clarificationQuestion?: string
   clarificationOptions?: string[]
+  /** 本次运行收集的 mc_screenshot 截图（供任务总结展示） */
+  collectedScreenshots?: Array<{ base64: string; mimeType: string; toolId: string; timestamp: number }>
 }
 
 export function workflowStepToPlanStep(step: WorkflowStep): PlanStepState {

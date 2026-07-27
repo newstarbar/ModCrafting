@@ -621,7 +621,10 @@ submit_plan 参数要求：
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
 6. **GUI 布局预览强制要求：任何涉及 Screen/HUD/ConfigScreen 代码的步骤（无论是新建还是修改现有 GUI），必须先调用 gui_layout_preview 工具生成 HTML 布局预览供用户确认，拿到用户确认的布局 JSON 后才能编写/修改 GUI 代码。禁止跳过预览直接 edit_file/write_file GUI 代码。layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。**
 7. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
-8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ 根据功能类型设计测试场景（生成生物/给予物品/触发事件） ④ mc_screenshot/mc_inspect 验证效果。禁止仅凭 menu 宣称完成。`;
+8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ 根据功能类型设计测试场景（生成生物/给予物品/触发事件） ④ mc_screenshot/mc_inspect 验证效果。禁止仅凭 menu 宣称完成。
+9. ${isVisionCapableModel(this.apiConfig.model)
+		? "验证策略：当前模型支持图片理解。功能测试时调用 mc_screenshot 截图，模型会直接分析截图验证功能效果。"
+		: "验证策略：当前模型不支持图片理解。功能测试验证策略：① 优先使用 mc_inspect 获取结构化数据（界面类型、控件列表、玩家状态）进行数据化验证；② 仍需调用 mc_screenshot 截图（供总结展示和用户参考），但不要尝试从截图本身分析；③ 若 mc_inspect 无法验证的功能（如颜色/动画/渲染效果），在输出中明确标注\"需用户手动确认\"；④ 禁止声称\"测试通过\"而无客观证据（mc_inspect 数据或用户确认）。"}`;
 
 		const extraRules = mode === "execute" ? "" : "\n- **仅需求歧义时可用 ask_clarification（短问题+短选项）；代码事实先勘察。**\n- **最多 3 句背景说明，然后直接列出步骤。** 禁止方案推演。";
 
@@ -772,7 +775,37 @@ ${projectInfo}`;
 			openCodeDelegate: this.buildOpenCodeDelegate()
 		});
 		this.maybeEmitSymptomConfirmNotice();
+		// 任务完成且收集到截图时，发送任务总结截图事件
+		this.emitTaskSummaryScreenshots();
 		return result;
+	}
+
+	/** 任务完成后发送截图展示事件（复用 ToolResult 事件结构，UI 层渲染为可点击缩略图） */
+	private emitTaskSummaryScreenshots(): void {
+		const screenshots = this.agent.lastCollectedScreenshots;
+		if (!screenshots || screenshots.length === 0) return;
+		// 仅在计划全部完成时发送总结截图
+		if (!this.planTracker?.allDone()) return;
+		this.emitEvent({
+			kind: EventKind.Notice,
+			notice: {
+				level: "info",
+				text: `## 任务完成 — 测试截图\n以下为本次任务测试过程中的 ${screenshots.length} 张截图，点击可放大预览。`
+			}
+		});
+		for (const shot of screenshots) {
+			this.emitEvent({
+				kind: EventKind.ToolResult,
+				tool: {
+					id: `summary-${shot.toolId}-${shot.timestamp}`,
+					name: "task_summary_screenshot",
+					args: "",
+					output: "任务完成截图",
+					imageBase64: shot.base64,
+					imageMimeType: shot.mimeType
+				}
+			});
+		}
 	}
 
 	private async beginExecuteFromTracker(streamCb: (text: string, reasoning?: string) => void): Promise<string> {

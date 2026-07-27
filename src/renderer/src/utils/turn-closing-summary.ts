@@ -84,10 +84,24 @@ export function buildTurnClosingSummary(opts: BuildClosingSummaryOptions): strin
   }
 
   if (opts.reason === 'completed') {
-    const parts = ['本轮任务已完成。']
-    if (progress) parts.push(`${progress}。`)
-    else if (opts.steps?.length) parts.push(`共完成 ${opts.steps.length} 个步骤。`)
-    if (goal) parts.push(`目标「${goal}」已落实。`)
+    const parts: string[] = []
+    // 检查是否有验证相关步骤
+    const verifySteps = opts.steps?.filter(s =>
+      /验证|测试|screenshot|inspect|截图/i.test(s.description)
+    ) || []
+    if (verifySteps.length > 0) {
+      parts.push('## 任务总结分析')
+      parts.push(`已完成 ${opts.steps?.length || 0} 个步骤，其中 ${verifySteps.length} 个验证步骤。`)
+      if (goal) {
+        parts.push(`目标「${goal}」已落实。`)
+      }
+      parts.push('请参考下方测试截图确认功能效果。')
+    } else {
+      parts.push('本轮任务已完成。')
+      if (progress) parts.push(`${progress}。`)
+      else if (opts.steps?.length) parts.push(`共完成 ${opts.steps.length} 个步骤。`)
+      if (goal) parts.push(`目标「${goal}」已落实。`)
+    }
     return parts.join('')
   }
 

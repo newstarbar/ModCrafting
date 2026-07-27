@@ -362,6 +362,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
   const [deletePending, setDeletePending] = useState<{ msgId: string; role: 'user' | 'assistant'; preview: string } | null>(null)
+  // 工具截图放大预览（mc_screenshot 等工具返回的截图）
+  const [toolScreenshotLightbox, setToolScreenshotLightbox] = useState<{ src: string; name: string } | null>(null)
   const displayMessagesRef = useRef<DisplayMessage[]>([])
   displayMessagesRef.current = displayMessages
 
@@ -1140,8 +1142,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             return next
           })
           // Find existing tool entry by id and update it
+          let foundEntry = false
           for (const entry of t.entries) {
             if (entry.kind === 'tool' && entry.id === event.tool.id) {
+              foundEntry = true
               entry.status = event.tool.error ? 'error' : 'done'
               entry.output = event.tool.output || event.tool.error || entry.liveOutput || ''
               entry.liveOutput = undefined
@@ -1149,8 +1153,27 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               if (event.tool.fileDiff) {
                 entry.fileDiff = event.tool.fileDiff
               }
+              // 携带截图数据（mc_screenshot 等工具返回）
+              if (event.tool.imageBase64) {
+                entry.imageBase64 = event.tool.imageBase64
+                entry.imageMimeType = event.tool.imageMimeType
+              }
               break
             }
+          }
+          // 任务总结截图：无对应 ToolDispatch，直接创建条目
+          if (!foundEntry && event.tool.name === 'task_summary_screenshot' && event.tool.imageBase64) {
+            t.entries.push({
+              kind: 'tool',
+              id: event.tool.id,
+              name: event.tool.name,
+              status: 'done',
+              output: event.tool.output || '',
+              imageBase64: event.tool.imageBase64,
+              imageMimeType: event.tool.imageMimeType,
+              displayName: '任务总结截图'
+            })
+            refreshDisplay()
           }
           // Detect complete_step results to mark plan steps done
           const output = event.tool.output || ''
@@ -2148,6 +2171,26 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                           </pre>
                         </div>
                       )}
+                      {entry.imageBase64 && entry.status === 'done' && (
+                        <div className="tool-screenshot-preview">
+                          <button
+                            type="button"
+                            className="tool-screenshot-preview__btn"
+                            title="点击放大预览"
+                            onClick={() => setToolScreenshotLightbox({
+                              src: `data:${entry.imageMimeType || 'image/png'};base64,${entry.imageBase64}`,
+                              name: `${displayName || entry.name} 截图`
+                            })}
+                          >
+                            <img
+                              src={`data:${entry.imageMimeType || 'image/png'};base64,${entry.imageBase64}`}
+                              alt="测试截图"
+                              className="tool-screenshot-preview__img"
+                            />
+                            <span className="tool-screenshot-preview__hint">点击放大</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )
                 }
@@ -2376,6 +2419,14 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         preview={deletePending.preview}
         onConfirm={handleDeleteConfirm}
         onCancel={handleDeleteCancel}
+      />
+    )}
+    {toolScreenshotLightbox && (
+      <ImageLightbox
+        src={toolScreenshotLightbox.src}
+        path=""
+        name={toolScreenshotLightbox.name}
+        onClose={() => setToolScreenshotLightbox(null)}
       />
     )}
     </>

@@ -1821,8 +1821,8 @@ body,
 }
 
 .image-lightbox__img {
-	max-width: 90vw;
-	max-height: 76vh;
+	width: 90vw;
+	height: 76vh;
 	object-fit: contain;
 	transform-origin: center center;
 	transition: transform 0.08s linear;
@@ -1853,6 +1853,53 @@ body,
 
 .image-lightbox__toolbar button:hover {
 	background: rgba(255, 255, 255, 0.12);
+}
+
+.tool-screenshot-preview {
+	margin-top: 6px;
+}
+
+.tool-screenshot-preview__btn {
+	position: relative;
+	display: inline-block;
+	padding: 0;
+	border: 1px solid var(--border-light, rgba(255, 255, 255, 0.12));
+	border-radius: 6px;
+	background: rgba(0, 0, 0, 0.2);
+	cursor: pointer;
+	overflow: hidden;
+	transition: border-color 0.15s ease;
+}
+
+.tool-screenshot-preview__btn:hover {
+	border-color: var(--accent-color, #4a9eff);
+}
+
+.tool-screenshot-preview__img {
+	display: block;
+	width: 200px;
+	height: auto;
+	max-height: 140px;
+	object-fit: cover;
+	border-radius: 5px;
+}
+
+.tool-screenshot-preview__hint {
+	position: absolute;
+	bottom: 4px;
+	right: 4px;
+	padding: 2px 6px;
+	border-radius: 4px;
+	background: rgba(0, 0, 0, 0.65);
+	color: #eee;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+	pointer-events: none;
+}
+
+.tool-screenshot-preview__btn:hover .tool-screenshot-preview__hint {
+	opacity: 1;
 }
 
 .chat-input-composite__goal-expanded {

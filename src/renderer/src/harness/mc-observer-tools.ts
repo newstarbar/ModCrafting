@@ -52,7 +52,7 @@ function optionalInstanceId(args: Record<string, unknown>): string | undefined {
 
 export const mcScreenshotTool: Tool = {
   name: 'mc_screenshot',
-  description: '截取当前 Minecraft 客户端画面（观测桥）。返回路径/尺寸；视觉模型可能附带 base64。',
+  description: '截取当前 Minecraft 客户端画面（观测桥）。返回路径/尺寸；视觉模型可能附带 base64。无论模型是否支持视觉，截图都会保存并在任务总结中展示。非视觉模型请配合 mc_inspect 做数据化验证。',
   schema: {
     type: 'object',
     properties: {

@@ -50,6 +50,9 @@ export interface ChronoEntryTool {
   args?: Record<string, unknown>
   fileDiff?: FileDiff
   displayName?: string
+  /** 截图图片数据（mc_screenshot 等工具返回；供 UI 展示） */
+  imageBase64?: string
+  imageMimeType?: string
 }
 
 export interface ChronoEntryGuiLayout {

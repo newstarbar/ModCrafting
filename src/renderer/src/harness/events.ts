@@ -65,6 +65,9 @@ export interface ToolEvent {
   truncated?: boolean
   durationMs?: number
   fileDiff?: FileDiff
+  /** 截图图片数据（始终携带，不依赖 visionModel；供 UI 展示） */
+  imageBase64?: string
+  imageMimeType?: string
 }
 
 export interface FileDiff {
