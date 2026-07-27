@@ -51,11 +51,65 @@ function rejectedResult(
   }
 }
 
+export interface ToolCallContext {
+  /** 当前阶段，影响错误消息中的操作指导 */
+  phase?: 'plan' | 'execute'
+  /** 当前步骤标题（execute 阶段），用于错误消息定位 */
+  stepTitle?: string
+}
+
+/** 工具不在白名单时，生成阶段感知的明确错误消息（含允许工具列表 + 操作指导） */
+function rejectedNotOfferedResult(
+  call: ModelToolCall,
+  offeredSchemas: ToolSchema[],
+  context?: ToolCallContext
+): ToolResult {
+  const phase = context?.phase ?? 'execute'
+  // 排除控制工具（submit_plan/complete_step），避免噪音
+  const allowedNames = offeredSchemas
+    .map(s => s.name)
+    .filter(n => n !== 'submit_plan' && n !== 'complete_step')
+  const allowedList = allowedNames.length > 0 ? allowedNames.join(', ') : '（无）'
+
+  let detail: string
+  if (phase === 'plan') {
+    const writeTools = ['write_file', 'edit_file', 'delete_file', 'trigger_build', 'run_command']
+    const mcTools = ['mc_screenshot', 'mc_inspect', 'mc_command', 'mc_input', 'mc_ensure_test_world', 'mc_ensure_cheats', 'mc_inventory', 'mc_world', 'mc_chat']
+    if (writeTools.includes(call.name)) {
+      detail = `当前处于计划阶段，禁止写入/编辑/删除文件或触发构建。计划阶段仅允许只读工具：${allowedList}。\n` +
+        `请直接输出结构化计划文本（每步一行，格式：N. [kind] 标题 — 目标路径），不要调用 ${call.name}。`
+    } else if (mcTools.includes(call.name)) {
+      detail = `当前处于计划阶段，禁止操作游戏。计划阶段仅允许只读工具：${allowedList}。\n` +
+        `请直接输出结构化计划文本，不要调用 ${call.name}。`
+    } else {
+      detail = `当前处于计划阶段，该工具不在允许列表中。允许的只读工具：${allowedList}。\n` +
+        `请直接输出结构化计划文本，或改用允许的工具。`
+    }
+  } else {
+    const stepInfo = context?.stepTitle ? `当前步骤：${context.stepTitle}。` : ''
+    detail = `${stepInfo}工具 "${call.name}" 不在当前步骤的白名单中。当前允许的工具：${allowedList}。\n` +
+      `请改用允许的工具；若当前步骤无需工具调用，可调用 complete_step 推进到下一步骤。`
+  }
+
+  const output = `blocked: [tool_not_offered] ${detail}`
+  return {
+    output,
+    error: output,
+    durationMs: 0,
+    ok: false,
+    toolName: call.name,
+    args: call.args,
+    exitCode: null,
+    errorKind: 'tool_not_offered'
+  }
+}
+
 /** Enforce the exact schemas offered in the current model call.
  * Native calls and XML fallback calls pass through this same boundary. */
 export function validateToolCalls(
   calls: ModelToolCall[],
-  offeredSchemas: ToolSchema[]
+  offeredSchemas: ToolSchema[],
+  context?: ToolCallContext
 ): ValidatedToolCalls {
   const offered = new Map(offeredSchemas.map((schema) => [schema.name, schema]))
   const accepted: ModelToolCall[] = []
@@ -66,7 +120,7 @@ export function validateToolCalls(
     if (!schema) {
       rejected.set(
         call.id,
-        rejectedResult(call, 'tool_not_offered', '该工具不在当前阶段/步骤的白名单中')
+        rejectedNotOfferedResult(call, offeredSchemas, context)
       )
       continue
     }

@@ -670,14 +670,15 @@ export class Agent {
         }
 
         const rawToolCalls = result.toolCalls
-        const validation = validateToolCalls(rawToolCalls, availableTools)
+        const validation = validateToolCalls(rawToolCalls, availableTools, { phase })
         // Hard-ban tools that already hit the not-offered streak brake.
         for (const call of [...validation.accepted]) {
           if (!this.hardBannedTools.has(call.name)) continue
           validation.accepted = validation.accepted.filter((c) => c.id !== call.id)
           const brakeOut = formatNotOfferedBrakeInstruction(
             [call.name],
-            availableTools.map((t) => t.name)
+            availableTools.map((t) => t.name),
+            phase
           )
           validation.rejected.set(call.id, {
             output: brakeOut,
@@ -718,7 +719,7 @@ export class Agent {
           if (cleanText) messages.push({ role: 'assistant', content: cleanText })
           const allowedNames = availableTools.map((t) => t.name)
           if (brakedTools.length > 0) {
-            const brakeMsg = formatNotOfferedBrakeInstruction(brakedTools, allowedNames)
+            const brakeMsg = formatNotOfferedBrakeInstruction(brakedTools, allowedNames, phase)
             messages.push({ role: 'user', content: brakeMsg })
             this.emit({
               kind: EventKind.Notice,

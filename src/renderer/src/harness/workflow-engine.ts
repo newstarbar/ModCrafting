@@ -1281,7 +1281,10 @@ export class WorkflowEngine {
 					continue;
 				}
 
-				const validation = validateToolCalls(allCalls, allowedTools);
+				const validation = validateToolCalls(allCalls, allowedTools, {
+					phase: 'execute',
+					stepTitle: step.title
+				});
 				// execute 阶段误调 submit_plan → 无害提示，避免 0ms 失败噪音与死循环
 				// run/build 误调 complete_step：可操作拒绝；若 run 验收已满足则视为推进信号
 				const runGatesSatisfied =

@@ -45,12 +45,16 @@ export function updateNotOfferedStreak(
 
 export function formatNotOfferedBrakeInstruction(
   brakedTools: string[],
-  allowedToolNames: string[]
+  allowedToolNames: string[],
+  phase?: 'plan' | 'execute'
 ): string {
   const banned = brakedTools.join(', ')
   const allowed = allowedToolNames.length ? allowedToolNames.join(', ') : '（无）'
+  const phaseGuidance = phase === 'plan'
+    ? '计划阶段应直接输出结构化计划文本（每步一行），不需要调用被禁工具。'
+    : '若当前步骤无需工具调用，可调用 complete_step 推进到下一步骤。'
   return (
-    `【系统】工具 ${banned} 已连续被白名单拒绝 ≥${MAX_SAME_TOOL_NOT_OFFERED} 次，禁止再调用。` +
-    `当前允许工具：${allowed}。请改用允许的工具，或向用户说明阶段/步骤限制。`
+    `【系统】工具 ${banned} 已连续被白名单拒绝 ≥${MAX_SAME_TOOL_NOT_OFFERED} 次，本会话剩余轮次禁止再调用。` +
+    `当前允许的工具：${allowed}。\n${phaseGuidance}`
   )
 }

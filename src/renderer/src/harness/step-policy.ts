@@ -223,6 +223,16 @@ export function createRejectedToolResult(
       step.kind === 'build'
         ? ' 请先调用 trigger_build({"task":"build"})；构建失败后会自动进入修复模式，那时才允许 edit_file。'
         : ' 请先调用 trigger_build({"task":"runClient"})；运行失败后会自动进入修复模式，那时才允许 edit_file。'
+  } else if (call.name === 'trigger_build') {
+    output += ` 当前步骤类型为 ${step.kind}，trigger_build 仅在 build/run 步骤允许。请先 complete_step 推进到构建/运行步骤。`
+  } else if (call.name === 'mc_screenshot' || call.name === 'mc_inspect' || call.name === 'mc_command' || call.name === 'mc_input' || call.name === 'mc_ensure_test_world' || call.name === 'mc_ensure_cheats' || call.name === 'mc_inventory' || call.name === 'mc_world' || call.name === 'mc_chat') {
+    output += ` MC 操作工具仅在 run 步骤允许。当前步骤类型为 ${step.kind}，请先完成当前步骤推进到 run 步骤。`
+  } else if (call.name === 'fabric_recipe_generate' || call.name === 'create_recipe') {
+    output += ` 配方工具仅在 recipe 步骤允许。当前步骤类型为 ${step.kind}。`
+  } else if (call.name === 'fabric_mixin_scaffold' || call.name === 'fabric_mixin_register') {
+    output += ` Mixin 工具仅在 mixin 步骤允许。当前步骤类型为 ${step.kind}。`
+  } else {
+    output += ` 当前步骤允许的工具：${step.allowedTools.join(', ')}。请改用允许的工具，或调用 complete_step 推进到下一步骤。`
   }
   return {
     output,
