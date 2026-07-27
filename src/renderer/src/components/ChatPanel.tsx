@@ -1846,24 +1846,42 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     const truncated = displayMessages.slice(0, turnIndex + 1)
 
+    // 判断截断点是否在 execute 阶段：检查当前计划是否存在且锚点在截断范围内
+    const currentPlan = activePlanRef.current
+    const hasValidPlan = Boolean(
+      currentPlan &&
+      currentPlan.steps.length > 0 &&
+      truncated.some((m) => m.id === currentPlan.anchorMsgId)
+    )
+    const planToKeep = hasValidPlan ? currentPlan : null
+
     bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
-    setActivePlan(null)
+    setActivePlan(planToKeep)
     setCompletionFlash('')
     turnRef.current = { msgId: '', entries: [], streamDone: false }
 
     setDisplayMessages(truncated)
-    flushPersist(truncated, null, { resetSystem: true })
+    flushPersist(truncated, planToKeep, { resetSystem: true })
 
-    const serialized = serializeDisplayMessages(truncated, null)
+    const serialized = serializeDisplayMessages(truncated, planToKeep)
     void toControllerMessagesWithAttachments(serialized, (p) => window.api.readAttachmentDataUrl(p)).then((msgs) => {
       controllerRef.current?.restoreSnapshot(msgs)
+      if (planToKeep) {
+        controllerRef.current?.restorePlanTracker(planToKeep.steps)
+      }
     })
 
     const ctrl = controllerRef.current
     if (!ctrl) return
-    try { await ctrl.retryFromUser() }
+    try {
+      if (planToKeep) {
+        await ctrl.retryExecuteTurn()
+      } else {
+        await ctrl.retryFromUser()
+      }
+    }
     catch {
       setIsLoading(false)
       setAgentStatus('')

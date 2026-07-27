@@ -1375,6 +1375,33 @@ ${projectInfo}`;
 		return this.runTurn(lastUser.content, { pushUser: false });
 	}
 
+	/** Re-run the last user turn in execute phase without resetting plan.
+	 *  保留 planTracker 和 _phase，仅重置 Agent 运行状态后重新运行。
+	 *  适用于 execute 阶段重试：AI 从当前步骤继续执行，不重新规划、不重新问澄清。 */
+	async retryExecuteTurn(): Promise<string> {
+		if (this._running) return "";
+
+		this.trimTrailingAssistants();
+		const lastUser = [...this.messages].reverse().find((m) => m.role === "user" && m.origin !== "harness" && !/^(?:\[mid-turn\]|\[SYSTEM:|【系统|STOP EXPLORING)/.test(contentAsText(m.content)));
+		if (!lastUser) return "";
+
+		// Drop trailing harness-injected messages after lastUser
+		while (this.messages.length > 0) {
+			const last = this.messages[this.messages.length - 1];
+			if (last.role === "user" && last !== lastUser) {
+				this.messages.pop();
+				continue;
+			}
+			break;
+		}
+
+		// 保持在 execute 阶段，不清空 planTracker
+		// 仅重置 Agent 运行状态（clarificationPending、idleRounds 等）
+		this.agent.resetRunState();
+
+		return this.runTurn(lastUser.content, { pushUser: false });
+	}
+
 	/** Resume execution after a clarification question was answered. */
 	async answerClarification(answer: string): Promise<string> {
 		if (!this.agent.clarificationPending) return "";
