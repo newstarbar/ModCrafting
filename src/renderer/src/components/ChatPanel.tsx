@@ -1448,14 +1448,18 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
     const sendContent = buildUserContent(userMsg, messageAttachments, imageDataUrls)
 
-    const resumeLike = /^(继续|接着|往下|continue|执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i.test(userMsg)
-    const planForTurn = resumeLike
-      ? (activePlanRef.current || restoreActivePlan(displayMessagesRef.current, serializeDisplayMessages(displayMessagesRef.current, activePlanRef.current)))
-      : null
-    if (resumeLike && planForTurn?.steps?.length) {
-      ctrl.restorePlanTracker(planForTurn.steps)
-      activePlanRef.current = planForTurn
-      setActivePlan(planForTurn)
+    // 仅「执行计划」在 planReady 时恢复；「继续」等新消息清除旧进度，按上下文重新规划。
+    const executeWaitingPlan =
+      planReady
+      && /^(执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i.test(userMsg)
+      && Boolean(activePlanRef.current?.steps?.length)
+    if (executeWaitingPlan && activePlanRef.current?.steps?.length) {
+      ctrl.restorePlanTracker(activePlanRef.current.steps)
+      setActivePlan(activePlanRef.current)
+    } else {
+      ctrl.clearPlanForNewTurn()
+      setActivePlan(null)
+      setPlanReady(false)
     }
 
     setInput('')
@@ -1463,11 +1467,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
-    // Keep pinned plan when resuming; clearing it made「继续」lose tracker after reload.
-    if (!resumeLike) {
-      setActivePlan(null)
-      setPlanReady(false)
-    }
     setCompletionFlash('')
 
     if (!currentSessionId) {
@@ -1518,7 +1517,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           stateSnapshot: preSnapshot,
           attachments: messageAttachments.length ? messageAttachments : undefined
         }]
-        flushPersist(next, resumeLike ? activePlanRef.current : null)
+        flushPersist(next, executeWaitingPlan ? activePlanRef.current : null)
         return next
       })
     }

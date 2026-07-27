@@ -114,6 +114,9 @@ export function buildTurnClosingSummary(opts: BuildClosingSummaryOptions): strin
 
   if (opts.reason === 'partial') {
     const parts = ['本轮部分完成。']
+    if (errorText && !/cancel/i.test(errorText)) {
+      parts.push(`原因：${errorText.slice(0, 200)}。`)
+    }
     if (progress) parts.push(`${progress}。`)
     if (goal) parts.push(`目标：${goal}。`)
     parts.push('发送新消息可继续推进。')
@@ -123,6 +126,21 @@ export function buildTurnClosingSummary(opts: BuildClosingSummaryOptions): strin
   // answered / chat
   if (progress) return `本轮已结束。${progress}。`
   return '本轮已结束。'
+}
+
+function lastToolFailureReason(entries: ChronoEntry[]): string | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]
+    if (e.kind !== 'tool') continue
+    const out = String(e.output || '').trim()
+    const failed = e.status === 'error' || /^\s*Error:/i.test(out)
+    if (!failed) continue
+    const firstLine = out.split('\n').map((l) => l.trim()).find(Boolean) || ''
+    const name = e.name || 'tool'
+    if (firstLine) return `${name}: ${firstLine.slice(0, 160)}`
+    return `${name} 失败`
+  }
+  return undefined
 }
 
 /**
@@ -140,16 +158,27 @@ export function ensureClosingSummaryEntry(
     || opts.reason === 'cancelled'
     || opts.reason === 'partial'
 
+  const enriched: BuildClosingSummaryOptions = { ...opts }
+  if ((forceAppend || opts.reason === 'error') && !enriched.error) {
+    const fromTools = lastToolFailureReason(entries)
+    if (fromTools) enriched.error = fromTools
+  }
+
   if (forceAppend) {
-    if (hasClosingSummaryText(entries)) return entries
-    const summary = buildTurnClosingSummary(opts)
+    // Always append a fresh closing for abnormal / partial ends (even if an older marker exists).
+    const summary = buildTurnClosingSummary(enriched)
     if (!summary.trim()) return entries
+    if (hasClosingSummaryText(entries)) {
+      // Replace trailing closing marker with richer one if we now have a reason
+      const withoutOld = entries.filter((e) => !(e.kind === 'text' && CLOSING_MARKERS_RE.test(e.content.trim())))
+      return [...withoutOld, { kind: 'text', content: summary }]
+    }
     return [...entries, { kind: 'text', content: summary }]
   }
 
   if (opts.reason === 'completed') {
     if (hasClosingSummaryText(entries)) return entries
-    const summary = buildTurnClosingSummary(opts)
+    const summary = buildTurnClosingSummary(enriched)
     if (!summary.trim()) return entries
     return [...entries, { kind: 'text', content: summary }]
   }
@@ -163,7 +192,7 @@ export function ensureClosingSummaryEntry(
     }
     return entries
   }
-  const summary = buildTurnClosingSummary(opts)
+  const summary = buildTurnClosingSummary(enriched)
   if (!summary.trim()) return entries
   return [...entries, { kind: 'text', content: summary }]
 }

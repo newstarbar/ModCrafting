@@ -1061,34 +1061,37 @@ ${projectInfo}`;
 				return result;
 			}
 
+			if (effectiveIntent === "resume") {
+				// 「继续」仅在计划待用户确认执行时恢复；否则按上下文重新规划，避免沿用上一轮旧进度。
+				if (this.planReadyAwaitingExecute && this.planTracker && !this.planTracker.allDone()) {
+					const result = await this.beginExecuteFromTracker(streamCb);
+					this.onAgentStatus?.("");
+					return result;
+				}
+				this.retainCurrentUserAsNewTask();
+				this.planTracker = null;
+				this.lastPlanCandidate = null;
+				this._phase = "plan";
+				this.planReadyAwaitingExecute = false;
+				this.emitEvent({
+					kind: EventKind.Notice,
+					notice: {
+						level: "info",
+						text: "将根据当前上下文重新制定实施计划（不再沿用上一轮任务进度）。"
+					}
+				});
+				effectiveIntent = "develop";
+				this.lastTurnMode = "develop";
+			}
+
 			if (effectiveIntent === "chat") {
 				const result = await this.runChatTurn(streamCb);
 				this.onAgentStatus?.("");
 				return result;
 			}
 
-			if (effectiveIntent === "resume") {
-				this.adoptPlanCandidateIfNeeded();
-				if (!this.planTracker) {
-					this.onAgentStatus?.("");
-					const missing = "没有可恢复的计划。请重新描述需求，或确认会话中仍有未完成的任务进度后再发送「继续」。";
-					this.messages.push({ role: "assistant", content: missing, origin: "assistant", taskId: this.taskId });
-					this.emitEvent({ kind: EventKind.TurnStarted, turnMode: "resume", composerMode: this.composerMode });
-					this.emitEvent({ kind: EventKind.Text, text: missing });
-					this.emitEvent({
-						kind: EventKind.Notice,
-						notice: { level: "warn", text: missing }
-					});
-					this.emitEvent({ kind: EventKind.TurnDone, phase: "resume_missing_plan", turnMode: "resume", composerMode: this.composerMode });
-					return missing;
-				}
-				const result = await this.beginExecuteFromTracker(streamCb);
-				this.onAgentStatus?.("");
-				return result;
-			}
-
 			// 短症状/修复：agent 模式跳过正式 submit_plan。
-			if (intent === "develop" && this.composerMode === "agent" && (!this.planTracker || this.planTracker.allDone()) && classified.skipFormalPlan) {
+			if (effectiveIntent === "develop" && this.composerMode === "agent" && (!this.planTracker || this.planTracker.allDone()) && classified.skipFormalPlan) {
 				if (this.planTracker?.allDone()) {
 					this.retainCurrentUserAsNewTask();
 					this.planTracker = null;
@@ -1123,7 +1126,7 @@ ${projectInfo}`;
 				return result;
 			}
 
-			if (intent === "develop" && this._phase === "execute" && this.planTracker && !this.planTracker.allDone()) {
+			if (effectiveIntent === "develop" && this._phase === "execute" && this.planTracker && !this.planTracker.allDone()) {
 				// Only explicit replacement language starts a new task. Length-based guessing
 				// previously discarded active plans for ordinary corrections and details.
 				const isNewRequest = /^\s*(我不要这个|不要这个|换个需求|换一个需求|新任务|另外(?:做|加|创建)|重新做|放弃当前|算了|stop\b|new\b)/i.test(inputText);
@@ -1150,12 +1153,12 @@ ${projectInfo}`;
 				}
 			}
 
-			if (intent === "develop" || intent === "plan_only") {
-				if (intent === "develop" && this.planTracker?.allDone()) {
+			if (effectiveIntent === "develop" || effectiveIntent === "plan_only") {
+				if (effectiveIntent === "develop" && this.planTracker?.allDone()) {
 					this.retainCurrentUserAsNewTask();
 					this.planTracker = null;
 				}
-				if (intent === "plan_only") {
+				if (effectiveIntent === "plan_only") {
 					this._phase = "plan";
 					this.planTracker = null;
 					this.lastPlanCandidate = null;
@@ -1680,5 +1683,18 @@ ${projectInfo}`;
 			this.lastSystemMode = null;
 			void this.updateSystemPrompt("execute");
 		}
+	}
+
+	/**
+	 * Clear incomplete plan state before a new user turn so the agent must
+	 * produce a fresh plan from context (instead of silently resuming old steps).
+	 * Does not clear planReadyAwaitingExecute — that path uses restorePlanTracker.
+	 */
+	clearPlanForNewTurn(): void {
+		this.planTracker = null;
+		this.lastPlanCandidate = null;
+		this._phase = "plan";
+		this.planReadyAwaitingExecute = false;
+		this.lastSystemMode = null;
 	}
 }

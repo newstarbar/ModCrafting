@@ -13,15 +13,14 @@ import org.lwjgl.glfw.GLFW;
  * In-game tip / status for {@link InputGuard}.
  * Drawn only inside the game framebuffer (never covers the OS title bar).
  * <p>
- * Locked: always show corner chip; tip card only while hovering the chip (or the tip itself).
- * When locked, cursor is unlocked so hover works in-world while mixins still block gameplay input.<br>
+ * Locked: corner chip always shown; tip card appears while the mouse is over the game window.
+ * Cursor is unlocked while locked so hover works in-world; mixins still block gameplay input.<br>
  * Unlocked: corner "手动模式" chip; click to re-lock.
  */
 public final class InputGuardHud {
     private static final int PAD = 10;
     private static final int BTN_H = 20;
     private static final int INDICATOR_H = 16;
-    private static final int HOT_PAD = 4;
 
     private static boolean mouseWasDown;
     private static int restoreBtnX;
@@ -37,11 +36,6 @@ public final class InputGuardHud {
     private static boolean tipVisible;
     private static boolean restoreHitValid;
     private static boolean indicatorHitValid;
-    /** Previous-frame tip bounds so the pointer can move from chip → card without flicker. */
-    private static int prevTipX;
-    private static int prevTipY;
-    private static int prevTipW;
-    private static int prevTipH;
 
     private InputGuardHud() {}
 
@@ -71,8 +65,8 @@ public final class InputGuardHud {
         indicatorW = 0;
 
         if (!InputGuard.isActive() || client == null || client.getWindow() == null) {
-            prevTipW = 0;
-            prevTipH = 0;
+            tipCardW = 0;
+            tipCardH = 0;
             return;
         }
 
@@ -81,34 +75,21 @@ public final class InputGuardHud {
 
         if (InputGuard.isLocked()) {
             drawIndicator(context, client, sw, sh, "AI 自测", 0xFF4A90D9);
-            boolean overChip = hit(mouseX, mouseY, indicatorX - HOT_PAD, indicatorY - HOT_PAD,
-                    indicatorW + HOT_PAD * 2, INDICATOR_H + HOT_PAD * 2);
-            boolean overPrevTip = prevTipW > 0 && hit(mouseX, mouseY, prevTipX, prevTipY, prevTipW, prevTipH);
-            if (overChip || overPrevTip) {
+            // Tip when pointer is anywhere inside the game viewport (not only the chip).
+            boolean overWindow = mouseX >= 0 && mouseY >= 0 && mouseX < sw && mouseY < sh;
+            if (overWindow) {
                 tipVisible = true;
                 drawTipCard(context, client, sw, sh);
-                prevTipX = tipCardX;
-                prevTipY = tipCardY;
-                prevTipW = tipCardW;
-                prevTipH = tipCardH;
             } else {
                 tipCardW = 0;
                 tipCardH = 0;
-                prevTipW = 0;
-                prevTipH = 0;
             }
         } else {
             tipCardW = 0;
             tipCardH = 0;
-            prevTipW = 0;
-            prevTipH = 0;
             drawIndicator(context, client, sw, sh, "手动模式", 0xFF5BCA6B);
             indicatorHitValid = true;
         }
-    }
-
-    private static boolean hit(double mx, double my, int x, int y, int w, int h) {
-        return w > 0 && h > 0 && mx >= x && mx <= x + w && my >= y && my <= y + h;
     }
 
     private static void drawIndicator(DrawContext context, MinecraftClient client, int sw, int sh, String label, int border) {
