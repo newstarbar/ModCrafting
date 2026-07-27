@@ -17,7 +17,7 @@ let trackingTimer: NodeJS.Timeout | null = null
 let currentPid: number | null = null
 let isLocked = true
 
-const TRACK_INTERVAL_MS = 500
+const TRACK_INTERVAL_MS = 250
 
 function resolveOverlayHtmlPath(): string {
   // 开发环境：resources/overlay/mc-input-guard.html
@@ -38,7 +38,7 @@ function createOverlayWindow(): BrowserWindow {
     transparent: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: false,
+    resizable: true, // 允许调整大小，以便跟随 MC 窗口尺寸变化（全屏切换等）
     focusable: false, // 不获取焦点，MC 窗口保持焦点
     hasShadow: false,
     webPreferences: {
@@ -86,12 +86,13 @@ interface McWindowRect {
 }
 
 /**
- * 通过 PowerShell + PID 查找 MC 窗口位置和大小
- * 使用 Get-Process.MainWindowHandle + GetWindowRect API
+ * 通过 PowerShell + PID 查找 MC 窗口客户区位置和大小
+ * 使用 GetClientRect + ClientToScreen 获取客户区矩形（不含标题栏/边框），
+ * 这样 overlay 窗口精确覆盖 MC 渲染区域。
  */
 async function findMcWindowRect(pid: number): Promise<McWindowRect | null> {
   return new Promise((resolve) => {
-    // PowerShell 脚本：通过 PID 查找窗口句柄，再获取窗口矩形
+    // PowerShell 脚本：通过 PID 查找窗口句柄，获取客户区矩形并转换为屏幕坐标
     const script = `
 $ErrorActionPreference = 'SilentlyContinue'
 $proc = Get-Process -Id ${pid}
@@ -99,16 +100,24 @@ if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) { return }
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class McWinRect {
+public class McClientRect {
   [DllImport("user32.dll")]
-  public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  public static extern bool GetClientRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")]
+  public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT { public int L; public int T; public int R; public int B; }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT { public int X; public int Y; }
 }
 "@
-$rect = New-Object McWinRect+RECT
-[McWinRect]::GetWindowRect($proc.MainWindowHandle, [ref]$rect) | Out-Null
-"$($rect.L),$($rect.T),$($rect.R),$($rect.B)"
+$rect = New-Object McClientRect+RECT
+[McClientRect]::GetClientRect($proc.MainWindowHandle, [ref]$rect) | Out-Null
+$pt = New-Object McClientRect+POINT
+$pt.X = $rect.L
+$pt.Y = $rect.T
+[McClientRect]::ClientToScreen($proc.MainWindowHandle, [ref]$pt) | Out-Null
+"$($pt.X),$($pt.Y),$($rect.R - $rect.L),$($rect.B - $rect.T)"
 `.trim()
 
     execFile(
@@ -126,12 +135,16 @@ $rect = New-Object McWinRect+RECT
           resolve(null)
           return
         }
-        const [l, t, r, b] = parts.map((n) => parseInt(n, 10))
-        if ([l, t, r, b].some((n) => !Number.isFinite(n))) {
+        const [x, y, w, h] = parts.map((n) => parseInt(n, 10))
+        if ([x, y, w, h].some((n) => !Number.isFinite(n))) {
           resolve(null)
           return
         }
-        resolve({ x: l, y: t, width: r - l, height: b - t })
+        if (w <= 0 || h <= 0) {
+          resolve(null)
+          return
+        }
+        resolve({ x, y, width: w, height: h })
       }
     )
   })

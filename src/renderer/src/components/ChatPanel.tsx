@@ -986,6 +986,28 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         }
         break
 
+      case EventKind.GuiLayoutPreviewCancelled:
+        // 步骤切换/修复模式进入时，将所有 pending 的预览条目标记为已取消
+        setDisplayMessages((prev) => {
+          let anyChanged = false
+          const next = prev.map((m) => {
+            if (!m.entries) return m
+            let msgChanged = false
+            const entries = m.entries.map((e) => {
+              if (e.kind === 'guiLayoutPreview' && e.status === 'pending') {
+                msgChanged = true
+                anyChanged = true
+                return { ...e, status: 'cancelled' as const }
+              }
+              return e
+            })
+            return msgChanged ? { ...m, entries } : m
+          })
+          if (anyChanged) flushPersist(next, activePlanRef.current)
+          return anyChanged ? next : prev
+        })
+        break
+
       case EventKind.TurnStarted:
         turnUsageRef.current = { promptTokens: 0, completionTokens: 0 }
         onRunningChangeRef.current?.(true)

@@ -1,175 +1,181 @@
-import { EventKind, type Event } from './events.ts'
-import type { PlanTracker } from './plan-tracker.ts'
-import { isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from './step-policy.ts'
-import { executeBatch, isRunClientReadyResult, type Registry, type ToolContext, type ToolResult } from './tools.ts'
-import type { WorkflowRunResult, WorkflowStep } from './workflow-types.ts'
-import {
-  assistantToolCallMessage,
-  type ChatMessage,
-  type ModelToolCall,
-  toolResultMessage
-} from './chat-message.ts'
-import { isRetryableFetchError, sleep, fetchRetryDelayMs } from './fetch-retry.ts'
-import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from './gradle-error-parser.ts'
-import { classifyFabricLog } from './fabric-utils.ts'
-import { canToolResultAdvanceStep, patternMatchesPath, sourceSetPathAliases } from './step-evidence.ts'
-import {
-  extractCompileApiHints,
-  hasSimilarDocSearch,
-  normalizeDocSearchFingerprint
-} from './doc-search-dedup.ts'
-import { FileSession } from './file-session.ts'
-import { workflowStepToPlanStep } from './workflow-types.ts'
-import { validateToolCalls } from './tool-call-validator.ts'
-import { MAX_EXECUTE_CLARIFICATIONS } from './clarify-validation.ts'
-import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from './reasoning-limits.ts'
-import type { VerifyTarget } from './verify-target.ts'
-import {
-  describeVerifyMismatch,
-  formatVerifyRepairKick,
-  isWrongScreenVerifyFinding,
-  matchesVerifyTarget
-} from './verify-target.ts'
+import { EventKind, type Event } from "./events.ts";
+import type { PlanTracker } from "./plan-tracker.ts";
+import { isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from "./step-policy.ts";
+import { executeBatch, isRunClientReadyResult, type Registry, type ToolContext, type ToolResult } from "./tools.ts";
+import type { WorkflowRunResult, WorkflowStep } from "./workflow-types.ts";
+import { assistantToolCallMessage, type ChatMessage, type ModelToolCall, toolResultMessage } from "./chat-message.ts";
+import { isRetryableFetchError, sleep, fetchRetryDelayMs } from "./fetch-retry.ts";
+import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from "./gradle-error-parser.ts";
+import { classifyFabricLog } from "./fabric-utils.ts";
+import { canToolResultAdvanceStep, patternMatchesPath, sourceSetPathAliases } from "./step-evidence.ts";
+import { extractCompileApiHints, hasSimilarDocSearch, normalizeDocSearchFingerprint } from "./doc-search-dedup.ts";
+import { FileSession } from "./file-session.ts";
+import { workflowStepToPlanStep } from "./workflow-types.ts";
+import { validateToolCalls } from "./tool-call-validator.ts";
+import { MAX_EXECUTE_CLARIFICATIONS } from "./clarify-validation.ts";
+import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
+import type { VerifyTarget } from "./verify-target.ts";
+import { describeVerifyMismatch, formatVerifyRepairKick, isWrongScreenVerifyFinding, matchesVerifyTarget } from "./verify-target.ts";
 
 export interface WorkflowModelResult {
-  finishReason?: string
-  toolCalls: ModelToolCall[]
-  text: string
-  reasoning: string
-  usage?: {
-    promptTokens?: number
-    completionTokens?: number
-    totalTokens?: number
-    cacheHitTokens?: number
-    cacheMissTokens?: number
-  }
-  /** When set, replace engine baseMessages with this compacted history. */
-  replaceBaseMessages?: ChatMessage[]
+	finishReason?: string;
+	toolCalls: ModelToolCall[];
+	text: string;
+	reasoning: string;
+	usage?: {
+		promptTokens?: number;
+		completionTokens?: number;
+		totalTokens?: number;
+		cacheHitTokens?: number;
+		cacheMissTokens?: number;
+	};
+	/** When set, replace engine baseMessages with this compacted history. */
+	replaceBaseMessages?: ChatMessage[];
 }
 
 export type WorkflowModelCall = (
-  messages: ChatMessage[],
-  tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
-  onChunk: (text: string, reasoning?: string) => void
-) => Promise<WorkflowModelResult>
+	messages: ChatMessage[],
+	tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
+	onChunk: (text: string, reasoning?: string) => void
+) => Promise<WorkflowModelResult>;
 
 export interface WorkflowEngineOptions {
-  steps: WorkflowStep[]
-  planTracker: PlanTracker
-  registry: Registry
-  projectPath: string | null
-  abortSignal?: AbortSignal
-  emit: (event: Event) => void
-  onToolDispatch?: (name: string, id: string) => void
-  onToolResult?: (name: string, id: string, output: string) => void
-  /** GUI 布局预览回调（透传到 ToolContext） */
-  onGuiLayoutPreview?: (payload: {
-    id: string
-    title: string
-    layoutType: import('./events.ts').GuiLayoutType
-    html: string
-    elements: import('./events.ts').GuiLayoutElement[]
-  }) => Promise<string>
-  modelCall: WorkflowModelCall
-  openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
-  /** Shared ACI read session for this run; created if omitted */
-  fileSession?: FileSession
-  /** Shared with Agent — execute-phase ask_clarification cap. */
-  clarificationGate?: { count: number }
-  /** When true, attach mc_screenshot base64 as multimodal tool content. */
-  visionModel?: boolean
-  /**
-   * When true (sticky user symptom), run step needs MC_PHASE:menu AND a successful
-   * mc_inspect / mc_screenshot before auto-completing.
-   */
-  requireInGameVerify?: boolean
-  /** Reject TitleScreen-only inspect/screenshot as verification (GUI/preview symptoms). */
-  requireFeatureGuiVerify?: boolean
-  /** Explicit screen/hotkey target; when set, inspect must match it. */
-  verifyTarget?: import('./verify-target.ts').VerifyTarget | null
+	steps: WorkflowStep[];
+	planTracker: PlanTracker;
+	registry: Registry;
+	projectPath: string | null;
+	abortSignal?: AbortSignal;
+	emit: (event: Event) => void;
+	onToolDispatch?: (name: string, id: string) => void;
+	onToolResult?: (name: string, id: string, output: string) => void;
+	/** GUI 布局预览回调（透传到 ToolContext） */
+	onGuiLayoutPreview?: (payload: { id: string; title: string; layoutType: import("./events.ts").GuiLayoutType; html: string; elements: import("./events.ts").GuiLayoutElement[] }) => Promise<string>;
+	/** 步骤切换/修复模式进入时清理未确认的 GUI 布局预览（避免残留面板阻塞流程） */
+	onCancelPendingGuiLayouts?: () => void;
+	modelCall: WorkflowModelCall;
+	openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>;
+	/** Shared ACI read session for this run; created if omitted */
+	fileSession?: FileSession;
+	/** Shared with Agent — execute-phase ask_clarification cap. */
+	clarificationGate?: { count: number };
+	/** When true, attach mc_screenshot base64 as multimodal tool content. */
+	visionModel?: boolean;
+	/**
+	 * When true (sticky user symptom), run step needs MC_PHASE:menu AND a successful
+	 * mc_inspect / mc_screenshot before auto-completing.
+	 */
+	requireInGameVerify?: boolean;
+	/** Reject TitleScreen-only inspect/screenshot as verification (GUI/preview symptoms). */
+	requireFeatureGuiVerify?: boolean;
+	/** Explicit screen/hotkey target; when set, inspect must match it. */
+	verifyTarget?: import("./verify-target.ts").VerifyTarget | null;
 }
 
-let workflowToolId = 0
+let workflowToolId = 0;
 
-const MAX_REPAIR_ROUNDS = 3
-const MAX_REPAIR_ROUNDS_CAP = 10
+const MAX_REPAIR_ROUNDS = 3;
+const MAX_REPAIR_ROUNDS_CAP = 10;
 /** Free repair-diagnostic rounds (read_error_log / fabric_log_debugger only). */
-export const MAX_FREE_REPAIR_DIAG_ROUNDS = 2
-const MAX_MODEL_NETWORK_RETRIES = 2
+export const MAX_FREE_REPAIR_DIAG_ROUNDS = 2;
+const MAX_MODEL_NETWORK_RETRIES = 2;
 const REPAIR_EXTRA_TOOLS = [
-  'edit_file',
-  'write_file',
-  'delete_file',
-  'read_file',
-  'grep',
-  'read_error_log',
-  'fabric_log_debugger',
-  'fabric_docs_search',
-  'minecraft_data_lookup',
-  'mc_wiki_search',
-  'vanilla_mc_wiki_query',
-  'fabric_mixin_target_lookup',
-  'fabric_mixin_scaffold',
-  'fabric_mixin_register',
-  'fabric_recipe_validate',
-  'fabric_mixin_validate',
-  'mc_screenshot',
-  'mc_inspect',
-  'mc_inventory',
-  'mc_world',
-  'mc_chat',
-  'mc_command',
-  'mc_input',
-  'mc_ensure_test_world',
-  'mc_ensure_cheats'
-] as const
+	"edit_file",
+	"write_file",
+	"delete_file",
+	"read_file",
+	"grep",
+	"read_error_log",
+	"fabric_log_debugger",
+	"fabric_docs_search",
+	"minecraft_data_lookup",
+	"mc_wiki_search",
+	"vanilla_mc_wiki_query",
+	"fabric_mixin_target_lookup",
+	"fabric_mixin_scaffold",
+	"fabric_mixin_register",
+	"fabric_recipe_validate",
+	"fabric_mixin_validate",
+	"mc_screenshot",
+	"mc_inspect",
+	"mc_inventory",
+	"mc_world",
+	"mc_chat",
+	"mc_command",
+	"mc_input",
+	"mc_ensure_test_world",
+	"mc_ensure_cheats"
+] as const;
 
-const REPAIR_DIAG_DEDUP_TOOLS = new Set(['read_error_log', 'fabric_log_debugger'])
+const REPAIR_DIAG_DEDUP_TOOLS = new Set(["read_error_log", "fabric_log_debugger"]);
+
+/**
+ * 停止所有运行中的 MC 实例并隐藏输入防护窗口。
+ * 在进入修复模式前调用，避免：
+ * 1. 游戏进程占用源文件导致构建失败
+ * 2. 重新 runClient 时启动第二个游戏实例
+ * 3. 输入防护覆盖窗口残留
+ */
+async function stopRunningGameAndHideGuard(): Promise<void> {
+	try {
+		if (typeof window !== "undefined" && window.api?.mcStopAll) {
+			await window.api.mcStopAll();
+		}
+	} catch {
+		// 停止游戏失败不应阻塞修复流程
+	}
+	try {
+		if (typeof window !== "undefined" && window.api?.mcInputGuardHide) {
+			await window.api.mcInputGuardHide();
+		}
+	} catch {
+		// 隐藏防护失败不影响主流程
+	}
+}
 
 function stableArgsKey(args: Record<string, unknown> | undefined): string {
-  const a = args || {}
-  const keys = Object.keys(a).sort()
-  const sorted: Record<string, unknown> = {}
-  for (const k of keys) sorted[k] = a[k]
-  return JSON.stringify(sorted)
+	const a = args || {};
+	const keys = Object.keys(a).sort();
+	const sorted: Record<string, unknown> = {};
+	for (const k of keys) sorted[k] = a[k];
+	return JSON.stringify(sorted);
 }
 
 function firstStackFrame(log: string): string {
-  const lines = log.split('\n')
-  for (const line of lines) {
-    const m = line.match(/(?:at\s+)?((?:src\/|net\/|com\/)[^\s(:]+\.(?:java|kt))(?::(\d+))?/i)
-    if (m) return `${m[1].replace(/\\/g, '/')}${m[2] ? `:${m[2]}` : ''}`
-  }
-  const gradle = parseGradleErrors(log, 1)
-  if (gradle[0]?.file) {
-    return `${gradle[0].file}${gradle[0].line != null ? `:${gradle[0].line}` : ''}`
-  }
-  return ''
+	const lines = log.split("\n");
+	for (const line of lines) {
+		const m = line.match(/(?:at\s+)?((?:src\/|net\/|com\/)[^\s(:]+\.(?:java|kt))(?::(\d+))?/i);
+		if (m) return `${m[1].replace(/\\/g, "/")}${m[2] ? `:${m[2]}` : ""}`;
+	}
+	const gradle = parseGradleErrors(log, 1);
+	if (gradle[0]?.file) {
+		return `${gradle[0].file}${gradle[0].line != null ? `:${gradle[0].line}` : ""}`;
+	}
+	return "";
 }
 
-export function repairErrorSignature(output: string, kind: 'build' | 'run'): string {
-  const gradleSig = gradleErrorSignature(output)
-  const entries = parseGradleErrors(output, 1)
-  if (kind === 'build' && entries.length > 0) return `gradle|${gradleSig}`
+export function repairErrorSignature(output: string, kind: "build" | "run"): string {
+	const gradleSig = gradleErrorSignature(output);
+	const entries = parseGradleErrors(output, 1);
+	if (kind === "build" && entries.length > 0) return `gradle|${gradleSig}`;
 
-  const classified = classifyFabricLog(output)
-  const frame = firstStackFrame(output)
-  return `${classified.kind}|${frame || gradleSig.slice(0, 200)}`
+	const classified = classifyFabricLog(output);
+	const frame = firstStackFrame(output);
+	return `${classified.kind}|${frame || gradleSig.slice(0, 200)}`;
 }
 
 /** Count distinct gradle/compiler error entries (for progress tracking). */
 export function countGradleErrorEntries(output: string): number {
-  return parseGradleErrors(output, 200).length
+	return parseGradleErrors(output, 200).length;
 }
 
 /** Unique source files referenced by gradle errors. */
 export function uniqueGradleErrorFiles(output: string): string[] {
-  const files = new Set<string>()
-  for (const entry of parseGradleErrors(output, 200)) {
-    if (!entry.file) continue
-    files.add(entry.file.replace(/\\/g, '/'))
-  }
-  return [...files]
+	const files = new Set<string>();
+	for (const entry of parseGradleErrors(output, 200)) {
+		if (!entry.file) continue;
+		files.add(entry.file.replace(/\\/g, "/"));
+	}
+	return [...files];
 }
 
 /**
@@ -177,181 +183,177 @@ export function uniqueGradleErrorFiles(output: string): string[] {
  * n unique error files → max(3, n+2), capped at MAX_REPAIR_ROUNDS_CAP.
  */
 export function computeRepairBudget(failureOutput: string): number {
-  const n = uniqueGradleErrorFiles(failureOutput).length
-  if (n <= 0) return MAX_REPAIR_ROUNDS
-  return Math.min(MAX_REPAIR_ROUNDS_CAP, Math.max(MAX_REPAIR_ROUNDS, n + 2))
+	const n = uniqueGradleErrorFiles(failureOutput).length;
+	if (n <= 0) return MAX_REPAIR_ROUNDS;
+	return Math.min(MAX_REPAIR_ROUNDS_CAP, Math.max(MAX_REPAIR_ROUNDS, n + 2));
 }
 
-const CLIENT_PACKAGE_ERROR_RE = /程序包\s*net\.minecraft\.client|package\s+net\.minecraft\.client/i
+const CLIENT_PACKAGE_ERROR_RE = /程序包\s*net\.minecraft\.client|package\s+net\.minecraft\.client/i;
 
 /** main-source files that fail because they import client-only packages. */
 export function extractClientInMainMigrations(output: string): string[] {
-  const mains = new Set<string>()
-  for (const entry of parseGradleErrors(output, 200)) {
-    if (!entry.file) continue
-    const file = entry.file.replace(/\\/g, '/')
-    if (!file.includes('src/main/java/')) continue
-    if (!CLIENT_PACKAGE_ERROR_RE.test(entry.message) && !CLIENT_PACKAGE_ERROR_RE.test(output)) {
-      // Still include main java files when the build log overall shows client-package isolation
-      // and this file is among the error set.
-      if (!/net\.minecraft\.client/.test(output)) continue
-    }
-    if (CLIENT_PACKAGE_ERROR_RE.test(entry.message) || /net\.minecraft\.client/.test(entry.message)) {
-      mains.add(file)
-    }
-  }
-  // Fallback: if log mentions client package isolation, take all main java error files
-  if (mains.size === 0 && /net\.minecraft\.client/.test(output)) {
-    for (const file of uniqueGradleErrorFiles(output)) {
-      if (file.includes('src/main/java/')) mains.add(file)
-    }
-  }
-  return [...mains]
+	const mains = new Set<string>();
+	for (const entry of parseGradleErrors(output, 200)) {
+		if (!entry.file) continue;
+		const file = entry.file.replace(/\\/g, "/");
+		if (!file.includes("src/main/java/")) continue;
+		if (!CLIENT_PACKAGE_ERROR_RE.test(entry.message) && !CLIENT_PACKAGE_ERROR_RE.test(output)) {
+			// Still include main java files when the build log overall shows client-package isolation
+			// and this file is among the error set.
+			if (!/net\.minecraft\.client/.test(output)) continue;
+		}
+		if (CLIENT_PACKAGE_ERROR_RE.test(entry.message) || /net\.minecraft\.client/.test(entry.message)) {
+			mains.add(file);
+		}
+	}
+	// Fallback: if log mentions client package isolation, take all main java error files
+	if (mains.size === 0 && /net\.minecraft\.client/.test(output)) {
+		for (const file of uniqueGradleErrorFiles(output)) {
+			if (file.includes("src/main/java/")) mains.add(file);
+		}
+	}
+	return [...mains];
 }
 
 export function mainToClientPath(mainPath: string): string {
-  return mainPath.replace(/\\/g, '/').replace('src/main/java/', 'src/client/java/')
+	return mainPath.replace(/\\/g, "/").replace("src/main/java/", "src/client/java/");
 }
 
 function formatMigrationChecklist(pendingMainDeletes: Set<string>): string {
-  if (pendingMainDeletes.size === 0) return ''
-  const lines = [...pendingMainDeletes].slice(0, 8).map((main) => {
-    const client = mainToClientPath(main)
-    const largeHint = '（若文件 >200 行：先 write_file 写骨架，再用多次 edit_file 分段填充）'
-    return `- write_file("${client}", ...) ${largeHint}\n  delete_file("${main}")`
-  })
-  return (
-    `\n【splitEnvironment 批量迁移】以下文件仍在 src/main/java 却引用 client 包。` +
-    `必须全部迁完（write 新路径 + delete 旧路径）后才能 trigger_build：\n` +
-    `${lines.join('\n')}\n`
-  )
+	if (pendingMainDeletes.size === 0) return "";
+	const lines = [...pendingMainDeletes].slice(0, 8).map((main) => {
+		const client = mainToClientPath(main);
+		const largeHint = "（若文件 >200 行：先 write_file 写骨架，再用多次 edit_file 分段填充）";
+		return `- write_file("${client}", ...) ${largeHint}\n  delete_file("${main}")`;
+	});
+	return `\n【splitEnvironment 批量迁移】以下文件仍在 src/main/java 却引用 client 包。` + `必须全部迁完（write 新路径 + delete 旧路径）后才能 trigger_build：\n` + `${lines.join("\n")}\n`;
 }
 
-export function buildRepairInstruction(output: string, kind: 'build' | 'run'): string {
-  const gradleEntries = parseGradleErrors(output, 8)
-  const structuredGradle = formatGradleErrorsForPrompt(output)
-  const classified = classifyFabricLog(output)
-  const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
-  const migrations = extractClientInMainMigrations(output)
-  const apiHints = extractCompileApiHints(output)
-  const fabricBlock =
-    gradleEntries.length === 0 || kind === 'run'
-      ? `\n--- Fabric/MC 分类 ---\n[${classified.kind}] ${classified.title}\n建议：${classified.advice}\n`
-      : `\n--- Fabric/MC 补充 ---\n[${classified.kind}] ${classified.title}：${classified.advice}\n`
-  if (migrations.length > 0) {
-    const pending = new Set(migrations)
-    return (
-      `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
-      `根因：splitEnvironmentSourceSets 隔离 — client 类不能留在 src/main/java。\n` +
-      `流程（强制顺序）：write_file 到 src/client/java → delete_file 删除旧 main 路径 → 全部迁完后再 ${retry}。\n` +
-      `禁止在迁移未完成时 trigger_build；禁止用 edit_file 原地改 main 路径里的 client 引用。\n` +
-      `大文件（>200 行）请 write_file 写骨架后用 edit_file 分段填充，避免参数截断。\n` +
-      formatMigrationChecklist(pending) +
-      `\n--- 错误摘要 ---\n${structuredGradle}` +
-      fabricBlock
-    )
-  }
-  return (
-    `【${kind === 'build' ? '构建' : '运行'}失败，已进入修复模式】\n` +
-    `流程：观察（read_error_log / fabric_log_debugger，限 ${MAX_FREE_REPAIR_DIAG_ROUNDS} 轮）→ ` +
-    `若错误含 cannot find symbol / 方法不存在 / Mixin 目标 / Registry / 错误 API，先 fabric_docs_search 查本地文档与 Yarn 确认签名 → ` +
-    `write_file / edit_file / delete_file 修改代码 → 再验证（${retry}）。\n` +
-    `在成功 write_file/edit_file/delete_file 之前禁止直接调用 ${retry}。\n` +
-    `文档查询不占用上述诊断轮次（另有知识查询免费额度）。\n` +
-    (apiHints.length > 0
-      ? `API 修复：针对 ${apiHints.join('、')} —— 用「类名 方法名」只查一次 fabric_docs_search，优先对照结果中的 Yarn「方法:」签名改调用；` +
-        `禁止用略改关键词反复查同一 API；查完立刻 edit_file 再 ${retry}。\n`
-      : '') +
-    `\n--- 错误摘要 ---\n${structuredGradle}` +
-    fabricBlock
-  )
+export function buildRepairInstruction(output: string, kind: "build" | "run"): string {
+	const gradleEntries = parseGradleErrors(output, 8);
+	const structuredGradle = formatGradleErrorsForPrompt(output);
+	const classified = classifyFabricLog(output);
+	const retry = kind === "build" ? "trigger_build build" : "trigger_build runClient";
+	const migrations = extractClientInMainMigrations(output);
+	const apiHints = extractCompileApiHints(output);
+	const fabricBlock =
+		gradleEntries.length === 0 || kind === "run"
+			? `\n--- Fabric/MC 分类 ---\n[${classified.kind}] ${classified.title}\n建议：${classified.advice}\n`
+			: `\n--- Fabric/MC 补充 ---\n[${classified.kind}] ${classified.title}：${classified.advice}\n`;
+	if (migrations.length > 0) {
+		const pending = new Set(migrations);
+		return (
+			`【${kind === "build" ? "构建" : "运行"}失败，已进入修复模式】\n` +
+			`根因：splitEnvironmentSourceSets 隔离 — client 类不能留在 src/main/java。\n` +
+			`流程（强制顺序）：write_file 到 src/client/java → delete_file 删除旧 main 路径 → 全部迁完后再 ${retry}。\n` +
+			`禁止在迁移未完成时 trigger_build；禁止用 edit_file 原地改 main 路径里的 client 引用。\n` +
+			`大文件（>200 行）请 write_file 写骨架后用 edit_file 分段填充，避免参数截断。\n` +
+			formatMigrationChecklist(pending) +
+			`\n--- 错误摘要 ---\n${structuredGradle}` +
+			fabricBlock
+		);
+	}
+	return (
+		`【${kind === "build" ? "构建" : "运行"}失败，已进入修复模式】\n` +
+		`流程：观察（read_error_log / fabric_log_debugger，限 ${MAX_FREE_REPAIR_DIAG_ROUNDS} 轮）→ ` +
+		`若错误含 cannot find symbol / 方法不存在 / Mixin 目标 / Registry / 错误 API，先 fabric_docs_search 查本地文档与 Yarn 确认签名 → ` +
+		`write_file / edit_file / delete_file 修改代码 → 再验证（${retry}）。\n` +
+		`在成功 write_file/edit_file/delete_file 之前禁止直接调用 ${retry}。\n` +
+		`文档查询不占用上述诊断轮次（另有知识查询免费额度）。\n` +
+		(apiHints.length > 0
+			? `API 修复：针对 ${apiHints.join("、")} —— 用「类名 方法名」只查一次 fabric_docs_search，优先对照结果中的 Yarn「方法:」签名改调用；` +
+				`禁止用略改关键词反复查同一 API；查完立刻 edit_file 再 ${retry}。\n`
+			: "") +
+		`\n--- 错误摘要 ---\n${structuredGradle}` +
+		fabricBlock
+	);
 }
 
 export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boolean {
-  if (step.kind !== 'build' && step.kind !== 'run') return false
-  const output = String(result.output || '')
-  if (step.kind === 'build') {
-    if (result.toolName !== 'trigger_build' && result.toolName !== 'run_command') return false
-    if (/BUILD FAILED|构建失败/i.test(output)) return true
-    if (result.exitCode != null && result.exitCode !== 0) return true
-    return Boolean(result.error)
-  }
-  if (result.toolName === 'trigger_build') {
-    if (String(result.args?.task || '') !== 'runClient') return false
-    if (/Error starting game|游戏测试失败|启动失败|failed to start|\[MC_PHASE:error\]/i.test(output)) return true
-    if (result.exitCode != null && result.exitCode !== 0) return true
-    return Boolean(result.error)
-  }
-  if (result.toolName === 'run_command') {
-    if (!/runClient/i.test(String(result.args?.command || ''))) return false
-    if (result.exitCode != null && result.exitCode !== 0) return true
-    return Boolean(result.error)
-  }
-  return false
+	if (step.kind !== "build" && step.kind !== "run") return false;
+	const output = String(result.output || "");
+	if (step.kind === "build") {
+		if (result.toolName !== "trigger_build" && result.toolName !== "run_command") return false;
+		if (/BUILD FAILED|构建失败/i.test(output)) return true;
+		if (result.exitCode != null && result.exitCode !== 0) return true;
+		return Boolean(result.error);
+	}
+	if (result.toolName === "trigger_build") {
+		if (String(result.args?.task || "") !== "runClient") return false;
+		if (/Error starting game|游戏测试失败|启动失败|failed to start|\[MC_PHASE:error\]/i.test(output)) return true;
+		if (result.exitCode != null && result.exitCode !== 0) return true;
+		return Boolean(result.error);
+	}
+	if (result.toolName === "run_command") {
+		if (!/runClient/i.test(String(result.args?.command || ""))) return false;
+		if (result.exitCode != null && result.exitCode !== 0) return true;
+		return Boolean(result.error);
+	}
+	return false;
 }
 
 function repairExtraTools(step: WorkflowStep): string[] {
-  return [...new Set([...step.allowedTools, ...REPAIR_EXTRA_TOOLS])]
+	return [...new Set([...step.allowedTools, ...REPAIR_EXTRA_TOOLS])];
 }
 
-function writeFileRetryInstruction(kind: 'build' | 'run'): string {
-  const retry = kind === 'build' ? 'trigger_build build' : 'trigger_build runClient'
-  return `【SYSTEM: 文件已修改，可以重新构建。请调用 ${retry} 验证修复结果。】`
+function writeFileRetryInstruction(kind: "build" | "run"): string {
+	const retry = kind === "build" ? "trigger_build build" : "trigger_build runClient";
+	return `【SYSTEM: 文件已修改，可以重新构建。请调用 ${retry} 验证修复结果。】`;
 }
 
 const REPAIR_DIAGNOSTIC_TOOLS = new Set([
-  'read_error_log',
-  'fabric_log_debugger',
-  // read_file / list_directory intentionally excluded — unlimited free reads caused
-  // explore thrashing in repair mode (see session diag 20260718).
-  // Knowledge tools are NOT diagnostic-round tools — they use MAX_FREE_KNOWLEDGE_ROUNDS.
-  'fabric_mod_json_validate'
-])
+	"read_error_log",
+	"fabric_log_debugger",
+	// read_file / list_directory intentionally excluded — unlimited free reads caused
+	// explore thrashing in repair mode (see session diag 20260718).
+	// Knowledge tools are NOT diagnostic-round tools — they use MAX_FREE_KNOWLEDGE_ROUNDS.
+	"fabric_mod_json_validate"
+]);
 
 function isRepairDiagnosticResult(step: WorkflowStep, result: ToolResult, repairMode: boolean): boolean {
-  if (!repairMode || !result.ok || result.error) return false
-  if (step.kind !== 'build' && step.kind !== 'run') return false
-  return REPAIR_DIAGNOSTIC_TOOLS.has(result.toolName || '')
+	if (!repairMode || !result.ok || result.error) return false;
+	if (step.kind !== "build" && step.kind !== "run") return false;
+	return REPAIR_DIAGNOSTIC_TOOLS.has(result.toolName || "");
 }
 
 /** Pure read/list/grep during repair — subject to MAX_FREE_REPAIR_DIAG_ROUNDS via explore counter. */
 function isRepairExploreResult(result: ToolResult): boolean {
-  if (!result.ok || result.error) return false
-  return result.toolName === 'read_file' || result.toolName === 'list_directory' || result.toolName === 'grep'
+	if (!result.ok || result.error) return false;
+	return result.toolName === "read_file" || result.toolName === "list_directory" || result.toolName === "grep";
 }
 
 /** Knowledge queries that should not consume attempt budget for non-terminal steps.
  *  However, beyond MAX_FREE_KNOWLEDGE_ROUNDS per step, they WILL count toward attempt. */
 const KNOWLEDGE_TOOLS = new Set([
-  'fabric_docs_search',
-  'fabric_javadoc_lookup',
-  'vanilla_mc_wiki_query',
-  'minecraft_data_lookup',
-  'mc_wiki_search',
-  'fabric_meta_version_check',
-  'fabric_mod_json_validate'
-])
+	"fabric_docs_search",
+	"fabric_javadoc_lookup",
+	"vanilla_mc_wiki_query",
+	"minecraft_data_lookup",
+	"mc_wiki_search",
+	"fabric_meta_version_check",
+	"fabric_mod_json_validate"
+]);
 
-const MAX_FREE_KNOWLEDGE_ROUNDS = 3
-const MAX_DOC_SEARCH_PER_WRITE_STEP = 2
+const MAX_FREE_KNOWLEDGE_ROUNDS = 3;
+const MAX_DOC_SEARCH_PER_WRITE_STEP = 2;
 /** Pure read/list/grep rounds before first write evidence — do not burn attempt. */
-export const MAX_FREE_EXPLORE_ROUNDS = 4
+export const MAX_FREE_EXPLORE_ROUNDS = 4;
 /** Fix 5: after this many consecutive identical rejections, force-stop the stuck step. */
-export const MAX_IDENTICAL_REJECTIONS = 4
-const EXPLORE_TOOLS = new Set(['read_file', 'list_directory', 'grep'])
+export const MAX_IDENTICAL_REJECTIONS = 4;
+const EXPLORE_TOOLS = new Set(["read_file", "list_directory", "grep"]);
 /** Tools whose successful execution constitutes a real file mutation this run (Fix 3 guard). */
 const RUN_WRITE_TOOLS = new Set([
-  'write_file',
-  'edit_file',
-  'delete_file',
-  'create_recipe',
-  'fabric_recipe_generate',
-  'fabric_template_generate',
-  'fabric_content_register',
-  'fabric_data_assets_generate',
-  'fabric_mixin_scaffold',
-  'fabric_mixin_register'
-])
+	"write_file",
+	"edit_file",
+	"delete_file",
+	"create_recipe",
+	"fabric_recipe_generate",
+	"fabric_template_generate",
+	"fabric_content_register",
+	"fabric_data_assets_generate",
+	"fabric_mixin_scaffold",
+	"fabric_mixin_register"
+]);
 
 /**
  * Fix 3: detect a "no-op" build — Gradle reports BUILD SUCCESSFUL but every task is
@@ -359,119 +361,111 @@ const RUN_WRITE_TOOLS = new Set([
  * produced zero writes, this is the "silent false success" signature.
  */
 export function isNoOpBuildResult(output: string | undefined): boolean {
-  const text = String(output || '')
-  if (!/BUILD SUCCESSFUL|构建完成|构建已完成/i.test(text)) return false
-  const taskLines = text.split('\n').filter((line) => /^\s*(?:\[[^\]]*\]\s*)?>?\s*Task\s+:/i.test(line))
-  if (taskLines.length === 0) return false
-  return taskLines.every((line) => /UP-TO-DATE|NO-SOURCE|SKIPPED|FROM-CACHE/i.test(line))
+	const text = String(output || "");
+	if (!/BUILD SUCCESSFUL|构建完成|构建已完成/i.test(text)) return false;
+	const taskLines = text.split("\n").filter((line) => /^\s*(?:\[[^\]]*\]\s*)?>?\s*Task\s+:/i.test(line));
+	if (taskLines.length === 0) return false;
+	return taskLines.every((line) => /UP-TO-DATE|NO-SOURCE|SKIPPED|FROM-CACHE/i.test(line));
 }
 /** After explore budget: strip roam tools only — keep read_file so edit_file aci_read_gate still works. */
-const EXPLORE_ROAM_TOOLS = new Set(['list_directory', 'grep'])
+const EXPLORE_ROAM_TOOLS = new Set(["list_directory", "grep"]);
 
 /**
  * When explore rounds are exhausted, drop list/grep; optionally strip knowledge tools.
  * stripKnowledge can apply even when explore is not exhausted (e.g. write-args truncation recovery).
  */
-export function applyExploreToolLimit(
-  names: string[],
-  options: { exploreExhausted: boolean; stripKnowledge?: boolean }
-): string[] {
-  return names.filter((name) => {
-    if (options.exploreExhausted && EXPLORE_ROAM_TOOLS.has(name)) return false
-    if (options.stripKnowledge && KNOWLEDGE_TOOLS.has(name)) return false
-    return true
-  })
+export function applyExploreToolLimit(names: string[], options: { exploreExhausted: boolean; stripKnowledge?: boolean }): string[] {
+	return names.filter((name) => {
+		if (options.exploreExhausted && EXPLORE_ROAM_TOOLS.has(name)) return false;
+		if (options.stripKnowledge && KNOWLEDGE_TOOLS.has(name)) return false;
+		return true;
+	});
 }
 
 /** Consecutive write/edit JSON truncation failures before forcing skeleton protocol. */
-export const MAX_WRITE_TRUNCATION_STREAK = 2
+export const MAX_WRITE_TRUNCATION_STREAK = 2;
 
 export const LARGE_FILE_REWRITE_RECOVERY =
-  `【大文件写入恢复】arguments JSON 连续截断，禁止再提交整文件。` +
-  `立即：① read_file 目标路径（若未读）→ ② write_file(path, 短骨架, overwrite=true)（<80 行）` +
-  `→ ③ 多次 edit_file 分段填充。不要 fabric_docs_search / javadoc / wiki——截断与文档无关。`
+	`【大文件写入恢复】arguments JSON 连续截断，禁止再提交整文件。` +
+	`立即：① read_file 目标路径（若未读）→ ② write_file(path, 短骨架, overwrite=true)（<80 行）` +
+	`→ ③ 多次 edit_file 分段填充。不要 fabric_docs_search / javadoc / wiki——截断与文档无关。`;
 
 export function isWriteArgsTruncationResult(result: ToolResult): boolean {
-  if (result.errorKind !== 'invalid_tool_arguments') return false
-  const name = result.toolName || ''
-  if (name !== 'write_file' && name !== 'edit_file') return false
-  return /不是合法 JSON|大文件易截断/i.test(String(result.output || result.error || ''))
+	if (result.errorKind !== "invalid_tool_arguments") return false;
+	const name = result.toolName || "";
+	if (name !== "write_file" && name !== "edit_file") return false;
+	return /不是合法 JSON|大文件易截断/i.test(String(result.output || result.error || ""));
 }
 
 export function pathFromWriteToolResult(result: ToolResult): string {
-  const p = result.args?.path
-  return typeof p === 'string' ? p.replace(/\\/g, '/') : ''
+	const p = result.args?.path;
+	return typeof p === "string" ? p.replace(/\\/g, "/") : "";
 }
 
 /** Count consecutive truncation rejects on the same path (or any path if previous was empty). */
-export function nextWriteTruncationStreak(
-  results: ToolResult[],
-  prevStreak: number,
-  prevPath: string
-): { streak: number; path: string } {
-  const truncations = results.filter(isWriteArgsTruncationResult)
-  if (truncations.length === 0) return { streak: 0, path: '' }
-  const path = pathFromWriteToolResult(truncations[truncations.length - 1]) || prevPath
-  const samePath = !prevPath || !path || prevPath === path
-  return {
-    streak: samePath ? prevStreak + truncations.length : truncations.length,
-    path
-  }
+export function nextWriteTruncationStreak(results: ToolResult[], prevStreak: number, prevPath: string): { streak: number; path: string } {
+	const truncations = results.filter(isWriteArgsTruncationResult);
+	if (truncations.length === 0) return { streak: 0, path: "" };
+	const path = pathFromWriteToolResult(truncations[truncations.length - 1]) || prevPath;
+	const samePath = !prevPath || !path || prevPath === path;
+	return {
+		streak: samePath ? prevStreak + truncations.length : truncations.length,
+		path
+	};
 }
 
 export function isDocSearchLimitedStep(step: WorkflowStep, repairMode = false): boolean {
-  if (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin') return true
-  if (repairMode && (step.kind === 'build' || step.kind === 'run')) return true
-  return false
+	if (step.kind === "write" || step.kind === "recipe" || step.kind === "mixin") return true;
+	if (repairMode && (step.kind === "build" || step.kind === "run")) return true;
+	return false;
 }
 
 export function isExploreLimitedStep(step: WorkflowStep, repairMode = false): boolean {
-  if (repairMode && (step.kind === 'build' || step.kind === 'run')) return true
-  return step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin'
+	if (repairMode && (step.kind === "build" || step.kind === "run")) return true;
+	return step.kind === "write" || step.kind === "recipe" || step.kind === "mixin";
 }
 
 export function buildDocSearchBlockedResult(step: WorkflowStep, call: ToolCallWithId): ToolResult {
-  return {
-    output:
-      `blocked: [doc_search_limit] 当前步骤 #${step.id} 已进行 ${MAX_DOC_SEARCH_PER_WRITE_STEP} 次 fabric_docs_search。` +
-      `请直接 edit_file / write_file 按已查到的 Yarn 签名改代码并重新构建，不要再搜索文档。`,
-    error: 'doc_search_limit: fabric_docs_search',
-    durationMs: 0,
-    ok: false,
-    toolName: call.name,
-    args: call.args,
-    exitCode: null,
-    errorKind: 'doc_search_limit'
-  }
+	return {
+		output:
+			`blocked: [doc_search_limit] 当前步骤 #${step.id} 已进行 ${MAX_DOC_SEARCH_PER_WRITE_STEP} 次 fabric_docs_search。` +
+			`请直接 edit_file / write_file 按已查到的 Yarn 签名改代码并重新构建，不要再搜索文档。`,
+		error: "doc_search_limit: fabric_docs_search",
+		durationMs: 0,
+		ok: false,
+		toolName: call.name,
+		args: call.args,
+		exitCode: null,
+		errorKind: "doc_search_limit"
+	};
 }
 
 export function isDocSearchOnlyRejectionRound(results: Iterable<ToolResult>): boolean {
-  const list = [...results]
-  return list.length > 0 && list.every((result) => result.errorKind === 'doc_search_limit')
+	const list = [...results];
+	return list.length > 0 && list.every((result) => result.errorKind === "doc_search_limit");
 }
 
 export function isKnowledgeOnlyRejectionRound(results: Iterable<ToolResult>): boolean {
-  const list = [...results]
-  return list.length > 0 && list.every((result) => KNOWLEDGE_TOOLS.has(result.toolName || ''))
+	const list = [...results];
+	return list.length > 0 && list.every((result) => KNOWLEDGE_TOOLS.has(result.toolName || ""));
 }
 
 /** Rejected-only rounds (whitelist / doc limit) must not burn write-step attempt. */
 export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boolean {
-  const list = [...results]
-  if (list.length === 0) return false
-  return list.every((result) =>
-    result.errorKind === 'doc_search_limit' ||
-    result.errorKind === 'repair_doc_dedup' ||
-    result.errorKind === 'tool_not_offered' ||
-    result.errorKind === 'tool_call_limit' ||
-    result.errorKind === 'after_control_barrier'
-  )
+	const list = [...results];
+	if (list.length === 0) return false;
+	return list.every(
+		(result) =>
+			result.errorKind === "doc_search_limit" ||
+			result.errorKind === "repair_doc_dedup" ||
+			result.errorKind === "tool_not_offered" ||
+			result.errorKind === "tool_call_limit" ||
+			result.errorKind === "after_control_barrier"
+	);
 }
 
 export function isPureExploreRound(results: ToolResult[]): boolean {
-  return results.length > 0 && results.every((result) =>
-    EXPLORE_TOOLS.has(result.toolName || '') && result.ok && !result.error
-  )
+	return results.length > 0 && results.every((result) => EXPLORE_TOOLS.has(result.toolName || "") && result.ok && !result.error);
 }
 
 /**
@@ -480,124 +474,92 @@ export function isPureExploreRound(results: ToolResult[]): boolean {
  * ScreenshotHandler).
  */
 export function detectExistingHandlerHint(step: WorkflowStep, result: ToolResult): string | undefined {
-  if (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin') return undefined
-  if (result.toolName !== 'read_file' || !result.ok || result.error) return undefined
-  const path = String(result.args?.path || '').replace(/\\/g, '/')
-  const output = String(result.output || '')
-  const target = (step.targetPath || '').replace(/\\/g, '/')
-  if (!/\.java$/i.test(path)) return undefined
-  if (target && (path.endsWith(target) || path.includes(target))) return undefined
-  if (!/UseBlockCallback|UseEntityCallback|UseItemCallback|\.register\s*\(|Handler|ModInitializer/i.test(output)) {
-    return undefined
-  }
-  return (
-    `【参考实现】读取到 ${path} 含注册/交互逻辑，可作参考。` +
-    `当前步骤尚未完成时请继续执行允许的工具，不要仅因此 complete_step。`
-  )
+	if (step.kind === "write" || step.kind === "recipe" || step.kind === "mixin") return undefined;
+	if (result.toolName !== "read_file" || !result.ok || result.error) return undefined;
+	const path = String(result.args?.path || "").replace(/\\/g, "/");
+	const output = String(result.output || "");
+	const target = (step.targetPath || "").replace(/\\/g, "/");
+	if (!/\.java$/i.test(path)) return undefined;
+	if (target && (path.endsWith(target) || path.includes(target))) return undefined;
+	if (!/UseBlockCallback|UseEntityCallback|UseItemCallback|\.register\s*\(|Handler|ModInitializer/i.test(output)) {
+		return undefined;
+	}
+	return `【参考实现】读取到 ${path} 含注册/交互逻辑，可作参考。` + `当前步骤尚未完成时请继续执行允许的工具，不要仅因此 complete_step。`;
 }
 
 export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
-  if (step.kind === 'inspect') {
-    const readHint = step.targetPath
-      ? `read_file("${step.targetPath}") 或 grep`
-      : 'read_file / grep'
-    return (
-      `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
-      `本步为勘察（inspect）：请立即调用 ${readHint} 完成勘察后 complete_step()，不要只输出旁白。`
-    )
-  }
-  if (step.kind === 'build') {
-    return (
-      `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
-      `本步为构建（build）：请立即调用 trigger_build(task="build") 构建项目，不要只输出旁白。`
-    )
-  }
-  if (step.kind === 'run') {
-    const title = step.title || ''
-    // 根据 step 描述推断应该调用哪个工具
-    if (/mc_ensure_test_world|进入世界|进入测试世界/.test(title)) {
-      return (
-        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
-        `本步为进入测试世界：请立即调用 mc_ensure_test_world 进入游戏世界。` +
-        `禁止仅凭 MC_PHASE:menu 宣称完成，禁止只输出旁白。`
-      )
-    }
-    if (/mc_ensure_cheats|作弊权限/.test(title)) {
-      return (
-        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
-        `本步为确保作弊权限：请立即调用 mc_ensure_cheats 开启作弊权限。`
-      )
-    }
-    if (/mc_screenshot|mc_inspect|验证功能|验证效果/.test(title)) {
-      return (
-        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
-        `本步为验证功能效果：请立即调用 mc_screenshot 截图和/或 mc_inspect 检视当前状态，客观校验功能是否生效。` +
-        `禁止只输出"测试通过"等旁白而没有客观证据。`
-      )
-    }
-    if (/runclient|启动游戏|运行游戏/.test(title)) {
-      return (
-        `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
-        `本步为启动游戏：请立即调用 trigger_build(task="runClient") 启动游戏客户端。`
-      )
-    }
-    // 通用 run 步骤指令
-    return (
-      `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
-      `本步为游戏内测试：请调用 mc_ensure_test_world / mc_ensure_cheats / mc_command / mc_input / mc_screenshot / mc_inspect 等工具完成测试场景。` +
-      `禁止只输出旁白。`
-    )
-  }
-  const targetHint = step.targetPath
-    ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)`
-    : 'write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)'
-  return (
-    `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` +
-    `请立即调用 ${targetHint} 写入目标文件，或 complete_step()，不要只输出旁白或继续无目标探索。`
-  )
+	if (step.kind === "inspect") {
+		const readHint = step.targetPath ? `read_file("${step.targetPath}") 或 grep` : "read_file / grep";
+		return `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` + `本步为勘察（inspect）：请立即调用 ${readHint} 完成勘察后 complete_step()，不要只输出旁白。`;
+	}
+	if (step.kind === "build") {
+		return `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` + `本步为构建（build）：请立即调用 trigger_build(task="build") 构建项目，不要只输出旁白。`;
+	}
+	if (step.kind === "run") {
+		const title = step.title || "";
+		// 根据 step 描述推断应该调用哪个工具
+		if (/mc_ensure_test_world|进入世界|进入测试世界/.test(title)) {
+			return (
+				`【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` + `本步为进入测试世界：请立即调用 mc_ensure_test_world 进入游戏世界。` + `禁止仅凭 MC_PHASE:menu 宣称完成，禁止只输出旁白。`
+			);
+		}
+		if (/mc_ensure_cheats|作弊权限/.test(title)) {
+			return `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` + `本步为确保作弊权限：请立即调用 mc_ensure_cheats 开启作弊权限。`;
+		}
+		if (/mc_screenshot|mc_inspect|验证功能|验证效果/.test(title)) {
+			return (
+				`【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+				`本步为验证功能效果：请立即调用 mc_screenshot 截图和/或 mc_inspect 检视当前状态，客观校验功能是否生效。` +
+				`禁止只输出"测试通过"等旁白而没有客观证据。`
+			);
+		}
+		if (/runclient|启动游戏|运行游戏/.test(title)) {
+			return `【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` + `本步为启动游戏：请立即调用 trigger_build(task="runClient") 启动游戏客户端。`;
+		}
+		// 通用 run 步骤指令
+		return (
+			`【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+			`本步为游戏内测试：请调用 mc_ensure_test_world / mc_ensure_cheats / mc_command / mc_input / mc_screenshot / mc_inspect 等工具完成测试场景。` +
+			`禁止只输出旁白。`
+		);
+	}
+	const targetHint = step.targetPath ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)` : "write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)";
+	return `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` + `请立即调用 ${targetHint} 写入目标文件，或 complete_step()，不要只输出旁白或继续无目标探索。`;
 }
 
 /** List target paths still lacking write evidence (for complete_step rejection hints). */
 export function missingWriteEvidencePaths(step: WorkflowStep, results: ToolResult[]): string[] {
-  if (step.kind !== 'write') return []
-  const required = step.targetPaths?.length
-    ? step.targetPaths
-    : (step.targetPath ? [step.targetPath] : [])
-  if (required.length === 0) return []
-  return required.filter((targetPath) => {
-    const planStep = {
-      ...workflowStepToPlanStep(step),
-      kind: 'write' as const,
-      targetPath,
-      targetPaths: undefined
-    }
-    return !results.some((result) => {
-      if (!result.ok || result.error) return false
-      const artifacts = result.artifactPaths?.length
-        ? result.artifactPaths
-        : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
-      return artifacts.some((artifactPath) =>
-        canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok
-      )
-    })
-  })
+	if (step.kind !== "write") return [];
+	const required = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
+	if (required.length === 0) return [];
+	return required.filter((targetPath) => {
+		const planStep = {
+			...workflowStepToPlanStep(step),
+			kind: "write" as const,
+			targetPath,
+			targetPaths: undefined
+		};
+		return !results.some((result) => {
+			if (!result.ok || result.error) return false;
+			const artifacts = result.artifactPaths?.length ? result.artifactPaths : [result.artifactPath || String(result.args?.path || "")].filter(Boolean);
+			return artifacts.some((artifactPath) => canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok);
+		});
+	});
 }
 
 /** Successful write/edit artifact paths from this step run. */
 export function successfulWriteArtifacts(results: ToolResult[]): string[] {
-  const paths: string[] = []
-  for (const result of results) {
-    if (!result.ok || result.error) continue
-    if (!RUN_WRITE_TOOLS.has(result.toolName || '')) continue
-    const artifacts = result.artifactPaths?.length
-      ? result.artifactPaths
-      : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
-    for (const p of artifacts) {
-      const n = String(p).replace(/\\/g, '/')
-      if (n) paths.push(n)
-    }
-  }
-  return [...new Set(paths)]
+	const paths: string[] = [];
+	for (const result of results) {
+		if (!result.ok || result.error) continue;
+		if (!RUN_WRITE_TOOLS.has(result.toolName || "")) continue;
+		const artifacts = result.artifactPaths?.length ? result.artifactPaths : [result.artifactPath || String(result.args?.path || "")].filter(Boolean);
+		for (const p of artifacts) {
+			const n = String(p).replace(/\\/g, "/");
+			if (n) paths.push(n);
+		}
+	}
+	return [...new Set(paths)];
 }
 
 /**
@@ -605,1504 +567,1308 @@ export function successfulWriteArtifacts(results: ToolResult[]): string[] {
  * helper, not the client entry). Single-target write steps only.
  */
 export function orphanWriteArtifacts(step: WorkflowStep, results: ToolResult[]): string[] {
-  if (step.kind !== 'write') return []
-  if (step.targetPaths && step.targetPaths.length > 1) return []
-  const required = step.targetPaths?.length
-    ? step.targetPaths
-    : (step.targetPath ? [step.targetPath] : [])
-  if (required.length !== 1) return []
-  const written = successfulWriteArtifacts(results)
-  if (written.length === 0) return []
-  const target = required[0]
-  // If any write already matches the planned path, nothing to adopt.
-  if (written.some((p) => patternMatchesPath(target, p))) return []
-  return written.filter((p) => !patternMatchesPath(target, p))
+	if (step.kind !== "write") return [];
+	if (step.targetPaths && step.targetPaths.length > 1) return [];
+	const required = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
+	if (required.length !== 1) return [];
+	const written = successfulWriteArtifacts(results);
+	if (written.length === 0) return [];
+	const target = required[0];
+	// If any write already matches the planned path, nothing to adopt.
+	if (written.some((p) => patternMatchesPath(target, p))) return [];
+	return written.filter((p) => !patternMatchesPath(target, p));
 }
 
 export function buildWriteForceInstruction(step: WorkflowStep): string {
-  const target = step.targetPath
-    ? `目标文件：${step.targetPath}`
-    : '请按步骤描述确定目标路径'
-  return (
-    `【强制写入】探索轮次已用尽。禁止 list_directory/grep/文档查询漫游。` +
-    `${target}。可对目标路径 read_file 一次后 edit_file；或 write_file / fabric_mixin_scaffold 写出代码。`
-  )
+	const target = step.targetPath ? `目标文件：${step.targetPath}` : "请按步骤描述确定目标路径";
+	return `【强制写入】探索轮次已用尽。禁止 list_directory/grep/文档查询漫游。` + `${target}。可对目标路径 read_file 一次后 edit_file；或 write_file / fabric_mixin_scaffold 写出代码。`;
 }
 
-export function buildStepFailureMessage(
-  step: WorkflowStep,
-  attempt: number,
-  maxIterations: number,
-  lastToolName: string,
-  repairNote: string,
-  remaining: string
-): string {
-  return (
-    `步骤 #${step.id}「${step.title}」未能自动完成（已用 ${attempt}/${maxIterations} 轮）。` +
-    `最后工具：${lastToolName || '无'}。\n\n` +
-    repairNote +
-    `建议：发送「继续」恢复执行，或根据日志用 edit_file 修复后重试。\n\n` +
-    `未完成步骤：\n${remaining}`
-  )
+export function buildStepFailureMessage(step: WorkflowStep, attempt: number, maxIterations: number, lastToolName: string, repairNote: string, remaining: string): string {
+	return (
+		`步骤 #${step.id}「${step.title}」未能自动完成（已用 ${attempt}/${maxIterations} 轮）。` +
+		`最后工具：${lastToolName || "无"}。\n\n` +
+		repairNote +
+		`建议：发送「继续」恢复执行，或根据日志用 edit_file 修复后重试。\n\n` +
+		`未完成步骤：\n${remaining}`
+	);
 }
 
 function isKnowledgeRound(step: WorkflowStep, result: ToolResult | undefined, knowledgeCount: number): boolean {
-  if (!result || !result.ok || result.error) return false
-  if (step.kind === 'build' || step.kind === 'run') return false
-  if (!KNOWLEDGE_TOOLS.has(result.toolName || '')) return false
-  // After MAX_FREE_KNOWLEDGE_ROUNDS, knowledge queries count as real attempts
-  return knowledgeCount < MAX_FREE_KNOWLEDGE_ROUNDS
+	if (!result || !result.ok || result.error) return false;
+	if (step.kind === "build" || step.kind === "run") return false;
+	if (!KNOWLEDGE_TOOLS.has(result.toolName || "")) return false;
+	// After MAX_FREE_KNOWLEDGE_ROUNDS, knowledge queries count as real attempts
+	return knowledgeCount < MAX_FREE_KNOWLEDGE_ROUNDS;
 }
 
 function statusForPlan(step: WorkflowStep): string {
-  if (step.status === 'failed') return 'error'
-  return step.status
+	if (step.status === "failed") return "error";
+	return step.status;
 }
 
-function normalizeModelToolCalls(
-  toolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; rawArguments?: string }>
-): ModelToolCall[] {
-  return toolCalls.map((call) => ({
-    id: call.id || `workflow_call_${++workflowToolId}`,
-    name: call.name,
-    args: call.args,
-    rawArguments: call.rawArguments || JSON.stringify(call.args)
-  }))
+function normalizeModelToolCalls(toolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; rawArguments?: string }>): ModelToolCall[] {
+	return toolCalls.map((call) => ({
+		id: call.id || `workflow_call_${++workflowToolId}`,
+		name: call.name,
+		args: call.args,
+		rawArguments: call.rawArguments || JSON.stringify(call.args)
+	}));
 }
 
 function resultCompletesStep(
-  step: WorkflowStep,
-  result: ToolResult,
-  stepHasEvidence: boolean,
-  runGate?: {
-    requireInGameVerify: boolean
-    requireFeatureGuiVerify?: boolean
-    runReady: boolean
-    inGameVerified: boolean
-  }
+	step: WorkflowStep,
+	result: ToolResult,
+	stepHasEvidence: boolean,
+	runGate?: {
+		requireInGameVerify: boolean;
+		requireFeatureGuiVerify?: boolean;
+		runReady: boolean;
+		inGameVerified: boolean;
+	}
 ): boolean {
-  if (!result.ok || result.error) return false
-  if (result.toolName === 'complete_step') {
-    if (step.kind === 'build' || step.kind === 'run') return false
-    if (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe' || step.kind === 'mixin') {
-      return stepHasEvidence
-    }
-    return true
-  }
-  switch (step.kind) {
-    case 'recipe':
-      return false
-    case 'mixin':
-      return false
-    case 'inspect':
-      // Evidence tools set stepHasEvidence; advancement requires complete_step
-      return false
-    case 'write':
-      return false
-    case 'build':
-      return (
-        (result.toolName === 'trigger_build' &&
-          String(result.args?.task || 'build') === 'build' &&
-          (result.exitCode == null || result.exitCode === 0)) ||
-        (result.toolName === 'run_command' && result.exitCode === 0)
-      )
-    case 'run':
-      if (runGate?.requireInGameVerify) {
-        return runGate.runReady && runGate.inGameVerified
-      }
-      return isRunClientReadyResult(result)
-    case 'answer':
-      return true
-  }
+	if (!result.ok || result.error) return false;
+	if (result.toolName === "complete_step") {
+		if (step.kind === "build" || step.kind === "run") return false;
+		if (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin") {
+			return stepHasEvidence;
+		}
+		return true;
+	}
+	switch (step.kind) {
+		case "recipe":
+			return false;
+		case "mixin":
+			return false;
+		case "inspect":
+			// Evidence tools set stepHasEvidence; advancement requires complete_step
+			return false;
+		case "write":
+			return false;
+		case "build":
+			return (
+				(result.toolName === "trigger_build" && String(result.args?.task || "build") === "build" && (result.exitCode == null || result.exitCode === 0)) ||
+				(result.toolName === "run_command" && result.exitCode === 0)
+			);
+		case "run":
+			if (runGate?.requireInGameVerify) {
+				return runGate.runReady && runGate.inGameVerified;
+			}
+			return isRunClientReadyResult(result);
+		case "answer":
+			return true;
+	}
 }
 
 /** True when inspect/screenshot payload is still the main menu title screen. */
 export function isTitleScreenVerifyOutput(output: string): boolean {
-  const out = String(output || '')
-  if (/"simpleName"\s*:\s*"TitleScreen"/i.test(out)) return true
-  if (/"kind"\s*:\s*"title"/i.test(out)) return true
-  return false
+	const out = String(output || "");
+	if (/"simpleName"\s*:\s*"TitleScreen"/i.test(out)) return true;
+	if (/"kind"\s*:\s*"title"/i.test(out)) return true;
+	return false;
 }
 
 export function isInGameVerifyResult(
-  result: ToolResult,
-  options?: {
-    requireFeatureGui?: boolean
-    verifyTarget?: VerifyTarget | null
-  }
+	result: ToolResult,
+	options?: {
+		requireFeatureGui?: boolean;
+		verifyTarget?: VerifyTarget | null;
+	}
 ): boolean {
-  if (!result.ok || result.error) return false
-  const name = result.toolName || ''
-  if (name !== 'mc_inspect' && name !== 'mc_screenshot') return false
-  const out = String(result.output || '')
-  if (/^Error:/i.test(out)) return false
-  if (/观测桥未就绪|没有运行中的游戏实例/i.test(out)) return false
-  if (options?.verifyTarget) {
-    // Prefer inspect for structured screen match; screenshot alone rarely has simpleName.
-    if (name === 'mc_screenshot' && options.verifyTarget.screenNamePatterns.length > 0) {
-      return false
-    }
-    return matchesVerifyTarget(out, options.verifyTarget)
-  }
-  if (options?.requireFeatureGui && isTitleScreenVerifyOutput(out)) return false
-  return true
+	if (!result.ok || result.error) return false;
+	const name = result.toolName || "";
+	if (name !== "mc_inspect" && name !== "mc_screenshot") return false;
+	const out = String(result.output || "");
+	if (/^Error:/i.test(out)) return false;
+	if (/观测桥未就绪|没有运行中的游戏实例/i.test(out)) return false;
+	if (options?.verifyTarget) {
+		// Prefer inspect for structured screen match; screenshot alone rarely has simpleName.
+		if (name === "mc_screenshot" && options.verifyTarget.screenNamePatterns.length > 0) {
+			return false;
+		}
+		return matchesVerifyTarget(out, options.verifyTarget);
+	}
+	if (options?.requireFeatureGui && isTitleScreenVerifyOutput(out)) return false;
+	return true;
 }
 
 export function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
-  if (!result.ok || result.error) return false
-  if (step.kind === 'recipe') {
-    return result.validation?.kind === 'recipe' && result.validation.valid
-  }
-  if (step.kind === 'mixin') {
-    return result.validation?.kind === 'mixin' && result.validation.valid
-  }
-  if (step.kind !== 'write' && step.kind !== 'inspect') return false
-  const planStep = {
-    ...workflowStepToPlanStep(step),
-    kind: step.kind,
-    targetPath: step.targetPath,
-    evidence: step.evidence
-  }
-  return canToolResultAdvanceStep(planStep, result).ok
+	if (!result.ok || result.error) return false;
+	if (step.kind === "recipe") {
+		return result.validation?.kind === "recipe" && result.validation.valid;
+	}
+	if (step.kind === "mixin") {
+		return result.validation?.kind === "mixin" && result.validation.valid;
+	}
+	if (step.kind !== "write" && step.kind !== "inspect") return false;
+	const planStep = {
+		...workflowStepToPlanStep(step),
+		kind: step.kind,
+		targetPath: step.targetPath,
+		evidence: step.evidence
+	};
+	return canToolResultAdvanceStep(planStep, result).ok;
 }
 
 export function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[]): boolean {
-  const successful = results.filter((result) => result.ok && !result.error)
-  if (step.kind === 'inspect') {
-    return successful.some((result) => recordsStepEvidence(step, result))
-  }
-  if (step.kind === 'recipe' || step.kind === 'mixin') {
-    return successful.some((result) => recordsStepEvidence(step, result))
-  }
-  if (step.kind !== 'write') return false
+	const successful = results.filter((result) => result.ok && !result.error);
+	if (step.kind === "inspect") {
+		return successful.some((result) => recordsStepEvidence(step, result));
+	}
+	if (step.kind === "recipe" || step.kind === "mixin") {
+		return successful.some((result) => recordsStepEvidence(step, result));
+	}
+	if (step.kind !== "write") return false;
 
-  const requiredPaths = step.targetPaths?.length
-    ? step.targetPaths
-    : (step.targetPath ? [step.targetPath] : [])
-  if (requiredPaths.length === 0) {
-    return successful.some((result) => recordsStepEvidence(step, result))
-  }
-  return requiredPaths.every((targetPath) => successful.some((result) => {
-    const artifacts = result.artifactPaths?.length
-      ? result.artifactPaths
-      : [result.artifactPath || String(result.args?.path || '')].filter(Boolean)
-    return artifacts.some((artifactPath) => {
-      // Check one required path at a time — do not keep sibling targetPaths
-      // or a single-file write would satisfy every entry in the list.
-      const planStep = {
-        ...workflowStepToPlanStep(step),
-        kind: 'write' as const,
-        targetPath,
-        targetPaths: undefined
-      }
-      return canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok
-    })
-  }))
+	const requiredPaths = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
+	if (requiredPaths.length === 0) {
+		return successful.some((result) => recordsStepEvidence(step, result));
+	}
+	return requiredPaths.every((targetPath) =>
+		successful.some((result) => {
+			const artifacts = result.artifactPaths?.length ? result.artifactPaths : [result.artifactPath || String(result.args?.path || "")].filter(Boolean);
+			return artifacts.some((artifactPath) => {
+				// Check one required path at a time — do not keep sibling targetPaths
+				// or a single-file write would satisfy every entry in the list.
+				const planStep = {
+					...workflowStepToPlanStep(step),
+					kind: "write" as const,
+					targetPath,
+					targetPaths: undefined
+				};
+				return canToolResultAdvanceStep(planStep, { ...result, artifactPath }).ok;
+			});
+		})
+	);
 }
 
 export type DiskProbe = {
-  exists: (absPath: string) => Promise<boolean>
-  listDirectory: (absPath: string) => Promise<Array<{ name: string; isDirectory: boolean }>>
-}
+	exists: (absPath: string) => Promise<boolean>;
+	listDirectory: (absPath: string) => Promise<Array<{ name: string; isDirectory: boolean }>>;
+};
 
 function isDirectoryTarget(target: string): boolean {
-  const withSlash = target.replace(/\\/g, '/')
-  if (withSlash.endsWith('/')) return true
-  const base = withSlash.replace(/\/+$/, '').split('/').pop() || ''
-  return !base.includes('.')
+	const withSlash = target.replace(/\\/g, "/");
+	if (withSlash.endsWith("/")) return true;
+	const base = withSlash.replace(/\/+$/, "").split("/").pop() || "";
+	return !base.includes(".");
 }
 
 /** Prefill write evidence from files already on disk (resume / 继续 after partial stop). */
-export async function collectDiskWriteEvidence(
-  projectPath: string,
-  step: WorkflowStep,
-  probe: DiskProbe
-): Promise<ToolResult[]> {
-  if (step.kind !== 'write') return []
-  const targets = step.targetPaths?.length
-    ? step.targetPaths
-    : (step.targetPath ? [step.targetPath] : [])
-  if (targets.length === 0) return []
+export async function collectDiskWriteEvidence(projectPath: string, step: WorkflowStep, probe: DiskProbe): Promise<ToolResult[]> {
+	if (step.kind !== "write") return [];
+	const targets = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
+	if (targets.length === 0) return [];
 
-  const found: string[] = []
-  for (const target of targets) {
-    const rel = target.replace(/\\/g, '/').replace(/\/+$/, '')
-    if (isDirectoryTarget(target)) {
-      // Probe target + main↔client alias directories (Loom split source sets).
-      const dirCandidates = sourceSetPathAliases(rel)
-      for (const dirRel of dirCandidates) {
-        try {
-          const entries = await probe.listDirectory(`${projectPath}/${dirRel}`)
-          for (const entry of entries) {
-            if (!entry.isDirectory) {
-              found.push(`${dirRel}/${entry.name}`)
-            }
-          }
-          if (entries.some((e) => !e.isDirectory)) break
-        } catch {
-          // directory missing or unreadable — try next alias
-        }
-      }
-      continue
-    }
-    // Prefer the planned path; fall back to main↔client twin when only one exists.
-    let hit: string | undefined
-    for (const candidate of sourceSetPathAliases(rel)) {
-      try {
-        if (await probe.exists(`${projectPath}/${candidate}`)) {
-          hit = candidate
-          break
-        }
-      } catch {
-        // ignore
-      }
-    }
-    if (hit) found.push(hit)
-  }
+	const found: string[] = [];
+	for (const target of targets) {
+		const rel = target.replace(/\\/g, "/").replace(/\/+$/, "");
+		if (isDirectoryTarget(target)) {
+			// Probe target + main↔client alias directories (Loom split source sets).
+			const dirCandidates = sourceSetPathAliases(rel);
+			for (const dirRel of dirCandidates) {
+				try {
+					const entries = await probe.listDirectory(`${projectPath}/${dirRel}`);
+					for (const entry of entries) {
+						if (!entry.isDirectory) {
+							found.push(`${dirRel}/${entry.name}`);
+						}
+					}
+					if (entries.some((e) => !e.isDirectory)) break;
+				} catch {
+					// directory missing or unreadable — try next alias
+				}
+			}
+			continue;
+		}
+		// Prefer the planned path; fall back to main↔client twin when only one exists.
+		let hit: string | undefined;
+		for (const candidate of sourceSetPathAliases(rel)) {
+			try {
+				if (await probe.exists(`${projectPath}/${candidate}`)) {
+					hit = candidate;
+					break;
+				}
+			} catch {
+				// ignore
+			}
+		}
+		if (hit) found.push(hit);
+	}
 
-  if (found.length === 0) return []
-  return [{
-    output: `磁盘已存在目标文件：${found.join(', ')}`,
-    durationMs: 0,
-    ok: true,
-    toolName: 'write_file',
-    args: { path: found[0] },
-    artifactPath: found[0],
-    artifactPaths: found,
-    exitCode: 0
-  }]
+	if (found.length === 0) return [];
+	return [
+		{
+			output: `磁盘已存在目标文件：${found.join(", ")}`,
+			durationMs: 0,
+			ok: true,
+			toolName: "write_file",
+			args: { path: found[0] },
+			artifactPath: found[0],
+			artifactPaths: found,
+			exitCode: 0
+		}
+	];
 }
 
 export class WorkflowEngine {
-  private steps: WorkflowStep[]
-  private planTracker: PlanTracker
-  private registry: Registry
-  private projectPath: string | null
-  private abortSignal?: AbortSignal
-  private emit: (event: Event) => void
-  private onToolDispatch?: (name: string, id: string) => void
-  private onToolResult?: (name: string, id: string, output: string) => void
-  private onGuiLayoutPreview?: WorkflowEngineOptions['onGuiLayoutPreview']
-  private modelCall: WorkflowModelCall
-  private openCodeDelegate?: WorkflowEngineOptions['openCodeDelegate']
-  private fileSession: FileSession
-  private clarificationGate?: { count: number }
-  private visionModel: boolean
-  private requireInGameVerify: boolean
-  private requireFeatureGuiVerify: boolean
-  private verifyTarget: VerifyTarget | null
-  private runClientReady = false
-  private inGameVerified = false
-  private lastVerifyWasTitleScreen = false
-  private lastVerifyMismatch = ''
+	private steps: WorkflowStep[];
+	private planTracker: PlanTracker;
+	private registry: Registry;
+	private projectPath: string | null;
+	private abortSignal?: AbortSignal;
+	private emit: (event: Event) => void;
+	private onToolDispatch?: (name: string, id: string) => void;
+	private onToolResult?: (name: string, id: string, output: string) => void;
+	private onGuiLayoutPreview?: WorkflowEngineOptions["onGuiLayoutPreview"];
+	private onCancelPendingGuiLayouts?: WorkflowEngineOptions["onCancelPendingGuiLayouts"];
+	private modelCall: WorkflowModelCall;
+	private openCodeDelegate?: WorkflowEngineOptions["openCodeDelegate"];
+	private fileSession: FileSession;
+	private clarificationGate?: { count: number };
+	private visionModel: boolean;
+	private requireInGameVerify: boolean;
+	private requireFeatureGuiVerify: boolean;
+	private verifyTarget: VerifyTarget | null;
+	private runClientReady = false;
+	private inGameVerified = false;
+	private lastVerifyWasTitleScreen = false;
+	private lastVerifyMismatch = "";
 
-  constructor(options: WorkflowEngineOptions) {
-    this.steps = options.steps
-    this.planTracker = options.planTracker
-    this.registry = options.registry
-    this.projectPath = options.projectPath
-    this.abortSignal = options.abortSignal
-    this.emit = options.emit
-    this.onToolDispatch = options.onToolDispatch
-    this.onToolResult = options.onToolResult
-    this.onGuiLayoutPreview = options.onGuiLayoutPreview
-    this.modelCall = options.modelCall
-    this.openCodeDelegate = options.openCodeDelegate
-    this.fileSession = options.fileSession || new FileSession()
-    this.clarificationGate = options.clarificationGate
-    this.visionModel = Boolean(options.visionModel)
-    this.requireInGameVerify = Boolean(options.requireInGameVerify)
-    this.requireFeatureGuiVerify = Boolean(options.requireFeatureGuiVerify)
-    this.verifyTarget = options.verifyTarget ?? null
-  }
+	constructor(options: WorkflowEngineOptions) {
+		this.steps = options.steps;
+		this.planTracker = options.planTracker;
+		this.registry = options.registry;
+		this.projectPath = options.projectPath;
+		this.abortSignal = options.abortSignal;
+		this.emit = options.emit;
+		this.onToolDispatch = options.onToolDispatch;
+		this.onToolResult = options.onToolResult;
+		this.onGuiLayoutPreview = options.onGuiLayoutPreview;
+		this.onCancelPendingGuiLayouts = options.onCancelPendingGuiLayouts;
+		this.modelCall = options.modelCall;
+		this.openCodeDelegate = options.openCodeDelegate;
+		this.fileSession = options.fileSession || new FileSession();
+		this.clarificationGate = options.clarificationGate;
+		this.visionModel = Boolean(options.visionModel);
+		this.requireInGameVerify = Boolean(options.requireInGameVerify);
+		this.requireFeatureGuiVerify = Boolean(options.requireFeatureGuiVerify);
+		this.verifyTarget = options.verifyTarget ?? null;
+	}
 
-  private planState(): Array<{
-    id: string
-    description: string
-    status: string
-    kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
-    targetPath?: string
-    targetPaths?: string[]
-    evidence?: string
-  }> {
-    return this.steps.map((step) => ({
-      id: step.id,
-      description: step.title,
-      status: statusForPlan(step),
-      ...(step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' ? { kind: step.kind } : {}),
-      ...(step.targetPath ? { targetPath: step.targetPath } : {}),
-      ...(step.targetPaths?.length ? { targetPaths: [...step.targetPaths] } : {}),
-      ...(step.evidence ? { evidence: step.evidence } : {})
-    }))
-  }
+	private planState(): Array<{
+		id: string;
+		description: string;
+		status: string;
+		kind?: "inspect" | "write" | "recipe" | "mixin";
+		targetPath?: string;
+		targetPaths?: string[];
+		evidence?: string;
+	}> {
+		return this.steps.map((step) => ({
+			id: step.id,
+			description: step.title,
+			status: statusForPlan(step),
+			...(step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin" ? { kind: step.kind } : {}),
+			...(step.targetPath ? { targetPath: step.targetPath } : {}),
+			...(step.targetPaths?.length ? { targetPaths: [...step.targetPaths] } : {}),
+			...(step.evidence ? { evidence: step.evidence } : {})
+		}));
+	}
 
-  private emitPlanState(): void {
-    this.emit({ kind: EventKind.PlanState, planSteps: this.planState() })
-  }
+	private emitPlanState(): void {
+		this.emit({ kind: EventKind.PlanState, planSteps: this.planState() });
+	}
 
-  private currentStep(): WorkflowStep | null {
-    return this.steps.find((step) => step.status === 'running')
-      ?? this.steps.find((step) => step.status === 'failed')
-      ?? this.steps.find((step) => step.status === 'pending')
-      ?? null
-  }
+	private currentStep(): WorkflowStep | null {
+		return this.steps.find((step) => step.status === "running") ?? this.steps.find((step) => step.status === "failed") ?? this.steps.find((step) => step.status === "pending") ?? null;
+	}
 
-  private toolSchemasFor(
-    step: WorkflowStep,
-    repairMode: boolean,
-    limits?: {
-      fabricDocsSearchCount?: number
-      knowledgeQueries?: number
-      exploreRounds?: number
-      stepHasEvidence?: boolean
-      stripKnowledge?: boolean
-    }
-  ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-    // Stable tools set within a step: always offer the repair superset for build/run
-    // so entering repairMode does not change the tools array (prompt-cache friendly).
-    // Runtime gates (filterToolCallsForStep / isToolAllowedForStep) still block
-    // edit/write until repair, and reject over-limit doc/explore calls.
-    let names: string[]
-    if (step.kind === 'build' || step.kind === 'run') {
-      names = repairExtraTools(step)
-    } else {
-      names = [...step.allowedTools]
-      if (repairMode) names = repairExtraTools(step)
-    }
-    const exploreExhausted =
-      isExploreLimitedStep(step, repairMode) &&
-      (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS
-    names = applyExploreToolLimit(names, {
-      exploreExhausted,
-      stripKnowledge: limits?.stripKnowledge === true
-    })
-    return this.registry.schemas().filter((tool) => names.includes(tool.name))
-  }
+	private toolSchemasFor(
+		step: WorkflowStep,
+		repairMode: boolean,
+		limits?: {
+			fabricDocsSearchCount?: number;
+			knowledgeQueries?: number;
+			exploreRounds?: number;
+			stepHasEvidence?: boolean;
+			stripKnowledge?: boolean;
+		}
+	): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+		// Stable tools set within a step: always offer the repair superset for build/run
+		// so entering repairMode does not change the tools array (prompt-cache friendly).
+		// Runtime gates (filterToolCallsForStep / isToolAllowedForStep) still block
+		// edit/write until repair, and reject over-limit doc/explore calls.
+		let names: string[];
+		if (step.kind === "build" || step.kind === "run") {
+			names = repairExtraTools(step);
+		} else {
+			names = [...step.allowedTools];
+			if (repairMode) names = repairExtraTools(step);
+		}
+		const exploreExhausted = isExploreLimitedStep(step, repairMode) && (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS;
+		names = applyExploreToolLimit(names, {
+			exploreExhausted,
+			stripKnowledge: limits?.stripKnowledge === true
+		});
+		return this.registry.schemas().filter((tool) => names.includes(tool.name));
+	}
 
-  private workflowPrompt(
-    step: WorkflowStep,
-    repairMode: boolean,
-    repairWriteRequired: boolean,
-    offeredToolNames?: string[],
-    ephemeralInstruction?: string,
-    pendingMigration?: Set<string>
-  ): ChatMessage {
-    const tools = offeredToolNames ?? (repairMode ? repairExtraTools(step) : step.allowedTools)
-    const prefix = repairMode ? '【修复模式】' : '【工作流步骤】'
-    const migrationPending = Boolean(pendingMigration && pendingMigration.size > 0)
-    const repairGate =
-      repairMode && (repairWriteRequired || migrationPending)
-        ? migrationPending
-          ? '必须先完成 splitEnvironment 批量迁移（write_file 到 client + delete_file 删 main）后才能 trigger_build。\n'
-          : '必须先 write_file / edit_file / delete_file 修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n'
-        : ''
-    const clarifyHint = tools.includes('ask_clarification')
-      ? '标识符/路径/类名先用 read_file/grep 从项目推断；仅用户偏好或需求歧义才 ask_clarification（短问题+短选项）。禁止把 API 命名或实现清单丢给用户选。\n'
-      : ''
-    const evidenceHint = step.evidence
-      ? `验收标准: ${step.evidence}\n`
-      : ''
-    const editHint =
-      '新建用 write_file；小改用 edit_file（须先 read_file）；整文件重写用 write_file(overwrite=true)，过长则短骨架+分段 edit_file；迁移用 write_file 新路径 + delete_file 旧路径。'
-    const buildFirst =
-      (step.kind === 'build' || step.kind === 'run') && !repairMode
-        ? step.kind === 'build'
-          ? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
-          : '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n'
-        : ''
-    const migrationHint = migrationPending && pendingMigration
-      ? formatMigrationChecklist(pendingMigration)
-      : ''
-    const ephemeral = ephemeralInstruction?.trim()
-      ? `\n${ephemeralInstruction.trim()}\n`
-      : ''
-    return {
-      role: 'user',
-      content:
-        `${prefix}${repairGate}${clarifyHint}${buildFirst}${migrationHint}${ephemeral}只执行当前步骤，不要重复已完成操作。\n` +
-        `当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(', ') || '无'}\n` +
-        `${editHint}工具成功且满足验收证据后主机会推进。`
-    }
-  }
+	private workflowPrompt(
+		step: WorkflowStep,
+		repairMode: boolean,
+		repairWriteRequired: boolean,
+		offeredToolNames?: string[],
+		ephemeralInstruction?: string,
+		pendingMigration?: Set<string>
+	): ChatMessage {
+		const tools = offeredToolNames ?? (repairMode ? repairExtraTools(step) : step.allowedTools);
+		const prefix = repairMode ? "【修复模式】" : "【工作流步骤】";
+		const migrationPending = Boolean(pendingMigration && pendingMigration.size > 0);
+		const repairGate =
+			repairMode && (repairWriteRequired || migrationPending)
+				? migrationPending
+					? "必须先完成 splitEnvironment 批量迁移（write_file 到 client + delete_file 删 main）后才能 trigger_build。\n"
+					: "必须先 write_file / edit_file / delete_file 修改代码后才能 trigger_build / run_command；禁止在未修改代码时直接重编译。\n"
+				: "";
+		const clarifyHint = tools.includes("ask_clarification")
+			? "标识符/路径/类名先用 read_file/grep 从项目推断；仅用户偏好或需求歧义才 ask_clarification（短问题+短选项）。禁止把 API 命名或实现清单丢给用户选。\n"
+			: "";
+		const evidenceHint = step.evidence ? `验收标准: ${step.evidence}\n` : "";
+		const editHint = "新建用 write_file；小改用 edit_file（须先 read_file）；整文件重写用 write_file(overwrite=true)，过长则短骨架+分段 edit_file；迁移用 write_file 新路径 + delete_file 旧路径。";
+		const buildFirst =
+			(step.kind === "build" || step.kind === "run") && !repairMode
+				? step.kind === "build"
+					? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
+					: '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n'
+				: "";
+		const migrationHint = migrationPending && pendingMigration ? formatMigrationChecklist(pendingMigration) : "";
+		const ephemeral = ephemeralInstruction?.trim() ? `\n${ephemeralInstruction.trim()}\n` : "";
+		return {
+			role: "user",
+			content:
+				`${prefix}${repairGate}${clarifyHint}${buildFirst}${migrationHint}${ephemeral}只执行当前步骤，不要重复已完成操作。\n` +
+				`当前步骤 #${step.id}: ${step.title}\n类型: ${step.kind}\n${evidenceHint}允许工具: ${tools.join(", ") || "无"}\n` +
+				`${editHint}工具成功且满足验收证据后主机会推进。`
+		};
+	}
 
-  private emitRejected(callId: string, result: ToolResult): void {
-    this.emit({
-      kind: EventKind.ToolDispatch,
-      tool: { id: callId, name: result.toolName || 'unknown', args: JSON.stringify(result.args || {}) }
-    })
-    this.emit({
-      kind: EventKind.ToolResult,
-      tool: {
-        id: callId,
-        name: result.toolName || 'unknown',
-        args: '',
-        output: result.output,
-        error: result.error,
-        durationMs: result.durationMs
-      }
-    })
-    this.onToolResult?.(result.toolName || 'unknown', callId, result.output)
-  }
+	private emitRejected(callId: string, result: ToolResult): void {
+		this.emit({
+			kind: EventKind.ToolDispatch,
+			tool: { id: callId, name: result.toolName || "unknown", args: JSON.stringify(result.args || {}) }
+		});
+		this.emit({
+			kind: EventKind.ToolResult,
+			tool: {
+				id: callId,
+				name: result.toolName || "unknown",
+				args: "",
+				output: result.output,
+				error: result.error,
+				durationMs: result.durationMs
+			}
+		});
+		this.onToolResult?.(result.toolName || "unknown", callId, result.output);
+	}
 
-  private async executeAllowedCalls(step: WorkflowStep, calls: ToolCallWithId[]): Promise<Map<string, ToolResult>> {
-    if (calls.length === 0) return new Map()
-    const ctx: ToolContext = {
-      projectPath: this.projectPath,
-      callId: `workflow_${step.id}`,
-      abortSignal: this.abortSignal,
-      planTracker: this.planTracker,
-      fileSession: this.fileSession,
-      onPlanStateChange: () => this.emitPlanState(),
-      onGuiLayoutPreview: this.onGuiLayoutPreview
-    }
-    return executeBatch(
-      calls,
-      this.registry,
-      ctx,
-      (name, id, args) => {
-        const tool = this.registry.get(name)
-        this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: JSON.stringify(args), readOnly: tool?.readOnly() } })
-        this.onToolDispatch?.(name, id)
-      },
-      (name, id, result) => {
-        this.emit({
-          kind: EventKind.ToolResult,
-          tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff }
-        })
-        this.onToolResult?.(name, id, result.output)
-      },
-      (id, chunk) => {
-        this.emit({ kind: EventKind.ToolProgress, tool: { id, name: '', args: '', partial: true, output: chunk } })
-      }
-    )
-  }
+	private async executeAllowedCalls(step: WorkflowStep, calls: ToolCallWithId[]): Promise<Map<string, ToolResult>> {
+		if (calls.length === 0) return new Map();
+		const ctx: ToolContext = {
+			projectPath: this.projectPath,
+			callId: `workflow_${step.id}`,
+			abortSignal: this.abortSignal,
+			planTracker: this.planTracker,
+			fileSession: this.fileSession,
+			onPlanStateChange: () => this.emitPlanState(),
+			onGuiLayoutPreview: this.onGuiLayoutPreview
+		};
+		return executeBatch(
+			calls,
+			this.registry,
+			ctx,
+			(name, id, args) => {
+				const tool = this.registry.get(name);
+				this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: JSON.stringify(args), readOnly: tool?.readOnly() } });
+				this.onToolDispatch?.(name, id);
+			},
+			(name, id, result) => {
+				this.emit({
+					kind: EventKind.ToolResult,
+					tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff }
+				});
+				this.onToolResult?.(name, id, result.output);
+			},
+			(id, chunk) => {
+				this.emit({ kind: EventKind.ToolProgress, tool: { id, name: "", args: "", partial: true, output: chunk } });
+			}
+		);
+	}
 
-  private appendToolRound(
-    baseMessages: ChatMessage[],
-    streamContent: string,
-    calls: ModelToolCall[],
-    resultsById: Map<string, ToolResult>,
-    instruction?: string
-  ): string | undefined {
-    baseMessages.push(assistantToolCallMessage(streamContent, calls))
-    for (const call of calls) {
-      const result = resultsById.get(call.id)
-      const image =
-        this.visionModel && result?.imageBase64
-          ? { base64: result.imageBase64, mimeType: result.imageMimeType }
-          : undefined
-      baseMessages.push(toolResultMessage(call, result?.output ?? '', image))
-    }
-    // Do NOT persist instruction as role:system in baseMessages — that breaks
-    // prompt-cache prefixes. Return it for the next ephemeral workflowPrompt instead.
-    return instruction?.trim() || undefined
-  }
+	private appendToolRound(baseMessages: ChatMessage[], streamContent: string, calls: ModelToolCall[], resultsById: Map<string, ToolResult>, instruction?: string): string | undefined {
+		baseMessages.push(assistantToolCallMessage(streamContent, calls));
+		for (const call of calls) {
+			const result = resultsById.get(call.id);
+			const image = this.visionModel && result?.imageBase64 ? { base64: result.imageBase64, mimeType: result.imageMimeType } : undefined;
+			baseMessages.push(toolResultMessage(call, result?.output ?? "", image));
+		}
+		// Do NOT persist instruction as role:system in baseMessages — that breaks
+		// prompt-cache prefixes. Return it for the next ephemeral workflowPrompt instead.
+		return instruction?.trim() || undefined;
+	}
 
-  async run(baseMessages: ChatMessage[]): Promise<WorkflowRunResult> {
-    let finalContent = ''
-    // Fix 3: run-level guard — did any real write happen anywhere this run?
-    // Used to detect no-op builds (all UP-TO-DATE + zero writes) → surface instead of silent success.
-    let anyWriteThisRun = false
-    const planHasWriteSteps = this.steps.some(
-      (s) => s.kind === 'write' || s.kind === 'recipe' || s.kind === 'mixin'
-    )
-    this.emitPlanState()
+	async run(baseMessages: ChatMessage[]): Promise<WorkflowRunResult> {
+		let finalContent = "";
+		// Fix 3: run-level guard — did any real write happen anywhere this run?
+		// Used to detect no-op builds (all UP-TO-DATE + zero writes) → surface instead of silent success.
+		let anyWriteThisRun = false;
+		const planHasWriteSteps = this.steps.some((s) => s.kind === "write" || s.kind === "recipe" || s.kind === "mixin");
+		this.emitPlanState();
 
-    while (!this.abortSignal?.aborted) {
-      const step = this.currentStep()
-      if (!step) break
-      // Fix 2: only a genuinely resumed step (persisted 'running') may treat pre-existing
-      // files on disk as write evidence. A fresh 'pending' step reached this run must
-      // produce a real write_file/edit_file — pre-existing target files (i.e. every
-      // "modify existing file" step) must NOT auto-satisfy evidence.
-      const wasResumedRun = step.status === 'running'
-      if (step.status === 'pending' || step.status === 'failed') step.status = 'running'
-      if (step.kind === 'run' && !wasResumedRun) {
-        this.runClientReady = false
-        this.inGameVerified = false
-      }
-      this.emitPlanState()
-      const delegatedEvidence: ToolResult[] = []
+		while (!this.abortSignal?.aborted) {
+			const step = this.currentStep();
+			if (!step) break;
+			// Fix 2: only a genuinely resumed step (persisted 'running') may treat pre-existing
+			// files on disk as write evidence. A fresh 'pending' step reached this run must
+			// produce a real write_file/edit_file — pre-existing target files (i.e. every
+			// "modify existing file" step) must NOT auto-satisfy evidence.
+			const wasResumedRun = step.status === "running";
+			if (step.status === "pending" || step.status === "failed") step.status = "running";
+			// 步骤切换时清理未确认的 GUI 布局预览，避免残留面板阻塞新步骤
+			if (!wasResumedRun && this.onCancelPendingGuiLayouts) {
+				this.onCancelPendingGuiLayouts();
+			}
+			if (step.kind === "run" && !wasResumedRun) {
+				this.runClientReady = false;
+				this.inGameVerified = false;
+			}
+			this.emitPlanState();
+			const delegatedEvidence: ToolResult[] = [];
 
-      if (
-        this.openCodeDelegate &&
-        step.kind === 'write' &&
-        this.projectPath &&
-        !this.abortSignal?.aborted
-      ) {
-        const targets = step.targetPaths?.length
-          ? step.targetPaths
-          : (step.targetPath ? [step.targetPath] : [])
-        const instruction =
-          `完成 Fabric 模组写码步骤：${step.title}\n` +
-          `目标路径：${targets.join(', ') || '由当前步骤确定'}\n` +
-          `验收标准：${step.evidence || '目标文件产生最小、正确的变更'}\n` +
-          `当前计划：\n${this.planTracker.toContextBlock()}`
-        const delegated = await this.openCodeDelegate(step, instruction)
-        if (delegated.ok) {
-          if (delegated.output?.trim()) {
-            finalContent = delegated.output
-          }
-          const changedPaths = delegated.changedPaths || []
-          delegatedEvidence.push({
-            output: `OpenCode 已验证变更：${changedPaths.join(', ')}`,
-            durationMs: 0,
-            ok: true,
-            toolName: 'write_file',
-            args: { path: changedPaths[0] || step.targetPath || '' },
-            artifactPath: changedPaths[0],
-            artifactPaths: changedPaths,
-            exitCode: 0
-          })
-          baseMessages.push({
-            role: 'system',
-            content:
-              `【OpenCode 委托证据】已修改并验证：${changedPaths.join(', ')}。` +
-              `请核对验收标准后调用 complete_step 完成当前步骤；不要重复写入。`
-          })
-          this.emit({
-            kind: EventKind.Notice,
-            notice: {
-              level: 'info',
-              text: 'OpenCode 已产生经过目标校验的文件变更，等待 Harness 验收步骤'
-            }
-          })
-        } else this.emit({
-          kind: EventKind.Notice,
-          notice: {
-            level: 'warn',
-            text: `OpenCode 委托失败，回退自研 Agent：${delegated.error || 'unknown'}`
-          }
-        })
-      }
+			if (this.openCodeDelegate && step.kind === "write" && this.projectPath && !this.abortSignal?.aborted) {
+				const targets = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
+				const instruction =
+					`完成 Fabric 模组写码步骤：${step.title}\n` +
+					`目标路径：${targets.join(", ") || "由当前步骤确定"}\n` +
+					`验收标准：${step.evidence || "目标文件产生最小、正确的变更"}\n` +
+					`当前计划：\n${this.planTracker.toContextBlock()}`;
+				const delegated = await this.openCodeDelegate(step, instruction);
+				if (delegated.ok) {
+					if (delegated.output?.trim()) {
+						finalContent = delegated.output;
+					}
+					const changedPaths = delegated.changedPaths || [];
+					delegatedEvidence.push({
+						output: `OpenCode 已验证变更：${changedPaths.join(", ")}`,
+						durationMs: 0,
+						ok: true,
+						toolName: "write_file",
+						args: { path: changedPaths[0] || step.targetPath || "" },
+						artifactPath: changedPaths[0],
+						artifactPaths: changedPaths,
+						exitCode: 0
+					});
+					baseMessages.push({
+						role: "system",
+						content: `【OpenCode 委托证据】已修改并验证：${changedPaths.join(", ")}。` + `请核对验收标准后调用 complete_step 完成当前步骤；不要重复写入。`
+					});
+					this.emit({
+						kind: EventKind.Notice,
+						notice: {
+							level: "info",
+							text: "OpenCode 已产生经过目标校验的文件变更，等待 Harness 验收步骤"
+						}
+					});
+				} else
+					this.emit({
+						kind: EventKind.Notice,
+						notice: {
+							level: "warn",
+							text: `OpenCode 委托失败，回退自研 Agent：${delegated.error || "unknown"}`
+						}
+					});
+			}
 
-      if (step.kind === 'write' && this.projectPath && wasResumedRun) {
-        try {
-          const existing = await collectDiskWriteEvidence(this.projectPath, step, {
-            exists: (p) => window.api.exists(p),
-            listDirectory: (p) => window.api.listDirectory(p)
-          })
-          if (existing.length > 0) {
-            // Informational only — existence alone must NOT satisfy write evidence
-            // (rewrite steps often target files that already exist on disk).
-            const paths = existing.flatMap((result) =>
-              result.artifactPaths?.length
-                ? result.artifactPaths
-                : (result.artifactPath ? [result.artifactPath] : [])
-            )
-            baseMessages.push({
-              role: 'system',
-              content:
-                `【磁盘提示】目标路径已存在：${paths.join(', ')}。` +
-                `若需按本步描述重写，请 write_file(overwrite=true) 或分段 edit_file；` +
-                `勿仅因文件存在而 complete_step。`
-            })
-          }
-        } catch {
-          // Probe failures must not block the step
-        }
-      }
+			if (step.kind === "write" && this.projectPath && wasResumedRun) {
+				try {
+					const existing = await collectDiskWriteEvidence(this.projectPath, step, {
+						exists: (p) => window.api.exists(p),
+						listDirectory: (p) => window.api.listDirectory(p)
+					});
+					if (existing.length > 0) {
+						// Informational only — existence alone must NOT satisfy write evidence
+						// (rewrite steps often target files that already exist on disk).
+						const paths = existing.flatMap((result) => (result.artifactPaths?.length ? result.artifactPaths : result.artifactPath ? [result.artifactPath] : []));
+						baseMessages.push({
+							role: "system",
+							content: `【磁盘提示】目标路径已存在：${paths.join(", ")}。` + `若需按本步描述重写，请 write_file(overwrite=true) 或分段 edit_file；` + `勿仅因文件存在而 complete_step。`
+						});
+					}
+				} catch {
+					// Probe failures must not block the step
+				}
+			}
 
-      let completed = false
-      let repairMode = false
-      let repairWriteRequired = false
-      let repairValidationRequired: 'recipe' | 'mixin' | undefined
-      let repairRounds = 0
-      let effectiveMaxRepairRounds = MAX_REPAIR_ROUNDS
-      let lastErrorCount = 0
-      let lastFailureOutput = ''
-      const seenRepairSignatures = new Set<string>()
-      const seenDiagSignatures = new Set<string>()
-      const seenDocFingerprints = new Set<string>()
-      const pendingMigration = new Set<string>()
-      let pendingEphemeralInstruction: string | undefined
-      let pendingReasoningKick = false
-      let repairDiagRounds = 0
-      const evidenceResults: ToolResult[] = [...delegatedEvidence]
-      let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
-      let evidenceIdleRounds = 0
-      let exploreRounds = 0
-      let consecutiveIdenticalRejections = 0
-      let lastRejectionSignature = ''
-      let writeTruncationStreak = 0
-      let writeTruncationPath = ''
-      let stripKnowledgeForTruncation = false
-      let debuggerPrefetched = false
-      let attempt = 0
-      let loopIterations = 0
-      let modelNetworkRetries = 0
-      let knowledgeQueries = 0
-      let fabricDocsSearchCount = 0
-      let lastToolName = ''
-      const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS_CAP
-      const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS_CAP * 8
+			let completed = false;
+			let repairMode = false;
+			let repairWriteRequired = false;
+			let repairValidationRequired: "recipe" | "mixin" | undefined;
+			let repairRounds = 0;
+			let effectiveMaxRepairRounds = MAX_REPAIR_ROUNDS;
+			let lastErrorCount = 0;
+			let lastFailureOutput = "";
+			const seenRepairSignatures = new Set<string>();
+			const seenDiagSignatures = new Set<string>();
+			const seenDocFingerprints = new Set<string>();
+			const pendingMigration = new Set<string>();
+			let pendingEphemeralInstruction: string | undefined;
+			let pendingReasoningKick = false;
+			let repairDiagRounds = 0;
+			const evidenceResults: ToolResult[] = [...delegatedEvidence];
+			let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
+			let evidenceIdleRounds = 0;
+			let exploreRounds = 0;
+			let consecutiveIdenticalRejections = 0;
+			let lastRejectionSignature = "";
+			let writeTruncationStreak = 0;
+			let writeTruncationPath = "";
+			let stripKnowledgeForTruncation = false;
+			let debuggerPrefetched = false;
+			let attempt = 0;
+			let loopIterations = 0;
+			let modelNetworkRetries = 0;
+			let knowledgeQueries = 0;
+			let fabricDocsSearchCount = 0;
+			let lastToolName = "";
+			const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS_CAP;
+			const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS_CAP * 8;
 
-      while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
-        loopIterations++
-        const migrationPending = pendingMigration.size > 0
-        const policyOptions: ToolGateOptions | undefined = repairMode
-          ? {
-              repairMode: true,
-              repairWriteRequired: repairWriteRequired || migrationPending,
-              repairValidationRequired
-            }
-          : undefined
-        const allowedTools = this.toolSchemasFor(step, repairMode, {
-          fabricDocsSearchCount,
-          knowledgeQueries,
-          exploreRounds,
-          stepHasEvidence,
-          stripKnowledge: stripKnowledgeForTruncation
-        })
-        const offeredNames = allowedTools.map((tool) => tool.name)
-        const ephemeral = [pendingEphemeralInstruction, pendingReasoningKick ? LONG_REASONING_KICK : '']
-          .filter(Boolean)
-          .join('\n\n') || undefined
-        pendingEphemeralInstruction = undefined
-        pendingReasoningKick = false
-        const modelMessages = [
-          ...baseMessages,
-          this.workflowPrompt(
-            step,
-            repairMode,
-            repairWriteRequired || migrationPending,
-            offeredNames,
-            ephemeral,
-            pendingMigration
-          )
-        ]
-        let streamText = ''
-        let streamReasoning = ''
-        let modelResult: WorkflowModelResult
-        try {
-          modelResult = await this.modelCall(modelMessages, allowedTools, (text, reasoning) => {
-            if (text) streamText = text
-            if (reasoning) streamReasoning = reasoning
-          })
-          if (modelResult.replaceBaseMessages) {
-            baseMessages.length = 0
-            baseMessages.push(...modelResult.replaceBaseMessages)
-          }
-          modelNetworkRetries = 0
-        } catch (err: unknown) {
-          if (this.abortSignal?.aborted) break
-          const errMsg = err instanceof Error ? err.message : String(err)
-          if (isRetryableFetchError(err) && modelNetworkRetries < MAX_MODEL_NETWORK_RETRIES) {
-            modelNetworkRetries++
-            loopIterations--
-            const delay = fetchRetryDelayMs(modelNetworkRetries - 1)
-            baseMessages.push({
-              role: 'user',
-              content:
-                `【系统】模型 API 暂时不可用（${errMsg}），${Math.round(delay / 1000)}s 后重试本步骤（${modelNetworkRetries}/${MAX_MODEL_NETWORK_RETRIES}）。`
-            })
-            await sleep(delay)
-            continue
-          }
-          const remaining = this.steps
-            .filter((s) => s.status !== 'completed')
-            .map((s) => `#${s.id} ${s.title}`)
-            .join('\n')
-          return {
-            finalContent:
-              finalContent.trim() ||
-              `步骤 #${step.id}「${step.title}」因网络错误中断：${errMsg}\n\n` +
-              `发送「继续」可从当前步骤恢复。\n\n未完成步骤：\n${remaining}`,
-            allDone: false,
-            partial: true,
-            steps: this.steps
-          }
-        }
-        finalContent = modelResult.text || streamText || finalContent
+			while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
+				loopIterations++;
+				const migrationPending = pendingMigration.size > 0;
+				const policyOptions: ToolGateOptions | undefined = repairMode
+					? {
+							repairMode: true,
+							repairWriteRequired: repairWriteRequired || migrationPending,
+							repairValidationRequired
+						}
+					: undefined;
+				const allowedTools = this.toolSchemasFor(step, repairMode, {
+					fabricDocsSearchCount,
+					knowledgeQueries,
+					exploreRounds,
+					stepHasEvidence,
+					stripKnowledge: stripKnowledgeForTruncation
+				});
+				const offeredNames = allowedTools.map((tool) => tool.name);
+				const ephemeral = [pendingEphemeralInstruction, pendingReasoningKick ? LONG_REASONING_KICK : ""].filter(Boolean).join("\n\n") || undefined;
+				pendingEphemeralInstruction = undefined;
+				pendingReasoningKick = false;
+				const modelMessages = [...baseMessages, this.workflowPrompt(step, repairMode, repairWriteRequired || migrationPending, offeredNames, ephemeral, pendingMigration)];
+				let streamText = "";
+				let streamReasoning = "";
+				let modelResult: WorkflowModelResult;
+				try {
+					modelResult = await this.modelCall(modelMessages, allowedTools, (text, reasoning) => {
+						if (text) streamText = text;
+						if (reasoning) streamReasoning = reasoning;
+					});
+					if (modelResult.replaceBaseMessages) {
+						baseMessages.length = 0;
+						baseMessages.push(...modelResult.replaceBaseMessages);
+					}
+					modelNetworkRetries = 0;
+				} catch (err: unknown) {
+					if (this.abortSignal?.aborted) break;
+					const errMsg = err instanceof Error ? err.message : String(err);
+					if (isRetryableFetchError(err) && modelNetworkRetries < MAX_MODEL_NETWORK_RETRIES) {
+						modelNetworkRetries++;
+						loopIterations--;
+						const delay = fetchRetryDelayMs(modelNetworkRetries - 1);
+						baseMessages.push({
+							role: "user",
+							content: `【系统】模型 API 暂时不可用（${errMsg}），${Math.round(delay / 1000)}s 后重试本步骤（${modelNetworkRetries}/${MAX_MODEL_NETWORK_RETRIES}）。`
+						});
+						await sleep(delay);
+						continue;
+					}
+					const remaining = this.steps
+						.filter((s) => s.status !== "completed")
+						.map((s) => `#${s.id} ${s.title}`)
+						.join("\n");
+					return {
+						finalContent: finalContent.trim() || `步骤 #${step.id}「${step.title}」因网络错误中断：${errMsg}\n\n` + `发送「继续」可从当前步骤恢复。\n\n未完成步骤：\n${remaining}`,
+						allDone: false,
+						partial: true,
+						steps: this.steps
+					};
+				}
+				finalContent = modelResult.text || streamText || finalContent;
 
-        const reasoningLen = (modelResult.reasoning || streamReasoning || '').length
-        if (reasoningLen >= MAX_REASONING_SOFT_CHARS || modelResult.finishReason === 'reasoning_cap') {
-          pendingReasoningKick = true
-        }
+				const reasoningLen = (modelResult.reasoning || streamReasoning || "").length;
+				if (reasoningLen >= MAX_REASONING_SOFT_CHARS || modelResult.finishReason === "reasoning_cap") {
+					pendingReasoningKick = true;
+				}
 
-        const allCalls = normalizeModelToolCalls(modelResult.toolCalls)
-        if (allCalls.length === 0) {
-          // Answer steps auto-complete on text output; no tool calls needed.
-          if (step.kind === 'answer') {
-            step.status = 'completed'
-            this.planTracker.advanceCurrent('answer text')
-            finalContent = modelResult.text || streamText || finalContent
-            this.emitPlanState()
-            completed = true
-            break
-          }
-          baseMessages.push({
-            role: 'user',
-            content: buildEmptyToolCallInstruction(step)
-          })
-          attempt++
-          continue
-        }
+				const allCalls = normalizeModelToolCalls(modelResult.toolCalls);
+				if (allCalls.length === 0) {
+					// Answer steps auto-complete on text output; no tool calls needed.
+					if (step.kind === "answer") {
+						step.status = "completed";
+						this.planTracker.advanceCurrent("answer text");
+						finalContent = modelResult.text || streamText || finalContent;
+						this.emitPlanState();
+						completed = true;
+						break;
+					}
+					baseMessages.push({
+						role: "user",
+						content: buildEmptyToolCallInstruction(step)
+					});
+					attempt++;
+					continue;
+				}
 
-        const validation = validateToolCalls(allCalls, allowedTools)
-        // execute 阶段误调 submit_plan → 无害提示，避免 0ms 失败噪音与死循环
-        for (const [id, rejected] of validation.rejected) {
-          if (
-            rejected.toolName === 'submit_plan' ||
-            (rejected.errorKind === 'tool_not_offered' && /submit_plan/.test(rejected.output || ''))
-          ) {
-            const soft: ToolResult = {
-              output: '执行阶段无需 submit_plan。请按当前步骤直接调用工具（read_file/edit_file/write_file/trigger_build 等）。',
-              durationMs: 0,
-              ok: true,
-              toolName: 'submit_plan',
-              args: rejected.args,
-              exitCode: null
-            }
-            validation.rejected.set(id, soft)
-            this.emitRejected(id, soft)
-            continue
-          }
-          this.emitRejected(id, rejected)
-        }
-        const calls = validation.accepted
-        if (calls.length === 0) {
-          const onlySoftSubmit =
-            [...validation.rejected.values()].every((r) => r.toolName === 'submit_plan' && r.ok)
-          if (onlySoftSubmit) {
-            pendingEphemeralInstruction = this.appendToolRound(
-              baseMessages,
-              modelResult.text || streamText,
-              allCalls,
-              validation.rejected,
-              '执行阶段无需 submit_plan。请按当前步骤直接调用工具。'
-            )
-            attempt++
-            continue
-          }
-          const trunc = nextWriteTruncationStreak(
-            [...validation.rejected.values()],
-            writeTruncationStreak,
-            writeTruncationPath
-          )
-          writeTruncationStreak = trunc.streak
-          writeTruncationPath = trunc.path
-          if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
-            stripKnowledgeForTruncation = true
-          }
-          const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values())
-          const truncHint =
-            writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : undefined
-          pendingEphemeralInstruction = this.appendToolRound(
-            baseMessages,
-            modelResult.text || streamText,
-            allCalls,
-            validation.rejected,
-            [onlyKnowledgeRejected ? buildEmptyToolCallInstruction(step) : '所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。', truncHint]
-              .filter(Boolean)
-              .join('\n\n')
-          )
-          if (!onlyKnowledgeRejected) attempt++
-          continue
-        }
+				const validation = validateToolCalls(allCalls, allowedTools);
+				// execute 阶段误调 submit_plan → 无害提示，避免 0ms 失败噪音与死循环
+				for (const [id, rejected] of validation.rejected) {
+					if (rejected.toolName === "submit_plan" || (rejected.errorKind === "tool_not_offered" && /submit_plan/.test(rejected.output || ""))) {
+						const soft: ToolResult = {
+							output: "执行阶段无需 submit_plan。请按当前步骤直接调用工具（read_file/edit_file/write_file/trigger_build 等）。",
+							durationMs: 0,
+							ok: true,
+							toolName: "submit_plan",
+							args: rejected.args,
+							exitCode: null
+						};
+						validation.rejected.set(id, soft);
+						this.emitRejected(id, soft);
+						continue;
+					}
+					this.emitRejected(id, rejected);
+				}
+				const calls = validation.accepted;
+				if (calls.length === 0) {
+					const onlySoftSubmit = [...validation.rejected.values()].every((r) => r.toolName === "submit_plan" && r.ok);
+					if (onlySoftSubmit) {
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							validation.rejected,
+							"执行阶段无需 submit_plan。请按当前步骤直接调用工具。"
+						);
+						attempt++;
+						continue;
+					}
+					const trunc = nextWriteTruncationStreak([...validation.rejected.values()], writeTruncationStreak, writeTruncationPath);
+					writeTruncationStreak = trunc.streak;
+					writeTruncationPath = trunc.path;
+					if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
+						stripKnowledgeForTruncation = true;
+					}
+					const onlyKnowledgeRejected = isKnowledgeOnlyRejectionRound(validation.rejected.values());
+					const truncHint = writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : undefined;
+					pendingEphemeralInstruction = this.appendToolRound(
+						baseMessages,
+						modelResult.text || streamText,
+						allCalls,
+						validation.rejected,
+						[onlyKnowledgeRejected ? buildEmptyToolCallInstruction(step) : "所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。", truncHint].filter(Boolean).join("\n\n")
+					);
+					if (!onlyKnowledgeRejected) attempt++;
+					continue;
+				}
 
-        const resultsById = new Map<string, ToolResult>(validation.rejected)
-        const executableAllowed: ToolCallWithId[] = []
-        let controlBarrierReached = false
-        let projectedDocSearchCount = fabricDocsSearchCount
-        for (const call of calls) {
-          if (executableAllowed.length >= 8) {
-            const rejected: ToolResult = {
-              output: `blocked: [tool_call_limit] 单轮最多执行 8 个工具，"${call.name}" 已延后。`,
-              error: 'tool_call_limit',
-              durationMs: 0,
-              ok: false,
-              toolName: call.name,
-              args: call.args,
-              exitCode: null,
-              errorKind: 'tool_call_limit'
-            }
-            this.emitRejected(call.id, rejected)
-            resultsById.set(call.id, rejected)
-            continue
-          }
-          if (controlBarrierReached) {
-            const rejected: ToolResult = {
-              output: `blocked: [after_control_barrier] "${call.name}" 位于控制调用之后，未执行。请在下一轮调用。`,
-              error: 'after_control_barrier',
-              durationMs: 0,
-              ok: false,
-              toolName: call.name,
-              args: call.args,
-              exitCode: null,
-              errorKind: 'after_control_barrier'
-            }
-            this.emitRejected(call.id, rejected)
-            resultsById.set(call.id, rejected)
-            continue
-          }
-          if (!isToolAllowedForStep(step, call, policyOptions)) {
-            const rejected = createRejectedToolResult(step, call, policyOptions)
-            this.emitRejected(call.id, rejected)
-            resultsById.set(call.id, rejected)
-            continue
-          }
-          if (
-            isDocSearchLimitedStep(step, repairMode) &&
-            call.name === 'fabric_docs_search' &&
-            projectedDocSearchCount >= MAX_DOC_SEARCH_PER_WRITE_STEP
-          ) {
-            const rejected = buildDocSearchBlockedResult(step, call)
-            this.emitRejected(call.id, rejected)
-            resultsById.set(call.id, rejected)
-            continue
-          }
-          if (repairMode && call.name === 'fabric_docs_search') {
-            const fp = normalizeDocSearchFingerprint(String(call.args?.keyword || call.args?.query || ''))
-            if (fp && hasSimilarDocSearch(seenDocFingerprints, fp)) {
-              const rejected: ToolResult = {
-                output:
-                  `blocked: [repair_doc_dedup] 已查询过相近关键词（${fp}）。` +
-                  `请对照上次结果中的 Yarn「方法:」签名直接 edit_file，禁止换措辞再查同一 API。`,
-                error: 'repair_doc_dedup',
-                durationMs: 0,
-                ok: false,
-                toolName: call.name,
-                args: call.args,
-                exitCode: null,
-                errorKind: 'repair_doc_dedup'
-              }
-              this.emitRejected(call.id, rejected)
-              resultsById.set(call.id, rejected)
-              continue
-            }
-          }
-          if (repairMode && REPAIR_DIAG_DEDUP_TOOLS.has(call.name)) {
-            const diagSig = `${call.name}\0${stableArgsKey(call.args)}`
-            if (seenDiagSignatures.has(diagSig)) {
-              const rejected: ToolResult = {
-                output:
-                  `blocked: [repair_diag_dedup] "${call.name}" 已用相同参数执行过。请改用 edit_file 做最小补丁，或更换诊断参数。`,
-                error: 'repair_diag_dedup',
-                durationMs: 0,
-                ok: false,
-                toolName: call.name,
-                args: call.args,
-                exitCode: null,
-                errorKind: 'repair_diag_dedup'
-              }
-              this.emitRejected(call.id, rejected)
-              resultsById.set(call.id, rejected)
-              continue
-            }
-          }
-          executableAllowed.push(call)
-          if (call.name === 'fabric_docs_search') projectedDocSearchCount++
-          if (call.name === 'complete_step' || call.name === 'ask_clarification') {
-            controlBarrierReached = true
-          }
-        }
+				const resultsById = new Map<string, ToolResult>(validation.rejected);
+				const executableAllowed: ToolCallWithId[] = [];
+				let controlBarrierReached = false;
+				let projectedDocSearchCount = fabricDocsSearchCount;
+				for (const call of calls) {
+					if (executableAllowed.length >= 8) {
+						const rejected: ToolResult = {
+							output: `blocked: [tool_call_limit] 单轮最多执行 8 个工具，"${call.name}" 已延后。`,
+							error: "tool_call_limit",
+							durationMs: 0,
+							ok: false,
+							toolName: call.name,
+							args: call.args,
+							exitCode: null,
+							errorKind: "tool_call_limit"
+						};
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					if (controlBarrierReached) {
+						const rejected: ToolResult = {
+							output: `blocked: [after_control_barrier] "${call.name}" 位于控制调用之后，未执行。请在下一轮调用。`,
+							error: "after_control_barrier",
+							durationMs: 0,
+							ok: false,
+							toolName: call.name,
+							args: call.args,
+							exitCode: null,
+							errorKind: "after_control_barrier"
+						};
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					if (!isToolAllowedForStep(step, call, policyOptions)) {
+						const rejected = createRejectedToolResult(step, call, policyOptions);
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					if (isDocSearchLimitedStep(step, repairMode) && call.name === "fabric_docs_search" && projectedDocSearchCount >= MAX_DOC_SEARCH_PER_WRITE_STEP) {
+						const rejected = buildDocSearchBlockedResult(step, call);
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					if (repairMode && call.name === "fabric_docs_search") {
+						const fp = normalizeDocSearchFingerprint(String(call.args?.keyword || call.args?.query || ""));
+						if (fp && hasSimilarDocSearch(seenDocFingerprints, fp)) {
+							const rejected: ToolResult = {
+								output: `blocked: [repair_doc_dedup] 已查询过相近关键词（${fp}）。` + `请对照上次结果中的 Yarn「方法:」签名直接 edit_file，禁止换措辞再查同一 API。`,
+								error: "repair_doc_dedup",
+								durationMs: 0,
+								ok: false,
+								toolName: call.name,
+								args: call.args,
+								exitCode: null,
+								errorKind: "repair_doc_dedup"
+							};
+							this.emitRejected(call.id, rejected);
+							resultsById.set(call.id, rejected);
+							continue;
+						}
+					}
+					if (repairMode && REPAIR_DIAG_DEDUP_TOOLS.has(call.name)) {
+						const diagSig = `${call.name}\0${stableArgsKey(call.args)}`;
+						if (seenDiagSignatures.has(diagSig)) {
+							const rejected: ToolResult = {
+								output: `blocked: [repair_diag_dedup] "${call.name}" 已用相同参数执行过。请改用 edit_file 做最小补丁，或更换诊断参数。`,
+								error: "repair_diag_dedup",
+								durationMs: 0,
+								ok: false,
+								toolName: call.name,
+								args: call.args,
+								exitCode: null,
+								errorKind: "repair_diag_dedup"
+							};
+							this.emitRejected(call.id, rejected);
+							resultsById.set(call.id, rejected);
+							continue;
+						}
+					}
+					executableAllowed.push(call);
+					if (call.name === "fabric_docs_search") projectedDocSearchCount++;
+					if (call.name === "complete_step" || call.name === "ask_clarification") {
+						controlBarrierReached = true;
+					}
+				}
 
-        if (executableAllowed.length === 0) {
-          const repairWriteBlockedOnly =
-            repairMode &&
-            (repairWriteRequired || repairValidationRequired || pendingMigration.size > 0) &&
-            calls.length > 0 &&
-            calls.every((call) => isRepairWriteBlocked(step, call, policyOptions))
-          const docSearchBlockedOnly = isDocSearchOnlyRejectionRound(resultsById.values())
-          const nonBurningRejection = isNonBurningRejectionRound(resultsById.values())
-          const trunc = nextWriteTruncationStreak(
-            [...resultsById.values()],
-            writeTruncationStreak,
-            writeTruncationPath
-          )
-          writeTruncationStreak = trunc.streak
-          writeTruncationPath = trunc.path
-          if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
-            stripKnowledgeForTruncation = true
-          }
-          const rejectionSig = [...resultsById.values()]
-            .map((r) => `${r.toolName}:${r.errorKind || r.error || ''}`)
-            .sort()
-            .join('|')
-          if (rejectionSig && rejectionSig === lastRejectionSignature) {
-            consecutiveIdenticalRejections++
-          } else {
-            consecutiveIdenticalRejections = 1
-            lastRejectionSignature = rejectionSig
-          }
-          const buildEditLoop =
-            (step.kind === 'build' || step.kind === 'run') &&
-            !repairMode &&
-            [...resultsById.values()].every((r) =>
-              r.errorKind === 'tool_not_allowed' &&
-              (r.toolName === 'edit_file' || r.toolName === 'write_file')
-            )
-          const rejectionHint = [
-            [...resultsById.values()].map((r) => r.output).filter(Boolean).join('\n'),
-            repairWriteBlockedOnly
-              ? pendingMigration.size > 0
-                ? '修复模式下必须先完成 client 迁移（write_file + delete_file），再重新构建。'
-                : '修复模式下必须先 write_file / edit_file / delete_file 修改代码，再重新构建。'
-              : buildEditLoop
-                ? (step.kind === 'build'
-                  ? '【禁止循环改文件】构建步骤当前不允许 edit_file。请立即 trigger_build({"task":"build"})；失败后才进入修复模式。'
-                  : '【禁止循环改文件】运行步骤当前不允许 edit_file。请立即 trigger_build({"task":"runClient"})；失败后才进入修复模式。')
-              : docSearchBlockedOnly || nonBurningRejection
-                ? buildEmptyToolCallInstruction(step)
-                : `本步骤允许的工具：${offeredNames.join(', ') || '无'}。请改用其中之一完成当前步骤。`,
-            writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : ''
-          ].filter(Boolean).join('\n\n')
-          pendingEphemeralInstruction = this.appendToolRound(
-            baseMessages,
-            modelResult.text || streamText,
-            allCalls,
-            resultsById,
-            rejectionHint
-          )
-          // Fix 5: identical dead-end loop guard. Spam burns budget faster; a persistent
-          // identical wall (model keeps hitting the same rejection with no new evidence)
-          // is force-stopped so the step fails fast with an actionable message instead of
-          // spinning silently until maxIterations.
-          if (consecutiveIdenticalRejections >= MAX_IDENTICAL_REJECTIONS) {
-            attempt = maxIterations
-          } else if (consecutiveIdenticalRejections >= 2) {
-            attempt += 2
-          } else if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) {
-            attempt++
-          }
-          continue
-        }
-        consecutiveIdenticalRejections = 0
-        lastRejectionSignature = ''
+				if (executableAllowed.length === 0) {
+					const repairWriteBlockedOnly =
+						repairMode &&
+						(repairWriteRequired || repairValidationRequired || pendingMigration.size > 0) &&
+						calls.length > 0 &&
+						calls.every((call) => isRepairWriteBlocked(step, call, policyOptions));
+					const docSearchBlockedOnly = isDocSearchOnlyRejectionRound(resultsById.values());
+					const nonBurningRejection = isNonBurningRejectionRound(resultsById.values());
+					const trunc = nextWriteTruncationStreak([...resultsById.values()], writeTruncationStreak, writeTruncationPath);
+					writeTruncationStreak = trunc.streak;
+					writeTruncationPath = trunc.path;
+					if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
+						stripKnowledgeForTruncation = true;
+					}
+					const rejectionSig = [...resultsById.values()]
+						.map((r) => `${r.toolName}:${r.errorKind || r.error || ""}`)
+						.sort()
+						.join("|");
+					if (rejectionSig && rejectionSig === lastRejectionSignature) {
+						consecutiveIdenticalRejections++;
+					} else {
+						consecutiveIdenticalRejections = 1;
+						lastRejectionSignature = rejectionSig;
+					}
+					const buildEditLoop =
+						(step.kind === "build" || step.kind === "run") &&
+						!repairMode &&
+						[...resultsById.values()].every((r) => r.errorKind === "tool_not_allowed" && (r.toolName === "edit_file" || r.toolName === "write_file"));
+					const rejectionHint = [
+						[...resultsById.values()]
+							.map((r) => r.output)
+							.filter(Boolean)
+							.join("\n"),
+						repairWriteBlockedOnly
+							? pendingMigration.size > 0
+								? "修复模式下必须先完成 client 迁移（write_file + delete_file），再重新构建。"
+								: "修复模式下必须先 write_file / edit_file / delete_file 修改代码，再重新构建。"
+							: buildEditLoop
+								? step.kind === "build"
+									? '【禁止循环改文件】构建步骤当前不允许 edit_file。请立即 trigger_build({"task":"build"})；失败后才进入修复模式。'
+									: '【禁止循环改文件】运行步骤当前不允许 edit_file。请立即 trigger_build({"task":"runClient"})；失败后才进入修复模式。'
+								: docSearchBlockedOnly || nonBurningRejection
+									? buildEmptyToolCallInstruction(step)
+									: `本步骤允许的工具：${offeredNames.join(", ") || "无"}。请改用其中之一完成当前步骤。`,
+						writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK ? LARGE_FILE_REWRITE_RECOVERY : ""
+					]
+						.filter(Boolean)
+						.join("\n\n");
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, rejectionHint);
+					// Fix 5: identical dead-end loop guard. Spam burns budget faster; a persistent
+					// identical wall (model keeps hitting the same rejection with no new evidence)
+					// is force-stopped so the step fails fast with an actionable message instead of
+					// spinning silently until maxIterations.
+					if (consecutiveIdenticalRejections >= MAX_IDENTICAL_REJECTIONS) {
+						attempt = maxIterations;
+					} else if (consecutiveIdenticalRejections >= 2) {
+						attempt += 2;
+					} else if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) {
+						attempt++;
+					}
+					continue;
+				}
+				consecutiveIdenticalRejections = 0;
+				lastRejectionSignature = "";
 
-        const executed = await this.executeAllowedCalls(step, executableAllowed)
-        for (const [id, result] of executed) {
-          resultsById.set(id, result)
-          if (result.ok && !result.error && RUN_WRITE_TOOLS.has(result.toolName || '')) {
-            anyWriteThisRun = true
-            writeTruncationStreak = 0
-            writeTruncationPath = ''
-            stripKnowledgeForTruncation = false
-          }
-          if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || '') && result.ok && !result.error) {
-            seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`)
-          }
-          const invalidatesRecipe = step.kind === 'recipe' &&
-            (result.toolName === 'edit_file' || result.toolName === 'write_file' || result.toolName === 'delete_file')
-          const invalidatesMixin = step.kind === 'mixin' &&
-            ['edit_file', 'write_file', 'delete_file', 'fabric_mixin_scaffold', 'fabric_mixin_register'].includes(result.toolName || '')
-          if (invalidatesRecipe || invalidatesMixin) {
-            const kind = invalidatesRecipe ? 'recipe' : 'mixin'
-            for (let index = evidenceResults.length - 1; index >= 0; index--) {
-              if (evidenceResults[index].validation?.kind === kind) evidenceResults.splice(index, 1)
-            }
-          }
-          evidenceResults.push(result)
-        }
-        stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults)
+				const executed = await this.executeAllowedCalls(step, executableAllowed);
+				for (const [id, result] of executed) {
+					resultsById.set(id, result);
+					if (result.ok && !result.error && RUN_WRITE_TOOLS.has(result.toolName || "")) {
+						anyWriteThisRun = true;
+						writeTruncationStreak = 0;
+						writeTruncationPath = "";
+						stripKnowledgeForTruncation = false;
+					}
+					if (REPAIR_DIAG_DEDUP_TOOLS.has(result.toolName || "") && result.ok && !result.error) {
+						seenDiagSignatures.add(`${result.toolName}\0${stableArgsKey(result.args)}`);
+					}
+					const invalidatesRecipe = step.kind === "recipe" && (result.toolName === "edit_file" || result.toolName === "write_file" || result.toolName === "delete_file");
+					const invalidatesMixin = step.kind === "mixin" && ["edit_file", "write_file", "delete_file", "fabric_mixin_scaffold", "fabric_mixin_register"].includes(result.toolName || "");
+					if (invalidatesRecipe || invalidatesMixin) {
+						const kind = invalidatesRecipe ? "recipe" : "mixin";
+						for (let index = evidenceResults.length - 1; index >= 0; index--) {
+							if (evidenceResults[index].validation?.kind === kind) evidenceResults.splice(index, 1);
+						}
+					}
+					evidenceResults.push(result);
+				}
+				stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
 
-        const truncAfterExec = nextWriteTruncationStreak(
-          [...resultsById.values()],
-          writeTruncationStreak,
-          writeTruncationPath
-        )
-        // Only advance streak from this round's truncations if we didn't just succeed a write
-        if ([...executed.values()].some((r) => r.ok && !r.error && RUN_WRITE_TOOLS.has(r.toolName || ''))) {
-          // already cleared above
-        } else {
-          writeTruncationStreak = truncAfterExec.streak
-          writeTruncationPath = truncAfterExec.path
-          if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
-            stripKnowledgeForTruncation = true
-          }
-        }
+				const truncAfterExec = nextWriteTruncationStreak([...resultsById.values()], writeTruncationStreak, writeTruncationPath);
+				// Only advance streak from this round's truncations if we didn't just succeed a write
+				if ([...executed.values()].some((r) => r.ok && !r.error && RUN_WRITE_TOOLS.has(r.toolName || ""))) {
+					// already cleared above
+				} else {
+					writeTruncationStreak = truncAfterExec.streak;
+					writeTruncationPath = truncAfterExec.path;
+					if (writeTruncationStreak >= MAX_WRITE_TRUNCATION_STREAK) {
+						stripKnowledgeForTruncation = true;
+					}
+				}
 
-        const orderedResults = executableAllowed
-          .map((call) => resultsById.get(call.id))
-          .filter((result): result is ToolResult => Boolean(result))
-        const lastResult = orderedResults[orderedResults.length - 1]
-        if (lastResult?.toolName) lastToolName = lastResult.toolName
+				const orderedResults = executableAllowed.map((call) => resultsById.get(call.id)).filter((result): result is ToolResult => Boolean(result));
+				const lastResult = orderedResults[orderedResults.length - 1];
+				if (lastResult?.toolName) lastToolName = lastResult.toolName;
 
-        fabricDocsSearchCount += orderedResults.filter((result) =>
-          result.toolName === 'fabric_docs_search' && result.ok && !result.error
-        ).length
-        for (const result of orderedResults) {
-          if (result.toolName !== 'fabric_docs_search' || !result.ok || result.error) continue
-          const fp = normalizeDocSearchFingerprint(String(result.args?.keyword || result.args?.query || ''))
-          if (fp) seenDocFingerprints.add(fp)
-        }
+				fabricDocsSearchCount += orderedResults.filter((result) => result.toolName === "fabric_docs_search" && result.ok && !result.error).length;
+				for (const result of orderedResults) {
+					if (result.toolName !== "fabric_docs_search" || !result.ok || result.error) continue;
+					const fp = normalizeDocSearchFingerprint(String(result.args?.keyword || result.args?.query || ""));
+					if (fp) seenDocFingerprints.add(fp);
+				}
 
-        const clarificationResult = orderedResults.find((result) =>
-          result.toolName === 'ask_clarification' && result.ok && !result.error
-        )
-        if (clarificationResult) {
-          const used = this.clarificationGate?.count ?? 0
-          if (used >= MAX_EXECUTE_CLARIFICATIONS) {
-            pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
-            baseMessages.push({
-              role: 'user',
-              content:
-                `【系统】澄清次数已达上限（${MAX_EXECUTE_CLARIFICATIONS} 次）。` +
-                '请自行选择最简一致方案并继续执行当前步骤，禁止再次 ask_clarification。'
-            })
-            attempt++
-            continue
-          }
-          if (this.clarificationGate) this.clarificationGate.count++
-          const question = String(clarificationResult.args?.question || '')
-          const options = Array.isArray(clarificationResult.args?.options)
-            ? (clarificationResult.args.options as string[]).map(String)
-            : undefined
-          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
-          return {
-            finalContent: clarificationResult.output,
-            allDone: false,
-            partial: false,
-            needsClarification: true,
-            clarificationQuestion: question,
-            clarificationOptions: options,
-            steps: this.steps
-          }
-        }
+				const clarificationResult = orderedResults.find((result) => result.toolName === "ask_clarification" && result.ok && !result.error);
+				if (clarificationResult) {
+					const used = this.clarificationGate?.count ?? 0;
+					if (used >= MAX_EXECUTE_CLARIFICATIONS) {
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
+						baseMessages.push({
+							role: "user",
+							content: `【系统】澄清次数已达上限（${MAX_EXECUTE_CLARIFICATIONS} 次）。` + "请自行选择最简一致方案并继续执行当前步骤，禁止再次 ask_clarification。"
+						});
+						attempt++;
+						continue;
+					}
+					if (this.clarificationGate) this.clarificationGate.count++;
+					const question = String(clarificationResult.args?.question || "");
+					const options = Array.isArray(clarificationResult.args?.options) ? (clarificationResult.args.options as string[]).map(String) : undefined;
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
+					return {
+						finalContent: clarificationResult.output,
+						allDone: false,
+						partial: false,
+						needsClarification: true,
+						clarificationQuestion: question,
+						clarificationOptions: options,
+						steps: this.steps
+					};
+				}
 
-        // Track run-step gates across rounds when symptom verification is required.
-        if (step.kind === 'run') {
-          for (const result of orderedResults) {
-            if (isRunClientReadyResult(result)) this.runClientReady = true
-            if (
-              isInGameVerifyResult(result, {
-                requireFeatureGui: this.requireFeatureGuiVerify,
-                verifyTarget: this.verifyTarget
-              })
-            ) {
-              this.inGameVerified = true
-              this.lastVerifyWasTitleScreen = false
-              this.lastVerifyMismatch = ''
-            } else if (
-              (result.toolName === 'mc_inspect' || result.toolName === 'mc_screenshot') &&
-              result.ok
-            ) {
-              const out = String(result.output || '')
-              if (isTitleScreenVerifyOutput(out)) this.lastVerifyWasTitleScreen = true
-              if (this.verifyTarget) {
-                this.lastVerifyMismatch = describeVerifyMismatch(out, this.verifyTarget)
-              }
-            }
-          }
-        }
-        const runGate = {
-          requireInGameVerify: this.requireInGameVerify,
-          requireFeatureGuiVerify: this.requireFeatureGuiVerify,
-          runReady: this.runClientReady,
-          inGameVerified: this.inGameVerified
-        }
-        const decisiveResult = orderedResults.find((result) =>
-          isTerminalFailure(step, result) ||
-          resultCompletesStep(step, result, stepHasEvidence, runGate)
-        )
-        const success =
-          (decisiveResult
-            ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate)
-            : false) ||
-          (step.kind === 'run' &&
-            this.requireInGameVerify &&
-            this.runClientReady &&
-            this.inGameVerified)
-        let roundInstruction: string | undefined
-        if (stripKnowledgeForTruncation) {
-          roundInstruction = LARGE_FILE_REWRITE_RECOVERY
-        }
-        if (
-          step.kind === 'run' &&
-          this.requireInGameVerify &&
-          this.runClientReady &&
-          !this.inGameVerified
-        ) {
-          const target = this.verifyTarget
-          let wrongScreenFinding: { actual: string; expected: string } | null = null
-          if (target) {
-            for (const result of orderedResults) {
-              if (result.toolName !== 'mc_inspect' || !result.ok) continue
-              wrongScreenFinding = isWrongScreenVerifyFinding(
-                String(result.output || ''),
-                target
-              )
-              if (wrongScreenFinding) break
-            }
-          }
-          if (wrongScreenFinding) {
-            if (!repairMode) {
-              repairMode = true
-              repairWriteRequired = true
-              this.emit({
-                kind: EventKind.Notice,
-                notice: {
-                  level: 'warn',
-                  text:
-                    `检测目标未达成：期望「${wrongScreenFinding.expected}」，` +
-                    `实际「${wrongScreenFinding.actual}」。已进入修复模式，请改代码后重测。`
-                }
-              })
-            }
-            roundInstruction = [
-              roundInstruction,
-              formatVerifyRepairKick(wrongScreenFinding)
-            ]
-              .filter(Boolean)
-              .join('\n')
-          } else {
-            const titleHint = target
-              ? [
-                  `【检测目标未达成】${target.label}`,
-                  this.lastVerifyMismatch || '尚未在目标界面上完成 mc_inspect。',
-                  '打开步骤：',
-                  ...target.openSteps.map((s, i) => `${i + 1}. ${s}`),
-                  '禁止在 TitleScreen 上宣称校验完成；禁止仅凭 ready / 随便进一个无关界面结束。'
-                ].join('\n')
-              : this.lastVerifyWasTitleScreen
-                ? [
-                    '刚才仍停在 TitleScreen（标题屏），这不算打开了待测功能。',
-                    '必须进入症状相关界面后再检视/截图。'
-                  ].join('\n')
-                : [
-                    '【游戏内校验未完成】MC_PHASE:menu 仅表示进了主菜单。',
-                    '必须调用 mc_ensure_test_world 进入世界，再打开待测功能界面后校验，禁止只看标题屏就结束。'
-                  ].join('\n')
-            roundInstruction = [roundInstruction, titleHint].filter(Boolean).join('\n')
-          }
-        }
+				// Track run-step gates across rounds when symptom verification is required.
+				if (step.kind === "run") {
+					for (const result of orderedResults) {
+						if (isRunClientReadyResult(result)) this.runClientReady = true;
+						if (
+							isInGameVerifyResult(result, {
+								requireFeatureGui: this.requireFeatureGuiVerify,
+								verifyTarget: this.verifyTarget
+							})
+						) {
+							this.inGameVerified = true;
+							this.lastVerifyWasTitleScreen = false;
+							this.lastVerifyMismatch = "";
+						} else if ((result.toolName === "mc_inspect" || result.toolName === "mc_screenshot") && result.ok) {
+							const out = String(result.output || "");
+							if (isTitleScreenVerifyOutput(out)) this.lastVerifyWasTitleScreen = true;
+							if (this.verifyTarget) {
+								this.lastVerifyMismatch = describeVerifyMismatch(out, this.verifyTarget);
+							}
+						}
+					}
+				}
+				const runGate = {
+					requireInGameVerify: this.requireInGameVerify,
+					requireFeatureGuiVerify: this.requireFeatureGuiVerify,
+					runReady: this.runClientReady,
+					inGameVerified: this.inGameVerified
+				};
+				const decisiveResult = orderedResults.find((result) => isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence, runGate));
+				const success =
+					(decisiveResult ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate) : false) ||
+					(step.kind === "run" && this.requireInGameVerify && this.runClientReady && this.inGameVerified);
+				let roundInstruction: string | undefined;
+				if (stripKnowledgeForTruncation) {
+					roundInstruction = LARGE_FILE_REWRITE_RECOVERY;
+				}
+				if (step.kind === "run" && this.requireInGameVerify && this.runClientReady && !this.inGameVerified) {
+					const target = this.verifyTarget;
+					let wrongScreenFinding: { actual: string; expected: string } | null = null;
+					if (target) {
+						for (const result of orderedResults) {
+							if (result.toolName !== "mc_inspect" || !result.ok) continue;
+							wrongScreenFinding = isWrongScreenVerifyFinding(String(result.output || ""), target);
+							if (wrongScreenFinding) break;
+						}
+					}
+					if (wrongScreenFinding) {
+						if (!repairMode) {
+							repairMode = true;
+							repairWriteRequired = true;
+							// 进入修复模式前停止游戏，避免源文件被占用导致构建失败
+							await stopRunningGameAndHideGuard();
+							this.emit({
+								kind: EventKind.Notice,
+								notice: {
+									level: "warn",
+									text: `检测目标未达成：期望「${wrongScreenFinding.expected}」，` + `实际「${wrongScreenFinding.actual}」。已进入修复模式，游戏已停止，请改代码后重测。`
+								}
+							});
+						}
+						roundInstruction = [roundInstruction, formatVerifyRepairKick(wrongScreenFinding)].filter(Boolean).join("\n");
+					} else {
+						const titleHint = target
+							? [
+									`【检测目标未达成】${target.label}`,
+									this.lastVerifyMismatch || "尚未在目标界面上完成 mc_inspect。",
+									"打开步骤：",
+									...target.openSteps.map((s, i) => `${i + 1}. ${s}`),
+									"禁止在 TitleScreen 上宣称校验完成；禁止仅凭 ready / 随便进一个无关界面结束。"
+								].join("\n")
+							: this.lastVerifyWasTitleScreen
+								? ["刚才仍停在 TitleScreen（标题屏），这不算打开了待测功能。", "必须进入症状相关界面后再检视/截图。"].join("\n")
+								: ["【游戏内校验未完成】MC_PHASE:menu 仅表示进了主菜单。", "必须调用 mc_ensure_test_world 进入世界，再打开待测功能界面后校验，禁止只看标题屏就结束。"].join("\n");
+						roundInstruction = [roundInstruction, titleHint].filter(Boolean).join("\n");
+					}
+				}
 
-        if (success) {
-          // No-op build (all UP-TO-DATE) on a plan that still had write/recipe/mixin work
-          // must not advance — otherwise "假完成" skips real code changes.
-          if (
-            step.kind === 'build' &&
-            planHasWriteSteps &&
-            decisiveResult &&
-            isNoOpBuildResult(decisiveResult.output)
-          ) {
-            const warning = anyWriteThisRun
-              ? '⚠️ 构建为 UP-TO-DATE：本轮虽有写入，但未触发实际编译（compile* 全 UP-TO-DATE）。请核对是否改错 main/client 路径，或改动未保存到 Gradle 源集。'
-              : '⚠️ 构建为 UP-TO-DATE：本轮未检测到任何文件改动（无 write_file/edit_file 等写入）。禁止视为修复成功——请先对目标源码做真实修改。'
-            this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: warning } })
-            roundInstruction = [
-              warning,
-              '禁止 complete_step / 推进构建步骤。请 edit_file 修改客户端或主源码后再次 trigger_build。'
-            ].join('\n')
-            pendingEphemeralInstruction = this.appendToolRound(
-              baseMessages,
-              modelResult.text || streamText,
-              allCalls,
-              resultsById,
-              roundInstruction
-            )
-            attempt++
-            continue
-          }
-          repairMode = false
-          repairWriteRequired = false
-          repairValidationRequired = undefined
-          repairRounds = 0
-          pendingMigration.clear()
-          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById)
-          step.status = 'completed'
-          const advanceName =
-            decisiveResult?.toolName ||
-            (this.inGameVerified ? 'mc_inspect' : 'workflow evidence')
-          this.planTracker.advanceCurrent(advanceName)
-          completed = true
-          this.emitPlanState()
-          break
-        }
+				if (success) {
+					// No-op build (all UP-TO-DATE) on a plan that still had write/recipe/mixin work
+					// must not advance — otherwise "假完成" skips real code changes.
+					if (step.kind === "build" && planHasWriteSteps && decisiveResult && isNoOpBuildResult(decisiveResult.output)) {
+						const warning = anyWriteThisRun
+							? "⚠️ 构建为 UP-TO-DATE：本轮虽有写入，但未触发实际编译（compile* 全 UP-TO-DATE）。请核对是否改错 main/client 路径，或改动未保存到 Gradle 源集。"
+							: "⚠️ 构建为 UP-TO-DATE：本轮未检测到任何文件改动（无 write_file/edit_file 等写入）。禁止视为修复成功——请先对目标源码做真实修改。";
+						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: warning } });
+						roundInstruction = [warning, "禁止 complete_step / 推进构建步骤。请 edit_file 修改客户端或主源码后再次 trigger_build。"].join("\n");
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+						attempt++;
+						continue;
+					}
+					repairMode = false;
+					repairWriteRequired = false;
+					repairValidationRequired = undefined;
+					repairRounds = 0;
+					pendingMigration.clear();
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
+					step.status = "completed";
+					const advanceName = decisiveResult?.toolName || (this.inGameVerified ? "mc_inspect" : "workflow evidence");
+					this.planTracker.advanceCurrent(advanceName);
+					completed = true;
+					this.emitPlanState();
+					break;
+				}
 
-        // Write/inspect: once evidence exists, stop burning budget on re-reads and
-        // auto-complete if the model keeps stalling without complete_step.
-        if (
-          stepHasEvidence &&
-          (step.kind === 'write' || step.kind === 'inspect' || step.kind === 'recipe' || step.kind === 'mixin')
-        ) {
-          evidenceIdleRounds++
-          roundInstruction = [
-            roundInstruction,
-            `【验收证据已满足】请立即调用 complete_step({"stepId":"${step.id}"}) 推进下一步，禁止继续重复 read_file/edit_file。`
-          ].filter(Boolean).join('\n\n')
-          if (evidenceIdleRounds >= 2) {
-            pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
-            step.status = 'completed'
-            this.planTracker.advanceCurrent('auto_complete_after_evidence')
-            completed = true
-            this.emitPlanState()
-            this.emit({
-              kind: EventKind.Notice,
-              notice: {
-                level: 'info',
-                text: `步骤 #${step.id} 验收证据已满足，已自动推进（模型未及时 complete_step）。`
-              }
-            })
-            break
-          }
-        } else {
-          evidenceIdleRounds = 0
-        }
+				// Write/inspect: once evidence exists, stop burning budget on re-reads and
+				// auto-complete if the model keeps stalling without complete_step.
+				if (stepHasEvidence && (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin")) {
+					evidenceIdleRounds++;
+					roundInstruction = [roundInstruction, `【验收证据已满足】请立即调用 complete_step({"stepId":"${step.id}"}) 推进下一步，禁止继续重复 read_file/edit_file。`]
+						.filter(Boolean)
+						.join("\n\n");
+					if (evidenceIdleRounds >= 2) {
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+						step.status = "completed";
+						this.planTracker.advanceCurrent("auto_complete_after_evidence");
+						completed = true;
+						this.emitPlanState();
+						this.emit({
+							kind: EventKind.Notice,
+							notice: {
+								level: "info",
+								text: `步骤 #${step.id} 验收证据已满足，已自动推进（模型未及时 complete_step）。`
+							}
+						});
+						break;
+					}
+				} else {
+					evidenceIdleRounds = 0;
+				}
 
-        if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
-          const signature = repairErrorSignature(decisiveResult.output, step.kind as 'build' | 'run')
-          const errorCount = countGradleErrorEntries(decisiveResult.output)
-          if (seenRepairSignatures.has(signature)) {
-            roundInstruction =
-              '【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 write_file/edit_file/delete_file 做不同修改；仅用户偏好不明时才 ask_clarification。'
-            pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
-            attempt++
-            continue
-          }
-          seenRepairSignatures.add(signature)
-          repairMode = true
-          repairWriteRequired = true
-          repairValidationRequired = undefined
-          lastFailureOutput = decisiveResult.output
-          effectiveMaxRepairRounds = Math.max(effectiveMaxRepairRounds, computeRepairBudget(lastFailureOutput))
-          // Progressive: error count decreased → do not burn a repairRound.
-          const progressed = lastErrorCount > 0 && errorCount > 0 && errorCount < lastErrorCount
-          if (!progressed) repairRounds++
-          lastErrorCount = errorCount || lastErrorCount
-          for (const main of extractClientInMainMigrations(lastFailureOutput)) {
-            pendingMigration.add(main.replace(/\\/g, '/'))
-          }
-          roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as 'build' | 'run')
-          if (pendingMigration.size > 0) {
-            roundInstruction += formatMigrationChecklist(pendingMigration)
-          }
-          if (!debuggerPrefetched) {
-            debuggerPrefetched = true
-            const dbg = this.registry.get('fabric_log_debugger')
-            if (dbg) {
-              try {
-                const dbgOut = await dbg.execute(
-                  {
-                    projectPath: this.projectPath,
-                    callId: `repair_prefetch_${step.id}`,
-                    fileSession: this.fileSession
-                  },
-                  { log: lastFailureOutput.slice(0, 12000) }
-                )
-                roundInstruction += `\n--- 自动诊断（仅此一次）---\n${dbgOut}`
-                seenDiagSignatures.add(`fabric_log_debugger\0${stableArgsKey({ log: lastFailureOutput.slice(0, 12000) })}`)
-              } catch {
-                // ignore prefetch errors
-              }
-            }
-          }
-          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
-          if (repairRounds > effectiveMaxRepairRounds) {
-            attempt = maxIterations
-            break
-          }
-          continue
-        }
+				if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
+					const signature = repairErrorSignature(decisiveResult.output, step.kind as "build" | "run");
+					const errorCount = countGradleErrorEntries(decisiveResult.output);
+					if (seenRepairSignatures.has(signature)) {
+						roundInstruction = "【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 write_file/edit_file/delete_file 做不同修改；仅用户偏好不明时才 ask_clarification。";
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+						attempt++;
+						continue;
+					}
+					seenRepairSignatures.add(signature);
+					// 进入修复模式前停止游戏（如果是 run 步骤失败，游戏可能还在运行）
+					if (!repairMode) {
+						await stopRunningGameAndHideGuard();
+					}
+					repairMode = true;
+					repairWriteRequired = true;
+					repairValidationRequired = undefined;
+					lastFailureOutput = decisiveResult.output;
+					effectiveMaxRepairRounds = Math.max(effectiveMaxRepairRounds, computeRepairBudget(lastFailureOutput));
+					// Progressive: error count decreased → do not burn a repairRound.
+					const progressed = lastErrorCount > 0 && errorCount > 0 && errorCount < lastErrorCount;
+					if (!progressed) repairRounds++;
+					lastErrorCount = errorCount || lastErrorCount;
+					for (const main of extractClientInMainMigrations(lastFailureOutput)) {
+						pendingMigration.add(main.replace(/\\/g, "/"));
+					}
+					roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as "build" | "run");
+					if (pendingMigration.size > 0) {
+						roundInstruction += formatMigrationChecklist(pendingMigration);
+					}
+					if (!debuggerPrefetched) {
+						debuggerPrefetched = true;
+						const dbg = this.registry.get("fabric_log_debugger");
+						if (dbg) {
+							try {
+								const dbgOut = await dbg.execute(
+									{
+										projectPath: this.projectPath,
+										callId: `repair_prefetch_${step.id}`,
+										fileSession: this.fileSession
+									},
+									{ log: lastFailureOutput.slice(0, 12000) }
+								);
+								roundInstruction += `\n--- 自动诊断（仅此一次）---\n${dbgOut}`;
+								seenDiagSignatures.add(`fabric_log_debugger\0${stableArgsKey({ log: lastFailureOutput.slice(0, 12000) })}`);
+							} catch {
+								// ignore prefetch errors
+							}
+						}
+					}
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+					if (repairRounds > effectiveMaxRepairRounds) {
+						attempt = maxIterations;
+						break;
+					}
+					continue;
+				}
 
-        // Track splitEnvironment migrations: delete_file removes pending main paths.
-        for (const result of orderedResults) {
-          if (!result.ok || result.error) continue
-          if (result.toolName !== 'delete_file') continue
-          const path = String(result.artifactPath || result.args?.path || '').replace(/\\/g, '/')
-          if (path && pendingMigration.has(path)) pendingMigration.delete(path)
-        }
+				// Track splitEnvironment migrations: delete_file removes pending main paths.
+				for (const result of orderedResults) {
+					if (!result.ok || result.error) continue;
+					if (result.toolName !== "delete_file") continue;
+					const path = String(result.artifactPath || result.args?.path || "").replace(/\\/g, "/");
+					if (path && pendingMigration.has(path)) pendingMigration.delete(path);
+				}
 
-        const repairWrite = orderedResults.find((result) =>
-          (result.toolName === 'write_file' || result.toolName === 'edit_file' || result.toolName === 'delete_file') &&
-          result.ok &&
-          !result.error
-        )
-        if (repairMode && repairWrite) {
-          const changedPath = String(repairWrite.artifactPath || repairWrite.args?.path || '').replace(/\\/g, '/')
-          const changedLower = changedPath.toLowerCase()
-          if (repairWrite.toolName === 'delete_file' && pendingMigration.has(changedPath)) {
-            pendingMigration.delete(changedPath)
-          }
-          // Batch migration: keep repairWriteRequired until pendingMigration is empty.
-          if (pendingMigration.size > 0) {
-            repairWriteRequired = true
-            roundInstruction =
-              `【SYSTEM: 迁移未完成】还剩 ${pendingMigration.size} 个 main 文件待 delete_file。` +
-              `禁止 trigger_build。\n` +
-              formatMigrationChecklist(pendingMigration)
-            // Skip mixin validate gate during bulk migration — finish moves first.
-            repairValidationRequired = undefined
-          } else {
-            repairWriteRequired = false
-            repairValidationRequired = repairWrite.toolName === 'delete_file'
-              ? undefined
-              : /\/data\/[^/]+\/recipes?\/.+\.json$/.test(changedLower)
-                ? 'recipe'
-                : (/mixins?\.json$/.test(changedLower) || (/mixin/.test(changedLower) && changedLower.endsWith('.java')))
-                  ? 'mixin'
-                  : undefined
-            roundInstruction = repairValidationRequired
-              ? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
-              : writeFileRetryInstruction(step.kind as 'build' | 'run')
-          }
-          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
-          continue
-        }
+				const repairWrite = orderedResults.find(
+					(result) => (result.toolName === "write_file" || result.toolName === "edit_file" || result.toolName === "delete_file") && result.ok && !result.error
+				);
+				if (repairMode && repairWrite) {
+					const changedPath = String(repairWrite.artifactPath || repairWrite.args?.path || "").replace(/\\/g, "/");
+					const changedLower = changedPath.toLowerCase();
+					if (repairWrite.toolName === "delete_file" && pendingMigration.has(changedPath)) {
+						pendingMigration.delete(changedPath);
+					}
+					// Batch migration: keep repairWriteRequired until pendingMigration is empty.
+					if (pendingMigration.size > 0) {
+						repairWriteRequired = true;
+						roundInstruction = `【SYSTEM: 迁移未完成】还剩 ${pendingMigration.size} 个 main 文件待 delete_file。` + `禁止 trigger_build。\n` + formatMigrationChecklist(pendingMigration);
+						// Skip mixin validate gate during bulk migration — finish moves first.
+						repairValidationRequired = undefined;
+					} else {
+						repairWriteRequired = false;
+						repairValidationRequired =
+							repairWrite.toolName === "delete_file"
+								? undefined
+								: /\/data\/[^/]+\/recipes?\/.+\.json$/.test(changedLower)
+									? "recipe"
+									: /mixins?\.json$/.test(changedLower) || (/mixin/.test(changedLower) && changedLower.endsWith(".java"))
+										? "mixin"
+										: undefined;
+						roundInstruction = repairValidationRequired
+							? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
+							: writeFileRetryInstruction(step.kind as "build" | "run");
+					}
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+					continue;
+				}
 
-        const repairValidation = orderedResults.find((result) =>
-          repairValidationRequired && result.validation?.kind === repairValidationRequired && result.validation.valid && result.ok && !result.error
-        )
-        if (repairMode && repairValidationRequired && repairValidation) {
-          repairValidationRequired = undefined
-          roundInstruction = writeFileRetryInstruction(step.kind as 'build' | 'run')
-          pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
-          continue
-        }
+				const repairValidation = orderedResults.find(
+					(result) => repairValidationRequired && result.validation?.kind === repairValidationRequired && result.validation.valid && result.ok && !result.error
+				);
+				if (repairMode && repairValidationRequired && repairValidation) {
+					repairValidationRequired = undefined;
+					roundInstruction = writeFileRetryInstruction(step.kind as "build" | "run");
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+					continue;
+				}
 
-        const existingHandlerHint = orderedResults
-          .map((result) => detectExistingHandlerHint(step, result))
-          .find(Boolean)
-        if (existingHandlerHint) {
-          roundInstruction = existingHandlerHint
-        }
+				const existingHandlerHint = orderedResults.map((result) => detectExistingHandlerHint(step, result)).find(Boolean);
+				if (existingHandlerHint) {
+					roundInstruction = existingHandlerHint;
+				}
 
-        // Track knowledge queries and limit per step
-        const successfulKnowledge = orderedResults.filter((result) =>
-          result.ok && !result.error && KNOWLEDGE_TOOLS.has(result.toolName || '')
-        )
-        if (successfulKnowledge.length > 0) {
-          knowledgeQueries += successfulKnowledge.length
-          if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
-            roundInstruction = [
-              roundInstruction,
-              `【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 edit_file 或 complete_step 完成当前步骤，不要再搜索文档。`
-            ].filter(Boolean).join('\n\n')
-          }
-        }
+				// Track knowledge queries and limit per step
+				const successfulKnowledge = orderedResults.filter((result) => result.ok && !result.error && KNOWLEDGE_TOOLS.has(result.toolName || ""));
+				if (successfulKnowledge.length > 0) {
+					knowledgeQueries += successfulKnowledge.length;
+					if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
+						roundInstruction = [
+							roundInstruction,
+							`【知识查询已达上限】本步骤已进行 ${knowledgeQueries} 次文档查询（上限 ${MAX_FREE_KNOWLEDGE_ROUNDS} 次免费）。剩余查询将消耗步骤配额。请直接 edit_file 或 complete_step 完成当前步骤，不要再搜索文档。`
+						]
+							.filter(Boolean)
+							.join("\n\n");
+					}
+				}
 
-        const pureExplore = isPureExploreRound(orderedResults)
-        const repairExploreOnly =
-          repairMode &&
-          orderedResults.length > 0 &&
-          orderedResults.every((result) => isRepairExploreResult(result) || isRepairDiagnosticResult(step, result, repairMode))
-        if (pureExplore && isExploreLimitedStep(step, repairMode) && !stepHasEvidence) {
-          exploreRounds++
-          if (exploreRounds >= MAX_FREE_EXPLORE_ROUNDS) {
-            roundInstruction = [
-              roundInstruction,
-              buildWriteForceInstruction(step)
-            ].filter(Boolean).join('\n\n')
-          }
-        }
-        if (repairExploreOnly) {
-          repairDiagRounds++
-          if (repairDiagRounds > MAX_FREE_REPAIR_DIAG_ROUNDS) {
-            roundInstruction = [
-              roundInstruction,
-              `【修复只读轮次已用尽】已进行 ${repairDiagRounds} 轮诊断/勘察（上限 ${MAX_FREE_REPAIR_DIAG_ROUNDS}）。` +
-                `必须立即 write_file / edit_file / delete_file 开始修复，禁止继续只读。`
-            ].filter(Boolean).join('\n\n')
-          }
-        }
+				const pureExplore = isPureExploreRound(orderedResults);
+				const repairExploreOnly =
+					repairMode && orderedResults.length > 0 && orderedResults.every((result) => isRepairExploreResult(result) || isRepairDiagnosticResult(step, result, repairMode));
+				if (pureExplore && isExploreLimitedStep(step, repairMode) && !stepHasEvidence) {
+					exploreRounds++;
+					if (exploreRounds >= MAX_FREE_EXPLORE_ROUNDS) {
+						roundInstruction = [roundInstruction, buildWriteForceInstruction(step)].filter(Boolean).join("\n\n");
+					}
+				}
+				if (repairExploreOnly) {
+					repairDiagRounds++;
+					if (repairDiagRounds > MAX_FREE_REPAIR_DIAG_ROUNDS) {
+						roundInstruction = [
+							roundInstruction,
+							`【修复只读轮次已用尽】已进行 ${repairDiagRounds} 轮诊断/勘察（上限 ${MAX_FREE_REPAIR_DIAG_ROUNDS}）。` +
+								`必须立即 write_file / edit_file / delete_file 开始修复，禁止继续只读。`
+						]
+							.filter(Boolean)
+							.join("\n\n");
+					}
+				}
 
-        const requestedCompletion = orderedResults.some((result) => result.toolName === 'complete_step' && result.ok)
-        if (requestedCompletion && !success) {
-          const orphans = orphanWriteArtifacts(step, evidenceResults)
-          if (step.kind === 'write' && orphans.length > 0) {
-            const missing = missingWriteEvidencePaths(step, evidenceResults)
-            pendingEphemeralInstruction = this.appendToolRound(
-              baseMessages,
-              modelResult.text || streamText,
-              allCalls,
-              resultsById,
-              roundInstruction
-            )
-            step.status = 'completed'
-            this.planTracker.advanceCurrent(`adopted_orphan_write:${orphans.join(',')}`)
-            completed = true
-            this.emitPlanState()
-            this.emit({
-              kind: EventKind.Notice,
-              notice: {
-                level: 'info',
-                text:
-                  `步骤 #${step.id} 计划路径与实际写入不一致` +
-                  `（要求 ${missing.join(', ') || step.targetPath || '?'}，实际 ${orphans.join(', ')}），` +
-                  `已按实际写入推进。`
-              }
-            })
-            break
-          }
-          const missing = missingWriteEvidencePaths(step, evidenceResults)
-          const missingHint = missing.length
-            ? `缺少写入证据：${missing.join(', ')}。请对该路径 edit_file/write_file 一次后再 complete_step（仅确认文件已存在不够）。`
-            : '请先对目标路径完成 write_file/edit_file（或 mixin/recipe 校验）。'
-          roundInstruction = [
-            roundInstruction,
-            `blocked: [step_evidence_required] 步骤 #${step.id} 尚未满足验收证据，未推进计划。${missingHint}`
-          ].filter(Boolean).join('\n\n')
-        }
+				const requestedCompletion = orderedResults.some((result) => result.toolName === "complete_step" && result.ok);
+				if (requestedCompletion && !success) {
+					const orphans = orphanWriteArtifacts(step, evidenceResults);
+					if (step.kind === "write" && orphans.length > 0) {
+						const missing = missingWriteEvidencePaths(step, evidenceResults);
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+						step.status = "completed";
+						this.planTracker.advanceCurrent(`adopted_orphan_write:${orphans.join(",")}`);
+						completed = true;
+						this.emitPlanState();
+						this.emit({
+							kind: EventKind.Notice,
+							notice: {
+								level: "info",
+								text: `步骤 #${step.id} 计划路径与实际写入不一致` + `（要求 ${missing.join(", ") || step.targetPath || "?"}，实际 ${orphans.join(", ")}），` + `已按实际写入推进。`
+							}
+						});
+						break;
+					}
+					const missing = missingWriteEvidencePaths(step, evidenceResults);
+					const missingHint = missing.length
+						? `缺少写入证据：${missing.join(", ")}。请对该路径 edit_file/write_file 一次后再 complete_step（仅确认文件已存在不够）。`
+						: "请先对目标路径完成 write_file/edit_file（或 mixin/recipe 校验）。";
+					roundInstruction = [roundInstruction, `blocked: [step_evidence_required] 步骤 #${step.id} 尚未满足验收证据，未推进计划。${missingHint}`].filter(Boolean).join("\n\n");
+				}
 
-        pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction)
+				pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
 
-        const repairDiagnosticRound = repairMode && orderedResults.length > 0 &&
-          orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode)) &&
-          repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS
-        const freeKnowledgeRound = successfulKnowledge.length === orderedResults.length &&
-          knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS
-        const freeExploreRound =
-          pureExplore &&
-          isExploreLimitedStep(step, repairMode) &&
-          !stepHasEvidence &&
-          exploreRounds <= MAX_FREE_EXPLORE_ROUNDS
-        const freeRepairExplore =
-          repairExploreOnly && repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS
-        const readOnlyAfterEvidence =
-          stepHasEvidence &&
-          orderedResults.length > 0 &&
-          orderedResults.every((result) =>
-            result.toolName === 'read_file' ||
-            result.toolName === 'list_directory' ||
-            result.toolName === 'grep'
-          )
-        if (!repairDiagnosticRound && !freeKnowledgeRound && !freeExploreRound && !freeRepairExplore && !readOnlyAfterEvidence) {
-          attempt++
-        }
-      }
+				const repairDiagnosticRound =
+					repairMode && orderedResults.length > 0 && orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode)) && repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS;
+				const freeKnowledgeRound = successfulKnowledge.length === orderedResults.length && knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS;
+				const freeExploreRound = pureExplore && isExploreLimitedStep(step, repairMode) && !stepHasEvidence && exploreRounds <= MAX_FREE_EXPLORE_ROUNDS;
+				const freeRepairExplore = repairExploreOnly && repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS;
+				const readOnlyAfterEvidence =
+					stepHasEvidence &&
+					orderedResults.length > 0 &&
+					orderedResults.every((result) => result.toolName === "read_file" || result.toolName === "list_directory" || result.toolName === "grep");
+				if (!repairDiagnosticRound && !freeKnowledgeRound && !freeExploreRound && !freeRepairExplore && !readOnlyAfterEvidence) {
+					attempt++;
+				}
+			}
 
-      if (!completed && step.status !== 'completed') {
-        step.status = 'failed'
-        this.emitPlanState()
-        const remaining = this.steps
-          .filter((s) => s.status !== 'completed')
-          .map((s) => `#${s.id} ${s.title}`)
-          .join('\n')
-        const repairNote =
-          repairRounds > effectiveMaxRepairRounds
-            ? `已尝试 ${repairRounds}/${effectiveMaxRepairRounds} 轮自动修复仍未成功。\n\n最后错误：\n${lastFailureOutput.trim().split('\n').slice(-40).join('\n')}\n\n`
-            : ''
-        return {
-          finalContent:
-            finalContent.trim() ||
-            buildStepFailureMessage(step, attempt, maxIterations, lastToolName, repairNote, remaining),
-          allDone: false,
-          partial: true,
-          steps: this.steps
-        }
-      }
-    }
+			if (!completed && step.status !== "completed") {
+				step.status = "failed";
+				this.emitPlanState();
+				const remaining = this.steps
+					.filter((s) => s.status !== "completed")
+					.map((s) => `#${s.id} ${s.title}`)
+					.join("\n");
+				const repairNote =
+					repairRounds > effectiveMaxRepairRounds
+						? `已尝试 ${repairRounds}/${effectiveMaxRepairRounds} 轮自动修复仍未成功。\n\n最后错误：\n${lastFailureOutput.trim().split("\n").slice(-40).join("\n")}\n\n`
+						: "";
+				return {
+					finalContent: finalContent.trim() || buildStepFailureMessage(step, attempt, maxIterations, lastToolName, repairNote, remaining),
+					allDone: false,
+					partial: true,
+					steps: this.steps
+				};
+			}
+		}
 
-    const allDone =
-      this.steps.length > 0 && this.steps.every((step) => step.status === 'completed')
-    if (this.steps.length === 0) {
-      this.emit({
-        kind: EventKind.Notice,
-        notice: { level: 'error', text: '执行计划为空，无法推进。请重新发送需求或「游戏测试」。' }
-      })
-      return {
-        finalContent: '执行计划为空，未能启动游戏内校验。',
-        allDone: false,
-        partial: true,
-        steps: this.steps
-      }
-    }
-    return {
-      finalContent: finalContent || (allDone ? '全部计划步骤已完成。' : '工作流已停止。'),
-      allDone,
-      partial: !allDone,
-      steps: this.steps
-    }
-  }
+		const allDone = this.steps.length > 0 && this.steps.every((step) => step.status === "completed");
+		if (this.steps.length === 0) {
+			this.emit({
+				kind: EventKind.Notice,
+				notice: { level: "error", text: "执行计划为空，无法推进。请重新发送需求或「游戏测试」。" }
+			});
+			return {
+				finalContent: "执行计划为空，未能启动游戏内校验。",
+				allDone: false,
+				partial: true,
+				steps: this.steps
+			};
+		}
+		return {
+			finalContent: finalContent || (allDone ? "全部计划步骤已完成。" : "工作流已停止。"),
+			allDone,
+			partial: !allDone,
+			steps: this.steps
+		};
+	}
 }

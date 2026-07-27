@@ -73,6 +73,8 @@ export interface AgentOptions {
     html: string
     elements: import('./events.ts').GuiLayoutElement[]
   }) => Promise<string>
+  /** 步骤切换/修复模式进入时清理未确认的 GUI 布局预览 */
+  onCancelPendingGuiLayouts?: () => void
 }
 
 export interface RunOptions {
@@ -143,6 +145,7 @@ export class Agent {
     html: string
     elements: import('./events.ts').GuiLayoutElement[]
   }) => Promise<string>
+  onCancelPendingGuiLayouts?: () => void
   // Once locked, readonly tools stay removed for the entire run
   private readonlyLocked = false
   /** Plan phase: exploration tools stripped after readonly round cap. */
@@ -184,6 +187,7 @@ export class Agent {
     this.onToolDispatch = opts.onToolDispatch
     this.onToolResult = opts.onToolResult
     this.onGuiLayoutPreview = opts.onGuiLayoutPreview
+    this.onCancelPendingGuiLayouts = opts.onCancelPendingGuiLayouts
   }
 
   setRegistry(registry: Registry): void {
@@ -323,6 +327,7 @@ export class Agent {
       onToolDispatch: this.onToolDispatch,
       onToolResult: this.onToolResult,
       onGuiLayoutPreview: this.onGuiLayoutPreview,
+      onCancelPendingGuiLayouts: this.onCancelPendingGuiLayouts,
       openCodeDelegate,
       fileSession: this.fileSession,
       clarificationGate,

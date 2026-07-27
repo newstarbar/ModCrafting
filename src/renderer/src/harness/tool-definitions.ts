@@ -980,6 +980,18 @@ export const triggerBuildTool: Tool = {
 
 		try {
 			if (task === "build" && isPanelBridgeRegistered()) {
+				// 构建前停止运行中的 MC 实例，避免源文件被占用导致构建失败
+				// 同时隐藏输入防护覆盖窗口
+				try {
+					if (typeof window !== 'undefined' && window.api?.mcStopAll) {
+						await window.api.mcStopAll()
+					}
+					if (typeof window !== 'undefined' && window.api?.mcInputGuardHide) {
+						await window.api.mcInputGuardHide()
+					}
+				} catch {
+					// 停止游戏失败不阻塞构建
+				}
 				const res = await runBuildViaPanel(ctx.onProgress);
 				const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "\n[退出码: 0]";
 				const log = getLastBuildLogText().trim();

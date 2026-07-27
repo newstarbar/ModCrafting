@@ -100,7 +100,8 @@ export class Controller {
 				this.onAgentStatus?.(`${name} 完成`);
 				logger.tool(`${name} completed`, output.slice(0, 100));
 			},
-			onGuiLayoutPreview: (payload) => this.handleGuiLayoutPreview(payload)
+			onGuiLayoutPreview: (payload) => this.handleGuiLayoutPreview(payload),
+			onCancelPendingGuiLayouts: () => this.cancelAllPendingGuiLayouts()
 		});
 
 		this.openCodeAdapter = new OpenCodeAdapter({
@@ -1417,6 +1418,18 @@ ${projectInfo}`;
 			}
 			resolver('{"cancelled": true}');
 		}
+	}
+
+	/** 清理所有未确认的 GUI 布局预览（步骤切换/修复模式进入时调用）。 */
+	cancelAllPendingGuiLayouts(): void {
+		if (this.pendingGuiLayoutResolvers.size === 0) return;
+		for (const [, resolver] of this.pendingGuiLayoutResolvers.entries()) {
+			resolver('{"cancelled": true}');
+		}
+		this.pendingGuiLayoutResolvers.clear();
+		this.guiLayoutPending = false;
+		// 通知 UI 将所有 pending 状态的预览条目标记为已取消
+		this.emitEvent({ kind: EventKind.GuiLayoutPreviewCancelled });
 	}
 
 	clearSession(): void {

@@ -43,6 +43,7 @@ export const EventKind = {
   AskRequest: 'AskRequest',
   ClarificationNeeded: 'ClarificationNeeded',
   GuiLayoutPreview: 'GuiLayoutPreview',
+  GuiLayoutPreviewCancelled: 'GuiLayoutPreviewCancelled',
   TurnDone: 'TurnDone',
   CompactionStarted: 'CompactionStarted',
   CompactionDone: 'CompactionDone',
@@ -195,7 +196,7 @@ export class LoggerSink implements Sink {
   }
 
   emit(event: Event): void {
-    const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text, EventKind.ClarificationNeeded, EventKind.GuiLayoutPreview]
+    const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text, EventKind.ClarificationNeeded, EventKind.GuiLayoutPreview, EventKind.GuiLayoutPreviewCancelled]
     if (!skipKinds.includes(event.kind)) {
       const detail =
         event.text?.slice(0, 120) ||
