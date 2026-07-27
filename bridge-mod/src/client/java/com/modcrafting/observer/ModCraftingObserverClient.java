@@ -42,6 +42,8 @@ public class ModCraftingObserverClient implements ClientModInitializer {
             }
         });
 
+        InputGuard.register();
+        InputGuardHud.register();
         SendToAiHud.register();
 
         LOGGER.info("ModCrafting Observer client initialized");

@@ -109,11 +109,11 @@ const REPAIR_EXTRA_TOOLS = [
 const REPAIR_DIAG_DEDUP_TOOLS = new Set(["read_error_log", "fabric_log_debugger"]);
 
 /**
- * 停止所有运行中的 MC 实例并隐藏输入防护窗口。
+ * 停止所有运行中的 MC 实例并关闭游戏内输入护栏。
  * 在进入修复模式前调用，避免：
  * 1. 游戏进程占用源文件导致构建失败
  * 2. 重新 runClient 时启动第二个游戏实例
- * 3. 输入防护覆盖窗口残留
+ * 3. 输入护栏状态残留
  */
 async function stopRunningGameAndHideGuard(): Promise<void> {
 	try {
@@ -124,11 +124,10 @@ async function stopRunningGameAndHideGuard(): Promise<void> {
 		// 停止游戏失败不应阻塞修复流程
 	}
 	try {
-		if (typeof window !== "undefined" && window.api?.mcInputGuardHide) {
-			await window.api.mcInputGuardHide();
-		}
+		const { setMcInputGuard } = await import("./mc-observer-tools.ts");
+		await setMcInputGuard({ active: false });
 	} catch {
-		// 隐藏防护失败不影响主流程
+		// 关闭护栏失败不影响主流程
 	}
 }
 

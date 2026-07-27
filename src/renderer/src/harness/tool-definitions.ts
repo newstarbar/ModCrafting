@@ -5,6 +5,7 @@ import { type Tool, type ToolContext, type Previewer, type ToolExecutionPayload 
 import type { FileDiff, GuiLayoutElement, GuiLayoutType } from "./events";
 import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
 import { waitForMcRunReady } from "../utils/mc-wait-playing";
+import { setMcInputGuard } from "./mc-observer-tools";
 import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, validateRecipeContent, type RecipeKind, type RecipeKey } from "./recipe-utils";
 import { minecraftItems } from "../data/items";
 import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from "./fabric-knowledge";
@@ -1049,21 +1050,11 @@ function stripHtmlToText(html: string): string {
 }
 
 /**
- * AI 自测期间显示输入保护覆盖窗口。
- * 通过 MC 实例 ID 获取 PID，然后调用主进程创建覆盖窗口。
+ * AI 自测期间启用游戏内输入护栏（bridge-mod）。
  * 非关键功能，失败不影响主流程。
  */
 async function showInputGuardForInstance(instanceId: string): Promise<void> {
-  try {
-    if (!instanceId || typeof window === 'undefined' || !window.api?.mcGetInstance) return
-    const instance = (await window.api.mcGetInstance(instanceId)) as { pid?: number | null } | null
-    const pid = instance?.pid
-    if (typeof pid === 'number' && pid > 0 && window.api.mcInputGuardShow) {
-      await window.api.mcInputGuardShow(pid)
-    }
-  } catch {
-    // 输入保护是非关键功能，失败不影响主流程
-  }
+  await setMcInputGuard({ active: true, locked: true, instanceId })
 }
 
 function buildLogTail(text: string, maxChars = 8000): string {
@@ -1185,7 +1176,7 @@ export const triggerBuildTool: Tool = {
 					const tail = wait.logTail ? `\n\n--- 游戏日志（末尾）---\n${wait.logTail}` : "";
 					return `游戏启动失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`;
 				}
-				// AI 自测期间显示输入保护覆盖窗口
+				// AI 自测期间启用游戏内输入护栏
 				void showInputGuardForInstance(instanceId);
 				return [
 					`游戏已启动并进入主菜单（实例 ${instanceId}）。[MC_PHASE:menu]`,
@@ -1200,14 +1191,12 @@ export const triggerBuildTool: Tool = {
 		try {
 			if (task === "build" && isPanelBridgeRegistered()) {
 				// 构建前停止运行中的 MC 实例，避免源文件被占用导致构建失败
-				// 同时隐藏输入防护覆盖窗口
+				// 同时关闭游戏内输入护栏
 				try {
 					if (typeof window !== 'undefined' && window.api?.mcStopAll) {
 						await window.api.mcStopAll()
 					}
-					if (typeof window !== 'undefined' && window.api?.mcInputGuardHide) {
-						await window.api.mcInputGuardHide()
-					}
+					await setMcInputGuard({ active: false })
 				} catch {
 					// 停止游戏失败不阻塞构建
 				}

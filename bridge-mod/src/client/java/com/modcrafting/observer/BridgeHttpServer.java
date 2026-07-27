@@ -164,6 +164,7 @@ public final class BridgeHttpServer {
                 out.put("widgets", GameQueries.widgets());
                 yield out;
             }
+            case "/v1/input-guard" -> InputGuard.snapshot();
             default -> Map.of("ok", false, "code", "NOT_FOUND", "error", "未知路径: " + path);
         };
     }
@@ -173,6 +174,7 @@ public final class BridgeHttpServer {
             case "/v1/chat" -> GameQueries.sendChat(string(body.get("text"), body.get("message")));
             case "/v1/command" -> GameQueries.sendCommand(string(body.get("command"), body.get("text")));
             case "/v1/input" -> InputActions.handle(body);
+            case "/v1/input-guard" -> InputGuard.apply(body);
             default -> Map.of("ok", false, "code", "NOT_FOUND", "error", "未知路径: " + path);
         };
     }

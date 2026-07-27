@@ -11,6 +11,9 @@
   "entrypoints": {
     "client": ["com.modcrafting.observer.ModCraftingObserverClient"]
   },
+  "mixins": [
+    "modcrafting_observer.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=${loader_version}",
     "minecraft": "~${minecraft_version}",

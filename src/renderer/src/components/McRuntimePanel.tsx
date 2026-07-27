@@ -4,6 +4,7 @@ import { logger } from '../utils/logger'
 import { parseMcLogs, PHASE_LABELS, PHASE_ORDER, phaseStepIndex, splitLogChunks } from '../utils/mc-phase-parser'
 import { waitForMcRunReady } from '../utils/mc-wait-playing'
 import { summarizeCrashReport } from '../utils/log-parser'
+import { setMcInputGuard } from '../harness/mc-observer-tools'
 
 export type McExitReason = 'none' | 'normal' | 'crash' | 'manual' | 'start_failed'
 
@@ -89,15 +90,15 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
       const unsubCrash = window.api.onMcCrashed((id, code, crashReportPath) => {
         setCrashMessage({ id, code, path: crashReportPath })
-        // MC 崩溃时隐藏输入保护覆盖窗口
-        void window.api.mcInputGuardHide?.()
+        // 进程已退出，护栏随游戏进程结束；尝试关闭以免残留调用
+        void setMcInputGuard({ active: false, instanceId: id })
       })
 
-      // MC 状态变化时检测是否退出世界 → 隐藏覆盖窗口
-      const unsubStateForGuard = window.api.onMcStateChanged((_id, state) => {
+      // MC 状态变化时检测是否退出 → 关闭输入护栏
+      const unsubStateForGuard = window.api.onMcStateChanged((id, state) => {
         const s = state as { status?: string }
         if (s?.status && s.status !== 'running' && s.status !== 'starting') {
-          void window.api.mcInputGuardHide?.()
+          void setMcInputGuard({ active: false, instanceId: id })
         }
       })
 
@@ -187,8 +188,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
     const handleStop = useCallback(async (id: string) => {
       await window.api.mcStop(id)
-      // 手动停止游戏时隐藏输入保护覆盖窗口
-      void window.api.mcInputGuardHide?.()
+      void setMcInputGuard({ active: false, instanceId: id })
     }, [])
 
     const handleDelete = useCallback(async (id: string) => {
@@ -243,8 +243,7 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
 
     const stopAllRunning = useCallback(async () => {
       await window.api.mcStopAll()
-      // 停止所有游戏时隐藏输入保护覆盖窗口
-      void window.api.mcInputGuardHide?.()
+      void setMcInputGuard({ active: false })
     }, [])
 
     useImperativeHandle(ref, () => ({

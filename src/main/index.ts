@@ -16,7 +16,6 @@ import {
   startContextIngressServer,
   stopContextIngressServer
 } from './context-ingress-server'
-import { setupInputGuardHandlers, destroyInputGuard } from './mc-input-guard'
 
 if (is.dev) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
@@ -30,7 +29,6 @@ initAppBadge(() => mainWindow)
 async function runShutdownCleanup(): Promise<void> {
   stopAllTerminalSessions()
   stopAllMcInstances()
-  destroyInputGuard()
   stopContextIngressServer()
   await shutdownOpenCode()
   await stopGradleDaemonsOnExit()
@@ -143,7 +141,6 @@ app.whenReady().then(() => {
   setupOpenCodeHandlers(() => mainWindow)
   setupTerminalHandlers()
   setupMcRuntimeHandlers()
-  setupInputGuardHandlers()
   createWindow()
   initUpdater()
 

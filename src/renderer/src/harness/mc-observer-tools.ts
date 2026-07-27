@@ -24,6 +24,25 @@ export async function callMcBridge(
   })
 }
 
+/** 启用/关闭游戏内输入护栏（bridge-mod）。失败不影响主流程。 */
+export async function setMcInputGuard(
+  opts: { active: boolean; locked?: boolean; instanceId?: string }
+): Promise<void> {
+  try {
+    const body: Record<string, unknown> = { active: opts.active }
+    if (typeof opts.locked === 'boolean') body.locked = opts.locked
+    else if (opts.active) body.locked = true
+    const attempts = opts.active ? 8 : 1
+    for (let i = 0; i < attempts; i++) {
+      const last = await callMcBridge('POST', '/v1/input-guard', body, opts.instanceId)
+      if (last.ok) return
+      if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 400))
+    }
+  } catch {
+    // non-critical
+  }
+}
+
 export function formatBridgeResult(result: BridgeCallResult, omitKeys: string[] = ['base64']): string {
   if (!result.ok && Object.keys(result.data || {}).length === 0) {
     return `Error: ${result.error || '观测桥调用失败'}`
@@ -228,6 +247,18 @@ export const mcInputTool: Tool = {
     }
     if (action === 'click_widget' || action === 'click_at') {
       await new Promise((r) => setTimeout(r, 250))
+      // 若仍在加载界面，提醒不要反复点击或重启游戏
+      const inspect = await callMcBridge('GET', '/v1/screen', undefined, optionalInstanceId(args))
+      if (inspect.ok) {
+        const kind = String((inspect.data as { kind?: string }).kind || '')
+        const simple = String((inspect.data as { simpleName?: string }).simpleName || '')
+        if (isLoadingScreenKind(kind, simple)) {
+          return [
+            formatBridgeResult(result),
+            '[note] 当前仍在加载界面（loading）。请等待世界加载完成，用 mc_inspect 轮询，禁止 click_widget，更不要因此重新 runClient。'
+          ].join('\n')
+        }
+      }
     }
     return formatBridgeResult(result)
   }
@@ -236,7 +267,7 @@ export const mcInputTool: Tool = {
 // ── 测试环境编排辅助 ──
 
 const POLL_INTERVAL_MS = 500
-const WORLD_ENTER_TIMEOUT_MS = 30_000
+const WORLD_ENTER_TIMEOUT_MS = 120_000
 const LAN_OPEN_TIMEOUT_MS = 5_000
 
 function sleep(ms: number): Promise<void> {
@@ -263,14 +294,22 @@ function parseInspectState(inspect: BridgeCallResult): {
   }
 }
 
-/** 等待直到进入世界或超时 */
+function isLoadingScreenKind(kind: string, screenClass: string): boolean {
+  if (kind === 'loading') return true
+  const s = screenClass || ''
+  return /Loading|Progress|DownloadingTerrain|LevelLoading|SaveLevel/i.test(s)
+}
+
+/** 等待直到进入世界或超时；加载界面只等待、不点击 */
 async function waitForInWorld(instanceId?: string): Promise<BridgeCallResult> {
   const deadline = Date.now() + WORLD_ENTER_TIMEOUT_MS
   let last: BridgeCallResult = { ok: false, status: 0, data: {} }
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS)
     last = await callMcBridge('GET', '/v1/inspect', undefined, instanceId)
-    if (parseInspectState(last).inWorld) return last
+    const state = parseInspectState(last)
+    if (state.inWorld) return last
+    // loading：继续等，不要当作失败去点按钮
   }
   return last
 }
@@ -345,6 +384,27 @@ export const mcEnsureTestWorldTool: Tool = {
         `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
         '提示：现在可以执行功能测试场景（如 mc_command 生成生物、mc_input 移动玩家），再用 mc_screenshot/mc_inspect 验证效果。',
         '::kh::测试环境|世界|已进入'
+      ].join('\n')
+    }
+
+    // 2b. 正在加载 → 只等待，禁止点按钮 / 禁止因此重启游戏
+    if (isLoadingScreenKind(state.screenKind, state.screenClass)) {
+      const worldInspect = await waitForInWorld(instanceId)
+      const worldState = parseInspectState(worldInspect)
+      if (worldState.inWorld) {
+        const player = (worldInspect.data.player as Record<string, unknown>) || {}
+        return [
+          '世界加载完成，已进入游戏世界。',
+          `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
+          '提示：现在可以执行功能测试场景。建议先调用 mc_ensure_cheats。',
+          '::kh::测试环境|世界|已进入'
+        ].join('\n')
+      }
+      return [
+        '世界仍在加载中，等待超时（120s）。',
+        `当前界面：${worldState.screenKind} / ${worldState.screenClass}`,
+        '提示：请用 mc_inspect 继续观察加载进度并等待；禁止 click_widget，禁止因此重新 trigger_build runClient（会导致双开/卡死）。',
+        '::kh::测试环境|世界|加载超时'
       ].join('\n')
     }
 
@@ -467,8 +527,9 @@ export const mcEnsureTestWorldTool: Tool = {
       }
 
       return [
-        '等待进入世界超时（30s）。',
-        '提示：可能是世界加载缓慢。请用 mc_inspect 检视当前状态，或等待后重试。',
+        '等待进入世界超时（120s）。',
+        `最后界面：${worldState.screenKind} / ${worldState.screenClass}`,
+        '提示：若仍在 loading，请用 mc_inspect 继续等待；不要 click_widget，不要因此重新 runClient。',
         '::kh::测试环境|世界|进入超时'
       ].join('\n')
     }
@@ -476,7 +537,7 @@ export const mcEnsureTestWorldTool: Tool = {
     // 4. 在其它界面 → 返回当前状态
     return [
       `当前不在主菜单也不在世界中，界面：${state.screenKind} / ${state.screenClass}`,
-      '提示：请用 mc_inspect 检视当前界面，用 mc_input 手动操作返回主菜单或进入世界。',
+      '提示：请用 mc_inspect 检视当前界面。若是加载界面请等待；不要为点不到按钮而重新 runClient。',
       '::kh::测试环境|世界|未知界面'
     ].join('\n')
   }

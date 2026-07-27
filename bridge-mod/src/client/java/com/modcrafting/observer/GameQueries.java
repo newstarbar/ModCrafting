@@ -120,7 +120,10 @@ public final class GameQueries {
         out.put("simpleName", screen.getClass().getSimpleName());
         out.put("title", screen.getTitle() != null ? screen.getTitle().getString() : null);
         String kind = "other";
-        if (screen instanceof TitleScreen) kind = "title";
+        String simple = screen.getClass().getSimpleName();
+        String className = screen.getClass().getName();
+        if (isLoadingScreen(simple, className)) kind = "loading";
+        else if (screen instanceof TitleScreen) kind = "title";
         else if (screen instanceof SelectWorldScreen) kind = "select_world";
         else if (screen instanceof MultiplayerScreen) kind = "multiplayer";
         else if (screen.shouldPause()) kind = "pause_or_menu";
@@ -367,6 +370,19 @@ public final class GameQueries {
             m.put("maxHealth", living.getMaxHealth());
         }
         return m;
+    }
+
+    private static boolean isLoadingScreen(String simpleName, String className) {
+        String s = simpleName == null ? "" : simpleName;
+        String c = className == null ? "" : className;
+        return s.contains("Loading")
+                || s.contains("Progress")
+                || s.contains("DownloadingTerrain")
+                || s.contains("LevelLoading")
+                || s.contains("SaveLevel")
+                || c.contains("Loading")
+                || c.contains("ProgressScreen")
+                || c.contains("DownloadingTerrain");
     }
 
     private static Map<String, Object> error(String code, String message) {

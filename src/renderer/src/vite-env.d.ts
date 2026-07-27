@@ -134,12 +134,6 @@ interface ModCraftingApi {
   onMcStateChanged: (callback: (id: string, state: object) => void) => () => void
   onMcCrashed: (callback: (id: string, exitCode: number, crashReportPath: string | null) => void) => () => void
 
-  // MC Input Guard — AI 自测期间覆盖 MC 窗口，拦截玩家鼠标输入
-  mcInputGuardShow: (pid: number) => Promise<{ ok: boolean; error?: string }>
-  mcInputGuardHide: () => Promise<{ ok: boolean }>
-  mcInputGuardSetLocked: (locked: boolean) => Promise<{ ok: boolean }>
-  mcInputGuardIsActive: () => Promise<{ active: boolean; locked: boolean }>
-
   saveRecentProject: (projectPath: string) => Promise<WriteResult>
   loadRecentProject: () => Promise<{ success: boolean; data: string | null; error?: string }>
   listRecentProjects: () => Promise<RecentProject[]>

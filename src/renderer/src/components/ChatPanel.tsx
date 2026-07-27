@@ -2024,7 +2024,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           )}
           {!isUser && (
             <>
-              {msg.embeddedPlan && msg.embeddedPlan.length > 0 && (
+              {msg.embeddedPlan && msg.embeddedPlan.length > 0
+                && !(shouldShowPinnedPlan(activePlan, displayMessages, planReady)
+                  && activePlan?.anchorMsgId === msg.id) && (
                 <TaskPlan steps={msg.embeddedPlan} variant="anchored" defaultCollapsed />
               )}
               {msg.entries && msg.entries.length === 0 && msg.isStreaming && (

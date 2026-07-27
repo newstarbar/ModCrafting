@@ -3162,122 +3162,19 @@ body,
 }
 
 .task-plan--collapsed {
-	padding: 0;
-	border-style: dashed;
-	background: var(--bg-tertiary);
 	max-height: none;
 	overflow-y: visible;
-	max-width: min(100%, 520px);
-	margin-left: auto;
-	margin-right: auto;
+	padding: 10px 12px;
 }
 
-.task-plan-collapsed-toggle {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	width: 100%;
-	padding: 8px 12px;
-	border: none;
-	background: transparent;
-	color: var(--text-secondary);
-	font-size: 13px;
-	cursor: pointer;
-	text-align: left;
-}
-
-.task-plan-collapsed-toggle:hover {
-	color: var(--text-primary);
+.task-plan--collapsed .task-plan-header {
+	margin-bottom: 0;
 }
 
 .task-plan-collapsed-icon {
 	color: var(--text-muted);
 	font-size: 10px;
 	flex-shrink: 0;
-}
-
-.task-plan-collapsed-title {
-	font-weight: 600;
-	flex-shrink: 0;
-}
-
-.task-plan-collapsed-current {
-	flex: 1 1 auto;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	color: var(--text-muted);
-}
-
-.task-plan-collapsed-progress-text {
-	flex-shrink: 0;
-	color: var(--text-muted);
-	font-variant-numeric: tabular-nums;
-	font-size: 12px;
-}
-
-.task-plan-collapsed-ring {
-	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-}
-
-.task-plan-progress-ring {
-	width: 22px;
-	height: 22px;
-	transform: rotate(-90deg);
-}
-
-.task-plan-progress-ring-bg {
-	fill: none;
-	stroke: var(--border-color);
-	stroke-width: 4;
-}
-
-.task-plan-progress-ring-fg {
-	fill: none;
-	stroke: var(--accent);
-	stroke-width: 4;
-	stroke-linecap: round;
-	transition: stroke-dasharray 0.3s ease, stroke 0.2s ease;
-}
-
-.task-plan-progress-ring-fg--completed {
-	stroke: var(--success);
-}
-
-.task-plan-progress-ring-fg--error {
-	stroke: var(--error);
-}
-
-.task-plan-progress-ring-fg--running {
-	stroke: var(--accent);
-}
-
-.task-plan-progress-ring-fg--pending {
-	stroke: var(--text-muted);
-}
-
-.task-plan-collapsed-current--running {
-	color: var(--accent);
-}
-
-.task-plan-collapsed-current--completed {
-	color: var(--success);
-}
-
-.task-plan-collapsed-current--error {
-	color: var(--error);
-}
-
-.task-plan-collapsed-current--pending {
-	color: var(--text-muted);
-}
-
-.task-plan-collapsed-meta {
-	color: var(--text-muted);
-	font-size: 11px;
 }
 
 .task-plan-header-toggle {
