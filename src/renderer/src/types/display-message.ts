@@ -2,6 +2,7 @@ import type { PlanStep } from '../components/TaskPlan'
 import type { ComposerMode } from '../harness/turn-intent'
 import type { ChatMessage } from '../harness/chat-message'
 import type { MessageAttachment } from '../context/context-ingress'
+import type { GuiLayoutElement, GuiLayoutType } from '../harness/events'
 
 export interface ActivePlan {
   steps: PlanStep[]
@@ -51,10 +52,22 @@ export interface ChronoEntryTool {
   displayName?: string
 }
 
+export interface ChronoEntryGuiLayout {
+  kind: 'guiLayoutPreview'
+  id: string
+  title: string
+  layoutType: GuiLayoutType
+  html: string
+  elements: GuiLayoutElement[]
+  status: 'pending' | 'confirmed' | 'cancelled'
+  layoutJson?: string
+}
+
 export type ChronoEntry =
   | { kind: 'reasoning'; content: string; done?: boolean }
   | { kind: 'text'; content: string }
   | ChronoEntryTool
+  | ChronoEntryGuiLayout
 
 export interface DisplayMessage {
   id: string

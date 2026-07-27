@@ -65,6 +65,14 @@ export interface AgentOptions {
   maxSteps?: number
   onToolDispatch?: (name: string, id: string) => void
   onToolResult?: (name: string, id: string, output: string) => void
+  /** GUI 布局预览回调（Promise 阻塞模式）。由 Controller 提供，Agent 透传到 ToolContext。 */
+  onGuiLayoutPreview?: (payload: {
+    id: string
+    title: string
+    layoutType: import('./events.ts').GuiLayoutType
+    html: string
+    elements: import('./events.ts').GuiLayoutElement[]
+  }) => Promise<string>
 }
 
 export interface RunOptions {
@@ -128,6 +136,13 @@ export class Agent {
   maxSteps: number
   onToolDispatch?: (name: string, id: string) => void
   onToolResult?: (name: string, id: string, output: string) => void
+  onGuiLayoutPreview?: (payload: {
+    id: string
+    title: string
+    layoutType: import('./events.ts').GuiLayoutType
+    html: string
+    elements: import('./events.ts').GuiLayoutElement[]
+  }) => Promise<string>
   // Once locked, readonly tools stay removed for the entire run
   private readonlyLocked = false
   /** Plan phase: exploration tools stripped after readonly round cap. */
@@ -168,6 +183,7 @@ export class Agent {
     this.maxSteps = opts.maxSteps ?? 0 // 0 = unlimited
     this.onToolDispatch = opts.onToolDispatch
     this.onToolResult = opts.onToolResult
+    this.onGuiLayoutPreview = opts.onGuiLayoutPreview
   }
 
   setRegistry(registry: Registry): void {
@@ -306,6 +322,7 @@ export class Agent {
       emit: (event) => this.emit(event),
       onToolDispatch: this.onToolDispatch,
       onToolResult: this.onToolResult,
+      onGuiLayoutPreview: this.onGuiLayoutPreview,
       openCodeDelegate,
       fileSession: this.fileSession,
       clarificationGate,
@@ -868,7 +885,8 @@ export class Agent {
           fileSession: this.fileSession,
           onPlanStateChange: (steps) => {
             this.emit({ kind: EventKind.PlanState, planSteps: steps })
-          }
+          },
+          onGuiLayoutPreview: this.onGuiLayoutPreview
         }
 
         const results = blockedResults

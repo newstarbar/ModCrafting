@@ -144,7 +144,9 @@ function defaultAllowedTools(kind: StepKind): string[] {
         'fabric_javadoc_lookup',
         'vanilla_mc_wiki_query',
         'fabric_meta_version_check',
-        'fabric_mod_json_validate'
+        'fabric_mod_json_validate',
+        // GUI 布局预览：编写 Screen/HUD 代码前必须先调用此工具让用户确认布局
+        'gui_layout_preview'
       ]
     case 'build':
       return [

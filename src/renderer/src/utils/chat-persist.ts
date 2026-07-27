@@ -2,11 +2,12 @@ import type { PlanStep } from '../components/TaskPlan'
 import type { PersistedChronoEntry, PersistedMessage } from '../types/chat'
 import type { ChronoEntry } from '../types/display-message.ts'
 import type { ChatContentPart } from '../harness/chat-message.ts'
+import type { GuiLayoutElement, GuiLayoutType } from '../harness/events'
 import { collectExploreGroupKeys } from './tool-explore-group.ts'
 import { buildUserContent } from '../context/user-content.ts'
 
 export interface SerializableChronoEntry {
-  kind: 'reasoning' | 'text' | 'tool'
+  kind: 'reasoning' | 'text' | 'tool' | 'guiLayoutPreview'
   content?: string
   id?: string
   name?: string
@@ -28,6 +29,12 @@ export interface SerializableChronoEntry {
     oldContent?: string
     action?: 'create' | 'update' | 'delete'
   }
+  // guiLayoutPreview fields
+  title?: string
+  layoutType?: GuiLayoutType
+  html?: string
+  elements?: GuiLayoutElement[]
+  layoutJson?: string
 }
 
 export interface SerializableDisplayMessage {
@@ -119,6 +126,18 @@ export function serializeDisplayMessages(
         }
         if (e.kind === 'reasoning') {
           return { kind: 'reasoning', content: e.content, done: e.done ?? true }
+        }
+        if (e.kind === 'guiLayoutPreview') {
+          return {
+            kind: 'guiLayoutPreview',
+            id: e.id,
+            title: e.title,
+            layoutType: e.layoutType,
+            html: e.html.length > 48_000 ? `${e.html.slice(0, 48_000)}\n… [截断]` : e.html,
+            elements: e.elements,
+            status: e.status,
+            layoutJson: e.layoutJson
+          }
         }
         return { kind: 'text', content: e.content }
       })

@@ -3,6 +3,29 @@
 
 import { logger } from '../utils/logger.ts'
 
+// GUI layout element types for interactive preview
+export type GuiLayoutElementType =
+  | 'button'
+  | 'slider'
+  | 'toggle'
+  | 'label'
+  | 'text-field'
+  | 'cycle'
+  | 'custom'
+
+export interface GuiLayoutElement {
+  id: string
+  type: GuiLayoutElementType
+  label: string
+  x: number
+  y: number
+  width: number
+  height: number
+  dataLayoutType?: string
+}
+
+export type GuiLayoutType = 'option-list' | 'custom-screen' | 'hud-overlay'
+
 // Event kinds
 export const EventKind = {
   TurnStarted: 'TurnStarted',
@@ -19,6 +42,7 @@ export const EventKind = {
   ApprovalRequest: 'ApprovalRequest',
   AskRequest: 'AskRequest',
   ClarificationNeeded: 'ClarificationNeeded',
+  GuiLayoutPreview: 'GuiLayoutPreview',
   TurnDone: 'TurnDone',
   CompactionStarted: 'CompactionStarted',
   CompactionDone: 'CompactionDone',
@@ -121,6 +145,13 @@ export interface Event {
     evidence?: string
   }>
   clarification?: { question: string; options?: string[] }
+  guiLayout?: {
+    id: string
+    title: string
+    layoutType: GuiLayoutType
+    html: string
+    elements: GuiLayoutElement[]
+  }
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
 }
@@ -164,7 +195,7 @@ export class LoggerSink implements Sink {
   }
 
   emit(event: Event): void {
-    const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text, EventKind.ClarificationNeeded]
+    const skipKinds: EventKind[] = [EventKind.Reasoning, EventKind.Text, EventKind.ClarificationNeeded, EventKind.GuiLayoutPreview]
     if (!skipKinds.includes(event.kind)) {
       const detail =
         event.text?.slice(0, 120) ||

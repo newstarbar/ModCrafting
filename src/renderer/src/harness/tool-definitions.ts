@@ -2,7 +2,7 @@
 // Built-in tools for the Fabric mod development environment
 
 import { type Tool, type ToolContext, type Previewer, type ToolExecutionPayload } from "./tools";
-import type { FileDiff } from "./events";
+import type { FileDiff, GuiLayoutElement, GuiLayoutType } from "./events";
 import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
 import { waitForMcRunReady } from "../utils/mc-wait-playing";
 import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, validateRecipeContent, type RecipeKind, type RecipeKey } from "./recipe-utils";
@@ -1811,6 +1811,99 @@ export const askClarificationTool: Tool = {
 	}
 }
 
+// ── gui_layout_preview ──
+export const guiLayoutPreviewTool: Tool = {
+	name: "gui_layout_preview",
+	description:
+		"生成 GUI 布局 HTML 预览供用户确认。用户可在预览中拖拽调整元素位置（含辅助对齐），" +
+		"确认后返回布局 JSON。Agent 必须在编写 Screen/HUD 代码前调用此工具。" +
+		"布局类型：option-list（设置列表，用 SimpleOption+OptionListWidget）、" +
+		"custom-screen（自定义界面，用 Screen+相对坐标）、hud-overlay（HUD 覆盖层，用 HudRenderCallback+相对坐标）。" +
+		"HTML 只需包含视觉元素（带 data-layout-id/data-layout-type 属性的 absolute 定位 div），" +
+		"使用 1280x720 画布尺寸；拖拽脚本由预览组件自动注入，AI 无需编写任何 JavaScript。",
+	schema: {
+		type: "object",
+		properties: {
+			title: { type: "string", description: "界面标题（显示在预览面板顶部）" },
+			layoutType: {
+				type: "string",
+				enum: ["option-list", "custom-screen", "hud-overlay"],
+				description: "option-list=原版设置列表；custom-screen=自定义界面；hud-overlay=游戏内HUD"
+			},
+			html: {
+				type: "string",
+				description:
+					"布局预览 HTML（仅视觉部分）。必须包含 1280x720 画布容器和若干 absolute 定位元素，" +
+					"每个元素带 data-layout-id 和 data-layout-type 属性。禁止写 <script> 标签（会被剥离）。" +
+					"示例：<div data-layout-id='btn1' data-layout-type='button' style='position:absolute;left:560px;top:100px;width:160px;height:20px;'>按钮</div>"
+			},
+			elements: {
+				type: "array",
+				description: "布局元素数据（与 HTML 中的 data-layout-id 对应，用于初始位置和尺寸记录）",
+				items: {
+					type: "object",
+					properties: {
+						id: { type: "string", description: "元素 ID（与 data-layout-id 一致）" },
+						type: {
+							type: "string",
+							enum: ["button", "slider", "toggle", "label", "text-field", "cycle", "custom"],
+							description: "元素类型"
+						},
+						label: { type: "string", description: "元素标签文本" },
+						x: { type: "number", description: "初始 X 坐标（1280x720 画布内）" },
+						y: { type: "number", description: "初始 Y 坐标（1280x720 画布内）" },
+						width: { type: "number", description: "元素宽度" },
+						height: { type: "number", description: "元素高度" }
+					},
+					required: ["id", "type", "label", "x", "y", "width", "height"]
+				}
+			}
+		},
+		required: ["title", "layoutType", "html", "elements"]
+	},
+	readOnly: () => false,
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+		if (!ctx.onGuiLayoutPreview) {
+			return "Error: GUI 布局预览不可用（onGuiLayoutPreview 回调未注册）";
+		}
+		const id = `layout-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+		const title = String(args.title || "GUI 布局预览");
+		const layoutType = String(args.layoutType || "custom-screen") as GuiLayoutType;
+		const html = String(args.html || "");
+		const rawElements = Array.isArray(args.elements) ? args.elements : [];
+		const elements: GuiLayoutElement[] = rawElements.map((el: Record<string, unknown>, i: number) => ({
+			id: String(el.id || `el-${i}`),
+			type: (String(el.type || "custom") as GuiLayoutElement["type"]),
+			label: String(el.label || ""),
+			x: Number(el.x) || 0,
+			y: Number(el.y) || 0,
+			width: Number(el.width) || 100,
+			height: Number(el.height) || 20
+		}));
+
+		if (!html) return "Error: html is required";
+		if (elements.length === 0) return "Error: elements 数组不能为空";
+
+		const layoutJson = await ctx.onGuiLayoutPreview({ id, title, layoutType, html, elements });
+
+		if (layoutJson.includes('"cancelled": true')) {
+			return "用户取消了布局预览。请根据用户反馈调整布局后重新调用 gui_layout_preview。";
+		}
+
+		return [
+			"用户已确认 GUI 布局。以下是布局 JSON（用户可能调整了元素位置）：",
+			"```json",
+			layoutJson,
+			"```",
+			"请根据此布局 JSON 编写 GUI 代码：",
+			"- option-list 类型：使用 SimpleOption + OptionListWidget（零依赖自动布局）",
+			"- custom-screen 类型：使用 Screen + 相对坐标（this.width/2, this.height/2）",
+			"- hud-overlay 类型：使用 HudRenderCallback + 相对坐标",
+			"禁止硬编码绝对坐标，必须用相对计算。元素 x/y 是 1280x720 画布坐标，需转换为基于 this.width/this.height 的相对位置。"
+		].join("\n");
+	}
+}
+
 // Register all built-in tools
 import { Registry } from "./tools";
 import { logger } from "../utils/logger";
@@ -1851,6 +1944,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		fabricTemplateGenerateTool,
 		submitPlanTool,
 		askClarificationTool,
+		guiLayoutPreviewTool,
 		completeStepTool,
 		...MC_OBSERVER_TOOLS
 	];

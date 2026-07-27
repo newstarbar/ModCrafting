@@ -1,9 +1,10 @@
 import type { PlanStep } from '../components/TaskPlan'
 import type { UsageStats } from '../utils/usage'
 import type { MessageAttachment } from '../context/context-ingress'
+import type { GuiLayoutElement, GuiLayoutType } from '../harness/events'
 
 export interface PersistedChronoEntry {
-  kind: 'reasoning' | 'text' | 'tool'
+  kind: 'reasoning' | 'text' | 'tool' | 'guiLayoutPreview'
   content?: string
   id?: string
   name?: string
@@ -24,6 +25,12 @@ export interface PersistedChronoEntry {
     oldContent?: string
     action?: 'create' | 'update' | 'delete'
   }
+  // guiLayoutPreview fields
+  title?: string
+  layoutType?: GuiLayoutType
+  html?: string
+  elements?: GuiLayoutElement[]
+  layoutJson?: string
 }
 
 export interface PersistedMessage {

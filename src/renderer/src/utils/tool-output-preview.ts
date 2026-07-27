@@ -136,6 +136,24 @@ export function extractPreview(toolName: string, output: string, args?: Record<s
     return q.length > 40 ? `${q.slice(0, 40)}…` : q || '需要确认'
   }
 
+  if (toolName === 'gui_layout_preview') {
+    const title = String(args?.title || '')
+    const layoutType = String(args?.layoutType || '')
+    const typeLabel = layoutType === 'option-list'
+      ? '设置列表'
+      : layoutType === 'custom-screen'
+        ? '自定义界面'
+        : layoutType === 'hud-overlay'
+          ? 'HUD 覆盖层'
+          : layoutType
+    if (output.includes('用户取消了布局预览')) return `${typeLabel} · 用户取消`
+    if (output.includes('用户已确认 GUI 布局')) {
+      const elements = Array.isArray(args?.elements) ? args.elements.length : 0
+      return `${typeLabel} · ${elements} 元素 · 已确认`
+    }
+    return title ? `${title}（${typeLabel}）` : typeLabel
+  }
+
   const fl = output.split('\n')[0]?.trim() || ''
   return fl.length > 52 ? `${fl.slice(0, 52)}…` : fl
 }

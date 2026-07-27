@@ -39,6 +39,7 @@ import { isCodeExplainInput } from '../harness/turn-intent'
 import RollbackWarningPanel from './RollbackWarningPanel'
 import DeleteMessagePanel from './DeleteMessagePanel'
 import ClarificationOverlay from './ClarificationOverlay'
+import GuiLayoutPreviewPanel from './GuiLayoutPreviewPanel'
 import { removeMessageFromDisplay } from '../utils/message-delete'
 import { messagePlainText } from '../utils/message-text'
 import { shouldShowPinnedPlan } from '../utils/plan-visibility'
@@ -957,6 +958,34 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         }
         break
 
+      case EventKind.GuiLayoutPreview:
+        if (event.guiLayout) {
+          const gl = event.guiLayout
+          // 不清空 isLoading——工具仍在 Promise 阻塞中，turn 未结束
+          if (t.msgId) {
+            const layoutEntry: ChronoEntry = {
+              kind: 'guiLayoutPreview',
+              id: gl.id,
+              title: gl.title,
+              layoutType: gl.layoutType,
+              html: gl.html,
+              elements: gl.elements,
+              status: 'pending'
+            }
+            t.entries = [...t.entries, layoutEntry]
+            setDisplayMessages((prev) => {
+              const next = prev.map((m) => (
+                m.id === t.msgId
+                  ? { ...m, entries: [...t.entries] }
+                  : m
+              ))
+              flushPersist(next, activePlanRef.current)
+              return next
+            })
+          }
+        }
+        break
+
       case EventKind.TurnStarted:
         turnUsageRef.current = { promptTokens: 0, completionTokens: 0 }
         onRunningChangeRef.current?.(true)
@@ -1486,6 +1515,52 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       }
     }
   }, [isLoading, clarificationPending, bindActiveTurnGeneration])
+
+  const handleGuiLayoutConfirm = useCallback((entryId: string, layoutJson: string) => {
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    ctrl.resolveGuiLayout(entryId, layoutJson)
+    setDisplayMessages((prev) => {
+      const next = prev.map((m) => {
+        if (!m.entries) return m
+        const found = m.entries.some((e) => e.kind === 'guiLayoutPreview' && e.id === entryId)
+        if (!found) return m
+        return {
+          ...m,
+          entries: m.entries.map((e) =>
+            e.kind === 'guiLayoutPreview' && e.id === entryId
+              ? { ...e, status: 'confirmed' as const, layoutJson }
+              : e
+          )
+        }
+      })
+      flushPersist(next, activePlanRef.current)
+      return next
+    })
+  }, [flushPersist])
+
+  const handleGuiLayoutCancel = useCallback((entryId: string) => {
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    ctrl.cancelGuiLayout(entryId)
+    setDisplayMessages((prev) => {
+      const next = prev.map((m) => {
+        if (!m.entries) return m
+        const found = m.entries.some((e) => e.kind === 'guiLayoutPreview' && e.id === entryId)
+        if (!found) return m
+        return {
+          ...m,
+          entries: m.entries.map((e) =>
+            e.kind === 'guiLayoutPreview' && e.id === entryId
+              ? { ...e, status: 'cancelled' as const }
+              : e
+          )
+        }
+      })
+      flushPersist(next, activePlanRef.current)
+      return next
+    })
+  }, [flushPersist])
 
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
@@ -2094,6 +2169,19 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                   case 'text':
                     if (suppressPlanText && isNumberedPlanText(entry.content)) return null
                     return <div key={`t-${i}`}>{renderContent(entry.content)}</div>
+                  case 'guiLayoutPreview': {
+                    const layoutEntry = entry
+                    return (
+                      <div key={`gl-${i}`} className="chrono-entry-gui-layout">
+                        <GuiLayoutPreviewPanel
+                          entry={layoutEntry}
+                          disabled={isLoading || layoutEntry.status !== 'pending'}
+                          onConfirm={(layoutJson) => handleGuiLayoutConfirm(layoutEntry.id, layoutJson)}
+                          onCancel={() => handleGuiLayoutCancel(layoutEntry.id)}
+                        />
+                      </div>
+                    )
+                  }
                   default:
                     return null
                 }

@@ -833,6 +833,134 @@ public class ${main}ClientEntityRenderers {
   }
 }
 
+export function generateConfigScreenBundle(input: TemplateCodegenParams): TemplateCodegenResult {
+  const { config, name, displayName, formFields = {} } = input
+  const { modId, groupId, javaPackage } = config
+  const id = simpleName(name)
+  const cls = classNameFrom(name)
+  const main = mainClassName(javaPackage)
+  const enableToggle = boolYes(formFields.enableToggle) || formFields.enableToggle === undefined
+  const sliderField = str(formFields.sliderField, 'powerLevel')
+  const sliderMin = num(formFields.sliderMin, 0)
+  const sliderMax = num(formFields.sliderMax, 100)
+  const sliderDefault = num(formFields.sliderDefault, 50)
+  const cjp = clientJavaPath(config)
+
+  const appliedParams = [
+    `默认开关=${enableToggle}`,
+    `滑块字段=${sliderField}`,
+    `滑块范围=${sliderMin}-${sliderMax}`
+  ]
+  const unsupportedParams: string[] = []
+
+  const screenJava = `package ${groupId}.${javaPackage}.client.gui;
+
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.option.SimpleOption;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.OptionListWidget;
+import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
+
+/**
+ * ${displayName || id} - 模组设置界面
+ * 使用 SimpleOption + OptionListWidget 实现零依赖自动布局（自动排列/滚动/居中/分辨率适配）。
+ * 禁止手动 addRenderableWidget 逐个摆按钮；禁止硬编码绝对坐标。
+ */
+public class ${cls}Screen extends Screen {
+    private OptionListWidget optionList;
+
+    // 模组配置（实际应从 ModConfig 读取/写入；这里仅作为示例默认值）
+    private boolean enableFeature = ${enableToggle};
+    private int ${sliderField} = ${sliderDefault};
+
+    private final SimpleOption<Boolean> toggleOption = new SimpleOption<>(
+        "${modId}.options.enable_feature",
+        SimpleOption.emptyTooltip(),
+        (text, value) -> Text.of(value ? "开启" : "关闭").formatted(Formatting.YELLOW),
+        SimpleOption.BOOLEAN,
+        enableFeature,
+        (value) -> { enableFeature = value; }
+    );
+
+    private final SimpleOption<Integer> sliderOption = SimpleOption.ofIntSlider(
+        "${modId}.options.${sliderField}",
+        ${sliderMin}, ${sliderMax},
+        ${sliderDefault},
+        (value) -> { ${sliderField} = value; }
+    );
+
+    public ${cls}Screen() {
+        super(Text.of("${displayName || id}"));
+    }
+
+    @Override
+    protected void init() {
+        // OptionListWidget 自动排列所有 SimpleOption，无需手动写 bounds(x, y, w, h)
+        optionList = new OptionListWidget(
+            this.client,
+            this.width,
+            this.height,
+            32,                       // 顶部偏移（标题下方）
+            this.height - 32,         // 底部偏移（按钮上方）
+            25                        // 每项高度
+        );
+        optionList.addAll(toggleOption, sliderOption);
+        addSelectableChild(optionList);
+
+        // 完成 按钮 —— 相对坐标居中
+        addDrawableChild(ButtonWidget.builder(
+            Text.translatable("gui.done"),
+            (btn) -> this.close()
+        ).dimensions(
+            this.width / 2 - 100,   // 居中：宽度 200，左偏 100
+            this.height - 28,       // 距底部 28px
+            200, 20
+        ).build());
+    }
+
+    @Override
+    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+        super.render(context, mouseX, mouseY, delta);
+        // 标题居中
+        context.drawCenteredTextWithShadow(
+            this.textRenderer,
+            this.title,
+            this.width / 2,
+            12,
+            0xFFFFFF
+        );
+        optionList.render(context, mouseX, mouseY, delta);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        return optionList.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)
+            || super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+}
+`
+
+  const langEntries: Record<string, string> = {
+    [`${modId}.options.enable_feature`]: '启用功能',
+    [`${modId}.options.${sliderField}`]: '强度等级'
+  }
+
+  return {
+    files: [
+      { path: `${cjp}/client/gui/${cls}Screen.java`, content: screenJava },
+      {
+        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
+        content: mergeLangEntries(null, langEntries)
+      }
+    ],
+    mainInitCalls: [],
+    appliedParams,
+    unsupportedParams
+  }
+}
+
 export function patchMainInitializer(content: string, mainClass: string, calls: string[]): string {
   if (!calls.length) return content
   let result = content
@@ -872,6 +1000,8 @@ export function runTemplateCodegen(input: TemplateCodegenParams & { templateId: 
       return generateCustomArmorBundle(input)
     case 'custom-entity':
       return generateCustomEntityBundle(input)
+    case 'config-screen-optionlist':
+      return generateConfigScreenBundle(input)
     default:
       return { files: [], mainInitCalls: [] }
   }

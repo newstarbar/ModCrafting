@@ -62,6 +62,14 @@ export interface WorkflowEngineOptions {
   emit: (event: Event) => void
   onToolDispatch?: (name: string, id: string) => void
   onToolResult?: (name: string, id: string, output: string) => void
+  /** GUI 布局预览回调（透传到 ToolContext） */
+  onGuiLayoutPreview?: (payload: {
+    id: string
+    title: string
+    layoutType: import('./events.ts').GuiLayoutType
+    html: string
+    elements: import('./events.ts').GuiLayoutElement[]
+  }) => Promise<string>
   modelCall: WorkflowModelCall
   openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>
   /** Shared ACI read session for this run; created if omitted */
@@ -874,6 +882,7 @@ export class WorkflowEngine {
   private emit: (event: Event) => void
   private onToolDispatch?: (name: string, id: string) => void
   private onToolResult?: (name: string, id: string, output: string) => void
+  private onGuiLayoutPreview?: WorkflowEngineOptions['onGuiLayoutPreview']
   private modelCall: WorkflowModelCall
   private openCodeDelegate?: WorkflowEngineOptions['openCodeDelegate']
   private fileSession: FileSession
@@ -896,6 +905,7 @@ export class WorkflowEngine {
     this.emit = options.emit
     this.onToolDispatch = options.onToolDispatch
     this.onToolResult = options.onToolResult
+    this.onGuiLayoutPreview = options.onGuiLayoutPreview
     this.modelCall = options.modelCall
     this.openCodeDelegate = options.openCodeDelegate
     this.fileSession = options.fileSession || new FileSession()
@@ -1042,7 +1052,8 @@ export class WorkflowEngine {
       abortSignal: this.abortSignal,
       planTracker: this.planTracker,
       fileSession: this.fileSession,
-      onPlanStateChange: () => this.emitPlanState()
+      onPlanStateChange: () => this.emitPlanState(),
+      onGuiLayoutPreview: this.onGuiLayoutPreview
     }
     return executeBatch(
       calls,

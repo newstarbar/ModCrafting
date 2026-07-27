@@ -273,7 +273,7 @@ export interface TemplateKind {
 	id: string;
 	name: string;
 	description: string;
-	category: "block" | "item" | "entity" | "recipe" | "structure";
+	category: "block" | "item" | "entity" | "recipe" | "structure" | "gui";
 }
 
 export const MOD_TEMPLATES: TemplateKind[] = [
@@ -283,7 +283,8 @@ export const MOD_TEMPLATES: TemplateKind[] = [
 	{ id: "custom-entity", name: "自定义实体", description: "创建自定义生物/实体，支持自定义AI和行为", category: "entity" },
 	{ id: "custom-tool", name: "自定义工具", description: "创建自定义工具（剑、镐、斧等），支持自定义属性", category: "item" },
 	{ id: "custom-armor", name: "自定义护甲", description: "创建自定义护甲套装，支持自定义防御属性", category: "item" },
-	{ id: "custom-recipe", name: "自定义配方", description: "创建合成配方，支持多种合成类型", category: "recipe" }
+	{ id: "custom-recipe", name: "自定义配方", description: "创建合成配方，支持多种合成类型", category: "recipe" },
+	{ id: "config-screen-optionlist", name: "模组设置界面", description: "创建基于 OptionListWidget 的模组设置界面，零依赖自动布局，支持开关/滑块/循环选择", category: "gui" }
 ];
 
 export function generateCustomBlockClass(config: ProjectCreateConfig, blockName: string): string {

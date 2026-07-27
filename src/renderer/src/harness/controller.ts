@@ -66,6 +66,10 @@ export class Controller {
 	private openCodeModel = "opencode/deepseek-v4-flash-free";
 	private openCodeAdapter: OpenCodeAdapter | null = null;
 	private taskId = `task_${Date.now().toString(36)}`;
+	/** GUI 布局预览：pending 的 Promise resolver（id → resolve）。同一时刻只允许一个 pending。 */
+	private pendingGuiLayoutResolvers = new Map<string, (json: string) => void>();
+	/** GUI 布局预览是否正在等待用户确认。 */
+	guiLayoutPending = false;
 
 	// Callbacks
 	onEvent?: (event: Event) => void;
@@ -95,7 +99,8 @@ export class Controller {
 			onToolResult: (name, _id, output) => {
 				this.onAgentStatus?.(`${name} 完成`);
 				logger.tool(`${name} completed`, output.slice(0, 100));
-			}
+			},
+			onGuiLayoutPreview: (payload) => this.handleGuiLayoutPreview(payload)
 		});
 
 		this.openCodeAdapter = new OpenCodeAdapter({
@@ -1358,6 +1363,62 @@ ${projectInfo}`;
 		}
 	}
 
+	/** GUI 布局预览：触发预览面板并阻塞工具 Promise，等待用户确认/取消。 */
+	private handleGuiLayoutPreview(payload: {
+		id: string;
+		title: string;
+		layoutType: import("./events").GuiLayoutType;
+		html: string;
+		elements: import("./events").GuiLayoutElement[];
+	}): Promise<string> {
+		// 并发控制：若已有 pending 预览，自动取消旧的
+		for (const [oldId, resolver] of this.pendingGuiLayoutResolvers.entries()) {
+			if (oldId !== payload.id) {
+				this.pendingGuiLayoutResolvers.delete(oldId);
+				resolver('{"cancelled": true}');
+			}
+		}
+
+		return new Promise<string>((resolve) => {
+			this.pendingGuiLayoutResolvers.set(payload.id, resolve);
+			this.guiLayoutPending = true;
+			this.emitEvent({
+				kind: EventKind.GuiLayoutPreview,
+				guiLayout: {
+					id: payload.id,
+					title: payload.title,
+					layoutType: payload.layoutType,
+					html: payload.html,
+					elements: payload.elements
+				}
+			});
+		});
+	}
+
+	/** 用户确认布局：resolve 工具 Promise 并返回布局 JSON。 */
+	resolveGuiLayout(id: string, layoutJson: string): void {
+		const resolver = this.pendingGuiLayoutResolvers.get(id);
+		if (resolver) {
+			this.pendingGuiLayoutResolvers.delete(id);
+			if (this.pendingGuiLayoutResolvers.size === 0) {
+				this.guiLayoutPending = false;
+			}
+			resolver(layoutJson);
+		}
+	}
+
+	/** 用户取消布局：resolve 工具 Promise 为 cancelled。 */
+	cancelGuiLayout(id: string): void {
+		const resolver = this.pendingGuiLayoutResolvers.get(id);
+		if (resolver) {
+			this.pendingGuiLayoutResolvers.delete(id);
+			if (this.pendingGuiLayoutResolvers.size === 0) {
+				this.guiLayoutPending = false;
+			}
+			resolver('{"cancelled": true}');
+		}
+	}
+
 	clearSession(): void {
 		this.messages = [];
 		this._phase = "plan";
@@ -1366,6 +1427,12 @@ ${projectInfo}`;
 		this.lastSystemMode = null;
 		this.agent.resetRunState();
 		this.agent.clarificationPending = false;
+		// 清理 GUI 布局预览 pending 状态
+		for (const [, resolver] of this.pendingGuiLayoutResolvers.entries()) {
+			resolver('{"cancelled": true}');
+		}
+		this.pendingGuiLayoutResolvers.clear();
+		this.guiLayoutPending = false;
 		logger.agent("Session cleared");
 	}
 

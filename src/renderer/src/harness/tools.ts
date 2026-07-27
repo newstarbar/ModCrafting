@@ -3,7 +3,7 @@
 
 import { logger } from '../utils/logger.ts'
 import type { McPhase } from '../utils/mc-phase-parser.ts'
-import type { FileDiff } from './events.ts'
+import type { FileDiff, GuiLayoutElement, GuiLayoutType } from './events.ts'
 import type { PlanTracker, PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
 import type { FileSession } from './file-session.ts'
@@ -49,6 +49,17 @@ export interface ToolContext {
   onPlanStateChange?: (steps: PlanStepState[]) => void
   /** ACI: tracks files read this run for read-before-edit */
   fileSession?: FileSession
+  /** GUI 布局预览回调：触发预览面板，返回用户确认后的布局 JSON。
+   *  Promise 阻塞模式：工具 execute 等待用户确认后才返回结果。
+   *  返回的 JSON 字符串包含 layoutType 和 elements 数组；
+   *  若用户取消则返回 '{"cancelled": true}'。 */
+  onGuiLayoutPreview?: (payload: {
+    id: string
+    title: string
+    layoutType: GuiLayoutType
+    html: string
+    elements: GuiLayoutElement[]
+  }) => Promise<string>
 }
 
 const MAX_TOOL_OUTPUT = 32 * 1024 // 32KB max output

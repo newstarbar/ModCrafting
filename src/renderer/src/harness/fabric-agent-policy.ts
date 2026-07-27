@@ -114,7 +114,8 @@ const COMMON_GUARDRAILS = [
   '测试-修复循环：mc_screenshot/mc_inspect 客观校验后若发现功能未生效或有 bug，必须进入修复模式——用 edit_file/write_file 修改源码 → trigger_build build 重新构建 → trigger_build runClient 重启游戏 → mc_ensure_test_world 重新进入世界 → 再次 mc_screenshot/mc_inspect 验证。禁止在测试发现 bug 后直接结束会话；必须循环直到验证通过才能 complete_step。最多允许 3 轮修复-再测试循环，超出后向用户报告问题并请求指导。',
   '编写 Fabric 方块/物品/实体/附魔注册代码前，必须先调用 minecraft_data_lookup 查询标准 ID（minecraft:diamond_ore）与原版属性（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等），禁止凭记忆填写原版参数。',
   '用户输入模糊、不专业的游戏描述（"会爆炸的绿色怪物"、"挖矿掉的红色石头"）时，必须先用 mc_wiki_search 检索中文 MC 百科向量知识库解析需求，再结合 minecraft_data_lookup 生成 Fabric 代码。',
-  '原版机制/红石/生物/术语解释优先用 mc_wiki_search 或 vanilla_mc_wiki_query；Fabric API/注册/事件/迁移用 fabric_docs_search；标准 ID 与属性参数用 minecraft_data_lookup。'
+  '原版机制/红石/生物/术语解释优先用 mc_wiki_search 或 vanilla_mc_wiki_query；Fabric API/注册/事件/迁移用 fabric_docs_search；标准 ID 与属性参数用 minecraft_data_lookup。',
+  'GUI 布局分级（按优先级，编写任何 Screen/HUD 代码前必须先调用 gui_layout_preview 让用户确认布局，禁止跳过预览直接写代码）：① 模组设置界面（开关/滑块/循环选择） → gui_layout_preview(layoutType="option-list") 预览 → 用 SimpleOption + OptionListWidget（零依赖自动布局，自动滚动/居中/分辨率适配），禁止手动 addRenderableWidget 逐个摆按钮；② 自定义界面（图标/网格/动态内容） → gui_layout_preview(layoutType="custom-screen") 预览 → 用 Screen + 相对坐标（this.width/2, this.height/2, this.height - 28 等），禁止硬编码绝对坐标 (40, 40)；③ HUD 覆盖层 → gui_layout_preview(layoutType="hud-overlay") 预览 → 用 HudRenderCallback + client.getWindow().getScaledWidth/Height() 相对坐标。布局 JSON 中的 x/y 是 1280x720 画布坐标，custom-screen/hud-overlay 必须按比例转换为 this.width/this.height 的相对位置；option-list 类型直接用 OptionListWidget 自动布局无需转换。'
 ]
 
 const BEHAVIOR_GUARDRAILS = [

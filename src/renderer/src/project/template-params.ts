@@ -221,6 +221,17 @@ export function normalizeFormFieldsForCodegen(templateId: string, formData: Reco
       }
       break
     }
+    case 'config-screen-optionlist': {
+      if (normalized.screenName && !normalized.displayName) {
+        normalized.displayName = String(normalized.screenName)
+      }
+      appliedSummary.push(`${label('enableToggle')}=${normalized.enableToggle ?? true}`)
+      appliedSummary.push(`${label('sliderField')}=${normalized.sliderField || 'powerLevel'}`)
+      appliedSummary.push(`${label('sliderMin')}=${normalized.sliderMin ?? 0}`)
+      appliedSummary.push(`${label('sliderMax')}=${normalized.sliderMax ?? 100}`)
+      appliedSummary.push(`${label('sliderDefault')}=${normalized.sliderDefault ?? 50}`)
+      break
+    }
     default:
       break
   }
@@ -317,7 +328,7 @@ export function buildTemplateParamsFromForm(templateId: string, formData: Record
   const { formFields } = normalizeFormFieldsForCodegen(templateId, formData)
 
   const displayName =
-    pickDisplayName(formFields, 'blockName', 'itemName', 'foodName', 'entityName', 'toolName', 'armorName', 'recipeName') ||
+    pickDisplayName(formFields, 'blockName', 'itemName', 'foodName', 'entityName', 'toolName', 'armorName', 'recipeName', 'screenName') ||
     schema?.name ||
     templateId
 

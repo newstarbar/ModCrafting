@@ -545,6 +545,57 @@ export const templateSchemas: Record<string, TemplateSchema> = {
         type: 'craftingGrid'
       }
     ]
+  },
+  'config-screen-optionlist': {
+    id: 'config-screen-optionlist',
+    name: '模组设置界面',
+    description: '基于 OptionListWidget 的零依赖模组设置界面',
+    fields: [
+      {
+        key: 'screenName',
+        label: '界面中文名称',
+        type: 'text',
+        placeholder: '如 模组配置',
+        required: true
+      },
+      {
+        key: 'enableToggle',
+        label: '默认启用功能开关',
+        type: 'checkbox',
+        defaultValue: true
+      },
+      {
+        key: 'sliderField',
+        label: '滑块字段名（英文）',
+        type: 'text',
+        defaultValue: 'powerLevel',
+        placeholder: '如 powerLevel'
+      },
+      {
+        key: 'sliderMin',
+        label: '滑块最小值',
+        type: 'number',
+        defaultValue: 0,
+        min: 0,
+        max: 1000
+      },
+      {
+        key: 'sliderMax',
+        label: '滑块最大值',
+        type: 'number',
+        defaultValue: 100,
+        min: 1,
+        max: 10000
+      },
+      {
+        key: 'sliderDefault',
+        label: '滑块默认值',
+        type: 'number',
+        defaultValue: 50,
+        min: 0,
+        max: 10000
+      }
+    ]
   }
 }
 
