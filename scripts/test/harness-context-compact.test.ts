@@ -18,11 +18,11 @@ import {
   updateNotOfferedStreak
 } from '../../src/renderer/src/harness/tool-not-offered-brake.ts'
 
-test('effectiveContextWindow caps 1M models at 128k', () => {
-  assert.equal(effectiveContextWindow(1_000_000), 128_000)
+test('effectiveContextWindow trusts model-declared sizes up to 1M', () => {
+  assert.equal(effectiveContextWindow(1_000_000), 1_000_000)
   assert.equal(effectiveContextWindow(64_000), 64_000)
-  assert.equal(compactThreshold(1_000_000), 64_000)
-  assert.equal(warnTokenThreshold(1_000_000), 102_400)
+  assert.equal(compactThreshold(1_000_000), 500_000)
+  assert.equal(warnTokenThreshold(1_000_000), 800_000)
 })
 
 test('microCompact never compresses blocked/Error tool outputs', () => {
@@ -49,11 +49,13 @@ test('microCompact never compresses blocked/Error tool outputs', () => {
   assert.equal(contentAsText(toolMsg?.content || ''), blocked)
 })
 
-test('contextPercentFromPrompt uses effective working window (cap 128k)', () => {
-  // DeepSeek V4 Flash claims 1M, but bar uses min(claimed, 128k)
-  assert.equal(contextPercentFromPrompt(80_000, 'deepseek-v4-flash', 'deepseek'), 63)
+test('contextPercentFromPrompt uses model-declared working window', () => {
+  // DeepSeek V4 Flash claims 1M; 80k / 1M = 8%
+  assert.equal(contextPercentFromPrompt(80_000, 'deepseek-v4-flash', 'deepseek'), 8)
+  // 800k / 1M = 80%
+  assert.equal(contextPercentFromPrompt(800_000, 'deepseek-v4-flash', 'deepseek'), 80)
   // Over working window clamps to 100
-  assert.equal(contextPercentFromPrompt(800_000, 'deepseek-v4-flash', 'deepseek'), 100)
+  assert.equal(contextPercentFromPrompt(1_500_000, 'deepseek-v4-flash', 'deepseek'), 100)
 })
 
 test('microCompact truncates aged write_file tool_call arguments', () => {
@@ -98,7 +100,7 @@ test('compactToolCallArguments leaves small payloads alone', () => {
   assert.equal(compactToolCallArguments(call), call)
 })
 
-test('prepareMessages auto-compacts 1M window once estimate exceeds ~64k', async () => {
+test('prepareMessages auto-compacts once estimate exceeds compact threshold', async () => {
   const bulky = 'x'.repeat(40_000) // ~10k tokens each
   const messages: ChatMessage[] = [
     { role: 'system', content: 'system ' + bulky },
@@ -111,13 +113,14 @@ test('prepareMessages auto-compacts 1M window once estimate exceeds ~64k', async
     { role: 'user', content: 'final ' + bulky }
   ]
   const estimated = estimatePromptTokens(messages)
-  assert.ok(estimated > compactThreshold(1_000_000), `expected estimate ${estimated} > 64k`)
+  // Use 128k window so ~80k tokens exceeds the 64k compact threshold
+  assert.ok(estimated > compactThreshold(128_000), `expected estimate ${estimated} > 64k`)
 
   let summarized = false
   const result = await prepareMessages(
     messages,
     0,
-    { contextWindow: 1_000_000 },
+    { contextWindow: 128_000 },
     async () => {
       summarized = true
       return { text: '## 任务\n测试压缩\n## 当前状态\n已压缩' }

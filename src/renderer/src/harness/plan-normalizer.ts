@@ -67,12 +67,13 @@ function targetPathFromDescription(description: string): string | undefined {
   return path.startsWith('src/') ? path : `src/main/resources/${path}`
 }
 
-/** GUI 语义关键词：用于检测步骤是否涉及 GUI 布局变更 */
-const GUI_KEYWORD_RE = /Screen|HUD|ConfigScreen|GuiScreen|界面|布局|GUI|渲染|drawMock|drawWidget|renderWidget|addRenderableWidget|HudRender|overlay|标题|按钮|拖拽/i
+/** GUI 语义关键词：用于检测步骤是否涉及 GUI 布局变更（收紧：移除"渲染""标题""overlay"等过宽词） */
+const GUI_KEYWORD_RE = /ConfigScreen|GuiScreen|TitleScreen|OptionListWidget|HudRenderCallback|addRenderableWidget|drawWidget|布局预览|GUI 布局|界面布局/i
 
-/** 检测文件路径是否为 GUI 文件 */
+/** 检测文件路径是否为 GUI 文件（仅匹配承载 GUI 组件的类，排除 ScreenshotHandler 等逻辑类） */
 export function isGuiFilePath(path: string): boolean {
-  return /(?:Screen|Hud|Gui)\w*\.java$/i.test(path)
+  return /(?:^|[\\/])(?:Screen|HudOverlay|HudRender|GuiScreen|ConfigScreen)\.java$/i.test(path)
+        || /(?:Screen|Hud)\w*(?:Renderer|Widget|Overlay)\.java$/i.test(path)
 }
 
 /** 检测步骤是否需要 GUI 布局预览 */

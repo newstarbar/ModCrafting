@@ -27,9 +27,9 @@ export const LLM_PROVIDERS: LlmProviderDef[] = [
 		models: [
 			{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", contextWindow: 1_000_000, vision: false },
 			{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", contextWindow: 1_000_000, vision: false },
-			{ id: "deepseek-v3.2", label: "DeepSeek V3.2", contextWindow: 160_000, vision: false },
+			{ id: "deepseek-v3.2", label: "DeepSeek V3.2", contextWindow: 128_000, vision: false },
 			{ id: "deepseek-chat", label: "DeepSeek Chat (V3)", contextWindow: 128_000, vision: false },
-			{ id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", contextWindow: 64_000, vision: false }
+			{ id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", contextWindow: 128_000, vision: false }
 		]
 	},
 	{

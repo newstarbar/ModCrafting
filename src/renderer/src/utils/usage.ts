@@ -70,7 +70,7 @@ export function contextWindowLimit(model?: string, providerId?: string): number 
 
 /**
  * Working window used for the context bar and compaction pressure.
- * Caps vendor 1M claims at 128k so the bar matches when auto-compact fires.
+ * Trusts vendor-declared context window up to 1M (capped in effectiveContextWindow).
  */
 export function workingContextWindow(model?: string, providerId?: string): number {
   return effectiveContextWindow(contextWindowLimit(model, providerId))
@@ -83,7 +83,7 @@ export function formatContextLimit(limit: number): string {
 
 /**
  * Context-bar fill for the *current* API prompt (latest step), not a turn sum.
- * Denominator is the effective working window (min(claimed, 128k)), aligned with compaction.
+ * Denominator is the effective working window (model-declared, capped at 1M), aligned with compaction.
  */
 export function contextPercentFromPrompt(
   promptTokens: number,

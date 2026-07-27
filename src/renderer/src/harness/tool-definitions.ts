@@ -2109,7 +2109,13 @@ export const guiLayoutPreviewTool: Tool = {
 		const layoutJson = await ctx.onGuiLayoutPreview({ id, title, layoutType, html, elements });
 
 		if (layoutJson.includes('"cancelled": true')) {
-			return "用户取消了布局预览。请根据用户反馈调整布局后重新调用 gui_layout_preview。";
+			// 解析用户反馈原因（如有），传递给 AI 以重新生成
+			const feedbackMatch = layoutJson.match(/"feedback"\s*:\s*"([^"]*)"/);
+			const feedback = feedbackMatch?.[1]?.trim();
+			if (feedback) {
+				return `用户反馈预览与期望不符：${feedback}\n请根据以上反馈调整布局 HTML 与 elements 后重新调用 gui_layout_preview。`;
+			}
+			return "用户取消了布局预览。请调整布局后重新调用 gui_layout_preview。";
 		}
 
 		return [

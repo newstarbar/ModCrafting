@@ -34,13 +34,14 @@ const MICRO_SUMMARY_CHARS = 200
 const MICRO_ARGS_MIN_CHARS = 400
 
 /**
- * Auto-compact trigger as a fraction of the *effective* working window
- * (capped at DEFAULT_CONTEXT_WINDOW so 1M models still compact early).
+ * Auto-compact trigger as a fraction of the *effective* working window.
+ * 1M models are trusted up to 1M (capped in effectiveContextWindow) so
+ * long tasks keep full context; only compaction at 50% of the real window.
  */
 export const COMPACT_FRACTION = 0.5
 
-/** Cap used for compaction triggers regardless of vendor 1M marketing windows. */
-export const DEFAULT_CONTEXT_WINDOW = 128_000
+/** Default context window for unknown/custom models. Real model values are trusted up to 1M. */
+export const DEFAULT_CONTEXT_WINDOW = 256_000
 
 /** Warn UI when estimated tokens exceed this fraction of the effective window. */
 export const WARN_FRACTION = 0.8
@@ -67,12 +68,12 @@ export function estimatePromptTokens(messages: ChatMessage[]): number {
   return total
 }
 
-/** Working window for compaction: min(model claim, 128k). */
+/** Working window for compaction: trust model-declared size, capped at 1M to prevent异常值. */
 export function effectiveContextWindow(modelContextWindow?: number): number {
   const claimed = modelContextWindow && modelContextWindow > 0
     ? modelContextWindow
     : DEFAULT_CONTEXT_WINDOW
-  return Math.min(claimed, DEFAULT_CONTEXT_WINDOW)
+  return Math.min(claimed, 1_000_000)
 }
 
 export function compactThreshold(modelContextWindow?: number, fraction = COMPACT_FRACTION): number {

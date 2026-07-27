@@ -1148,7 +1148,7 @@ export class Agent {
             } else {
               this.consecutiveIdleRounds++
             }
-            if (this.consecutiveIdleRounds >= 3) {
+            if (this.consecutiveIdleRounds >= 5) {
               const remaining = planTracker ? `\n剩余计划：\n${planTracker.toContextBlock()}` : ''
               pushRoundHistory('检测到连续多轮无实质进展（无文件写入、无构建）。')
               finalContent = finalContent.trim() || `执行停滞：连续 ${this.consecutiveIdleRounds} 轮无文件写入或构建进展，已自动结束。${remaining}`

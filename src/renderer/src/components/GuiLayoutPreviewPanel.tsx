@@ -7,6 +7,8 @@ export interface GuiLayoutPreviewPanelProps {
   disabled?: boolean
   onConfirm: (layoutJson: string) => void
   onCancel: () => void
+  /** 用户反馈预览与期望不符，要求 AI 根据反馈重新生成 */
+  onFeedback?: (feedback: string) => void
 }
 
 const CANVAS_WIDTH = 1280
@@ -247,23 +249,29 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
   entry,
   disabled = false,
   onConfirm,
-  onCancel
+  onCancel,
+  onFeedback
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [scale, setScale] = useState(1)
   const [currentElements, setCurrentElements] = useState<GuiLayoutElement[]>(entry.elements)
+  const [feedbackMode, setFeedbackMode] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
   const isResolved = entry.status === 'confirmed' || entry.status === 'cancelled'
 
-  /** Build the iframe srcDoc: strip AI scripts/buttons, inject drag script. */
+  /** Build the iframe srcDoc: strip AI scripts/buttons, inject drag script, add base styles for visibility. */
   const buildSrcDoc = useCallback((html: string): string => {
     const cleaned = stripInteractiveTags(html)
     const withScript = injectDragScript(cleaned)
     if (withScript.includes('<html')) {
       return withScript
     }
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:0;overflow:hidden;background:#1e1e1e;}</style></head><body>${withScript}</body></html>`
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      body{margin:0;padding:0;overflow:hidden;background:#1e1e1e;font-family:sans-serif;color:#fff;}
+      [data-layout-id]{box-sizing:border-box;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.4);padding:4px;min-width:20px;min-height:20px;}
+    </style></head><body>${withScript}</body></html>`
   }, [])
 
   /** Compute scale to fit container width and height. */
@@ -390,7 +398,7 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
             ref={iframeRef}
             className="gui-layout-preview__iframe"
             title={entry.title}
-            sandbox="allow-scripts"
+            sandbox="allow-scripts allow-same-origin"
             style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT, border: 'none', display: isLoading ? 'none' : 'block' }}
           />
         </div>
@@ -401,7 +409,7 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
           {entry.status === 'confirmed' && entry.layoutJson ? ' · 已确认' : ''}
           {entry.status === 'cancelled' ? ' · 已取消' : ''}
         </div>
-        {!isResolved && (
+        {!isResolved && !feedbackMode && (
           <div className="gui-layout-preview__actions">
             <button
               type="button"
@@ -411,6 +419,16 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
             >
               取消
             </button>
+            {onFeedback && (
+              <button
+                type="button"
+                className="gui-layout-preview__btn gui-layout-preview__btn--feedback"
+                disabled={disabled}
+                onClick={() => setFeedbackMode(true)}
+              >
+                反馈并重新生成
+              </button>
+            )}
             <button
               type="button"
               className="gui-layout-preview__btn gui-layout-preview__btn--confirm"
@@ -419,6 +437,41 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
             >
               确认布局
             </button>
+          </div>
+        )}
+        {!isResolved && feedbackMode && (
+          <div className="gui-layout-preview__feedback">
+            <textarea
+              className="gui-layout-preview__feedback-text"
+              placeholder="描述预览与期望不符的地方，例如：按钮太大、缺少标题、颜色不对…"
+              value={feedbackText}
+              disabled={disabled}
+              rows={3}
+              onChange={(e) => setFeedbackText(e.target.value)}
+              autoFocus
+            />
+            <div className="gui-layout-preview__feedback-actions">
+              <button
+                type="button"
+                className="gui-layout-preview__btn gui-layout-preview__btn--cancel"
+                disabled={disabled}
+                onClick={() => { setFeedbackMode(false); setFeedbackText('') }}
+              >
+                返回
+              </button>
+              <button
+                type="button"
+                className="gui-layout-preview__btn gui-layout-preview__btn--confirm"
+                disabled={disabled || !feedbackText.trim()}
+                onClick={() => {
+                  onFeedback?.(feedbackText.trim())
+                  setFeedbackMode(false)
+                  setFeedbackText('')
+                }}
+              >
+                提交反馈
+              </button>
+            </div>
           </div>
         )}
       </div>

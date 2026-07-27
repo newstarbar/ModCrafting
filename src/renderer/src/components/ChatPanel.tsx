@@ -1617,6 +1617,29 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     })
   }, [flushPersist])
 
+  const handleGuiLayoutFeedback = useCallback((entryId: string, feedback: string) => {
+    const ctrl = controllerRef.current
+    if (!ctrl) return
+    ctrl.feedbackGuiLayout(entryId, feedback)
+    setDisplayMessages((prev) => {
+      const next = prev.map((m) => {
+        if (!m.entries) return m
+        const found = m.entries.some((e) => e.kind === 'guiLayoutPreview' && e.id === entryId)
+        if (!found) return m
+        return {
+          ...m,
+          entries: m.entries.map((e) =>
+            e.kind === 'guiLayoutPreview' && e.id === entryId
+              ? { ...e, status: 'cancelled' as const }
+              : e
+          )
+        }
+      })
+      flushPersist(next, activePlanRef.current)
+      return next
+    })
+  }, [flushPersist])
+
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
     const ctrl = controllerRef.current
@@ -2260,6 +2283,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                           disabled={layoutEntry.status !== 'pending'}
                           onConfirm={(layoutJson) => handleGuiLayoutConfirm(layoutEntry.id, layoutJson)}
                           onCancel={() => handleGuiLayoutCancel(layoutEntry.id)}
+                          onFeedback={(feedback) => handleGuiLayoutFeedback(layoutEntry.id, feedback)}
                         />
                       </div>
                     )

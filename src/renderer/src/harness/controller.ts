@@ -1548,6 +1548,19 @@ ${projectInfo}`;
 		}
 	}
 
+	/** 用户反馈预览不符：resolve 工具 Promise 为 cancelled + feedback，AI 据此重新生成。 */
+	feedbackGuiLayout(id: string, feedback: string): void {
+		const resolver = this.pendingGuiLayoutResolvers.get(id);
+		if (resolver) {
+			this.pendingGuiLayoutResolvers.delete(id);
+			if (this.pendingGuiLayoutResolvers.size === 0) {
+				this.guiLayoutPending = false;
+			}
+			const safeFeedback = feedback.replace(/"/g, '\\"').slice(0, 500);
+			resolver(`{"cancelled": true, "feedback": "${safeFeedback}"}`);
+		}
+	}
+
 	/** 清理所有未确认的 GUI 布局预览（步骤切换/修复模式进入时调用）。 */
 	cancelAllPendingGuiLayouts(): void {
 		if (this.pendingGuiLayoutResolvers.size === 0) return;
