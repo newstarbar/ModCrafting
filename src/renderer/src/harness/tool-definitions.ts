@@ -2051,7 +2051,8 @@ export const guiLayoutPreviewTool: Tool = {
 		"布局类型：option-list（设置列表，用 SimpleOption+OptionListWidget）、" +
 		"custom-screen（自定义界面，用 Screen+相对坐标）、hud-overlay（HUD 覆盖层，用 HudRenderCallback+相对坐标）。" +
 		"HTML 只需包含视觉元素（带 data-layout-id/data-layout-type 属性的 absolute 定位 div），" +
-		"使用 1280x720 画布尺寸；拖拽脚本由预览组件自动注入，AI 无需编写任何 JavaScript。",
+		"使用 1280x720 画布尺寸；拖拽脚本由预览组件自动注入，AI 无需编写任何 JavaScript。" +
+		"HTML 中禁止包含 <button>、<input type='button'>、onclick 事件或任何确认/取消按钮；确认/取消由外层 UI 统一提供。",
 	schema: {
 		type: "object",
 		properties: {
@@ -2066,6 +2067,7 @@ export const guiLayoutPreviewTool: Tool = {
 				description:
 					"布局预览 HTML（仅视觉部分）。必须包含 1280x720 画布容器和若干 absolute 定位元素，" +
 					"每个元素带 data-layout-id 和 data-layout-type 属性。禁止写 <script> 标签（会被剥离）。" +
+					"禁止包含 <button>、<input type='button'>、onclick 事件或任何确认/取消按钮（会被剥离）。" +
 					"示例：<div data-layout-id='btn1' data-layout-type='button' style='position:absolute;left:560px;top:100px;width:160px;height:20px;'>按钮</div>"
 			},
 			elements: {

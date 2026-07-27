@@ -14,9 +14,16 @@ const CANVAS_HEIGHT = 720
 const GRID_SIZE = 8
 const ALIGN_THRESHOLD = 4
 
-/** Strip <script>...</script> tags from HTML to prevent AI-injected scripts. */
-function stripScriptTags(html: string): string {
-  return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+/** Strip <script>...</script> tags and interactive buttons from HTML to prevent AI-injected scripts/actions. */
+function stripInteractiveTags(html: string): string {
+  // 移除 <script>
+  let cleaned = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+  // 移除 <button> 和 <input type="button|submit|reset">
+  cleaned = cleaned.replace(/<button\b[^>]*>[\s\S]*?<\/button>/gi, '')
+  cleaned = cleaned.replace(/<input\b[^>]*type=["']?(button|submit|reset)["']?[^>]*>/gi, '')
+  // 移除可能带有 onclick 属性的元素
+  cleaned = cleaned.replace(/\s*onclick=["'][^"']*["']/gi, '')
+  return cleaned
 }
 
 /** Inject the drag + alignment script before </body> (or append if no body tag). */
@@ -249,9 +256,9 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
   const [currentElements, setCurrentElements] = useState<GuiLayoutElement[]>(entry.elements)
   const isResolved = entry.status === 'confirmed' || entry.status === 'cancelled'
 
-  /** Build the iframe srcDoc: strip AI scripts, inject drag script. */
+  /** Build the iframe srcDoc: strip AI scripts/buttons, inject drag script. */
   const buildSrcDoc = useCallback((html: string): string => {
-    const cleaned = stripScriptTags(html)
+    const cleaned = stripInteractiveTags(html)
     const withScript = injectDragScript(cleaned)
     if (withScript.includes('<html')) {
       return withScript
@@ -259,13 +266,16 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:0;overflow:hidden;background:#1e1e1e;}</style></head><body>${withScript}</body></html>`
   }, [])
 
-  /** Compute scale to fit container width. */
+  /** Compute scale to fit container width and height. */
   const updateScale = useCallback(() => {
     const container = containerRef.current
     if (!container) return
     const availableWidth = container.clientWidth - 32
-    if (availableWidth > 0) {
-      setScale(Math.min(1, availableWidth / CANVAS_WIDTH))
+    const availableHeight = container.clientHeight - 32
+    if (availableWidth > 0 && availableHeight > 0) {
+      const scaleX = availableWidth / CANVAS_WIDTH
+      const scaleY = availableHeight / CANVAS_HEIGHT
+      setScale(Math.min(1, scaleX, scaleY))
     }
   }, [])
 
@@ -374,7 +384,7 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
         {isLoading && <div className="gui-layout-preview__loading">加载预览中...</div>}
         <div
           className="gui-layout-preview__scaler"
-          style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT, transform: `scale(${scale})`, transformOrigin: 'top left' }}
+          style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT, transform: `scale(${scale})`, transformOrigin: 'center center' }}
         >
           <iframe
             ref={iframeRef}

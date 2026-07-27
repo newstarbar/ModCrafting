@@ -2240,7 +2240,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                       <div key={`gl-${i}`} className="chrono-entry-gui-layout">
                         <GuiLayoutPreviewPanel
                           entry={layoutEntry}
-                          disabled={isLoading || layoutEntry.status !== 'pending'}
+                          disabled={layoutEntry.status !== 'pending'}
                           onConfirm={(layoutJson) => handleGuiLayoutConfirm(layoutEntry.id, layoutJson)}
                           onCancel={() => handleGuiLayoutCancel(layoutEntry.id)}
                         />
@@ -2337,7 +2337,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       <div className="chat-messages" ref={chatMessagesRef} onScroll={handleScroll}>
         {shouldShowPinnedPlan(activePlan, displayMessages, planReady) && activePlan && (
           <div className="chat-plan-sticky">
-            <TaskPlan steps={activePlan.steps} variant="pinned" />
+            <TaskPlan steps={activePlan.steps} variant="anchored" defaultCollapsed />
           </div>
         )}
         {displayMessages.length === 0 && !activePlan?.pinned && (

@@ -619,7 +619,7 @@ submit_plan 参数要求：
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
 4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient → mc_ensure_test_world 进入世界 → 根据功能类型设计测试场景 → mc_screenshot/mc_inspect 验证效果。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
-6. **GUI 布局预览强制要求：任何涉及 Screen/HUD/ConfigScreen 代码的步骤（无论是新建还是修改现有 GUI），必须先调用 gui_layout_preview 工具生成 HTML 布局预览供用户确认，拿到用户确认的布局 JSON 后才能编写/修改 GUI 代码。禁止跳过预览直接 edit_file/write_file GUI 代码。layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。**
+6. **GUI 布局预览强制要求：任何涉及 Screen/HUD/ConfigScreen 代码的步骤（无论是新建还是修改现有 GUI），必须先调用 gui_layout_preview 工具生成 HTML 布局预览供用户确认，拿到用户确认的布局 JSON 后才能编写/修改 GUI 代码。禁止跳过预览直接 edit_file/write_file GUI 代码。layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。生成的 HTML 仅用于可视化布局，禁止包含 <button>、<input type="button">、onclick 事件或任何确认/取消按钮；确认/取消由外层 UI 统一提供。**
 7. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
 8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ 根据功能类型设计测试场景（生成生物/给予物品/触发事件） ④ mc_screenshot/mc_inspect 验证效果。禁止仅凭 menu 宣称完成。
 9. ${isVisionCapableModel(this.apiConfig.model)
@@ -642,7 +642,7 @@ ${mode === "plan" ? "## 当前：输出计划阶段\n需求歧义时可用 ask_c
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**
 - **写 Fabric 方块/物品/实体/附魔注册代码前，必须先用 minecraft_data_lookup 查询原版标准 ID 与属性参数（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等），禁止凭记忆填写原版参数。**
 - **用户输入模糊或不专业的游戏描述时（如"会爆炸的绿色怪物"），先用 mc_wiki_search 检索中文 MC 百科向量知识库解析需求，再结合 minecraft_data_lookup 生成 Fabric 代码。**
-- **GUI 代码强制预览：编写或修改任何 Screen/HUD/ConfigScreen 代码前，必须先调用 gui_layout_preview 工具生成布局预览供用户确认。禁止跳过预览直接 edit_file/write_file GUI 代码。**
+- **GUI 代码强制预览：编写或修改任何 Screen/HUD/ConfigScreen 代码前，必须先调用 gui_layout_preview 工具生成布局预览供用户确认。禁止跳过预览直接 edit_file/write_file GUI 代码。生成的 HTML 仅用于可视化布局，禁止包含 <button>、<input type="button">、onclick 事件或任何确认/取消按钮；确认/取消由外层 UI 统一提供。**
 - 使用 Yarn mappings。主类→ModInitializer，客户端→ClientModInitializer。${extraRules}
 
 ${goalBlock}

@@ -2863,6 +2863,11 @@ body,
 	max-height: 200px;
 }
 
+.chat-plan-sticky .task-plan--collapsed {
+	margin-left: auto;
+	margin-right: auto;
+}
+
 /* ── Tool calls inline ── */
 .tool-call {
 	margin: 8px 0;
@@ -3126,10 +3131,11 @@ body,
 	background: var(--bg-surface);
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-md);
-	margin: 0 0 8px;
+	margin: 0 auto 8px;
 	padding: 10px 12px;
 	flex-shrink: 0;
 	max-height: 220px;
+	max-width: min(100%, 680px);
 	overflow: hidden;
 	display: flex;
 	flex-direction: column;
@@ -3145,26 +3151,37 @@ body,
 }
 
 .task-plan--anchored {
-	margin: 0 0 10px;
-	max-height: none;
+	margin: 0 auto 10px;
+	max-height: 220px;
+	overflow-y: auto;
+}
+
+.task-plan--pinned {
+	max-height: 180px;
+	overflow-y: auto;
 }
 
 .task-plan--collapsed {
 	padding: 0;
 	border-style: dashed;
 	background: var(--bg-tertiary);
+	max-height: none;
+	overflow-y: visible;
+	max-width: min(100%, 520px);
+	margin-left: auto;
+	margin-right: auto;
 }
 
 .task-plan-collapsed-toggle {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 10px;
 	width: 100%;
-	padding: 8px 10px;
+	padding: 8px 12px;
 	border: none;
 	background: transparent;
 	color: var(--text-secondary);
-	font-size: 12px;
+	font-size: 13px;
 	cursor: pointer;
 	text-align: left;
 }
@@ -3176,6 +3193,86 @@ body,
 .task-plan-collapsed-icon {
 	color: var(--text-muted);
 	font-size: 10px;
+	flex-shrink: 0;
+}
+
+.task-plan-collapsed-title {
+	font-weight: 600;
+	flex-shrink: 0;
+}
+
+.task-plan-collapsed-current {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-muted);
+}
+
+.task-plan-collapsed-progress-text {
+	flex-shrink: 0;
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	font-size: 12px;
+}
+
+.task-plan-collapsed-ring {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+}
+
+.task-plan-progress-ring {
+	width: 22px;
+	height: 22px;
+	transform: rotate(-90deg);
+}
+
+.task-plan-progress-ring-bg {
+	fill: none;
+	stroke: var(--border-color);
+	stroke-width: 4;
+}
+
+.task-plan-progress-ring-fg {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 4;
+	stroke-linecap: round;
+	transition: stroke-dasharray 0.3s ease, stroke 0.2s ease;
+}
+
+.task-plan-progress-ring-fg--completed {
+	stroke: var(--success);
+}
+
+.task-plan-progress-ring-fg--error {
+	stroke: var(--error);
+}
+
+.task-plan-progress-ring-fg--running {
+	stroke: var(--accent);
+}
+
+.task-plan-progress-ring-fg--pending {
+	stroke: var(--text-muted);
+}
+
+.task-plan-collapsed-current--running {
+	color: var(--accent);
+}
+
+.task-plan-collapsed-current--completed {
+	color: var(--success);
+}
+
+.task-plan-collapsed-current--error {
+	color: var(--error);
+}
+
+.task-plan-collapsed-current--pending {
+	color: var(--text-muted);
 }
 
 .task-plan-collapsed-meta {
@@ -3924,12 +4021,24 @@ body,
 }
 
 /* ── GUI Layout Preview Panel ── */
+.chrono-entry-gui-layout {
+	display: flex;
+	flex-direction: column;
+	min-height: 420px;
+	max-height: calc(100vh - 240px);
+	height: 100%;
+}
+
 .gui-layout-preview {
 	margin: 8px 0;
 	border: 1px solid var(--border-color, var(--border-light, #3a3a3a));
 	border-radius: 8px;
 	background: var(--bg-secondary, #1e1e1e);
 	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 420px;
 }
 
 .gui-layout-preview__header {
@@ -3975,11 +4084,15 @@ body,
 .gui-layout-preview__canvas-wrap {
 	position: relative;
 	width: 100%;
+	min-height: 320px;
+	height: 100%;
+	flex: 1 1 auto;
 	padding: 16px;
 	background: #1a1a1a;
 	overflow: hidden;
 	display: flex;
 	justify-content: center;
+	align-items: center;
 }
 
 .gui-layout-preview__loading {
@@ -3993,6 +4106,7 @@ body,
 
 .gui-layout-preview__scaler {
 	flex-shrink: 0;
+	transform-origin: center center;
 }
 
 .gui-layout-preview__iframe {

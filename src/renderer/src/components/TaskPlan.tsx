@@ -58,6 +58,27 @@ function progressLabel(steps: PlanStep[]): string {
   return `已完成 ${completedCount}/${total}`
 }
 
+function collapsedStatusText(steps: PlanStep[]): { text: string; tone: 'pending' | 'running' | 'completed' | 'error' } {
+  const total = steps.length
+  const completedCount = steps.filter((s) => s.status === 'completed').length
+  const hasError = steps.some((s) => s.status === 'error')
+  const running = steps.find((s) => s.status === 'running')
+  const allDone = total > 0 && completedCount === total
+
+  if (hasError) return { text: '部分失败', tone: 'error' }
+  if (allDone) return { text: '全部完成', tone: 'completed' }
+  if (running) {
+    const desc = running.description.replace(/\n/g, ' ').slice(0, 40)
+    return { text: `当前 #${running.id} ${desc}${running.description.length > 40 ? '…' : ''}`, tone: 'running' }
+  }
+  const next = steps.find((s) => s.status === 'pending')
+  if (next) {
+    const desc = next.description.replace(/\n/g, ' ').slice(0, 40)
+    return { text: `待启动 #${next.id} ${desc}${next.description.length > 40 ? '…' : ''}`, tone: 'pending' }
+  }
+  return { text: '等待开始', tone: 'pending' }
+}
+
 const TaskPlan: React.FC<TaskPlanProps> = ({
   steps,
   maxVisible = MAX_VISIBLE_DEFAULT,
@@ -99,37 +120,52 @@ const TaskPlan: React.FC<TaskPlanProps> = ({
     </div>
   )
 
-  if (variant === 'anchored' && collapsed) {
+  if (collapsed) {
+    const completedCount = steps.filter((s) => s.status === 'completed').length
+    const total = steps.length
+    const progress = total > 0 ? Math.round((completedCount / total) * 100) : 0
+    const status = collapsedStatusText(steps)
+
     return (
-      <div className="task-plan task-plan--anchored task-plan--collapsed">
+      <div className={`task-plan task-plan--${variant} task-plan--collapsed`}>
         <button
           type="button"
           className="task-plan-collapsed-toggle"
           onClick={() => setCollapsed(false)}
+          aria-label={`实施计划 ${completedCount}/${total}，${status.text}`}
         >
           <span className="task-plan-collapsed-icon">▸</span>
-          <span>实施计划</span>
-          <span className="task-plan-collapsed-meta">· {summarySuffix}</span>
+          <span className="task-plan-collapsed-title">实施计划</span>
+          <span className={`task-plan-collapsed-current task-plan-collapsed-current--${status.tone}`} title={status.text}>
+            {status.text}
+          </span>
+          <span className="task-plan-collapsed-progress-text">{completedCount}/{total}</span>
+          <span className="task-plan-collapsed-ring">
+            <svg viewBox="0 0 36 36" className="task-plan-progress-ring">
+              <path className="task-plan-progress-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+              <path
+                className={`task-plan-progress-ring-fg task-plan-progress-ring-fg--${status.tone}`}
+                strokeDasharray={`${progress}, 100`}
+                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+              />
+            </svg>
+          </span>
         </button>
       </div>
     )
   }
 
   return (
-    <div className={`task-plan${variant === 'anchored' ? ' task-plan--anchored' : ''}`}>
+    <div className={`task-plan task-plan--${variant}`}>
       <div className="task-plan-header">
-        {variant === 'anchored' ? (
-          <button
-            type="button"
-            className="task-plan-header-toggle"
-            onClick={() => setCollapsed(true)}
-          >
-            <span className="task-plan-collapsed-icon">▾</span>
-            <span>实施计划</span>
-          </button>
-        ) : (
+        <button
+          type="button"
+          className="task-plan-header-toggle"
+          onClick={() => setCollapsed(true)}
+        >
+          <span className="task-plan-collapsed-icon">▾</span>
           <span>实施计划</span>
-        )}
+        </button>
         <span className="task-plan-progress">{summarySuffix}</span>
       </div>
 
