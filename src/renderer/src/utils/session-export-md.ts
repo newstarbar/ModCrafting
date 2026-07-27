@@ -2,8 +2,8 @@ import type { ChronoEntry, DisplayMessage } from '../types/display-message'
 import type { ChatMessage } from '../harness/chat-message.ts'
 import { contentAsText } from '../harness/chat-message.ts'
 import type { PlanStep } from '../components/TaskPlan'
-import type { ChatTurn } from './chat-turns'
-import { groupMessagesIntoTurns } from './chat-turns'
+import type { ChatTurn } from './chat-turns.ts'
+import { groupMessagesIntoTurns } from './chat-turns.ts'
 
 const TOOL_OUTPUT_LIMIT = 48_000
 const TOOL_ARGS_LIMIT = 16_000

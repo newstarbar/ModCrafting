@@ -160,7 +160,7 @@ test('micro compaction still compacts old results after a new run resets counter
     { role: 'system', content: 'system' },
     { role: 'assistant', content: '', tool_calls: [] },
     { role: 'tool', name: 'read_file', tool_call_id: 'old', content: oldOutput },
-    ...Array.from({ length: 8 }, (_, index) => ({
+    ...Array.from({ length: 50 }, (_, index) => ({
       role: index % 2 === 0 ? 'user' : 'assistant',
       content: String(index)
     }))
