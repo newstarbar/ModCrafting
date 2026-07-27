@@ -67,17 +67,23 @@ public final class InputGuardHud {
         if (!InputGuard.isActive() || client == null || client.getWindow() == null) {
             tipCardW = 0;
             tipCardH = 0;
+            // 即使非 AI 自测期间也绘制点击高亮（供解锁后短暂残留）
+            drawClickHighlight(context, client);
             return;
         }
 
         int sw = client.getWindow().getScaledWidth();
         int sh = client.getWindow().getScaledHeight();
+        long handle = client.getWindow().getHandle();
 
         if (InputGuard.isLocked()) {
             drawIndicator(context, client, sw, sh, "AI 自测", 0xFF4A90D9);
-            // Tip when pointer is anywhere inside the game viewport (not only the chip).
-            boolean overWindow = mouseX >= 0 && mouseY >= 0 && mouseX < sw && mouseY < sh;
-            if (overWindow) {
+            // 使用 GLFW_HOVERED 检测鼠标是否悬停在游戏窗口上。
+            // 旧的 overWindow 判断基于 client.mouse.getX()/getY()，但这些值在鼠标离开窗口后
+            // 不更新（保留窗口内最后已知位置），导致提示卡片常驻显示。
+            // GLFW_HOVERED 直接由 GLFW 维护，准确反映光标是否在窗口客户区内。
+            boolean mouseOverWindow = GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_HOVERED) == GLFW.GLFW_TRUE;
+            if (mouseOverWindow) {
                 tipVisible = true;
                 drawTipCard(context, client, sw, sh);
             } else {
@@ -90,6 +96,29 @@ public final class InputGuardHud {
             drawIndicator(context, client, sw, sh, "手动模式", 0xFF5BCA6B);
             indicatorHitValid = true;
         }
+
+        // 绘制 Agent 点击高亮（独立于 locked 状态，只要 InputGuard 激活就绘制）
+        drawClickHighlight(context, client);
+    }
+
+    /** 绘制 Agent 点击按钮的柔和高亮边框（500ms 淡出）。
+     *  仅 GUI Screen 内的点击有高亮；世界内操控（移动/视角/攻击等）不记录高亮。 */
+    private static void drawClickHighlight(DrawContext context, MinecraftClient client) {
+        InputActions.ClickHighlight hl = InputActions.getLastClickHighlight();
+        if (hl == null || hl.isExpired()) return;
+
+        // 柔和蓝色边框，与 AI 自测主题色一致 (0xFF4A90D9)
+        int border = 0xFF4A90D9;
+        int x = (int) hl.x;
+        int y = (int) hl.y;
+        int w = (int) hl.width;
+        int h = (int) hl.height;
+
+        // 2px 边框
+        context.fill(x - 1, y - 1, x + w + 1, y + 1, border);             // 上
+        context.fill(x - 1, y + h - 1, x + w + 1, y + h + 1, border);     // 下
+        context.fill(x - 1, y, x + 1, y + h, border);                     // 左
+        context.fill(x + w - 1, y, x + w + 1, y + h, border);             // 右
     }
 
     private static void drawIndicator(DrawContext context, MinecraftClient client, int sw, int sh, String label, int border) {

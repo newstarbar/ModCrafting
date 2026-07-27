@@ -21,6 +21,28 @@ public final class InputActions {
         return t;
     });
 
+    /** 最近一次 Agent 点击 GUI 控件的高亮信息（供 InputGuardHud 渲染柔和高亮边框）。
+     *  仅 click_at/click_widget 设置；世界内操控（preset/mouseClick/mouseMove）不设置。 */
+    private static volatile ClickHighlight lastClickHighlight;
+
+    /** 点击高亮信息（不可变）。500ms 后过期自动消失。 */
+    public static final class ClickHighlight {
+        public final double x, y, width, height;
+        public final long expireAt;
+        public ClickHighlight(double x, double y, double w, double h, long expireAt) {
+            this.x = x; this.y = y;
+            this.width = w; this.height = h;
+            this.expireAt = expireAt;
+        }
+        public boolean isExpired() {
+            return System.currentTimeMillis() > expireAt;
+        }
+    }
+
+    public static ClickHighlight getLastClickHighlight() {
+        return lastClickHighlight;
+    }
+
     private InputActions() {}
 
     public static Map<String, Object> handle(Map<String, Object> body) {
@@ -59,6 +81,8 @@ public final class InputActions {
         int mouseButton = mouseButtonCode(str(body.get("button")));
         boolean pressed = screen.mouseClicked(x, y, mouseButton);
         screen.mouseReleased(x, y, mouseButton);
+        // 记录点击高亮：使用点击坐标周围 20x20 的区域作为默认边界
+        lastClickHighlight = new ClickHighlight(x - 10, y - 10, 20, 20, System.currentTimeMillis() + 500);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("action", "click_at");
@@ -111,6 +135,12 @@ public final class InputActions {
         clickBody.put("x", x);
         clickBody.put("y", y);
         Map<String, Object> result = clickAt(clickBody);
+        // 用控件实际边界覆盖默认的 20x20 高亮，更精确地标识被点击的按钮
+        lastClickHighlight = new ClickHighlight(
+            target.getX(), target.getY(),
+            target.getWidth(), target.getHeight(),
+            System.currentTimeMillis() + 500
+        );
         result.put("action", "click_widget");
         result.put("index", matchedIndex);
         result.put("message", target.getMessage() != null ? target.getMessage().getString() : "");

@@ -105,6 +105,16 @@ export function isRepairWriteBlocked(
   return REPAIR_WRITE_BLOCKED_TOOLS.has(call.name)
 }
 
+/** 允许在 run/build 步骤中执行的文件检查命令（只读、无副作用）。
+ *  用于检查运行产物（截图、日志、配置文件）等场景。 */
+function isFileInspectionCommand(command: string): boolean {
+  const normalized = command.trim()
+  if (!normalized) return false
+  // 允许的前缀：dir, ls, cat, type, Get-Content, Get-ChildItem, Test-Path, where, find
+  // 这些都是只读命令，不会修改或删除文件
+  return /^(?:dir|ls|cat|type|Get-Content|Get-ChildItem|Test-Path|where|find)\b/i.test(normalized)
+}
+
 function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options?: ToolGateOptions): boolean {
   if (READONLY_KNOWLEDGE_TOOLS.has(call.name) && (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin')) {
     return true
@@ -120,8 +130,8 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
   }
   if (call.name === 'run_command') {
     const command = String(call.args.command || '')
-    if (step.kind === 'build') return /gradlew|gradle|build/i.test(command)
-    if (step.kind === 'run') return /runClient/i.test(command)
+    if (step.kind === 'build') return /gradlew|gradle|build/i.test(command) || isFileInspectionCommand(command)
+    if (step.kind === 'run') return /runClient/i.test(command) || isFileInspectionCommand(command)
     if (step.kind === 'recipe' || step.kind === 'write') {
       return isRecipeCleanupCommand(command) || isProjectFileDeleteCommand(command)
     }
@@ -225,6 +235,13 @@ export function createRejectedToolResult(
         : ' 请先调用 trigger_build({"task":"runClient"})；运行失败后会自动进入修复模式，那时才允许 edit_file。'
   } else if (call.name === 'trigger_build') {
     output += ` 当前步骤类型为 ${step.kind}，trigger_build 仅在 build/run 步骤允许。请先 complete_step 推进到构建/运行步骤。`
+  } else if (call.name === 'run_command') {
+    const allowedHint = step.kind === 'run'
+      ? ' runClient 或文件检查命令（dir/ls/cat/type/Get-Content/Get-ChildItem/Test-Path 等）'
+      : step.kind === 'build'
+        ? ' gradle 构建命令或文件检查命令'
+        : ' 文件删除命令'
+    output += ` 当前步骤类型为 ${step.kind}，run_command 仅允许${allowedHint}。如需列出目录文件，请改用 list_directory。`
   } else if (call.name === 'mc_screenshot' || call.name === 'mc_inspect' || call.name === 'mc_command' || call.name === 'mc_input' || call.name === 'mc_ensure_test_world' || call.name === 'mc_ensure_cheats' || call.name === 'mc_inventory' || call.name === 'mc_world' || call.name === 'mc_chat') {
     output += ` MC 操作工具仅在 run 步骤允许。当前步骤类型为 ${step.kind}，请先完成当前步骤推进到 run 步骤。`
   } else if (call.name === 'fabric_recipe_generate' || call.name === 'create_recipe') {
