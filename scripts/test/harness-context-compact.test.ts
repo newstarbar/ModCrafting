@@ -12,6 +12,11 @@ import {
 } from '../../src/renderer/src/harness/context-compact.ts'
 import { contextPercentFromPrompt } from '../../src/renderer/src/utils/usage.ts'
 import type { ChatMessage } from '../../src/renderer/src/harness/chat-message.ts'
+import { contentAsText } from '../../src/renderer/src/harness/chat-message.ts'
+import {
+  MAX_SAME_TOOL_NOT_OFFERED,
+  updateNotOfferedStreak
+} from '../../src/renderer/src/harness/tool-not-offered-brake.ts'
 
 test('effectiveContextWindow caps 1M models at 128k', () => {
   assert.equal(effectiveContextWindow(1_000_000), 128_000)
@@ -20,11 +25,35 @@ test('effectiveContextWindow caps 1M models at 128k', () => {
   assert.equal(warnTokenThreshold(1_000_000), 102_400)
 })
 
-test('contextPercentFromPrompt uses latest prompt against model limit', () => {
-  // DeepSeek V4 Flash is registered as 1M
-  assert.equal(contextPercentFromPrompt(80_000, 'deepseek-v4-flash', 'deepseek'), 8)
-  // Summing multi-step prompts must NOT be used — 10×80k would show 80%
-  assert.equal(contextPercentFromPrompt(800_000, 'deepseek-v4-flash', 'deepseek'), 80)
+test('microCompact never compresses blocked/Error tool outputs', () => {
+  const blocked = 'blocked: [tool_not_offered] 工具 "mc_inspect" 未执行：该工具不在当前阶段/步骤的白名单中'
+  const messages: ChatMessage[] = [
+    { role: 'system', content: 'sys' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'c1',
+        type: 'function',
+        function: { name: 'mc_inspect', arguments: '{}' }
+      }]
+    },
+    { role: 'tool', name: 'mc_inspect', tool_call_id: 'c1', content: blocked },
+    ...Array.from({ length: RECENT_WINDOW + 20 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `t${i}`
+    } as ChatMessage))
+  ]
+  const compacted = microCompact(messages, 0)
+  const toolMsg = compacted.find((m) => m.role === 'tool' && m.tool_call_id === 'c1')
+  assert.equal(contentAsText(toolMsg?.content || ''), blocked)
+})
+
+test('contextPercentFromPrompt uses effective working window (cap 128k)', () => {
+  // DeepSeek V4 Flash claims 1M, but bar uses min(claimed, 128k)
+  assert.equal(contextPercentFromPrompt(80_000, 'deepseek-v4-flash', 'deepseek'), 63)
+  // Over working window clamps to 100
+  assert.equal(contextPercentFromPrompt(800_000, 'deepseek-v4-flash', 'deepseek'), 100)
 })
 
 test('microCompact truncates aged write_file tool_call arguments', () => {
@@ -99,4 +128,36 @@ test('prepareMessages auto-compacts 1M window once estimate exceeds ~64k', async
   assert.equal(result.compacted, true)
   assert.ok(estimatePromptTokens(result.messages) < estimated)
   assert.ok(result.messages.some((m) => (m.content || '').includes('上下文摘要')))
+})
+
+test('updateNotOfferedStreak brakes after 3 consecutive rounds or batch of 3', () => {
+  const streak = new Map<string, number>()
+  assert.deepEqual(
+    updateNotOfferedStreak(streak, [
+      { toolName: 'mc_inspect', errorKind: 'tool_not_offered', output: 'blocked' }
+    ]),
+    []
+  )
+  assert.equal(streak.get('mc_inspect'), 1)
+  assert.deepEqual(
+    updateNotOfferedStreak(streak, [
+      { toolName: 'mc_inspect', errorKind: 'tool_not_offered', output: 'blocked' }
+    ]),
+    []
+  )
+  assert.deepEqual(
+    updateNotOfferedStreak(streak, [
+      { toolName: 'mc_inspect', errorKind: 'tool_not_offered', output: 'blocked' }
+    ]),
+    ['mc_inspect']
+  )
+  assert.ok((streak.get('mc_inspect') || 0) >= MAX_SAME_TOOL_NOT_OFFERED)
+
+  const batch = new Map<string, number>()
+  const braked = updateNotOfferedStreak(batch, [
+    { toolName: 'grep', errorKind: 'tool_not_offered', output: 'a' },
+    { toolName: 'grep', errorKind: 'tool_not_allowed', output: 'b' },
+    { toolName: 'grep', errorKind: 'tool_not_offered', output: 'c' }
+  ])
+  assert.deepEqual(braked, ['grep'])
 })

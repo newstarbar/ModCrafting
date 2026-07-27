@@ -29,6 +29,10 @@ import {
 } from './fetch-retry.ts'
 import { validateToolCalls } from './tool-call-validator.ts'
 import {
+  formatNotOfferedBrakeInstruction,
+  updateNotOfferedStreak
+} from './tool-not-offered-brake.ts'
+import {
   MAX_PLAN_OFFERED_REJECT_ROUNDS,
   MAX_READONLY_ROUNDS,
   PLAN_EXPLORATION_LOCK_KICK,
@@ -167,6 +171,12 @@ export class Agent {
   private clarificationCount = 0
   // Rounds where every tool call was rejected by the loop guard (no progress)
   private consecutiveBlockedRounds = 0
+  /** Consecutive whitelist rejects per tool name (tool_not_offered / tool_not_allowed). */
+  private notOfferedStreak = new Map<string, number>()
+  /** Tools hard-banned for the rest of this run after streak brake. */
+  private hardBannedTools = new Set<string>()
+  /** After brake, one more all-banned round ends the loop. */
+  private notOfferedBrakeEscalated = false
   // Rounds where the model only called complete_step without any real work
   private consecutiveStepDoneOnlyRounds = 0
   // Rounds where model outputs mostly reasoning (>80%) with no tool calls
@@ -208,6 +218,9 @@ export class Agent {
     this.finalReadinessBlocks = 0
     this.graceRound = false
     this.consecutiveBlockedRounds = 0
+    this.notOfferedStreak.clear()
+    this.hardBannedTools.clear()
+    this.notOfferedBrakeEscalated = false
     this.consecutiveStepDoneOnlyRounds = 0
     this.consecutiveReasoningOnlyRounds = 0
     this.consecutiveIdleRounds = 0
@@ -658,6 +671,25 @@ export class Agent {
 
         const rawToolCalls = result.toolCalls
         const validation = validateToolCalls(rawToolCalls, availableTools)
+        // Hard-ban tools that already hit the not-offered streak brake.
+        for (const call of [...validation.accepted]) {
+          if (!this.hardBannedTools.has(call.name)) continue
+          validation.accepted = validation.accepted.filter((c) => c.id !== call.id)
+          const brakeOut = formatNotOfferedBrakeInstruction(
+            [call.name],
+            availableTools.map((t) => t.name)
+          )
+          validation.rejected.set(call.id, {
+            output: brakeOut,
+            error: brakeOut,
+            durationMs: 0,
+            ok: false,
+            toolName: call.name,
+            args: call.args,
+            exitCode: null,
+            errorKind: 'tool_not_offered'
+          })
+        }
         for (const [id, rejected] of validation.rejected) {
           this.emit({
             kind: EventKind.ToolDispatch,
@@ -676,12 +708,36 @@ export class Agent {
           })
           this.onToolResult?.(rejected.toolName || 'unknown', id, rejected.output)
         }
+        const brakedTools = updateNotOfferedStreak(this.notOfferedStreak, validation.rejected.values())
+        for (const name of brakedTools) this.hardBannedTools.add(name)
         const toolCalls = validation.accepted
         const cleanText = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
         finalContent = cleanText || streamContent
 
         if (rawToolCalls.length > 0 && toolCalls.length === 0) {
           if (cleanText) messages.push({ role: 'assistant', content: cleanText })
+          const allowedNames = availableTools.map((t) => t.name)
+          if (brakedTools.length > 0) {
+            const brakeMsg = formatNotOfferedBrakeInstruction(brakedTools, allowedNames)
+            messages.push({ role: 'user', content: brakeMsg })
+            this.emit({
+              kind: EventKind.Notice,
+              notice: {
+                level: 'warn',
+                text: `已禁止继续调用：${brakedTools.join(', ')}（白名单连续拒绝）`
+              }
+            })
+            if (this.notOfferedBrakeEscalated) {
+              logger.agent('Stop: not-offered brake escalated after repeat', { brakedTools })
+              break
+            }
+            this.notOfferedBrakeEscalated = true
+            if (phase === 'plan') {
+              this.planForceSubmitOnly = true
+              this.planExplorationLocked = true
+            }
+            continue
+          }
           if (phase === 'plan' && this.planExplorationLocked) {
             this.planOfferedRejectRounds++
             const rejectedNames = [...new Set(
@@ -724,6 +780,7 @@ export class Agent {
 
         if (toolCalls.length > 0) {
           this.planOfferedRejectRounds = 0
+          this.notOfferedBrakeEscalated = false
         }
 
         // Final answer — plan phase must submit_plan (or ask); prose-only is nudged.

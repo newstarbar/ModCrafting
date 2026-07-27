@@ -6,6 +6,7 @@ import {
   formatContextLimit,
   formatCostCny,
   formatTokensK,
+  workingContextWindow,
   type UsageStats
 } from '../utils/usage'
 import type { McRuntimeSlot } from '../types/dev-status'
@@ -60,12 +61,17 @@ const StatusBar: React.FC<StatusBarProps> = ({
       ? '环境就绪'
       : toolchainProgress || '环境检查中'
 
-  const contextLimit = contextWindowLimit(modelId, providerId)
-  const contextLimitLabel = formatContextLimit(contextLimit)
+  const claimedLimit = contextWindowLimit(modelId, providerId)
+  const workingLimit = workingContextWindow(modelId, providerId)
+  const contextLimitLabel = formatContextLimit(workingLimit)
   const xpPercent = Math.min(100, Math.max(0, usage.contextPercent))
+  const claimedNote =
+    claimedLimit !== workingLimit
+      ? `；模型标称 ${formatContextLimit(claimedLimit)}`
+      : ''
   const contextTitle = xpPercent > 80
-    ? `上下文占用约 ${xpPercent}%（即将满载）`
-    : `上下文占用约 ${xpPercent}%（prompt ${usage.lastPromptTokens.toLocaleString()} / ${contextLimit.toLocaleString()}）`
+    ? `上下文占用约 ${xpPercent}%（即将满载 / 有效窗口 ${workingLimit.toLocaleString()}）`
+    : `上下文占用约 ${xpPercent}%（prompt ${usage.lastPromptTokens.toLocaleString()} / 有效窗口 ${workingLimit.toLocaleString()}${claimedNote}）`
 
   const { hit: cacheHit, miss: cacheMiss } = cacheHitMissForDisplay(
     usage.turnCacheHitTokens,

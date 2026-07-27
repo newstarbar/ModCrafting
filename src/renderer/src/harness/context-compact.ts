@@ -12,14 +12,23 @@ import { contentAsText } from './chat-message.ts'
 
 // ── Thresholds ──
 
-/** Messages within this window are never compacted. */
-export const RECENT_WINDOW = 6
+/** Messages within this window are never micro-compacted. */
+export const RECENT_WINDOW = 40
+
+/**
+ * After LLM auto-compact, only this many trailing messages stay raw
+ * (kept smaller than RECENT_WINDOW so summarization actually shrinks the prompt).
+ */
+const AUTO_COMPACT_RECENT = 12
 
 /** Tool results older than this many assistant turns are eligible for micro-compaction. */
-const MICRO_COMPACT_AGE = 3
+const MICRO_COMPACT_AGE = 8
 
 /** Soft floor: tool outputs below this estimated size stay raw. */
 const MICRO_TOOL_MIN_TOKENS = 120
+
+/** Longer head for key tool summaries after compaction. */
+const MICRO_SUMMARY_CHARS = 200
 
 /** Soft floor: tool_call arguments below this stay raw. */
 const MICRO_ARGS_MIN_CHARS = 400
@@ -81,11 +90,17 @@ export function warnTokenThreshold(modelContextWindow?: number): number {
  * Preserves the tool name and exit status so the model still knows what happened.
  */
 function compactToolResult(name: string, output: string): string {
+  const trimmed = output.trim()
+  // Failure / gate signals must stay intact so the model cannot "unsee" them.
+  if (/^(blocked:|Error:)/i.test(trimmed)) return output
+
   const size = estimateTokens(output)
   if (size < MICRO_TOOL_MIN_TOKENS) return output // too small to bother
 
-  const lines = output.trim().split('\n')
+  const lines = trimmed.split('\n')
   const lastLine = lines[lines.length - 1]?.trim() || ''
+  const nonEmpty = lines.filter((l) => l.trim().length > 0)
+  const head = nonEmpty.find((l) => l.trim().length > 0)?.trim().slice(0, MICRO_SUMMARY_CHARS) || ''
 
   // Extract exit code
   const exitMatch = lastLine.match(/\[exit code: (-?\d+)\]|\[退出码: (-?\d+)\]/)
@@ -101,18 +116,22 @@ function compactToolResult(name: string, output: string): string {
     else if (hasFailed) summary = '构建失败'
     else summary = '已执行'
     if (exitCode != null) summary += ` (exit ${exitCode})`
+    if (nonEmpty.length > 1) summary += ` · ${nonEmpty.length} 行`
   } else if (name === 'read_file') {
-    const firstLine = lines.find((l) => l.trim().length > 0)?.trim().slice(0, 80) || ''
-    summary = firstLine ? `读取: ${firstLine}` : '读取文件'
+    summary = head ? `读取(${nonEmpty.length}行): ${head}` : `读取文件(${nonEmpty.length}行)`
   } else if (name === 'list_directory') {
-    const count = lines.filter((l) => l.trim()).length
-    summary = `${count} 个条目`
+    summary = `${nonEmpty.length} 个条目`
   } else if (name === 'grep') {
-    const firstLine = lines.find((l) => l.trim().length > 0)?.trim().slice(0, 80) || ''
-    summary = firstLine || '搜索完成'
+    summary = head
+      ? `搜索(${nonEmpty.length}命中): ${head}`
+      : `搜索完成(${nonEmpty.length}命中)`
+  } else if (name === 'mc_inspect') {
+    summary = head
+      ? `检视(${nonEmpty.length}行): ${head}`
+      : `检视完成(${nonEmpty.length}行)`
   } else {
-    const firstLine = lines.find((l) => l.trim().length > 0)?.trim().slice(0, 60) || ''
-    summary = firstLine || output.trim().slice(0, 60)
+    summary = head || trimmed.slice(0, MICRO_SUMMARY_CHARS)
+    if (nonEmpty.length > 1) summary += ` · ${nonEmpty.length} 行`
   }
 
   return `[已压缩: ${name} — ${summary}]`
@@ -306,8 +325,8 @@ export async function autoCompact(
     summary = `[对话上下文过长，已自动压缩。原始 ${messages.length} 条消息，${before} tokens。请根据文件系统中的实际代码继续工作。]`
   }
 
-  // Build the replacement: summary replaces all but the RECENT_WINDOW
-  const recent = messages.slice(-RECENT_WINDOW)
+  // Build the replacement: summary replaces all but the AUTO_COMPACT_RECENT
+  const recent = messages.slice(-AUTO_COMPACT_RECENT)
   const sysMsg = messages.find((m) => m.role === 'system')
   const after = estimatePromptTokens([
     ...(sysMsg ? [sysMsg] : []),
@@ -351,13 +370,20 @@ export async function prepareMessages(
     return { messages: prepared, compacted: false }
   }
 
-  // Step 3: Auto-compact
+  // Step 3: Auto-compact — keep a smaller raw tail than micro-compact's window.
+  // If the tail itself is still huge (few giant messages), shrink further so
+  // summarization can actually reduce prompt size.
   const sysIdx = prepared.findIndex((m) => m.role === 'system')
   const nonSystem = sysIdx >= 0 ? prepared.slice(sysIdx + 1) : prepared
-  const recent = nonSystem.slice(-RECENT_WINDOW)
+  let keepRaw = Math.min(AUTO_COMPACT_RECENT, nonSystem.length)
+  let recent = nonSystem.slice(-keepRaw)
+  while (keepRaw > 2 && estimatePromptTokens(recent) > Math.floor(threshold * 0.45)) {
+    keepRaw = Math.max(2, Math.floor(keepRaw / 2))
+    recent = nonSystem.slice(-keepRaw)
+  }
   const oldMessages = sysIdx >= 0
-    ? [prepared[sysIdx], ...nonSystem.slice(0, -RECENT_WINDOW)]
-    : nonSystem.slice(0, -RECENT_WINDOW)
+    ? [prepared[sysIdx], ...nonSystem.slice(0, Math.max(0, nonSystem.length - keepRaw))]
+    : nonSystem.slice(0, Math.max(0, nonSystem.length - keepRaw))
 
   const result = await autoCompact(oldMessages, modelCall)
   onCompact?.(result)

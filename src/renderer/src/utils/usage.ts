@@ -2,6 +2,10 @@ import {
   getModelContextWindow,
   getModelPricing,
 } from '../../../shared/llm-providers.ts'
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  effectiveContextWindow,
+} from '../harness/context-compact.ts'
 
 export interface UsageStats {
   sessionTokens: number
@@ -50,6 +54,7 @@ export function estimateCostDelta(
   return inputCost + outputCost
 }
 
+/** Vendor-claimed context window (may be 1M marketing size). */
 export function contextWindowLimit(model?: string, providerId?: string): number {
   const fromRegistry = model ? getModelContextWindow(model, providerId) : undefined
   if (fromRegistry) return fromRegistry
@@ -60,7 +65,15 @@ export function contextWindowLimit(model?: string, providerId?: string): number 
   if (/256/.test(m)) return 256_000
   if (/(^|[^0-9])32k?([^0-9]|$)/.test(m)) return 32_000
   if (/(^|[^0-9])64k?([^0-9]|$)/.test(m)) return 64_000
-  return 128_000
+  return DEFAULT_CONTEXT_WINDOW
+}
+
+/**
+ * Working window used for the context bar and compaction pressure.
+ * Caps vendor 1M claims at 128k so the bar matches when auto-compact fires.
+ */
+export function workingContextWindow(model?: string, providerId?: string): number {
+  return effectiveContextWindow(contextWindowLimit(model, providerId))
 }
 
 export function formatContextLimit(limit: number): string {
@@ -70,7 +83,7 @@ export function formatContextLimit(limit: number): string {
 
 /**
  * Context-bar fill for the *current* API prompt (latest step), not a turn sum.
- * Passing accumulated multi-step promptTokens will overstate fill toward 100%.
+ * Denominator is the effective working window (min(claimed, 128k)), aligned with compaction.
  */
 export function contextPercentFromPrompt(
   promptTokens: number,
@@ -78,7 +91,7 @@ export function contextPercentFromPrompt(
   providerId?: string
 ): number {
   if (promptTokens <= 0) return 0
-  const limit = contextWindowLimit(model, providerId)
+  const limit = workingContextWindow(model, providerId)
   return Math.min(100, Math.round((promptTokens / limit) * 100))
 }
 

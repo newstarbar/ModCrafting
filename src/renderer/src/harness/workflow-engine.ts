@@ -12,6 +12,10 @@ import { extractCompileApiHints, hasSimilarDocSearch, normalizeDocSearchFingerpr
 import { FileSession } from "./file-session.ts";
 import { workflowStepToPlanStep } from "./workflow-types.ts";
 import { validateToolCalls } from "./tool-call-validator.ts";
+import {
+	formatNotOfferedBrakeInstruction,
+	updateNotOfferedStreak
+} from "./tool-not-offered-brake.ts";
 import { MAX_EXECUTE_CLARIFICATIONS } from "./clarify-validation.ts";
 import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
 import type { VerifyTarget } from "./verify-target.ts";
@@ -1179,6 +1183,9 @@ export class WorkflowEngine {
 			let writeTruncationPath = "";
 			let stripKnowledgeForTruncation = false;
 			let debuggerPrefetched = false;
+			const notOfferedStreak = new Map<string, number>();
+			const hardBannedTools = new Set<string>();
+			let notOfferedBrakeEscalated = false;
 			let attempt = 0;
 			let loopIterations = 0;
 			let modelNetworkRetries = 0;
@@ -1335,6 +1342,24 @@ export class WorkflowEngine {
 					}
 					this.emitRejected(id, rejected);
 				}
+				// Hard-ban tools that already hit the not-offered streak brake.
+				for (const call of [...validation.accepted]) {
+					if (!hardBannedTools.has(call.name)) continue;
+					validation.accepted = validation.accepted.filter((c) => c.id !== call.id);
+					const brakeOut = formatNotOfferedBrakeInstruction([call.name], offeredNames);
+					const banned: ToolResult = {
+						output: brakeOut,
+						error: brakeOut,
+						durationMs: 0,
+						ok: false,
+						toolName: call.name,
+						args: call.args,
+						exitCode: null,
+						errorKind: "tool_not_offered"
+					};
+					validation.rejected.set(call.id, banned);
+					this.emitRejected(call.id, banned);
+				}
 				const calls = validation.accepted;
 				if (calls.length === 0) {
 					if (completeStepAdvanceSignal && step.kind === "run" && runGatesSatisfied) {
@@ -1357,6 +1382,32 @@ export class WorkflowEngine {
 							}
 						});
 						break;
+					}
+					const brakedTools = updateNotOfferedStreak(notOfferedStreak, validation.rejected.values());
+					for (const name of brakedTools) hardBannedTools.add(name);
+					if (brakedTools.length > 0) {
+						const brakeMsg = formatNotOfferedBrakeInstruction(brakedTools, offeredNames);
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							validation.rejected,
+							brakeMsg
+						);
+						this.emit({
+							kind: EventKind.Notice,
+							notice: {
+								level: "warn",
+								text: `已禁止继续调用：${brakedTools.join(", ")}（白名单连续拒绝）`
+							}
+						});
+						if (notOfferedBrakeEscalated) {
+							attempt = maxIterations;
+							break;
+						}
+						notOfferedBrakeEscalated = true;
+						attempt++;
+						continue;
 					}
 					const onlySoftSubmit = [...validation.rejected.values()].every((r) => r.toolName === "submit_plan" && r.ok);
 					if (onlySoftSubmit) {
@@ -1407,6 +1458,22 @@ export class WorkflowEngine {
 				let controlBarrierReached = false;
 				let projectedDocSearchCount = fabricDocsSearchCount;
 				for (const call of calls) {
+					if (hardBannedTools.has(call.name)) {
+						const brakeOut = formatNotOfferedBrakeInstruction([call.name], offeredNames);
+						const rejected: ToolResult = {
+							output: brakeOut,
+							error: brakeOut,
+							durationMs: 0,
+							ok: false,
+							toolName: call.name,
+							args: call.args,
+							exitCode: null,
+							errorKind: "tool_not_offered"
+						};
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
 					if (executableAllowed.length >= 8) {
 						const rejected: ToolResult = {
 							output: `blocked: [tool_call_limit] 单轮最多执行 8 个工具，"${call.name}" 已延后。`,
@@ -1490,6 +1557,35 @@ export class WorkflowEngine {
 					if (call.name === "complete_step" || call.name === "ask_clarification") {
 						controlBarrierReached = true;
 					}
+				}
+
+				const policyBraked = updateNotOfferedStreak(notOfferedStreak, resultsById.values());
+				for (const name of policyBraked) hardBannedTools.add(name);
+				if (policyBraked.length > 0 && executableAllowed.length === 0) {
+					pendingEphemeralInstruction = this.appendToolRound(
+						baseMessages,
+						modelResult.text || streamText,
+						allCalls,
+						resultsById,
+						formatNotOfferedBrakeInstruction(policyBraked, offeredNames)
+					);
+					this.emit({
+						kind: EventKind.Notice,
+						notice: {
+							level: "warn",
+							text: `已禁止继续调用：${policyBraked.join(", ")}（白名单连续拒绝）`
+						}
+					});
+					if (notOfferedBrakeEscalated) {
+						attempt = maxIterations;
+						break;
+					}
+					notOfferedBrakeEscalated = true;
+					attempt++;
+					continue;
+				}
+				if (executableAllowed.length > 0) {
+					notOfferedBrakeEscalated = false;
 				}
 
 				if (executableAllowed.length === 0) {
