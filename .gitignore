@@ -1,15 +1,16 @@
 runtime/
-resources/gradle-9.5.0-bin.zip
-resources/_gradle_extract/
-resources/_jdk_extract/
-resources/_test_extract/
-resources/gradle-home-seed/
-resources/gradle-home-seed.zip
-resources/.gradle-home-seed.zip.stamp
-resources/_prefetch_runtime/
-resources/_prefetch_project/
-resources/_offline_verify_project/
-resources/gradle-home-seed/.temp
+resources/
+# resources/gradle-9.5.0-bin.zip
+# resources/_gradle_extract/
+# resources/_jdk_extract/
+# resources/_test_extract/
+# resources/gradle-home-seed/
+# resources/gradle-home-seed.zip
+# resources/.gradle-home-seed.zip.stamp
+# resources/_prefetch_runtime/
+# resources/_prefetch_project/
+# resources/_offline_verify_project/
+# resources/gradle-home-seed/.temp
 
 # 依赖与构建
 node_modules/
