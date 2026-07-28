@@ -22,7 +22,7 @@
 > **不懂 Gradle？没关系。** 右侧「游戏」面板用图形化进度展示启动状态；AI 负责写代码、改文件、触发构建。终端与命令行默认折叠在「高级」页，仅供开发者备用。
 
 > [!NOTE]
-> **自带离线工具链。** 安装包内置 JDK 21、Gradle 与 Fabric 依赖缓存种子，首次启动自动初始化；在无网络或弱网环境下仍可完成模组编译与 `runClient` 测试（依赖预取完成后）。
+> **精简安装包 + 首次下载。** 安装包仅内置精简 JRE（约 60 MB），首次启动从国内镜像下载 Gradle 与 Fabric 依赖种子（约 620 MB，5-10 分钟）；下载完成后在无网络或弱网环境下仍可完成模组编译与 `runClient` 测试。
 
 ---
 
@@ -48,7 +48,7 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 | **上下文压缩** | 老旧工具结果微压缩 + 接近 token 上限触发 LLM 摘要 + 跨轮诊断保留（近期 5 条用户反馈 + 2 条助手摘要） |
 | **图形化游戏测试** | 多实例、阶段进度条、人话摘要；独立 `gameDir` 与 Gradle 守护进程隔离，支持联机 mod 多开 |
 | **崩溃 → AI 修复** | 自动检测崩溃报告，一键附加到对话上下文；构建失败进入修复模式，先改码再构建 |
-| **离线优先工具链** | 捆绑 JDK 21 / Gradle 9.5 / 依赖种子；启动遮罩 + 进度条，环境未就绪前锁定构建 |
+| **离线优先工具链** | 精简 JRE 内置 + 首次下载 Gradle / Fabric 依赖种子（国内镜像）；启动遮罩 + 下载预估 + 进度条，环境未就绪前锁定构建 |
 | **高级开发者区** | 编译检查、可折叠构建日志、可展开 xterm、调试日志面板 |
 | **API 密钥本地加密** | 支持 DeepSeek 等 OpenAI 兼容端点；密钥仅存本机，不进仓库 |
 
@@ -71,12 +71,12 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 
 | 安装包 | 大小 | 网络 | 适用场景 |
 |--------|------|------|----------|
-| **完整版** `ModCrafting Setup 1.0.0.exe` | ~1–1.5 GB | 首次复制离线包，之后可离线 | **推荐**。日常开发、网络不稳定 |
-| **便携版** `ModCrafting 1.0.0 Portable.exe` | ~80–150 MB | **首次必须联网**下载工具链（约 1GB） | U 盘、临时机器、可接受首启下载 |
+| **完整版** `ModCrafting Setup 1.0.0.exe` | ~400-500 MB | 首次启动下载依赖（约 620 MB，国内镜像 5-10 分钟），之后可离线 | **推荐**。日常开发、网络不稳定 |
+| **便携版** `ModCrafting 1.0.0 Portable.exe` | ~80-150 MB | **首次必须联网**下载工具链（约 1 GB） | U 盘、临时机器、可接受首启下载 |
 
 > 文件名中的版本号与 Release 标签一致（例如标签 `v1.0.0` 对应 `1.0.0`）。
 
-- **完整版（Setup）**：内置 JDK、Gradle、Fabric 离线依赖；首次启动复制到 `runtime/`，完成后可离线构建。
+- **完整版（Setup）**：安装包仅含精简 JRE（约 60 MB）；首次启动从国内镜像（Gitee + 腾讯云）下载 Gradle 与 Fabric 依赖种子到 `runtime/`，完成后可完全离线构建。
 - **便携版（Portable）**：仅含应用本体与小文件；首次启动自动联网下载 JDK / Gradle / Fabric 依赖。
 
 ### 应用内更新
@@ -194,23 +194,29 @@ cd ModCrafting
 npm install
 ```
 
-### 2. 准备捆绑工具链
+### 2. 准备工具链
 
 ```bash
 # 下载并解压 JDK 21 + Gradle 9.5 到 resources/
-npm run setup:toolchain
+npm run toolchain:setup
+
+# 精简 Gradle 发行版（移除文档/示例，节省 30-50%）
+npm run toolchain:strip-gradle
+
+# 构建 jlink 精简 JRE（约 60 MB，仅含所需 JDK 模块）
+npm run toolchain:build-jre
 
 # 验证工具链文件是否齐全
-npm run verify:toolchain
+npm run toolchain:verify
 ```
 
 ### 3. 预取 Fabric 依赖（需联网，约 1 GB）
 
 ```bash
-npm run prefetch:deps
+npm run toolchain:prefetch
 ```
 
-会在 `resources/gradle-home-seed/` 生成离线依赖种子，打包时一并分发。
+会在 `resources/gradle-home-seed/` 生成离线依赖种子。打包前还会压缩为 `gradle-home-seed.tar.xz` 并分片（用于首次启动下载）。
 
 ### 4. 开发与打包
 
@@ -237,21 +243,29 @@ npm run build:win:portable
 |------|------|
 | `npm run test` | 运行 harness 单元测试 |
 | `npm run toolchain:setup` | 下载 JDK 21 + Gradle 发行版 |
+| `npm run toolchain:strip-gradle` | 精简 Gradle 发行版（移除文档/示例） |
+| `npm run toolchain:build-jre` | 构建 jlink 精简 JRE（约 60 MB） |
 | `npm run toolchain:prefetch` | 预取 Fabric/Minecraft 依赖到种子目录 |
 | `npm run toolchain:verify` | 检查 JDK / Gradle / Wrapper |
 | `npm run toolchain:verify-offline` | 验证离线构建流程 |
 | `npm run build:win` | 构建 Setup + Portable（推荐发版用） |
-| `npm run build:win:setup` | 仅构建 NSIS 完整版（含离线工具链） |
+| `npm run build:win:setup` | 仅构建 NSIS 完整版（含精简 JRE，不含 Gradle/seed） |
 | `npm run build:win:portable` | 仅构建轻量便携版（不含 JDK/Gradle/seed） |
 | `npm run assets:icon` | 从 appIcon.png / installerIcon.png 生成 .ico |
 | `npm run release:manifest` | 渲染 `packaging/update-manifest.json`（发布用） |
+| `npm run release:notes` | 渲染 `packaging/release-body.md`（Release 正文） |
 | `npm run clean:local` | 清理本地 release/out 等生成物 |
 
 ### 发布新版本
 
 1. 更新 `package.json` 的 `version`
 2. 打 tag 并推送：`git tag v1.0.0 && git push origin v1.0.0`
-3. GitHub Actions 自动构建 Setup + Portable、发布 GitHub Release、同步 Gitee（需配置仓库 Secret `GITEE_TOKEN`）
+3. GitHub Actions 自动：
+   - 构建 Setup + Portable（含精简 JRE）
+   - 生成 seed 分片（`gradle-home-seed.tar.xz` 分片为 90 MB 块）
+   - 发布 GitHub Release（Setup + Portable + seed 分片）
+   - 同步 Gitee Release（Setup + Portable + seed 分片，需配置 Secret `GITEE_TOKEN`）
+   - 更新 `packaging/update-manifest.json` 到 main
 4. 详见 [`RELEASE.md`](RELEASE.md)（Release 正文由 CI 根据 commit 自动生成，无需手改）
 
 ---
@@ -299,7 +313,7 @@ ModCrafting/
 │   ├── preload/        # 安全桥接 API
 │   └── renderer/       # React UI：对话、游戏面板、项目向导
 ├── scripts/            # 构建脚本（toolchain / assets / packaging / release / test）
-├── resources/          # JDK / Gradle / 依赖种子（大部分由脚本生成，不进 Git）
+├── resources/          # JRE / Gradle / 依赖种子 / seed 分片（由脚本生成，不进 Git）
 ├── packaging/          # 安装包资源：图标、NSIS 脚本、许可说明
 └── package.json
 ```
@@ -311,10 +325,10 @@ ModCrafting/
 <details>
 <summary><strong>启动时工具链初始化失败</strong></summary>
 
-1. 确认 `resources/jdk-21` 与 `resources/gradle-9.5` 存在且完整  
-2. 运行 `npm run verify:toolchain` 查看缺失项  
-3. 便携版首次启动会复制 `runtime/`，磁盘需预留 ≥ 2 GB  
-4. 点击遮罩上的「重试」重新初始化  
+1. **完整版首次启动**：会从国内镜像下载 Gradle + Fabric 依赖种子（约 620 MB），请确保网络稳定
+2. **完整版重复启动失败**：检查 `runtime/` 目录是否可写，确认磁盘空间 ≥ 2 GB
+3. 运行 `npm run toolchain:verify` 查看缺失项（开发者）
+4. 点击遮罩上的「重试」重新初始化；若网络问题持续，可尝试切换网络环境
 
 </details>
 
@@ -368,9 +382,9 @@ ModCrafting/
 
 提交前请确认：
 
-- 未包含 API Key、`.env`、个人路径  
-- 未提交 `node_modules/`、`release/`、`runtime/`、`resources/jdk-21/` 等大文件  
-- 遵循现有代码风格，改动范围尽量聚焦  
+- 未包含 API Key、`.env`、个人路径
+- 未提交 `node_modules/`、`release/`、`runtime/`、`resources/jdk-21/`、`resources/jre-21-minimal/`、`resources/seed-shards/` 等大文件
+- 遵循现有代码风格，改动范围尽量聚焦
 
 ---
 
@@ -425,7 +439,7 @@ Built by [@newstarbar](https://github.com/newstarbar) and contributors
 - Vibecoding agent with Plan → Execute loop, 30+ tools, and defensive guardrails (read-before-write, repeat-success guard, empty-build detection, JSON-truncation recovery)
 - Fabric project wizard + 7 built-in quick-create templates (block / item / food / entity / tool / armor / recipe)
 - Context compaction: micro-compact old tool results, LLM summary near token limit, cross-turn diagnosis retention
-- Bundled offline toolchain (JDK 21, Gradle 9.5, dependency seed)
+- Slim installer (~400-500 MB) with bundled minimal JRE; first launch downloads Gradle + Fabric deps (~620 MB via domestic mirrors)
 - Graphical game test panel with multi-instance support
 - Crash reports → one-click send to AI for repair; build failures enter automatic repair mode
 
@@ -435,8 +449,9 @@ Built by [@newstarbar](https://github.com/newstarbar) and contributors
 git clone https://github.com/newstarbar/ModCrafting.git
 cd ModCrafting
 npm install
-npm run setup:toolchain
-npm run prefetch:deps
+npm run toolchain:setup
+npm run toolchain:build-jre
+npm run toolchain:prefetch
 npm run dev
 ```
 

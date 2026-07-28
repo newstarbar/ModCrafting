@@ -138,10 +138,10 @@ function buildBody() {
   const githubBase = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${tag}`
   const prev = previousTag(tag)
 
-  const downloadTable = `| 版本 | 说明 | Gitee | GitHub |
-|------|------|-------|--------|
-| **完整版 Setup** | 内置 JDK / Gradle / Fabric 离线依赖；支持应用内更新 | [Gitee 下载](${gitee.setup}) | [GitHub 下载](${githubBase}/ModCrafting%20Setup%20${ver}.exe) |
-| **便携版 Portable** | 体积小；**首次需联网**下载工具链（约 1 GB） | [Gitee 下载](${gitee.portable}) | [GitHub 下载](${githubBase}/ModCrafting%20${ver}%20Portable.exe) |`
+  const downloadTable = `| 版本 | 大小 | 说明 | Gitee | GitHub |
+|------|------|------|-------|--------|
+| **完整版 Setup** | ~400-500 MB | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](${gitee.setup}) | [GitHub 下载](${githubBase}/ModCrafting%20Setup%20${ver}.exe) |
+| **便携版 Portable** | ~80-150 MB | 体积小；**首次需联网**下载工具链（约 1 GB） | [Gitee 下载](${gitee.portable}) | [GitHub 下载](${githubBase}/ModCrafting%20${ver}%20Portable.exe) |`
 
   const changelog = buildChangelogSection(prev, tag)
 
@@ -155,13 +155,13 @@ ${downloadTable}
 
 ### 如何选择
 
-- **日常开发 / 网络不稳定**：选 **Setup 完整版**
+- **日常开发 / 网络不稳定**：选 **Setup 完整版**（安装包小，首次下载依赖后完全离线）
 - **U 盘 / 临时机器 / 可接受首启下载**：选 **Portable 便携版**
 
 ## 提示
 
 - ModCrafting 与 Mojang / Microsoft **无官方关联**，使用本软件须遵守 [Minecraft EULA](https://www.minecraft.net/zh-hans/eula)，并自备合法游戏副本
-- **完整版**：首次启动会初始化 \`runtime/\` 离线环境（约数分钟），完成后可离线构建模组
+- **完整版**：安装包仅含精简 JRE（约 60 MB），首次启动会从国内镜像下载 Gradle 与 Fabric 依赖种子（约 620 MB），完成后可完全离线构建模组
 - **便携版**：工具链下载至系统临时目录的 \`runtime/\`，设置保存在 \`%AppData%\\modcrafting\`
 
 ## 升级说明

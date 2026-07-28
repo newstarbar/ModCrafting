@@ -184,6 +184,34 @@ function collectReleaseAssets(dir) {
   return files
 }
 
+/**
+ * 收集 seed 分片文件（manifest.json + seed.part.001 ~ seed.part.00N）。
+ * NSIS 瘦包首次启动时从 Gitee 下载这些分片来恢复 Fabric 依赖种子。
+ */
+function collectSeedShards() {
+  const shardsDir = path.join(root, 'resources', 'seed-shards')
+  if (!existsSync(shardsDir)) {
+    console.warn(`[gitee] seed shards dir not found: ${shardsDir}`)
+    return []
+  }
+
+  const files = []
+  for (const name of readdirSync(shardsDir)) {
+    const full = path.join(shardsDir, name)
+    if (!statSync(full).isFile()) continue
+    // manifest.json + seed.part.NNN
+    if (name === 'manifest.json' || /^seed\.part\.\d{3}$/.test(name)) {
+      files.push(full)
+    }
+  }
+
+  if (files.length === 0) {
+    console.warn('[gitee] no seed shards found in resources/seed-shards/')
+  }
+
+  return files
+}
+
 function readReleaseBody() {
   const bodyPath = path.join(root, 'packaging', 'release-body.md')
   if (!existsSync(bodyPath)) {
@@ -312,7 +340,10 @@ async function uploadAsset(releaseId, filePath) {
 }
 
 async function main() {
-  const assets = collectReleaseAssets(releaseDir)
+  const releaseAssets = collectReleaseAssets(releaseDir)
+  const seedShards = collectSeedShards()
+  const assets = [...releaseAssets, ...seedShards]
+
   if (assets.length === 0) {
     console.error(`[gitee] No release assets in ${releaseDir}`)
     process.exit(1)

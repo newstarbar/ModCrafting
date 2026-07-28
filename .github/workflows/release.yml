@@ -34,6 +34,7 @@ jobs:
             resources/jdk-21
             resources/gradle-9.5
             resources/gradle-home-seed
+            resources/jre-21-minimal
           key: toolchain-${{ hashFiles('resources/fabric-versions.json') }}
 
       - name: Cache Minecraft client assets
@@ -59,11 +60,29 @@ jobs:
       - name: Setup full toolchain
         run: npm run toolchain:setup
 
+      - name: Strip Gradle distribution
+        run: npm run toolchain:strip-gradle
+
+      - name: Build jlink JRE
+        run: npm run toolchain:build-jre
+
       - name: Prefetch Fabric deps
         run: npm run toolchain:prefetch
 
       - name: Verify toolchain
         run: npm run toolchain:verify
+
+      - name: Generate Fabric symbol index
+        run: npm run toolchain:symbol-index
+
+      - name: Prepare seed for packaging
+        run: node scripts/toolchain/prepare-seed-for-packaging.mjs
+
+      - name: Archive gradle home seed (tar.xz)
+        run: node scripts/toolchain/archive-gradle-home-seed.mjs
+
+      - name: Split seed shards
+        run: node scripts/release/split-seed-shards.mjs
 
       - name: Prepare installer assets
         run: |
@@ -103,6 +122,23 @@ jobs:
             echo "Portable not found: $PORTABLE"
             exit 1
           fi
+
+      - name: Upload seed shards to GitHub Release
+        shell: bash
+        run: |
+          SHARDS_DIR="resources/seed-shards"
+          if [ ! -d "$SHARDS_DIR" ]; then
+            echo "Seed shards dir not found: $SHARDS_DIR"
+            exit 1
+          fi
+          echo "Uploading seed shards..."
+          for f in "$SHARDS_DIR"/*; do
+            if [ -f "$f" ]; then
+              echo "  uploading $(basename "$f")"
+              gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+            fi
+          done
+          echo "Seed shards uploaded."
 
       - name: Apply release notes to GitHub Release
         shell: bash

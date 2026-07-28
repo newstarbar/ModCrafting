@@ -2,12 +2,37 @@
 
 Release 正文由 CI **自动生成**，无需每次手改 Markdown。格式参考 [NapCatQQ Releases](https://github.com/NapNeko/NapCatQQ/releases)。
 
+## 瘦包策略（v1.0.0+）
+
+为兼顾国内网络环境与安装包体积，v1.0.0 起采用**瘦包 + 首次下载**策略：
+
+| 资源 | 位置 | 大小 |
+|------|------|------|
+| 精简 JRE（jlink） | 安装包内置 | ~60 MB |
+| Gradle 9.5 精简版 | 首次从腾讯云镜像下载 | ~120 MB |
+| Fabric 依赖种子 | 首次从 Gitee Release 下载分片 | ~500 MB |
+| **安装包总计** | | **~400-500 MB** |
+| **首次下载量** | | **~620 MB** |
+
+用户首次启动时会看到**下载预估对话框**，确认后开始下载（国内镜像 5-10 分钟）。下载完成后可完全离线使用。
+
+## seed 分片
+
+Fabric 依赖种子（`gradle-home-seed.tar.xz`）压缩后约 500 MB，超过 Gitee 单文件 100 MB 限制。CI 会自动分片：
+
+- 分片大小：90 MB / 块
+- 文件命名：`seed.part.001` ~ `seed.part.00N` + `manifest.json`（含 SHA256 校验）
+- 生成脚本：[`scripts/release/split-seed-shards.mjs`](scripts/release/split-seed-shards.mjs)
+- 下载器：[`src/main/seed-downloader.ts`](src/main/seed-downloader.ts)（多镜像回退：Gitee → GitHub）
+
+CI 上传到 GitHub Release 和 Gitee Release 后，应用首次启动自动从 Gitee 下载分片、校验、合并、解压。
+
 ## 自动生成的内容
 
 打 tag `v*` 推送后，[`scripts/release/render-release-notes.mjs`](scripts/release/render-release-notes.mjs) 会生成 `packaging/release-body.md`，包含：
 
 - 中文标题与文档链接
-- Setup / Portable 下载表（GitHub + Gitee 直链）
+- Setup / Portable 下载表（GitHub + Gitee 直链 + 大小 + 说明）
 - 版本选择、升级说明、合规提示
 - **变更日志**：从 `git log` 按 commit 信息自动归类为「新增 / 修复 / 优化」
 - Compare 链接（如 `v1.0.0...v1.0.1`）
@@ -21,18 +46,36 @@ Release 正文由 CI **自动生成**，无需每次手改 Markdown。格式参�
 
 1. 更新 `package.json` 的 `version`
 2. 提交代码，commit 信息建议使用规范前缀（便于自动归类）：
-   - `feat:` / `新增:` → ✨ 新增
-   - `fix:` / `修复:` → 🐛 修复
-   - `perf:` / `优化:` / `refactor:` → 🔧 优化
+   - `feat:` / `新增:` → 新增
+   - `fix:` / `修复:` → 修复
+   - `perf:` / `优化:` / `refactor:` → 优化
    - `chore:` / `ci:` / `build:` → 默认不展示在 Release 正文
 3. 打 tag 并推送：`git tag v1.0.1 && git push origin v1.0.1`
-4. GitHub Actions 自动：构建 → 发布 GitHub Release → 同步 Gitee → 更新 `packaging/update-manifest.json` 到 main
+4. GitHub Actions 自动：
+   - 构建工具链（setup → strip-gradle → build-jre → prefetch → archive → split-seed）
+   - 构建 Setup + Portable
+   - 发布 GitHub Release（Setup + Portable + seed 分片）
+   - 同步 Gitee Release（Setup + Portable + seed 分片）
+   - 更新 `packaging/update-manifest.json` 到 main
+
+## CI 构建步骤（toolchain）
+
+| 步骤 | 命令 | 产物 |
+|------|------|------|
+| 下载 JDK + Gradle | `npm run toolchain:setup` | `resources/jdk-21/`, `resources/gradle-9.5/` |
+| 精简 Gradle | `npm run toolchain:strip-gradle` | 移除 docs/samples/src |
+| 构建 jlink JRE | `npm run toolchain:build-jre` | `resources/jre-21-minimal/` (~60 MB) |
+| 预取 Fabric 依赖 | `npm run toolchain:prefetch` | `resources/gradle-home-seed/` |
+| 生成符号索引 | `npm run toolchain:symbol-index` | `resources/fabric-symbols/` |
+| 准备 seed | `node scripts/toolchain/prepare-seed-for-packaging.mjs` | 清理 + 规范化 |
+| 压缩 seed | `node scripts/toolchain/archive-gradle-home-seed.mjs` | `resources/gradle-home-seed.tar.xz` |
+| 分片 seed | `node scripts/release/split-seed-shards.mjs` | `resources/seed-shards/` |
 
 ## Gitee 配置
 
 见 [`packaging/gitee-config.json`](packaging/gitee-config.json)。GitHub Actions 还需 Secret `GITEE_TOKEN`。
 
-CI 发版时会先执行 `release:push-gitee`（把当前 commit + tag 推到 Gitee），再 `release:sync-gitee` 上传附件。若 Gitee 仓库没有对应代码，会报「创建标签失败」。
+CI 发版时会先执行 `release:push-gitee`（把当前 commit + tag 推到 Gitee），再 `release:sync-gitee` 上传附件（含 seed 分片）。若 Gitee 仓库没有对应代码，会报「创建标签失败」。
 
 ## 本地预览 Release 正文
 
@@ -40,3 +83,13 @@ CI 发版时会先执行 `release:push-gitee`（把当前 commit + tag 推到 Gi
 npm run release:notes -- v1.0.0
 # 输出 packaging/release-body.md
 ```
+
+## 本地生成 seed 分片（调试用）
+
+```bash
+# 前置：需已运行 toolchain:setup + toolchain:prefetch
+node scripts/toolchain/archive-gradle-home-seed.mjs
+node scripts/release/split-seed-shards.mjs
+# 产物在 resources/seed-shards/
+```
+
