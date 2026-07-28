@@ -32,10 +32,11 @@ import java.util.List;
 import java.util.Map;
 
 public final class GameQueries {
-    private static final DateTimeFormatter SHOT_TS =
-            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter SHOT_TS = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
+            .withZone(ZoneOffset.UTC);
 
-    private GameQueries() {}
+    private GameQueries() {
+    }
 
     public static Map<String, Object> health() {
         MinecraftClient client = MinecraftClient.getInstance();
@@ -122,11 +123,16 @@ public final class GameQueries {
         String kind = "other";
         String simple = screen.getClass().getSimpleName();
         String className = screen.getClass().getName();
-        if (isLoadingScreen(simple, className)) kind = "loading";
-        else if (screen instanceof TitleScreen) kind = "title";
-        else if (screen instanceof SelectWorldScreen) kind = "select_world";
-        else if (screen instanceof MultiplayerScreen) kind = "multiplayer";
-        else if (screen.shouldPause()) kind = "pause_or_menu";
+        if (isLoadingScreen(simple, className))
+            kind = "loading";
+        else if (screen instanceof TitleScreen)
+            kind = "title";
+        else if (screen instanceof SelectWorldScreen)
+            kind = "select_world";
+        else if (screen instanceof MultiplayerScreen)
+            kind = "multiplayer";
+        else if (screen.shouldPause())
+            kind = "pause_or_menu";
         out.put("kind", kind);
         out.put("pausesGame", screen.shouldPause());
         out.put("scaledWidth", client.getWindow().getScaledWidth());
@@ -159,7 +165,8 @@ public final class GameQueries {
         List<Map<String, Object>> list = new ArrayList<>();
         int index = 0;
         for (var element : screen.children()) {
-            if (!(element instanceof net.minecraft.client.gui.widget.ClickableWidget widget)) continue;
+            if (!(element instanceof net.minecraft.client.gui.widget.ClickableWidget widget))
+                continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("index", index++);
             row.put("type", widget.getClass().getSimpleName());
@@ -173,7 +180,8 @@ public final class GameQueries {
             row.put("centerX", widget.getX() + widget.getWidth() / 2.0);
             row.put("centerY", widget.getY() + widget.getHeight() / 2.0);
             list.add(row);
-            if (list.size() >= 64) break;
+            if (list.size() >= 64)
+                break;
         }
         return list;
     }
@@ -215,9 +223,11 @@ public final class GameQueries {
         Box box = player.getBoundingBox().expand(r);
         List<Map<String, Object>> entities = new ArrayList<>();
         for (Entity entity : world.getOtherEntities(player, box)) {
-            if (player.squaredDistanceTo(entity) > r * r) continue;
+            if (player.squaredDistanceTo(entity) > r * r)
+                continue;
             entities.add(entitySummary(entity));
-            if (entities.size() >= 64) break;
+            if (entities.size() >= 64)
+                break;
         }
         List<Map<String, Object>> blocks = new ArrayList<>();
         BlockPos origin = player.getBlockPos();
@@ -227,18 +237,22 @@ public final class GameQueries {
                 for (int dz = -sample; dz <= sample; dz++) {
                     BlockPos pos = origin.add(dx, dy, dz);
                     var state = world.getBlockState(pos);
-                    if (state.isAir()) continue;
+                    if (state.isAir())
+                        continue;
                     Map<String, Object> b = new LinkedHashMap<>();
                     b.put("x", pos.getX());
                     b.put("y", pos.getY());
                     b.put("z", pos.getZ());
                     b.put("blockId", Registries.BLOCK.getId(state.getBlock()).toString());
                     blocks.add(b);
-                    if (blocks.size() >= 48) break;
+                    if (blocks.size() >= 48)
+                        break;
                 }
-                if (blocks.size() >= 48) break;
+                if (blocks.size() >= 48)
+                    break;
             }
-            if (blocks.size() >= 48) break;
+            if (blocks.size() >= 48)
+                break;
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
@@ -248,39 +262,72 @@ public final class GameQueries {
         return out;
     }
 
+    /** 防重入标志：截图进行中拒绝新触发 */
+    private static volatile boolean screenshotInProgress = false;
+    /** 冷却时间：两次截图间至少间隔 500ms */
+    private static long lastScreenshotTime = 0;
+    private static final long SCREENSHOT_COOLDOWN_MS = 500;
+
     public static Map<String, Object> screenshot() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        Path dir = client.runDirectory.toPath().resolve("modcrafting-shots");
-        try {
-            Files.createDirectories(dir);
-        } catch (IOException e) {
-            return error("IO_ERROR", "无法创建截图目录: " + e.getMessage());
+        // 防重入：截图进行中拒绝新触发
+        if (screenshotInProgress) {
+            return error("BUSY", "截图进行中，请稍后再试");
         }
-        String name = "shot-" + SHOT_TS.format(Instant.now()) + ".png";
-        Path file = dir.resolve(name);
-        var image = ScreenshotRecorder.takeScreenshot(client.getFramebuffer());
+        // 冷却：两次截图间至少间隔 SCREENSHOT_COOLDOWN_MS
+        long now = System.currentTimeMillis();
+        if (now - lastScreenshotTime < SCREENSHOT_COOLDOWN_MS) {
+            return error("BUSY", "截图请求过于频繁，请稍后再试");
+        }
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.getFramebuffer() == null) {
+            return error("NOT_READY", "客户端或帧缓冲未就绪");
+        }
+        // 严格限制：只在玩家真正进入世界、且不在加载覆盖层时截图
+        if (client.player == null || client.world == null) {
+            return error("NOT_IN_WORLD", "玩家尚未进入世界，无法截图");
+        }
+        if (client.getOverlay() != null) {
+            return error("NOT_IN_WORLD", "世界正在加载中，无法截图");
+        }
+
+        screenshotInProgress = true;
+        lastScreenshotTime = now;
         try {
-            image.writeTo(file);
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("ok", true);
-            out.put("path", file.toAbsolutePath().toString());
-            out.put("relativePath", "modcrafting-shots/" + name);
-            out.put("width", image.getWidth());
-            out.put("height", image.getHeight());
-            byte[] bytes = Files.readAllBytes(file);
-            // Cap embedded base64 for vision models (~1.5MB raw ≈ 2MB base64)
-            if (bytes.length <= 1_500_000) {
-                out.put("base64", Base64.getEncoder().encodeToString(bytes));
-                out.put("mimeType", "image/png");
-            } else {
-                out.put("base64", null);
-                out.put("note", "截图过大，未内嵌 base64，请使用 path 读取文件");
+            Path dir = client.runDirectory.toPath().resolve("modcrafting-shots");
+            try {
+                Files.createDirectories(dir);
+            } catch (IOException e) {
+                return error("IO_ERROR", "无法创建截图目录: " + e.getMessage());
             }
-            return out;
-        } catch (IOException e) {
-            return error("IO_ERROR", "截图写入失败: " + e.getMessage());
+            String name = "shot-" + SHOT_TS.format(Instant.now()) + ".png";
+            Path file = dir.resolve(name);
+            var image = ScreenshotRecorder.takeScreenshot(client.getFramebuffer());
+            try {
+                image.writeTo(file);
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("ok", true);
+                out.put("path", file.toAbsolutePath().toString());
+                out.put("relativePath", "modcrafting-shots/" + name);
+                out.put("width", image.getWidth());
+                out.put("height", image.getHeight());
+                byte[] bytes = Files.readAllBytes(file);
+                // Cap embedded base64 for vision models (~1.5MB raw ≈ 2MB base64)
+                if (bytes.length <= 1_500_000) {
+                    out.put("base64", Base64.getEncoder().encodeToString(bytes));
+                    out.put("mimeType", "image/png");
+                } else {
+                    out.put("base64", null);
+                    out.put("note", "截图过大，未内嵌 base64，请使用 path 读取文件");
+                }
+                return out;
+            } catch (IOException e) {
+                return error("IO_ERROR", "截图写入失败: " + e.getMessage());
+            } finally {
+                image.close();
+            }
         } finally {
-            image.close();
+            screenshotInProgress = false;
         }
     }
 
@@ -331,7 +378,8 @@ public final class GameQueries {
         List<Map<String, Object>> list = new ArrayList<>();
         for (int i = from; i < to; i++) {
             ItemStack stack = inv.getStack(i);
-            if (stack.isEmpty()) continue;
+            if (stack.isEmpty())
+                continue;
             Map<String, Object> row = stackSummary(stack);
             row.put("slot", i);
             list.add(row);

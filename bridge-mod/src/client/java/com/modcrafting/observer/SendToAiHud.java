@@ -84,7 +84,7 @@ public final class SendToAiHud {
     }
 
     private static void tick(MinecraftClient client) {
-        while (sendKey.wasPressed()) {
+        if (sendKey.wasPressed()) {
             SendToAiActions.sendAsync();
         }
 
