@@ -11,8 +11,8 @@ import {
 
 test('plan exploration lock kick demands submit_plan', () => {
   assert.match(PLAN_EXPLORATION_LOCK_KICK, /submit_plan/)
-  assert.match(PLAN_EXPLORATION_LOCK_KICK, /已锁定/)
-  assert.equal(MAX_READONLY_ROUNDS, 6)
+  assert.match(PLAN_EXPLORATION_LOCK_KICK, /建议尽快提交/)
+  assert.equal(MAX_READONLY_ROUNDS, 15)
 })
 
 test('text-only plan replies are nudged up to MAX then stop', () => {
@@ -23,10 +23,11 @@ test('text-only plan replies are nudged up to MAX then stop', () => {
   assert.equal(shouldNudgePlanSubmit(MAX_PLAN_SUBMIT_NUDGE_ROUNDS), false)
 })
 
-test('post-lock tools are only submit_plan and ask_clarification', () => {
+test('post-lock tools include plan-closing plus read-only exploration', () => {
   assert.equal(isPlanPostLockTool('submit_plan'), true)
   assert.equal(isPlanPostLockTool('ask_clarification'), true)
+  assert.equal(isPlanPostLockTool('grep'), true)
+  assert.equal(isPlanPostLockTool('list_directory'), true)
   assert.equal(isPlanPostLockTool('read_file'), false)
   assert.equal(isPlanPostLockTool('fabric_docs_search'), false)
-  assert.equal(isPlanPostLockTool('grep'), false)
 })

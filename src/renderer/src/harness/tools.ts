@@ -74,7 +74,7 @@ function truncateOutput(output: string): string {
   const half = MAX_TOOL_OUTPUT / 2
   return (
     output.slice(0, half) +
-    `\n\n...[TRUNCATED ${output.length - MAX_TOOL_OUTPUT} bytes]...\n\n` +
+    `\n\n...[内容过长，已截断]...\n\n` +
     output.slice(-half)
   )
 }

@@ -73,7 +73,7 @@ const MAX_FINAL_READINESS_BLOCKS = 3;
 const EXPLORATION_TOOL_NAMES = ["list_directory", "read_file", "grep", "read_error_log", "run_command"];
 const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES;
 const CONTROL_TOOL_NAMES = ["complete_step"];
-const PLAN_POST_LOCK_TOOL_NAMES = new Set(["submit_plan", "ask_clarification"]);
+const PLAN_POST_LOCK_TOOL_NAMES = new Set(["submit_plan", "ask_clarification", "grep", "list_directory"]);
 const PLAN_READONLY_TOOL_NAMES = new Set([
 	"read_file",
 	"list_directory",

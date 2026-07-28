@@ -228,7 +228,7 @@ async function runWithCommandStream(ctx: ToolContext, run: () => Promise<{ outpu
 // ── read_file ──
 export const readFileTool: Tool & Previewer = {
 	name: "read_file",
-	description: "读取文件内容（含行号）。支持分页：offset 起始行（1-based），limit 最大行数。默认读前 200 行。",
+	description: "读取文件内容（含行号）。支持分页：offset 起始行（1-based），limit 最大行数。默认读前 400 行。",
 	schema: {
 		type: "object",
 		properties: {
@@ -253,12 +253,12 @@ export const readFileTool: Tool & Previewer = {
 			const lines = content.split("\n");
 			const total = lines.length;
 			const offset = Math.max(1, Number(args.offset) || 1);
-			const limit = args.limit !== undefined ? Number(args.limit) : 200;
+			const limit = args.limit !== undefined ? Number(args.limit) : 400;
 			const effectiveLimit = limit === 0 ? total : Math.min(limit, total);
 			const end = Math.min(offset + effectiveLimit - 1, total);
 			const page = lines.slice(offset - 1, end);
 			const numbered = page.map((line, i) => `${offset + i} | ${line}`).join("\n");
-			const header = `文件: ${relPath}（共 ${total} 行，显示 ${offset}-${end} 行）`;
+			const header = `文件: ${relPath}（第 ${offset}-${end} 行）`;
 			const footer = end < total ? `\n（剩余 ${total - end} 行。用 offset=${end + 1} 继续读取）` : "";
 			ctx.fileSession?.markRead(relPath);
 			return `${note ? note + "\n" : ""}${header}\n${numbered}${footer}`;

@@ -1,14 +1,14 @@
 /** Plan-phase gates: exploration cap → force submit_plan (no prose-only exit). */
 
-export const MAX_READONLY_ROUNDS = 6
+export const MAX_READONLY_ROUNDS = 15
 export const MAX_PLAN_OFFERED_REJECT_ROUNDS = 2
 /** Text-only replies after lock before giving up (controller may still format-retry). */
 export const MAX_PLAN_SUBMIT_NUDGE_ROUNDS = 3
 
 export const PLAN_EXPLORATION_LOCK_KICK =
-  '【系统】计划阶段已探索足够。list_directory/read_file/grep 已锁定。' +
-  '请立即调用 submit_plan 提交结构化计划；信息仍不足时用 ask_clarification（须带 options）。' +
-  '不要再尝试列出目录或搜索源码。'
+  '【系统】计划阶段勘探轮次较多，建议尽快提交。' +
+  '请调用 submit_plan 提交结构化计划；信息仍不足时用 ask_clarification（须带 options）。' +
+  '只读工具（list_directory/read_file/grep）仍可用，但请聚焦关键文件。'
 
 export const PLAN_SUBMIT_NUDGE =
   '【系统】计划阶段禁止仅用文字结束。请立即调用 submit_plan 提交结构化计划' +
@@ -19,7 +19,8 @@ export function shouldNudgePlanSubmit(nudgeRoundsCompleted: number): boolean {
   return nudgeRoundsCompleted < MAX_PLAN_SUBMIT_NUDGE_ROUNDS
 }
 
-/** After exploration lock, only allow plan-closing tools. */
+/** After exploration lock, allow plan-closing tools plus read-only exploration tools. */
 export function isPlanPostLockTool(name: string): boolean {
   return name === 'submit_plan' || name === 'ask_clarification'
+    || name === 'grep' || name === 'list_directory'
 }
