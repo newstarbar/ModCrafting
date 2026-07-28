@@ -40,7 +40,7 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 | 能力 | 说明 |
 |------|------|
 | **三模式智能路由** | 每轮独立 LLM 分类，自动分流至 **Chat**（概念问答）/ **Plan**（结构化计划）/ **Execute**（逐步执行）；同时识别错误报告、用户症状、游戏内验证请求等侧面信号 |
-| **Vibecoding 对话开发** | Plan → Execute 双阶段 Agent 循环；计划阶段只读探索上限 3 轮即锁定强制提交；执行阶段每步独立循环 + 修复模式 |
+| **Vibecoding 对话开发** | Plan → Execute 双阶段 Agent 循环；计划阶段只读探索上限 15 轮后建议提交（锁定后仍允许只读工具）；执行阶段每步独立循环 + 修复模式 |
 | **Fabric 项目向导** | 图形化新建项目：Mod ID、包名、作者、版本；自动生成 `build.gradle`、`fabric.mod.json`、入口类 |
 | **模板快速创建** | 7 种内置模板（自定义方块 / 物品 / 食物 / 实体 / 工具 / 护甲 / 配方），表单填写后跳过 Plan 阶段，直接由 `fabric_template_generate` 工具透传生成 |
 | **30+ 内置 AI 工具** | 文件读写（先读后写门控）· 目录列举 · 命令执行 · 触发构建 · 读取错误日志 · `mc_inspect` / `mc_screenshot` 游戏内客观校验 · `ask_clarification` 严格澄清 · `submit_plan` 结构化计划 · `complete_step` 验收推进 |
@@ -178,6 +178,8 @@ flowchart TB
 
 版本锁定见 [`resources/fabric-versions.json`](resources/fabric-versions.json)。
 
+> **详细文档**：架构、命令、Harness、工具链、知识库、归档机制等内容分类整理在 [`docs/`](docs/) 目录，导航见 [`docs/README.md`](docs/README.md)。AI Agent 工作指引见 [`AGENTS.md`](AGENTS.md) 与 [`CLAUDE.md`](CLAUDE.md)（均 ≤150 行精简版）。
+
 ---
 
 ## 从源码构建
@@ -267,7 +269,7 @@ npm run build:win:portable
 Agent 每轮独立分类用户消息，自动分流至三种模式：
 
 - **Chat 模式**：概念问答、方案说明，禁用写入/执行工具，直接给最佳方案不做比较
-- **Plan 模式**：输出结构化 `submit_plan`（write / recipe / mixin / inspect 四种 kind，1-6 步），最多 3 轮只读探索后强制提交
+- **Plan 模式**：输出结构化 `submit_plan`（write / recipe / mixin / inspect 四种 kind，1-6 步），最多 15 轮只读探索后建议提交（锁定后仍允许 grep/list_directory/read_file 等只读工具）
 - **Execute 模式**：逐步执行计划，每轮必调工具，旁白 ≤2 句，构建失败自动进入修复模式
 
 模式切换由 `turn-classifier` 完成，同时识别「错误报告 / 用户症状 / 游戏内验证请求」等侧面信号并注入到目标块中。澄清工具 `ask_clarification` 仅允许用于产品偏好与需求歧义，代码事实（API 命名、类名、mixin 路径等）必须走工具勘察。
