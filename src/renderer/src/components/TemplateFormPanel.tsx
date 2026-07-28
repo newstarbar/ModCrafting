@@ -10,6 +10,31 @@ interface TemplateFormPanelProps {
   onCancel: () => void
 }
 
+function validateField(field: FormField, value: unknown): string | null {
+  if (!field.required) return null
+  if (field.type === 'craftingGrid') return null
+  if (field.type === 'checkbox') return null
+  if (field.type === 'text') {
+    if (!String(value ?? '').trim()) return `${field.label}为必填项`
+    return null
+  }
+  if (field.type === 'number') {
+    if (value === '' || value === null || value === undefined || isNaN(Number(value))) {
+      return `${field.label}为必填项`
+    }
+    return null
+  }
+  if (field.type === 'select') {
+    if (!value) return `${field.label}为必填项`
+    return null
+  }
+  if (field.type === 'textarea') {
+    if (!String(value ?? '').trim()) return `${field.label}为必填项`
+    return null
+  }
+  return null
+}
+
 function createEmptyGrid(): GridSlot[][] {
   return Array(3).fill(null).map(() =>
     Array(3).fill(null).map(() => ({ itemId: '', count: 0 }))
@@ -21,7 +46,8 @@ function renderField(
   value: unknown,
   customValue: string,
   onChange: (key: string, value: unknown) => void,
-  onCustomChange: (key: string, value: string) => void
+  onCustomChange: (key: string, value: string) => void,
+  errorMessage?: string | null
 ) {
   const renderInput = () => {
     switch (field.type) {
@@ -131,6 +157,7 @@ function renderField(
       <div className="template-form-control">
         {renderInput()}
       </div>
+      {errorMessage && <span className="template-form-error">{errorMessage}</span>}
     </div>
   )
 }
@@ -139,6 +166,7 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
   const schema = templateSchemas[templateId]
   const [formData, setFormData] = useState<Record<string, unknown>>({})
   const [customValues, setCustomValues] = useState<Record<string, string>>({})
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
     const initialData: Record<string, unknown> = {}
@@ -155,9 +183,16 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
     })
     setFormData(initialData)
     setCustomValues({})
+    setValidationErrors({})
   }, [templateId])
 
   const handleChange = useCallback((key: string, value: unknown) => {
+    setValidationErrors((prev) => {
+      if (!prev[key]) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
     setFormData((prev) => {
       const next = { ...prev, [key]: value }
 
@@ -179,6 +214,14 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
   }, [])
 
   const handleSubmit = () => {
+    const errors: Record<string, string> = {}
+    for (const field of schema?.fields ?? []) {
+      const err = validateField(field, formData[field.key])
+      if (err) errors[field.key] = err
+    }
+    setValidationErrors(errors)
+    if (Object.keys(errors).length > 0) return
+
     let prompt = generatePromptFromForm(templateId, formData)
     if (isQuickCreateTemplate(templateId)) {
       const { formFields } = normalizeFormFieldsForCodegen(templateId, formData)
@@ -209,7 +252,7 @@ export default function TemplateFormPanel({ templateId, onConfirm, onCancel }: T
         <div className="template-form-body">
           <div className="template-form-fields">
             {schema.fields.map((field) =>
-              renderField(field, formData[field.key], customValues[field.key] || '', handleChange, handleCustomChange)
+              renderField(field, formData[field.key], customValues[field.key] || '', handleChange, handleCustomChange, validationErrors[field.key])
             )}
           </div>
           <TemplatePreview templateId={templateId} formData={formData} />

@@ -154,3 +154,42 @@ export const IconPanelRightClose = (props: IconProps) => (
     <polyline points="9 12 12 9 9 6" />
   </IconBase>
 )
+
+export const IconExpand = (props: IconProps) => (
+  <IconBase {...props}>
+    <polyline points="15 3 21 3 21 9" />
+    <polyline points="9 21 3 21 3 15" />
+    <line x1="21" y1="3" x2="14" y2="10" />
+    <line x1="3" y1="21" x2="10" y2="14" />
+  </IconBase>
+)
+
+export const IconCopy = (props: IconProps) => (
+  <IconBase {...props}>
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </IconBase>
+)
+
+export const IconAlertTriangle = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </IconBase>
+)
+
+export const IconLink = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+  </IconBase>
+)
+
+export const IconHammer = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M15 12l-8.5 8.5a2.12 2.12 0 0 1-3-3L12 9" />
+    <path d="M17.64 15L22 10.64" />
+    <path d="M20.91 11.7l-1.25-1.25c-.6-.6-.93-1.4-.93-2.25v-.86L16.01 4.6a5.56 5.56 0 0 0-3.94-1.64H9l.92.82A6.18 6.18 0 0 1 12 8.4v1.56l2 2h2.47l2.26 1.91" />
+  </IconBase>
+)

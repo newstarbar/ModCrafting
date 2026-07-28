@@ -1,6 +1,14 @@
+/** Aggregated tag describing the context type, for chip-based UI display. */
+export type ContextTagType = 'crash' | 'code-explain' | 'build-error' | 'shortcut' | 'runtime-error' | 'quick-create' | 'generic'
+
+export interface ContextTag {
+  type: ContextTagType
+  label: string
+}
+
 /** Unified payload for anything injected into the chat composer. */
 export type ContextPayload =
-  | { kind: 'text'; text: string; source?: string }
+  | { kind: 'text'; text: string; source?: string; tag?: ContextTag }
   | { kind: 'image'; path: string; mimeType: string; previewUrl?: string; name?: string; source?: string }
   | { kind: 'file'; path: string; name: string; source?: string }
 

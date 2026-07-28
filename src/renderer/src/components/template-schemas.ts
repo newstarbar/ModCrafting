@@ -628,9 +628,9 @@ export function generatePromptFromForm(templateId: string, formData: Record<stri
         const gridData = value as CraftingGridData
         if (gridData) {
           const { grid, outputItem, outputCount } = gridData
-          prompt += `- 输出物品：${outputItem} x${outputCount}\n`
+          prompt += `- 输出物品：${outputItem || '未设置'} x${outputCount}\n`
           prompt += `- 输入材料：\n`
-          
+
           const materials: Record<string, number> = {}
           grid.forEach(row => {
             row.forEach(slot => {
@@ -639,7 +639,7 @@ export function generatePromptFromForm(templateId: string, formData: Record<stri
               }
             })
           })
-          
+
           if (Object.keys(materials).length === 0) {
             prompt += `  无（空配方）\n`
           } else {
@@ -648,11 +648,13 @@ export function generatePromptFromForm(templateId: string, formData: Record<stri
             })
           }
 
-          prompt += `- 合成形状（3x3网格）：\n`
+          // 使用 [][][] 格式：每格填物品ID，空格留空字符串，便于 AI 理解多物品对应关系
+          prompt += `- 合成形状（3x3网格，每格填物品ID，空格留空）：\n`
           grid.forEach(row => {
-            const rowStr = row.map(slot => slot.itemId ? 'X' : '.').join(' ')
-            prompt += `  ${rowStr}\n`
+            const cells = row.map(slot => slot.itemId || '')
+            prompt += `  [${cells.join('][')}]\n`
           })
+          prompt += `- 形状说明：上述网格按行排列，'[' ']' 分隔每格，空字符串表示该格无物品\n`
           continue
         }
       }

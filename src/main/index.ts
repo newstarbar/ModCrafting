@@ -65,6 +65,12 @@ function setupWindowKeyboardShortcuts(win: BrowserWindow): void {
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
 
+    // 拦截 F12：默认不打开 DevTools
+    if (input.key === 'F12') {
+      event.preventDefault()
+      return
+    }
+
     if (input.key === 'F11') {
       win.setFullScreen(!win.isFullScreen())
       event.preventDefault()
@@ -126,8 +132,6 @@ function createWindow(): void {
   // Load the renderer
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    // Open DevTools in dev mode for debugging
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }

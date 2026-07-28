@@ -25,6 +25,7 @@ import type { GameDevStatus, PhaseDevStatus } from '../types/dev-status'
 interface McRuntimePanelProps {
   projectPath: string | null
   onAddCrashToChat: (crashContent: string) => void
+  onAddRuntimeErrorToChat?: (errorContent: string) => void
   toolchainReady?: boolean
   onRuntimeStatusChange?: (game: GameDevStatus, phase: PhaseDevStatus | null) => void
 }
@@ -56,11 +57,13 @@ function statusBadge(inst: McInstanceView): { label: string; className: string }
 }
 
 const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
-  ({ projectPath, onAddCrashToChat, toolchainReady = true, onRuntimeStatusChange }, ref) => {
+  ({ projectPath, onAddCrashToChat, onAddRuntimeErrorToChat, toolchainReady = true, onRuntimeStatusChange }, ref) => {
     const [instances, setInstances] = useState<McInstanceView[]>([])
     const [logs, setLogs] = useState<Map<string, string[]>>(new Map())
+    const [errorLines, setErrorLines] = useState<Map<string, string[]>>(new Map())
     const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set())
     const [crashMessage, setCrashMessage] = useState<{ id: string; code: number; path: string | null } | null>(null)
+    const [dismissedErrors, setDismissedErrors] = useState<Set<string>>(new Set())
     const instanceCounterRef = useRef(0)
 
     useEffect(() => {
@@ -78,14 +81,33 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
       })
 
       const unsubLog = window.api.onMcLog((id, text) => {
+        const newLines = text.split(/\r?\n/).filter((l) => l.length > 0)
         setLogs((prev) => {
           const next = new Map(prev)
           const existing = next.get(id) || []
-          const newLines = text.split(/\r?\n/).filter((l) => l.length > 0)
           const updated = [...existing, ...(newLines.length > 0 ? newLines : [text])].slice(-500)
           next.set(id, updated)
           return next
         })
+        // 检测运行时错误行
+        const errPattern = /ERROR|Exception|Caused by|at\s+knot\/\//
+        const newErrors = newLines.filter((l) => errPattern.test(l))
+        if (newErrors.length > 0) {
+          setErrorLines((prev) => {
+            const next = new Map(prev)
+            const existing = next.get(id) || []
+            const merged = [...existing, ...newErrors].slice(-50)
+            next.set(id, merged)
+            return next
+          })
+          // 新错误出现时重置 dismissed 状态
+          setDismissedErrors((prev) => {
+            if (!prev.has(id)) return prev
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+        }
       })
 
       const unsubCrash = window.api.onMcCrashed((id, code, crashReportPath) => {
@@ -176,6 +198,17 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
         next.delete(instanceId)
         return next
       })
+      setErrorLines((prev) => {
+        const next = new Map(prev)
+        next.delete(instanceId)
+        return next
+      })
+      setDismissedErrors((prev) => {
+        if (!prev.has(instanceId)) return prev
+        const next = new Set(prev)
+        next.delete(instanceId)
+        return next
+      })
       setCrashMessage((prev) => (prev?.id === instanceId ? null : prev))
       lastRuntimeStatusKeyRef.current = ''
     }, [])
@@ -195,9 +228,23 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
       await window.api.mcDeleteInstance(id)
       setInstances((prev) => prev.filter((i) => i.id !== id))
       setLogs((prev) => { const next = new Map(prev); next.delete(id); return next })
+      setErrorLines((prev) => { const next = new Map(prev); next.delete(id); return next })
+      setDismissedErrors((prev) => { const next = new Set(prev); next.delete(id); return next })
       setExpandedDetails((prev) => { const next = new Set(prev); next.delete(id); return next })
       if (crashMessage?.id === id) setCrashMessage(null)
     }, [crashMessage])
+
+    const handleSendRuntimeErrorToAi = useCallback((instanceId: string) => {
+      const errs = errorLines.get(instanceId) || []
+      if (errs.length === 0) return
+      const content = `--- 运行时错误 ---\n实例：${instances.find((i) => i.id === instanceId)?.name || instanceId}\n最近错误：\n${errs.slice(-10).join('\n')}`
+      if (onAddRuntimeErrorToChat) {
+        onAddRuntimeErrorToChat(content)
+      } else {
+        onAddCrashToChat(content)
+      }
+      setDismissedErrors((prev) => new Set(prev).add(instanceId))
+    }, [errorLines, instances, onAddRuntimeErrorToChat, onAddCrashToChat])
 
     const startDefaultForProject = useCallback(async () => {
       if (!projectPath || !toolchainReady) return
@@ -393,6 +440,34 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
                 <p className={`mc-summary${phaseInfo.hasError ? ' mc-summary--error' : ''}${exitSummary && (inst.exitReason ?? 'none') === 'normal' ? ' mc-summary--success' : ''}`}>
                   {exitSummary || phaseInfo.summaryLine}
                 </p>
+
+                {(() => {
+                  const errs = errorLines.get(inst.id) || []
+                  if (errs.length === 0 || dismissedErrors.has(inst.id)) return null
+                  const recent = errs.slice(-3)
+                  return (
+                    <div className="mc-error-banner mc-error-banner--warn">
+                      <div className="mc-error-banner-header">
+                        <span className="mc-error-banner-title">检测到运行时错误（{errs.length}）</span>
+                        <button
+                          type="button"
+                          className="mc-btn mc-error-send-btn"
+                          onClick={() => handleSendRuntimeErrorToAi(inst.id)}
+                          title="发送最近错误给 AI"
+                        >
+                          发送给 AI
+                        </button>
+                      </div>
+                      <div className="mc-error-banner-lines">
+                        {recent.map((line, i) => (
+                          <div key={i} className="mc-error-line" title={line}>
+                            {line.length > 120 ? line.slice(0, 117) + '...' : line}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 <div className="mc-card-actions">
                   {(inst.status === 'stopped' || inst.status === 'crashed') && (

@@ -707,7 +707,14 @@ const App: React.FC = () => {
 	const handleCrashToChat = useCallback((c: string) => {
 		setState((prev) => ({
 			...prev,
-			contextQueue: [...prev.contextQueue, { kind: 'text' as const, text: `--- 崩溃报告 ---\n${c}`, source: 'crash' }],
+			contextQueue: [...prev.contextQueue, { kind: 'text' as const, text: `--- 崩溃报告 ---\n${c}`, source: 'crash', tag: { type: 'crash' as const, label: '崩溃报告' } }],
+			rightPanelTab: "game"
+		}));
+	}, []);
+	const handleRuntimeErrorToChat = useCallback((c: string) => {
+		setState((prev) => ({
+			...prev,
+			contextQueue: [...prev.contextQueue, { kind: 'text' as const, text: c, source: 'runtime-error', tag: { type: 'runtime-error' as const, label: '运行时错误' } }],
 			rightPanelTab: "game"
 		}));
 	}, []);
@@ -716,7 +723,8 @@ const App: React.FC = () => {
 			enqueueContext({
 				kind: 'text',
 				text: `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`,
-				source: 'code-explain'
+				source: 'code-explain',
+				tag: { type: 'code-explain', label: `代码解释：${name}` }
 			});
 			return;
 		}
@@ -745,7 +753,8 @@ const App: React.FC = () => {
 						enqueueContext({
 							kind: 'text',
 							text: `--- 代码解释 ---\n${name} (${type})\n文件: ${found.relPath}\n\`\`\`java\n${found.code}\n\`\`\``,
-							source: 'code-explain'
+							source: 'code-explain',
+							tag: { type: 'code-explain', label: `代码解释：${name}` }
 						});
 						return;
 					}
@@ -754,13 +763,15 @@ const App: React.FC = () => {
 			enqueueContext({
 				kind: 'text',
 				text: `--- 代码解释 ---\n${name} (${type})\n未找到源代码文件`,
-				source: 'code-explain'
+				source: 'code-explain',
+				tag: { type: 'code-explain', label: `代码解释：${name}` }
 			});
 		} catch {
 			enqueueContext({
 				kind: 'text',
 				text: `--- 代码解释 ---\n${name} (${type})\n读取源代码失败`,
-				source: 'code-explain'
+				source: 'code-explain',
+				tag: { type: 'code-explain', label: `代码解释：${name}` }
 			});
 		}
 	}, [state.projectPath, enqueueContext]);
@@ -919,6 +930,7 @@ const App: React.FC = () => {
 										ref={mcRuntimeRef}
 										projectPath={state.projectPath}
 										onAddCrashToChat={handleCrashToChat}
+										onAddRuntimeErrorToChat={handleRuntimeErrorToChat}
 										toolchainReady={toolchainReady}
 										onRuntimeStatusChange={handleRuntimeStatusChange}
 									/>

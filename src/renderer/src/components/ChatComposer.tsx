@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react'
-import { IconSend, IconSquare, IconPaperclip, IconX } from './Icon'
+import React, { useEffect, useRef, useState } from 'react'
+import { IconSend, IconSquare, IconPaperclip, IconX, IconExpand } from './Icon'
 import QuickCreateBar from './QuickCreateBar'
 import ComposerModeMenu from './ComposerModeMenu'
 import ComposerModelMenu, { type ProviderModelSelection } from './ComposerModelMenu'
@@ -7,6 +7,7 @@ import type { ComposerMode } from '../harness/turn-intent'
 import type { ComposerAttachment } from '../context/context-ingress'
 import { hasImageAttachment } from '../context/context-ingress'
 import { isVisionCapableModel } from '../harness/chat-message'
+import { ContextChipList, type ContextChipData } from './ContextChip'
 
 export interface ChatComposerProps {
 	input: string
@@ -33,7 +34,12 @@ export interface ChatComposerProps {
 	onAttachFiles?: () => void
 	onPasteFiles?: (items: DataTransferItemList) => void
 	onDropFiles?: (files: FileList) => void
+	chips?: ContextChipData[]
+	onRemoveChip?: (id: string) => void
 }
+
+const MIN_COMPOSER_HEIGHT = 44
+const MAX_COMPOSER_RATIO = 0.6
 
 const ChatComposer: React.FC<ChatComposerProps> = ({
 	input,
@@ -60,17 +66,23 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 	onAttachFiles,
 	onPasteFiles,
 	onDropFiles,
+	chips = [],
+	onRemoveChip,
 }) => {
 	const [goalExpanded, setGoalExpanded] = useState(false)
 	const [dragOver, setDragOver] = useState(false)
+	const [fullscreen, setFullscreen] = useState(false)
+	const [composerHeight, setComposerHeight] = useState<number | null>(null)
 	const compositeRef = useRef<HTMLDivElement>(null)
+	const resizeStartRef = useRef<{ startY: number; startH: number } | null>(null)
 
 	const hasImages = hasImageAttachment(attachments)
 	const visionOk = !hasImages || isVisionCapableModel(modelId, providerId)
+	const hasChips = chips.length > 0
 	const canSend =
 		!disabled &&
 		!isLoading &&
-		(Boolean(input.trim()) || attachments.length > 0) &&
+		(Boolean(input.trim()) || attachments.length > 0 || hasChips) &&
 		visionOk
 
 	const placeholder = !toolchainReady
@@ -84,6 +96,60 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 					: composerMode === 'plan'
 						? '描述功能，生成实施计划…'
 						: '描述功能或问题…'
+
+	// 拖拽调整输入框高度：向上拖增大，向下拖减小
+	const onResizeStart = (e: React.PointerEvent) => {
+		if (e.button !== 0) return
+		e.preventDefault()
+		const startH = compositeRef.current?.offsetHeight ?? MIN_COMPOSER_HEIGHT
+		resizeStartRef.current = { startY: e.clientY, startH }
+		document.body.style.cursor = 'row-resize'
+		document.body.style.userSelect = 'none'
+	}
+
+	useEffect(() => {
+		const onMove = (e: PointerEvent) => {
+			if (!resizeStartRef.current) return
+			const delta = resizeStartRef.current.startY - e.clientY
+			const maxH = Math.max(MIN_COMPOSER_HEIGHT, window.innerHeight * MAX_COMPOSER_RATIO)
+			const newH = Math.max(
+				MIN_COMPOSER_HEIGHT,
+				Math.min(maxH, resizeStartRef.current.startH + delta)
+			)
+			setComposerHeight(newH)
+		}
+		const onUp = () => {
+			if (resizeStartRef.current) {
+				resizeStartRef.current = null
+				document.body.style.cursor = ''
+				document.body.style.userSelect = ''
+			}
+		}
+		window.addEventListener('pointermove', onMove)
+		window.addEventListener('pointerup', onUp)
+		return () => {
+			window.removeEventListener('pointermove', onMove)
+			window.removeEventListener('pointerup', onUp)
+		}
+	}, [])
+
+	// 全屏编辑：ESC 关闭
+	useEffect(() => {
+		if (!fullscreen) return
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault()
+				setFullscreen(false)
+			}
+		}
+		window.addEventListener('keydown', onKey)
+		return () => window.removeEventListener('keydown', onKey)
+	}, [fullscreen])
+
+	const handleFullscreenSend = () => {
+		setFullscreen(false)
+		if (canSend) onSend()
+	}
 
 	return (
 		<div className="chat-composer">
@@ -107,7 +173,8 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 
 			<div
 				ref={compositeRef}
-				className={`chat-input-composite${dragOver ? ' chat-input-composite--drag' : ''}`}
+				className={`chat-input-composite${dragOver ? ' chat-input-composite--drag' : ''}${composerHeight ? ' chat-input-composite--resized' : ''}`}
+				style={composerHeight ? { height: composerHeight } : undefined}
 				onDragEnter={(e) => {
 					e.preventDefault()
 					if (disabled || !onDropFiles) return
@@ -130,6 +197,19 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 					onDropFiles(e.dataTransfer.files)
 				}}
 			>
+				<div
+					className="composer-resize-handle"
+					onPointerDown={onResizeStart}
+					role="separator"
+					aria-orientation="horizontal"
+					aria-label="拖拽调整输入框大小"
+					title="拖拽调整输入框大小"
+				/>
+
+				{hasChips && onRemoveChip && (
+					<ContextChipList chips={chips} onRemove={onRemoveChip} />
+				)}
+
 				{attachments.length > 0 && (
 					<div className="chat-composer__attachments">
 						{attachments.map((att) => (
@@ -245,6 +325,17 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 						</button>
 					)}
 
+					<button
+						type="button"
+						className="composer-expand-btn"
+						onClick={() => setFullscreen(true)}
+						disabled={disabled}
+						title="全屏编辑（ESC 退出）"
+						aria-label="全屏编辑"
+					>
+						<IconExpand size="sm" />
+					</button>
+
 					<ComposerModeMenu
 						value={composerMode}
 						onChange={onComposerModeChange}
@@ -280,6 +371,68 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 					</div>
 				</div>
 			</div>
+
+			{fullscreen && (
+				<div
+					className="composer-fullscreen-overlay"
+					onClick={(e) => {
+						if (e.target === e.currentTarget) setFullscreen(false)
+					}}
+				>
+					<div className="composer-fullscreen-modal">
+						<div className="composer-fullscreen-header">
+							<span className="composer-fullscreen-title">全屏编辑</span>
+							<div className="composer-fullscreen-header-actions">
+								<span className="composer-fullscreen-hint">ESC 退出 · Enter 发送</span>
+								<button
+									type="button"
+									className="composer-fullscreen-close"
+									onClick={() => setFullscreen(false)}
+									title="关闭"
+									aria-label="关闭"
+								>
+									<IconX size="sm" />
+								</button>
+							</div>
+						</div>
+						<textarea
+							className="composer-fullscreen-textarea"
+							placeholder={placeholder}
+							value={input}
+							onChange={(e) => onInputChange(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === 'Enter' && !e.shiftKey) {
+									e.preventDefault()
+									handleFullscreenSend()
+								}
+							}}
+							autoFocus
+						/>
+						<div className="composer-fullscreen-footer">
+							<span className="composer-fullscreen-counter">
+								{input.length} 字
+							</span>
+							<div className="composer-fullscreen-footer-actions">
+								<button
+									type="button"
+									className="mc-btn"
+									onClick={() => setFullscreen(false)}
+								>
+									关闭
+								</button>
+								<button
+									type="button"
+									className="mc-btn mc-btn--primary"
+									onClick={handleFullscreenSend}
+									disabled={!canSend}
+								>
+									<IconSend size="sm" /> 发送
+								</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	)
 }

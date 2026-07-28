@@ -64,6 +64,7 @@ import {
 } from '../context/context-ingress'
 import { buildUserContent } from '../context/user-content'
 import { isVisionCapableModel } from '../harness/chat-message'
+import { ContextChipList, type ContextChipData, getChipLabel } from './ContextChip'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -325,6 +326,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const attachmentsRef = useRef(attachments)
   attachmentsRef.current = attachments
+  const [contextChips, setContextChips] = useState<ContextChipData[]>([])
+  const contextChipsRef = useRef(contextChips)
+  contextChipsRef.current = contextChips
   const [composerMode, setComposerMode] = useState<ComposerMode>('agent')
   const composerModeRef = useRef<ComposerMode>('agent')
   composerModeRef.current = composerMode
@@ -641,9 +645,27 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     const textParts: string[] = []
     const nextAtts: ComposerAttachment[] = []
+    const newChips: ContextChipData[] = []
     for (const item of newItems) {
       if (item.kind === 'text') {
-        textParts.push(item.text)
+        // 带 tag 的文本创建为 chip，不直接拼接 textarea
+        if (item.tag) {
+          newChips.push({
+            id: newAttachmentId(),
+            type: item.tag.type,
+            label: item.tag.label || getChipLabel(item.tag.type),
+            text: item.text
+          })
+          // 代码解释仍需切换 ask 模式
+          if (item.tag.type === 'code-explain') {
+            setComposerMode('ask')
+            composerModeRef.current = 'ask'
+            controllerRef.current?.setComposerMode('ask')
+            persistComposerMeta({ composerMode: 'ask' })
+          }
+        } else {
+          textParts.push(item.text)
+        }
       } else {
         const att = payloadToAttachment(item, newAttachmentId())
         if (att) nextAtts.push(att)
@@ -651,6 +673,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
     if (nextAtts.length) {
       setAttachments((prev) => [...prev, ...nextAtts])
+    }
+    if (newChips.length) {
+      setContextChips((prev) => [...prev, ...newChips])
     }
     if (textParts.length) {
       const text = textParts.join('\n\n')
@@ -828,6 +853,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const handleRemoveAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id))
+  }, [])
+
+  const handleRemoveContextChip = useCallback((id: string) => {
+    setContextChips((prev) => prev.filter((c) => c.id !== id))
   }, [])
 
   // Refresh display from turnRef
@@ -1411,9 +1440,11 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   // Session helpers — delegated to App (single source of truth)
   const handleSend = useCallback(async () => {
     const pendingAttachments = attachmentsRef.current
+    const pendingChips = contextChipsRef.current
     const hasText = Boolean(input.trim())
     const hasAtt = pendingAttachments.length > 0
-    if ((!hasText && !hasAtt) || isLoading || !toolchainReady) return
+    const hasChips = pendingChips.length > 0
+    if ((!hasText && !hasAtt && !hasChips) || isLoading || !toolchainReady) return
     // Clarification answers go through ClarificationOverlay confirm — not the composer.
     if (clarificationPending) return
     if (hasImageAttachment(pendingAttachments) && !isVisionCapableModel(apiConfig.model, apiConfig.providerId)) {
@@ -1441,7 +1472,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       ctrl.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
     }
 
-    const userMsg = input.trim()
+    // 聚合标签：chip 文本前置到用户输入前面（底层文本不变，仅 UI 层聚合展示）
+    const chipText = pendingChips.map((c) => c.text).join('\n\n')
+    const inputText = input.trim()
+    const userMsg = chipText && inputText
+      ? `${chipText}\n\n${inputText}`
+      : chipText || inputText
     const messageAttachments: MessageAttachment[] = pendingAttachments.map(attachmentToMessageAttachment)
     const imageDataUrls = new Map<string, string>()
     for (const att of messageAttachments) {
@@ -1467,6 +1503,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
     setInput('')
     setAttachments([])
+    setContextChips([])
     bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('思考中...')
@@ -2409,6 +2446,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             onAttachFiles={handleAttachFiles}
             onPasteFiles={handlePasteFiles}
             onDropFiles={handleDropFiles}
+            chips={contextChips}
+            onRemoveChip={handleRemoveContextChip}
           />
         )}
       </div>
