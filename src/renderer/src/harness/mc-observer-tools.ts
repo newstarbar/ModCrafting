@@ -247,7 +247,7 @@ export const mcInputTool: Tool = {
     }
     if (action === 'click_widget' || action === 'click_at') {
       await new Promise((r) => setTimeout(r, 250))
-      // 若仍在加载界面，提醒不要反复点击或重启游戏
+      // 获取当前屏幕状态（加载检测 + 失败时附加上下文）
       const inspect = await callMcBridge('GET', '/v1/screen', undefined, optionalInstanceId(args))
       if (inspect.ok) {
         const kind = String((inspect.data as { kind?: string }).kind || '')
@@ -256,6 +256,21 @@ export const mcInputTool: Tool = {
           return [
             formatBridgeResult(result),
             '[note] 当前仍在加载界面（loading）。请等待世界加载完成，用 mc_inspect 轮询，禁止 click_widget，更不要因此重新 runClient。'
+          ].join('\n')
+        }
+        // 失败时附加上下文：当前屏幕名 + 可用控件列表，帮助 AI 选择正确的 index/label
+        if (!result.ok) {
+          const data = inspect.data as Record<string, unknown>
+          const widgets = Array.isArray(data.widgets) ? data.widgets : []
+          const screenName = simple || kind || 'unknown'
+          const widgetList = widgets.slice(0, 10).map((w: Record<string, unknown>, i: number) => {
+            const label = w.label || w.text || w.type || 'unnamed'
+            const visible = w.visible === false ? ' (隐藏)' : ''
+            return `  [${i}] ${label}${visible}`
+          }).join('\n')
+          return [
+            formatBridgeResult(result),
+            `[上下文] 当前屏幕: ${screenName}，可用控件:\n${widgetList || '  (无控件)'}`
           ].join('\n')
         }
       }

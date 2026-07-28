@@ -117,6 +117,11 @@ export function buildTurnClosingSummary(opts: BuildClosingSummaryOptions): strin
     if (errorText && !/cancel/i.test(errorText)) {
       parts.push(`原因：${errorText.slice(0, 200)}。`)
     }
+    // 附加失败步骤详情，帮助用户/AI 定位问题
+    const failedStep = opts.steps?.find(s => s.status === 'error')
+    if (failedStep) {
+      parts.push(`失败步骤：${failedStep.description}。`)
+    }
     if (progress) parts.push(`${progress}。`)
     if (goal) parts.push(`目标：${goal}。`)
     parts.push('发送新消息可继续推进。')

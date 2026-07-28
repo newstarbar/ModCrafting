@@ -12,7 +12,7 @@ import {
 test('plan exploration lock kick demands submit_plan', () => {
   assert.match(PLAN_EXPLORATION_LOCK_KICK, /submit_plan/)
   assert.match(PLAN_EXPLORATION_LOCK_KICK, /已锁定/)
-  assert.equal(MAX_READONLY_ROUNDS, 3)
+  assert.equal(MAX_READONLY_ROUNDS, 6)
 })
 
 test('text-only plan replies are nudged up to MAX then stop', () => {

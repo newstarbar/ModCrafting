@@ -1062,6 +1062,18 @@ function buildLogTail(text: string, maxChars = 8000): string {
 	if (normalized.length <= maxChars) return normalized;
 	return normalized.slice(-maxChars);
 }
+
+/** 从构建输出中提取编译错误行，供 AI 快速定位。 */
+function extractBuildErrors(output: string): string[] {
+	const errors: string[] = []
+	for (const line of output.split('\n')) {
+		const trimmed = line.trim()
+		if (/错误:|error:/i.test(trimmed) && !/0 个错误|0 errors/.test(trimmed)) {
+			errors.push(trimmed)
+		}
+	}
+	return [...new Set(errors)].slice(0, 5)
+}
 export const readErrorLogTool: Tool = {
 	name: "read_error_log",
 	description: "Read build error logs or crash reports to help debug issues.",
@@ -1205,16 +1217,27 @@ export const triggerBuildTool: Tool = {
 				const log = getLastBuildLogText().trim();
 				const logBlock = log ? `\n\n--- 构建输出 ---\n${buildLogTail(log)}` : "";
 				if (res.failed) {
-					return `构建失败。${logBlock || "\n详情见右侧高级面板。"}${exitInfo}`;
-				}
+				const errs = extractBuildErrors(log)
+				const summary = errs.length > 0
+					? `【编译错误摘要】\n${errs.map((e) => `- ${e}`).join('\n')}\n\n`
+					: ''
+				return `${summary}构建失败。${logBlock || "\n详情见右侧高级面板。"}${exitInfo}`;
+			}
 				return `构建已完成。${logBlock}${exitInfo}`;
 			}
 
 			const res = await runWithCommandStream(ctx, () => window.api.runGradleTask(ctx.projectPath!, task));
-			const output = res.output || `Task "${task}" completed (exit: ${res.exitCode})`;
-			const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "";
-			const fallbackNote = res.usedOnlineFallback ? "\n[已联网补全依赖缓存]" : "";
-			return output + exitInfo + fallbackNote;
+		const output = res.output || `Task "${task}" completed (exit: ${res.exitCode})`;
+		const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "";
+		const fallbackNote = res.usedOnlineFallback ? "\n[已联网补全依赖缓存]" : "";
+		if (res.exitCode !== 0 && res.exitCode !== null) {
+			const errs = extractBuildErrors(output)
+			if (errs.length > 0) {
+				const summary = `【编译错误摘要】\n${errs.map((e) => `- ${e}`).join('\n')}\n\n`
+				return summary + output + exitInfo + fallbackNote
+			}
+		}
+		return output + exitInfo + fallbackNote;
 		} catch (err) {
 			return `Error running build: ${err}`;
 		}

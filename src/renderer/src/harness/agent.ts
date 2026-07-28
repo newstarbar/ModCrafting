@@ -543,11 +543,13 @@ export class Agent {
 					logger.agent("KICK: plan phase exploration cap reached");
 				}
 				if (this.planForceSubmitOnly) {
-					availableTools = availableTools.filter((t) => PLAN_POST_LOCK_TOOL_NAMES.has(t.name));
-				} else if (this.planExplorationLocked) {
-					availableTools = this.filterExplorationTools(availableTools);
-				}
-			} else if (phase === "execute") {
+				availableTools = availableTools.filter((t) =>
+					PLAN_POST_LOCK_TOOL_NAMES.has(t.name) || t.name === "read_file"
+				);
+			} else if (this.planExplorationLocked) {
+				availableTools = this.filterExplorationTools(availableTools);
+			}
+		} else if (phase === "execute") {
 				if (this.readonlyLocked) {
 					availableTools = this.filterExplorationTools(availableTools);
 				} else if (readonlyRounds >= MAX_READONLY_ROUNDS) {

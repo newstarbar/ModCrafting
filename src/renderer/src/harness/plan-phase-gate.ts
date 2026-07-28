@@ -1,6 +1,6 @@
 /** Plan-phase gates: exploration cap → force submit_plan (no prose-only exit). */
 
-export const MAX_READONLY_ROUNDS = 3
+export const MAX_READONLY_ROUNDS = 6
 export const MAX_PLAN_OFFERED_REJECT_ROUNDS = 2
 /** Text-only replies after lock before giving up (controller may still format-retry). */
 export const MAX_PLAN_SUBMIT_NUDGE_ROUNDS = 3

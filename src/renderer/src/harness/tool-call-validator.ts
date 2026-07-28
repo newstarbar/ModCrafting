@@ -65,10 +65,10 @@ function rejectedNotOfferedResult(
   context?: ToolCallContext
 ): ToolResult {
   const phase = context?.phase ?? 'execute'
-  // 排除控制工具（submit_plan/complete_step），避免噪音
+  // 排除 complete_step 避免噪音；保留 submit_plan 让 AI 知道可以提交计划
   const allowedNames = offeredSchemas
     .map(s => s.name)
-    .filter(n => n !== 'submit_plan' && n !== 'complete_step')
+    .filter(n => n !== 'complete_step')
   const allowedList = allowedNames.length > 0 ? allowedNames.join(', ') : '（无）'
 
   let detail: string

@@ -153,12 +153,18 @@ function pathHintFromArgs(raw: string): string {
   }
 }
 
+/** 控制工具参数不压缩：AI 需要完整历史参数来学习正确格式。
+ *  submit_plan/ask_clarification/complete_step 的参数被截断后，
+ *  AI 可能在后续轮次模仿截断的占位符格式，导致工具调用失败。 */
+const CONTROL_TOOL_NAMES = new Set(['submit_plan', 'ask_clarification', 'complete_step'])
+
 /** Shrink oversized tool_call arguments (write_file / edit_file payloads). */
 export function compactToolCallArguments(call: ChatToolCall): ChatToolCall {
   const raw = call.function?.arguments || ''
   if (raw.includes('"_compacted"')) return call // already stable
   if (raw.length < MICRO_ARGS_MIN_CHARS) return call
   const name = call.function?.name || 'unknown'
+  if (CONTROL_TOOL_NAMES.has(name)) return call
   const hint = pathHintFromArgs(raw)
   const placeholder = JSON.stringify({
     _compacted: true,
