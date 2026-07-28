@@ -409,6 +409,9 @@ const api = {
   getEdition: (): Promise<'dev' | 'full' | 'portable'> =>
     ipcRenderer.invoke('env:getEdition'),
 
+  needsFirstTimeDownload: (): Promise<boolean> =>
+    ipcRenderer.invoke('env:needsFirstTimeDownload'),
+
   checkForUpdates: (): Promise<{
     ok: boolean
     currentVersion: string

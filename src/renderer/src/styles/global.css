@@ -4268,6 +4268,92 @@ body,
 	filter: brightness(1.08);
 }
 
+.toolchain-init-card--download {
+	max-width: 460px;
+}
+
+.toolchain-init-download-estimate {
+	margin: 4px 0 16px;
+}
+
+.toolchain-init-download-intro {
+	margin: 0 0 12px;
+	font-size: 13px;
+	line-height: 1.6;
+	color: var(--text-secondary);
+}
+
+.toolchain-init-download-list {
+	list-style: none;
+	margin: 0 0 12px;
+	padding: 0;
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.toolchain-init-download-list li {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 10px 14px;
+	font-size: 13px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+.toolchain-init-download-list li:last-child {
+	border-bottom: none;
+}
+
+.toolchain-init-download-name {
+	color: var(--text-primary);
+	font-weight: 500;
+}
+
+.toolchain-init-download-size {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.toolchain-init-download-total {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 10px 14px;
+	border-radius: 8px;
+	background: var(--bg-secondary);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.toolchain-init-download-total-size {
+	color: var(--accent);
+}
+
+.toolchain-init-download-hint {
+	margin: 10px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.toolchain-init-confirm-btn {
+	width: 100%;
+	padding: 10px 20px;
+	font-size: 14px;
+	font-weight: 600;
+	color: #fff;
+	background: var(--accent);
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	margin-bottom: 12px;
+}
+
+.toolchain-init-confirm-btn:hover {
+	filter: brightness(1.08);
+}
+
 .chat-toolchain-lock-banner {
 	width: 100%;
 	margin-bottom: 8px;

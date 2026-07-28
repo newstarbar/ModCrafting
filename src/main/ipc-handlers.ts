@@ -27,7 +27,8 @@ import {
   resetToolchainInitState,
   createWindowProgressSender,
   getAppEdition,
-  searchLocalFabricSources
+  searchLocalFabricSources,
+  needsFirstTimeDownload
 } from './build-env'
 import { checkForUpdates, openReleasePages } from './updater'
 import { lookupFabricSymbol, verifyFabricSymbolIndex, type FabricSymbolLookupRequest } from './fabric-metadata'
@@ -422,6 +423,8 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('env:checkRuntimeWritable', async () => checkRuntimeWritable())
 
   ipcMain.handle('env:getEdition', async () => getAppEdition())
+
+  ipcMain.handle('env:needsFirstTimeDownload', async () => needsFirstTimeDownload())
 
   ipcMain.handle('updater:check', async () => checkForUpdates(true))
 

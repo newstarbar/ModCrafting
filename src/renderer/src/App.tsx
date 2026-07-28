@@ -120,6 +120,7 @@ const App: React.FC = () => {
 	});
 	const [projectPreparing, setProjectPreparing] = useState(false);
 	const [appEdition, setAppEdition] = useState<'dev' | 'full' | 'portable'>('dev');
+	const [downloadConfirmRequired, setDownloadConfirmRequired] = useState(false);
 	const [updateBanner, setUpdateBanner] = useState({ visible: false, message: '', percent: 0 });
 	const toolchainReady = toolchainInit.ready && !projectPreparing;
 	const overlayLocked = !toolchainInit.ready || projectPreparing || toolchainInit.phase === "error";
@@ -527,39 +528,45 @@ const App: React.FC = () => {
 		};
 	}, []);
 
-	useEffect(() => {
+	const runToolchainInit = useCallback(async (force: boolean): Promise<void> => {
 		const startedAt = Date.now();
+		const result = await window.api.initToolchain(force);
+		const status = await window.api.getToolchainStatus();
+		setToolchainStatus(status);
+		const ready = result.ok && (await window.api.isToolchainReady());
+		if (ready) {
+			const waitMs = Math.max(0, MIN_OVERLAY_MS - (Date.now() - startedAt));
+			if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+			setToolchainInit({
+				phase: "ready",
+				percent: 100,
+				message: "构建环境已就绪",
+				error: null,
+				ready: true
+			});
+			setToolchainProgress("");
+		} else {
+			setToolchainInit((prev) => ({
+				...prev,
+				phase: "error",
+				error: result.error || "构建环境未完全就绪，请重试",
+				ready: false
+			}));
+		}
+		await refreshRecentProjects();
+	}, [refreshRecentProjects]);
 
-		async function initToolchain(): Promise<void> {
+	useEffect(() => {
+		(async () => {
 			const edition = await window.api.getEdition();
 			setAppEdition(edition);
-			const result = await window.api.initToolchain();
-			const status = await window.api.getToolchainStatus();
-			setToolchainStatus(status);
-			const ready = result.ok && (await window.api.isToolchainReady());
-			if (ready) {
-				const waitMs = Math.max(0, MIN_OVERLAY_MS - (Date.now() - startedAt));
-				if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
-				setToolchainInit({
-					phase: "ready",
-					percent: 100,
-					message: "构建环境已就绪",
-					error: null,
-					ready: true
-				});
-				setToolchainProgress("");
-			} else {
-				setToolchainInit((prev) => ({
-					...prev,
-					phase: "error",
-					error: result.error || "构建环境未完全就绪，请重试",
-					ready: false
-				}));
+			const needsDownload = await window.api.needsFirstTimeDownload();
+			if (needsDownload) {
+				setDownloadConfirmRequired(true);
+				return;
 			}
-			await refreshRecentProjects();
-		}
-
-		initToolchain().catch((err) => {
+			await runToolchainInit(false);
+		})().catch((err) => {
 			console.error("initToolchain failed:", err);
 			setToolchainInit({
 				phase: "error",
@@ -569,7 +576,7 @@ const App: React.FC = () => {
 				ready: false
 			});
 		});
-	}, [refreshRecentProjects]);
+	}, [runToolchainInit]);
 
 	const retryToolchainInit = useCallback(() => {
 		setToolchainInit({
@@ -579,29 +586,20 @@ const App: React.FC = () => {
 			error: null,
 			ready: false
 		});
-		void window.api.initToolchain(true).then(async (result) => {
-			const status = await window.api.getToolchainStatus();
-			setToolchainStatus(status);
-			const ready = result.ok && (await window.api.isToolchainReady());
-			if (ready) {
-				setToolchainInit({
-					phase: "ready",
-					percent: 100,
-					message: "构建环境已就绪",
-					error: null,
-					ready: true
-				});
-				setToolchainProgress("");
-			} else {
-				setToolchainInit((prev) => ({
-					...prev,
-					phase: "error",
-					error: result.error || "构建环境初始化失败",
-					ready: false
-				}));
-			}
+		void runToolchainInit(true);
+	}, [runToolchainInit]);
+
+	const confirmDownload = useCallback(() => {
+		setDownloadConfirmRequired(false);
+		setToolchainInit({
+			phase: "checking",
+			percent: 0,
+			message: "正在启动下载…",
+			error: null,
+			ready: false
 		});
-	}, []);
+		void runToolchainInit(false);
+	}, [runToolchainInit]);
 
 	const handleRuntimeStatusChange = useCallback((game: GameDevStatus, phase: PhaseDevStatus | null) => {
 		setGameDevStatus((prev) => (
@@ -972,7 +970,7 @@ const App: React.FC = () => {
 				onOpen={(dir) => void handleOpenProjectPath(dir)}
 				onRecentChange={() => void refreshRecentProjects()}
 			/>
-			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} />
+			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} />
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
 			{appView === "workspace" && (
 				<StatusBar

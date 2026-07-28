@@ -10,6 +10,7 @@ import {
   isCompleteGradleDist
 } from './toolchain-download'
 import { ensureGradleHomeOnline } from './portable-prefetch'
+import { downloadAndExtractSeedShards } from './seed-downloader'
 import {
   collectParamNames,
   formatYarnField,
@@ -30,7 +31,7 @@ export const GRADLE_HOME_DIR = `gradle-${GRADLE_VERSION}`
 export const GRADLE_RUNTIME_DIR = 'gradle-9.5'
 const GRADLE_LAUNCHER_JAR = `gradle-launcher-${GRADLE_VERSION}.jar`
 const SEED_MARKER = '.modcrafting-seed.json'
-const SEED_ARCHIVE_NAME = 'gradle-home-seed.zip'
+const SEED_ARCHIVE_NAMES = ['gradle-home-seed.tar.xz', 'gradle-home-seed.zip']
 
 type FabricVersions = {
   minecraft_version: string
@@ -598,6 +599,11 @@ export function getRuntimeGradlePath(): string {
 
 function bundledJdkSearchPaths(): string[] {
   return [
+    // jlink JRE 优先（NSIS 瘦包配置，仅 60MB）
+    path.join(process.resourcesPath || '', 'jre-21-minimal'),
+    path.join(__dirname, '..', 'resources', 'jre-21-minimal'),
+    path.join(__dirname, '..', '..', 'resources', 'jre-21-minimal'),
+    // 完整 JDK 回退（开发模式 / 旧版安装 / 用户手动放入）
     path.join(process.resourcesPath || '', 'jdk-21'),
     path.join(__dirname, '..', 'resources', 'jdk-21'),
     path.join(__dirname, '..', '..', 'resources', 'jdk-21')
@@ -630,11 +636,13 @@ function bundledGradleHomeSeedPaths(): string[] {
 }
 
 function bundledGradleHomeSeedArchivePaths(): string[] {
-  return [
-    path.join(process.resourcesPath || '', SEED_ARCHIVE_NAME),
-    path.join(__dirname, '..', 'resources', SEED_ARCHIVE_NAME),
-    path.join(__dirname, '..', '..', 'resources', SEED_ARCHIVE_NAME)
-  ]
+  const result: string[] = []
+  for (const name of SEED_ARCHIVE_NAMES) {
+    result.push(path.join(process.resourcesPath || '', name))
+    result.push(path.join(__dirname, '..', 'resources', name))
+    result.push(path.join(__dirname, '..', '..', 'resources', name))
+  }
+  return result
 }
 
 function resolveBundledGradleHomeSeedArchivePath(): string | null {
@@ -650,6 +658,24 @@ function gradleHomeDirLooksValid(home: string): boolean {
       gradleHomeHasFabricCache(home) &&
       gradleHomeHasLoomCache(home)
   )
+}
+
+/**
+ * 检测 NSIS 瘦包首次启动是否需要联网下载 Fabric 依赖种子。
+ *
+ * 满足以下全部条件时返回 true：
+ *  - 应用已打包且为 full 版（NSIS 完整版）
+ *  - 无 bundled seed archive（瘦包不再内置 gradle-home-seed.zip）
+ *  - runtime 中的 gradle-home 未就绪（首次启动或之前未完成下载）
+ *
+ * 渲染进程据此显示下载预估对话框，用户确认后再调用 initToolchain。
+ */
+export function needsFirstTimeDownload(): boolean {
+  if (!app.isPackaged || !isFullEdition()) return false
+  if (resolveBundledGradleHomeSeedArchivePath() !== null) return false
+  const runtimeHome = runtimeGradleHomePath()
+  if (fs.existsSync(runtimeHome) && gradleHomeDirLooksValid(runtimeHome)) return false
+  return true
 }
 
 async function extractGradleHomeSeedArchive(
@@ -987,6 +1013,23 @@ async function ensureGradleHomeFromSeedImpl(
   const archive = resolveBundledGradleHomeSeedArchivePath()
   if (archive) {
     return extractGradleHomeSeedArchive(archive, dest, onProgress)
+  }
+
+  // Packaged + 无 bundled archive: 从 Gitee Releases 下载分片（NSIS 瘦包首次启动）
+  if (app.isPackaged) {
+    onProgress({
+      phase: 'deps',
+      message: '需要联网下载 Fabric 依赖种子（约 500MB，国内 Gitee 镜像）…',
+      percent: 36
+    })
+    const result = await downloadAndExtractSeedShards(dest, (msg, pct) => {
+      onProgress({ phase: 'deps', message: msg, percent: pct })
+    })
+    if (result.ok) {
+      return { ok: true }
+    }
+    // 下载失败则继续回退到报错
+    return { ok: false, error: result.error || 'Fabric 依赖种子下载失败，请检查网络后重启应用' }
   }
 
   if (!seedSrc) {

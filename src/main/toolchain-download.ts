@@ -13,6 +13,13 @@ export const GRADLE_MIRROR_URLS = [
   `https://mirrors.cloud.tencent.com/gradle/${GRADLE_DIST_NAME}.zip`
 ]
 
+// 国内 JDK 镜像（Windows x64，按优先级排序）
+// 优先于 Adoptium API 使用，显著提升国内下载速度
+const JDK_MIRROR_URLS_WIN_X64 = [
+  'https://mirrors.huaweicloud.com/adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip',
+  'https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip'
+]
+
 function adoptiumOs(): string {
   if (process.platform === 'win32') return 'windows'
   if (process.platform === 'darwin') return 'mac'
@@ -92,6 +99,22 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 }
 
 async function resolveJdkDownloadUrl(): Promise<string | null> {
+  // 优先国内镜像（仅 Windows x64，HEAD 检测可用性）
+  if (process.platform === 'win32' && adoptiumArch() === 'x64') {
+    for (const url of JDK_MIRROR_URLS_WIN_X64) {
+      try {
+        const res = await fetch(url, { method: 'HEAD', redirect: 'follow' })
+        if (res.ok) {
+          console.log(`[jdk-download] using mirror: ${new URL(url).host}`)
+          return url
+        }
+      } catch {
+        /* try next mirror */
+      }
+    }
+    console.warn('[jdk-download] 国内镜像不可用，回退到 Adoptium API')
+  }
+
   const os = adoptiumOs()
   const arch = adoptiumArch()
   const api =

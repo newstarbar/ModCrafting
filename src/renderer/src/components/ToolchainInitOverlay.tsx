@@ -15,6 +15,8 @@ interface ToolchainInitOverlayProps {
   projectPreparing: boolean
   edition?: 'dev' | 'full' | 'portable'
   onRetry: () => void
+  downloadConfirmRequired?: boolean
+  onConfirmDownload?: () => void
 }
 
 const STEPS: { id: ToolchainPhase; label: string }[] = [
@@ -48,9 +50,59 @@ function stepStatus(
   return 'pending'
 }
 
-const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, projectPreparing, edition = 'full', onRetry }) => {
-  const showOverlay = !state.ready || projectPreparing || state.phase === 'error'
+const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, projectPreparing, edition = 'full', onRetry, downloadConfirmRequired, onConfirmDownload }) => {
+  const showOverlay = !state.ready || projectPreparing || state.phase === 'error' || downloadConfirmRequired
   if (!showOverlay) return null
+
+  if (downloadConfirmRequired && onConfirmDownload) {
+    return (
+      <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="toolchain-dl-title">
+        <div className="toolchain-init-card toolchain-init-card--download">
+          <div className="toolchain-init-brand">
+            <span className="toolchain-init-logo">M</span>
+            <div>
+              <h1 id="toolchain-dl-title">ModCrafting</h1>
+              <p className="toolchain-init-subtitle">首次启动需要下载构建环境</p>
+            </div>
+          </div>
+
+          <div className="toolchain-init-download-estimate">
+            <p className="toolchain-init-download-intro">
+              安装包已精简至约 400MB，首次使用需联网下载以下资源后即可完全离线开发：
+            </p>
+            <ul className="toolchain-init-download-list">
+              <li>
+                <span className="toolchain-init-download-name">JRE 21（精简版）</span>
+                <span className="toolchain-init-download-size">已内置</span>
+              </li>
+              <li>
+                <span className="toolchain-init-download-name">Gradle 9.5 精简版</span>
+                <span className="toolchain-init-download-size">约 120MB（腾讯云镜像）</span>
+              </li>
+              <li>
+                <span className="toolchain-init-download-name">Fabric 依赖种子（分片）</span>
+                <span className="toolchain-init-download-size">约 500MB（Gitee 镜像）</span>
+              </li>
+            </ul>
+            <div className="toolchain-init-download-total">
+              <span>总计下载量</span>
+              <span className="toolchain-init-download-total-size">约 620MB</span>
+            </div>
+            <p className="toolchain-init-download-hint">
+              国内网络环境下约需 5-10 分钟，下载完成后可完全离线使用。
+            </p>
+          </div>
+
+          <button type="button" className="toolchain-init-confirm-btn" onClick={onConfirmDownload}>
+            立即下载
+          </button>
+          <p className="toolchain-init-lock-notice">
+            环境准备完成前，构建、运行与 AI 开发功能将暂时锁定。
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const isError = state.phase === 'error'
   const displayPercent = Math.min(100, Math.max(0, state.percent))
@@ -107,7 +159,7 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
           <p className="toolchain-init-hint">
             {isPortable
               ? '便携版首次启动需联网下载 JDK、Gradle 与 Fabric 依赖，完成后可离线构建。'
-              : '首次启动需复制约 1GB 离线依赖到本地缓存，请耐心等待，完成后即可完全离线构建。'}
+              : '正在从 Gitee 镜像下载 Fabric 依赖种子（约 500MB），请耐心等待。'}
           </p>
         )}
 
@@ -120,7 +172,7 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
               {isPortable ? (
                 <li>便携版需要稳定网络连接，请检查网络后重试</li>
               ) : (
-                <li>若安装包不完整，请重新下载完整版（Setup）安装包</li>
+                <li>若网络不稳定，请检查后点击重新初始化</li>
               )}
             </ul>
             <button type="button" className="toolchain-init-retry-btn" onClick={onRetry}>

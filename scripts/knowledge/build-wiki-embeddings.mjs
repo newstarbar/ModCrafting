@@ -170,11 +170,30 @@ async function main () {
   }
   console.log('')
 
-  // 写入二进制 embeddings
+  // 写入二进制 embeddings (Int8 量化)
+  // 文件布局: [scaleFactors (Float32 × N)] [int8Data (Int8 × N × D)]
+  // 反量化: float32[i * D + j] = int8Data[i * D + j] * scaleFactors[i]
+  const int8Data = new Int8Array(chunks.length * DIMENSION)
+  const scaleFactors = new Float32Array(chunks.length)
+  for (let i = 0; i < chunks.length; i++) {
+    let maxAbs = 0
+    const base = i * DIMENSION
+    for (let j = 0; j < DIMENSION; j++) {
+      maxAbs = Math.max(maxAbs, Math.abs(allEmbeddings[base + j]))
+    }
+    const scale = maxAbs > 0 ? maxAbs / 127 : 1
+    scaleFactors[i] = scale
+    for (let j = 0; j < DIMENSION; j++) {
+      int8Data[base + j] = Math.round(allEmbeddings[base + j] / scale)
+    }
+  }
   const binPath = path.join(outDir, 'embeddings.bin')
-  const buf = Buffer.from(allEmbeddings.buffer)
+  const buf = Buffer.concat([
+    Buffer.from(scaleFactors.buffer),
+    Buffer.from(int8Data.buffer)
+  ])
   fs.writeFileSync(binPath, buf)
-  console.log(`embeddings 已写入: ${path.relative(ROOT, binPath)} (${buf.length} bytes)`)
+  console.log(`embeddings 已写入: ${path.relative(ROOT, binPath)} (${buf.length} bytes, int8 量化)`)
 
   // 写入元数据（不包含 embedding）
   const metaChunks = chunks.map((c) => ({
@@ -194,10 +213,11 @@ async function main () {
   const manifest = {
     model: MODEL_ID,
     dimension: DIMENSION,
+    quantization: 'int8',
     chunkCount: chunks.length,
     builtAt: new Date().toISOString(),
     files: [
-      { name: 'embeddings.bin', type: 'float32-binary', size: buf.length },
+      { name: 'embeddings.bin', type: 'int8-quantized-binary', size: buf.length },
       { name: 'chunks.json', type: 'metadata-json' }
     ]
   }

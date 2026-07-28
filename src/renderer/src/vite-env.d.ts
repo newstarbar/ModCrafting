@@ -166,6 +166,7 @@ interface ModCraftingApi {
   getToolchainStatus: () => Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean; edition: 'dev' | 'full' | 'portable' }>
   checkRuntimeWritable: () => Promise<{ writable: boolean; runtimeRoot: string; error?: string }>
   getEdition: () => Promise<'dev' | 'full' | 'portable'>
+  needsFirstTimeDownload: () => Promise<boolean>
   checkForUpdates: () => Promise<{ ok: boolean; currentVersion: string; latestVersion?: string; hasUpdate?: boolean; source?: 'gitee' | 'github'; error?: string }>
   getAppVersion: () => Promise<string>
   openReleasePages: () => Promise<{ success: boolean }>

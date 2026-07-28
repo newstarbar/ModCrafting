@@ -33,6 +33,7 @@ interface IndexManifest {
   dimension: number
   chunkCount: number
   builtAt: string
+  quantization?: 'int8' | 'float32'
 }
 
 const MODEL_ID = 'Xenova/all-MiniLM-L6-v2'
@@ -75,12 +76,34 @@ function loadIndexFiles (): { ok: boolean; error?: string } {
     chunks = JSON.parse(fs.readFileSync(chunksPath, 'utf-8')) as ChunkMeta[]
 
     const buf = fs.readFileSync(binPath)
-    const floatBuf = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)
+    const dim = manifest.dimension
+    const expectedFloats = chunks.length * dim
 
-    if (floatBuf.length !== chunks.length * manifest.dimension) {
-      return { ok: false, error: `索引维度不匹配：expected ${chunks.length * manifest.dimension}, got ${floatBuf.length}` }
+    if (manifest.quantization === 'int8') {
+      // 文件布局: [scaleFactors (Float32 × N)] [int8Data (Int8 × N × D)]
+      const scaleBytes = chunks.length * 4
+      if (buf.byteLength < scaleBytes + chunks.length * dim) {
+        return { ok: false, error: `Int8 索引文件大小不足：expected ${scaleBytes + chunks.length * dim}, got ${buf.byteLength}` }
+      }
+      const scaleFactors = new Float32Array(buf.buffer, buf.byteOffset, chunks.length)
+      const int8Data = new Int8Array(buf.buffer, buf.byteOffset + scaleBytes, chunks.length * dim)
+      const float32 = new Float32Array(expectedFloats)
+      for (let i = 0; i < chunks.length; i++) {
+        const scale = scaleFactors[i]
+        const base = i * dim
+        for (let j = 0; j < dim; j++) {
+          float32[base + j] = int8Data[base + j] * scale
+        }
+      }
+      embeddings = float32
+    } else {
+      // 原生 Float32 格式（向后兼容）
+      const floatBuf = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)
+      if (floatBuf.length !== expectedFloats) {
+        return { ok: false, error: `索引维度不匹配：expected ${expectedFloats}, got ${floatBuf.length}` }
+      }
+      embeddings = floatBuf
     }
-    embeddings = floatBuf
     return { ok: true }
   } catch (err) {
     return { ok: false, error: `加载索引失败: ${String(err)}` }
