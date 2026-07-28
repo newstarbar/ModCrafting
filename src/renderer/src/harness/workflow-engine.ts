@@ -835,6 +835,8 @@ export class WorkflowEngine {
 	private verifyTarget: VerifyTarget | null;
 	private runClientReady = false;
 	private inGameVerified = false;
+	/** 前一个步骤是否为 run 类型（连续 run 步骤间不重置 runClientReady） */
+	private prevStepWasRun = false;
 	private lastVerifyWasTitleScreen = false;
 	private lastVerifyMismatch = "";
 	/** GUI 布局预览状态：当前步骤是否已完成预览（用户确认过布局 JSON） */
@@ -1087,10 +1089,11 @@ export class WorkflowEngine {
 			if (!wasResumedRun && this.onCancelPendingGuiLayouts) {
 				this.onCancelPendingGuiLayouts();
 			}
-			if (step.kind === "run" && !wasResumedRun) {
+			if (step.kind === "run" && !wasResumedRun && !this.prevStepWasRun) {
 				this.runClientReady = false;
 				this.inGameVerified = false;
 			}
+			this.prevStepWasRun = step.kind === "run";
 			this.emitPlanState();
 			const delegatedEvidence: ToolResult[] = [];
 
@@ -2084,6 +2087,20 @@ export class WorkflowEngine {
 			}
 
 			if (!completed && step.status !== "completed") {
+				// run 步骤渐进式降级：已验证过游戏内功能则标记完成，避免"32工具全成功但步骤失败"
+				if (step.kind === "run" && this.inGameVerified && this.runClientReady) {
+					step.status = "completed";
+					this.planTracker.advanceCurrent("run_verified_timeout");
+					this.emitPlanState();
+					this.emit({
+						kind: EventKind.Notice,
+						notice: {
+							level: "info",
+							text: `步骤 #${step.id} 已达迭代上限，但游戏内功能已验证（inGameVerified），标记为完成。`
+						}
+					});
+					continue;
+				}
 				step.status = "failed";
 				this.emitPlanState();
 				const remaining = this.steps

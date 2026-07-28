@@ -329,9 +329,80 @@ async function waitForInWorld(instanceId?: string): Promise<BridgeCallResult> {
   return last
 }
 
+/**
+ * 自动创建测试世界：点击"创建新的世界"→开启作弊→确认创建→等待加载。
+ * 封装在 mc_ensure_test_world 内部，不消耗 AI 的迭代次数。
+ */
+async function autoCreateTestWorld(instanceId?: string): Promise<{ ok: boolean; message: string }> {
+  // 1. 点击"创建新的世界"进入创建界面
+  const enterCreate = await callMcBridge(
+    'POST', '/v1/input',
+    { action: 'click_widget', label: '创建新的世界' },
+    instanceId
+  )
+  if (!enterCreate.ok) {
+    return {
+      ok: false,
+      message: '自动创建测试世界失败：无法点击"创建新的世界"按钮。' + formatBridgeResult(enterCreate) +
+        '\n提示：请用 mc_input 手动创建世界。'
+    }
+  }
+  await sleep(1500)
+
+  // 2. 开启"允许命令"（作弊权限）
+  const cheatsToggle = await callMcBridge(
+    'POST', '/v1/input',
+    { action: 'click_widget', label: '允许命令' },
+    instanceId
+  )
+  // 即使切换失败也继续（可能已开启或按钮文案不同）
+  if (cheatsToggle.ok) await sleep(500)
+
+  // 3. 点击"创建新的世界"确认按钮
+  const confirmCreate = await callMcBridge(
+    'POST', '/v1/input',
+    { action: 'click_widget', label: '创建新的世界' },
+    instanceId
+  )
+  if (!confirmCreate.ok) {
+    // 尝试备选文案
+    const altConfirm = await callMcBridge(
+      'POST', '/v1/input',
+      { action: 'click_widget', label: '创建新世界' },
+      instanceId
+    )
+    if (!altConfirm.ok) {
+      return {
+        ok: false,
+        message: '自动创建测试世界失败：无法确认创建。' + formatBridgeResult(confirmCreate) +
+          '\n提示：请用 mc_inspect 检视当前界面，用 mc_input 手动确认创建。'
+      }
+    }
+  }
+
+  // 4. 等待世界加载完成
+  const worldResult = await waitForInWorld(instanceId)
+  const worldState = parseInspectState(worldResult)
+  if (worldState.inWorld) {
+    const player = (worldResult.data.player as Record<string, unknown>) || {}
+    return {
+      ok: true,
+      message: [
+        '已自动创建测试世界并进入。',
+        `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
+        '提示：现在可以执行功能测试场景（如 mc_command 生成生物、mc_input 移动玩家），再用 mc_screenshot/mc_inspect 验证效果。',
+        '::kh::测试环境|世界|已进入'
+      ].join('\n')
+    }
+  }
+  return {
+    ok: false,
+    message: '测试世界创建后等待加载超时。请用 mc_inspect 检视当前状态，或等待加载完成后重试。'
+  }
+}
+
 /** 检测聊天缓冲中是否有权限错误信号 */
 function chatIndicatesPermissionError(messages: Array<Record<string, unknown>>): boolean {
-  if (!Array.isArray(messages) || messages.length === 0) return false
   // 检查最近 10 条消息
   const recent = messages.slice(-10)
   for (const m of recent) {
@@ -475,19 +546,21 @@ export const mcEnsureTestWorldTool: Tool = {
       const worldEntry = widgetList.find((w) => {
         const msg = String(w.message || '')
         const type = String(w.type || '')
-        // 排除明显的功能按钮（创建新世界、删除等）
-        return msg.length > 0 && !msg.includes('创建') && !msg.includes('新建') &&
+        const active = w.active !== false
+        // 排除功能按钮（创建/删除/进入/选定等）和不可激活控件
+        return active && msg.length > 0 &&
+          !msg.includes('创建') && !msg.includes('新建') &&
           !msg.includes('删除') && !msg.includes('编辑') && !msg.includes('重建') &&
+          !msg.includes('进入') && !msg.includes('选定') &&
           !msg.includes('create') && !msg.includes('delete') && !msg.includes('edit') &&
-          (type.includes('Button') || type.includes('Entry') || type.includes('World'))
+          (type.includes('World') || type.includes('Entry') ||
+           (type.includes('Button') && !msg.includes('搜索')))
       })
 
       if (!worldEntry) {
-        return [
-          '在世界选择界面未找到已有存档。',
-          '提示：当前没有任何单人存档。请手动创建一个世界（创建时建议开启作弊权限），或用 mc_input click_widget label="创建新世界" 进入创建流程。',
-          '::kh::测试环境|世界|无存档'
-        ].join('\n')
+        // 没有存档时自动创建测试世界，避免 AI 手动操作消耗大量迭代
+        const createResult = await autoCreateTestWorld(instanceId)
+        return createResult.message
       }
 
       // 点击世界条目

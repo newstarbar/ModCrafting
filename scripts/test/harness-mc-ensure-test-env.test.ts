@@ -167,22 +167,36 @@ test('mc_ensure_test_world: title screen navigates through singleplayer click', 
   }
 })
 
-test('mc_ensure_test_world: no save in select world screen returns hint', async () => {
+test('mc_ensure_test_world: no save in select world screen auto-creates test world', async () => {
   const sequence: BridgeCallResult[] = [
+    // 初始检视：在 TitleScreen
     ok({
       inWorld: false,
       screen: { kind: 'title', simpleName: 'TitleScreen' },
       player: { ok: false }
     }),
+    // 点击"单人游戏"
     ok({ clicked: true }),
+    // 检视：SelectWorldScreen，仅有功能按钮，没有世界条目
     ok({
       inWorld: false,
       screen: { kind: 'select_world', simpleName: 'SelectWorldScreen' },
-      // 仅有功能按钮，没有世界条目
       widgets: [
-        { index: 0, message: '创建新世界', type: 'ButtonWidget' },
-        { index: 1, message: '删除', type: 'ButtonWidget' }
+        { index: 0, message: '创建新的世界', type: 'ButtonWidget', active: true },
+        { index: 1, message: '删除', type: 'ButtonWidget', active: true }
       ]
+    }),
+    // autoCreateTestWorld: 点击"创建新的世界"
+    ok({ clicked: true }),
+    // autoCreateTestWorld: 点击"允许命令"
+    ok({ clicked: true }),
+    // autoCreateTestWorld: 点击"创建新的世界"确认
+    ok({ clicked: true }),
+    // waitForInWorld: 检视 → 已进入世界
+    ok({
+      inWorld: true,
+      screen: { kind: 'in_world', simpleName: 'InWorld' },
+      player: { ok: true, name: 'TestPlayer', x: 0, y: 64, z: 0, gamemode: 'creative' }
     })
   ]
   let i = 0
@@ -190,8 +204,8 @@ test('mc_ensure_test_world: no save in select world screen returns hint', async 
   try {
     const result = await mcEnsureTestWorldTool.execute(ctx, {})
     const output = String(result)
-    assert.match(output, /未找到已有存档|没有任何单人存档/)
-    assert.match(output, /::kh::测试环境\|世界\|无存档/)
+    assert.match(output, /已自动创建测试世界/)
+    assert.match(output, /::kh::测试环境\|世界\|已进入/)
   } finally {
     clearWindowMock()
   }
