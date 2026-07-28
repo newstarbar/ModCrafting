@@ -154,6 +154,18 @@ public final class BridgeHttpServer {
             case "/v1/widgets" -> GameQueries.widgets();
             case "/v1/look" -> GameQueries.look();
             case "/v1/nearby" -> GameQueries.nearby(queryDouble(rawQuery, "radius", 8.0));
+            case "/v1/entity" -> {
+                String uuid = queryString(rawQuery, "uuid", null);
+                String type = queryString(rawQuery, "type", null);
+                if (uuid != null) {
+                    yield GameQueries.entityDetail(uuid);
+                } else if (type != null) {
+                    yield GameQueries.entityByType(type);
+                } else {
+                    yield Map.of("ok", false, "code", "BAD_REQUEST",
+                            "error", "需要 uuid 或 type 参数");
+                }
+            }
             case "/v1/chat" -> GameQueries.chatRecent((int) queryDouble(rawQuery, "limit", 50));
             case "/v1/inspect" -> {
                 Map<String, Object> out = new LinkedHashMap<>();
@@ -219,6 +231,21 @@ public final class BridgeHttpServer {
             if (!key.equals(part.substring(0, eq))) continue;
             try {
                 return Double.parseDouble(java.net.URLDecoder.decode(part.substring(eq + 1), StandardCharsets.UTF_8));
+            } catch (Exception ignored) {
+                return def;
+            }
+        }
+        return def;
+    }
+
+    private static String queryString(String rawQuery, String key, String def) {
+        if (rawQuery == null || rawQuery.isBlank()) return def;
+        for (String part : rawQuery.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq <= 0) continue;
+            if (!key.equals(part.substring(0, eq))) continue;
+            try {
+                return java.net.URLDecoder.decode(part.substring(eq + 1), StandardCharsets.UTF_8);
             } catch (Exception ignored) {
                 return def;
             }

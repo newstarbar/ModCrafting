@@ -145,6 +145,48 @@ export const mcWorldTool: Tool = {
   }
 }
 
+/**
+ * 观察指定实体的详细状态（AI 目标、移动速度、爆炸倒计时、传送状态等）。
+ * 用途：验证实体行为修改（如苦力怕爆炸、末影人传送）。
+ */
+export const mcObserveEntityTool: Tool = {
+  name: 'mc_observe_entity',
+  description:
+    '观察指定实体的详细状态（观测桥 /v1/entity）。返回 AI 目标、移动速度、爆炸倒计时、传送状态、特殊状态等。' +
+    '用途：验证实体行为修改（如苦力怕爆炸改樱花、末影人移动方式修改）。' +
+    '参数：uuid（精确观察，来自 mc_world 的 entities 列表）或 type（按类型查找最近实体，如 minecraft:creeper）。' +
+    '实体行为修改类功能必须用本工具对比状态变化，禁止仅凭截图宣称完成。',
+  schema: {
+    type: 'object',
+    properties: {
+      uuid: { type: 'string', description: '实体 UUID（来自 mc_world 的 entities 列表）' },
+      type: { type: 'string', description: '实体类型 ID（如 minecraft:creeper 或 creeper），自动查找最近的' },
+      instanceId: { type: 'string', description: '可选实例 id' }
+    }
+  },
+  readOnly: () => true,
+  async execute(_ctx: ToolContext, args: Record<string, unknown>) {
+    const uuid = args.uuid ? String(args.uuid) : undefined
+    const type = args.type ? String(args.type) : undefined
+    const q = uuid
+      ? `?uuid=${encodeURIComponent(uuid)}`
+      : type
+        ? `?type=${encodeURIComponent(type)}`
+        : ''
+    if (!q) {
+      return [
+        'Error: 需要提供 uuid 或 type 参数。',
+        '用法：',
+        '- mc_observe_entity type=minecraft:creeper（按类型查找最近实体）',
+        '- mc_observe_entity uuid=12345abcde（精确观察指定实体）',
+        '提示：uuid 可从 mc_world 返回的 entities 列表中获取。'
+      ].join('\n')
+    }
+    const result = await callMcBridge('GET', `/v1/entity${q}`, undefined, optionalInstanceId(args))
+    return formatBridgeResult(result)
+  }
+}
+
 export const mcChatTool: Tool = {
   name: 'mc_chat',
   description: '读取近期聊天，或发送聊天/命令（以 / 开头的命令可用）。',
@@ -390,7 +432,8 @@ async function autoCreateTestWorld(instanceId?: string): Promise<{ ok: boolean; 
       message: [
         '已自动创建测试世界并进入。',
         `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
-        '提示：现在可以执行功能测试场景（如 mc_command 生成生物、mc_input 移动玩家），再用 mc_screenshot/mc_inspect 验证效果。',
+        '下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。',
+        'feature_type 取值：new_item（新物品）/ new_block（新方块）/ new_recipe（新合成配方）/ entity_behavior（实体行为修改，如苦力怕爆炸改樱花）/ player_interaction（玩家交互功能，如闪电剑）/ hud_gui（HUD或界面）。',
         '::kh::测试环境|世界|已进入'
       ].join('\n')
     }
@@ -468,7 +511,8 @@ export const mcEnsureTestWorldTool: Tool = {
       return [
         '已进入游戏世界，无需重复进入。',
         `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
-        '提示：现在可以执行功能测试场景（如 mc_command 生成生物、mc_input 移动玩家），再用 mc_screenshot/mc_inspect 验证效果。',
+        '下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。',
+        'feature_type 取值：new_item（新物品）/ new_block（新方块）/ new_recipe（新合成配方）/ entity_behavior（实体行为修改）/ player_interaction（玩家交互功能）/ hud_gui（HUD或界面）。',
         '::kh::测试环境|世界|已进入'
       ].join('\n')
     }
@@ -482,7 +526,7 @@ export const mcEnsureTestWorldTool: Tool = {
         return [
           '世界加载完成，已进入游戏世界。',
           `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
-          '提示：现在可以执行功能测试场景。建议先调用 mc_ensure_cheats。',
+          '下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。',
           '::kh::测试环境|世界|已进入'
         ].join('\n')
       }
@@ -519,15 +563,31 @@ export const mcEnsureTestWorldTool: Tool = {
 
       if (afterState.inWorld) {
         // 某些情况点击会直接进入世界
-        return '已进入游戏世界。提示：现在可以执行功能测试场景。'
+        return [
+          '已进入游戏世界。',
+          '下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。',
+          '::kh::测试环境|世界|已进入'
+        ].join('\n')
       }
 
-      if (afterState.screenKind !== 'select_world' && afterState.screenClass !== 'SelectWorldScreen') {
+      // 1.21.4 中无存档时点击"单人游戏"会直接进入 CreateWorldScreen（创建世界界面）
+      // 同时识别 SelectWorldScreen（选择世界界面）和 CreateWorldScreen（创建世界界面）
+      const isSelectWorld = afterState.screenKind === 'select_world' ||
+        afterState.screenClass === 'SelectWorldScreen'
+      const isCreateWorld = afterState.screenClass.includes('CreateWorld') ||
+        afterState.screenClass.includes('CreateNewWorld') ||
+        afterState.screenKind === 'create_world'
+      if (!isSelectWorld && !isCreateWorld) {
         return [
-          '点击"单人游戏"后未进入世界选择界面，当前界面：' + afterState.screenKind + ' / ' + afterState.screenClass,
+          '点击"单人游戏"后未进入世界选择/创建界面，当前界面：' + afterState.screenKind + ' / ' + afterState.screenClass,
           '提示：请用 mc_inspect 检视当前界面，用 mc_input click_widget 手动操作。',
           '::kh::测试环境|世界|选择界面阻塞'
         ].join('\n')
+      }
+      // 如果已经直接进入 CreateWorldScreen（无存档场景），跳过世界条目查找，直接自动创建
+      if (isCreateWorld && !isSelectWorld) {
+        const createResult = await autoCreateTestWorld(instanceId)
+        return createResult.message
       }
 
       // c. 在世界选择界面，查找并点击第一个世界条目
@@ -608,8 +668,9 @@ export const mcEnsureTestWorldTool: Tool = {
         return [
           '已进入游戏世界：' + (worldEntry.message || 'unknown'),
           `玩家：${player.name || 'unknown'} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || 'unknown'}`,
-          '提示：现在可以执行功能测试场景（如 mc_command 生成生物、mc_input 移动玩家），再用 mc_screenshot/mc_inspect 验证效果。',
-          '建议：若需要执行命令，先调用 mc_ensure_cheats 确保作弊权限已开启。',
+          '下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。',
+          'feature_type 取值：new_item / new_block / new_recipe / entity_behavior / player_interaction / hud_gui。',
+          '提示：若需要执行命令（give/summon/gamemode），先调用 mc_ensure_cheats 确保作弊权限已开启。',
           '::kh::测试环境|世界|已进入'
         ].join('\n')
       }
@@ -776,6 +837,7 @@ export const MC_OBSERVER_TOOLS: Tool[] = [
   mcInspectTool,
   mcInventoryTool,
   mcWorldTool,
+  mcObserveEntityTool,
   mcChatTool,
   mcCommandTool,
   mcInputTool,
@@ -787,7 +849,8 @@ export const MC_READONLY_TOOLS = new Set([
   'mc_screenshot',
   'mc_inspect',
   'mc_inventory',
-  'mc_world'
+  'mc_world',
+  'mc_observe_entity'
 ])
 
 export const MC_WRITE_TOOLS = new Set([

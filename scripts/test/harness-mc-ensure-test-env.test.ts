@@ -161,7 +161,8 @@ test('mc_ensure_test_world: title screen navigates through singleplayer click', 
     const output = String(result)
     assert.match(output, /已进入游戏世界/)
     assert.match(output, /测试世界/)
-    assert.match(output, /建议.*mc_ensure_cheats/)
+    assert.match(output, /mc_test_scenario/)
+    assert.match(output, /mc_ensure_cheats/)
   } finally {
     clearWindowMock()
   }

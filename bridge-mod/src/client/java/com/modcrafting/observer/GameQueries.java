@@ -9,6 +9,10 @@ import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.entity.mob.CreeperEntity;
+import net.minecraft.entity.mob.EndermanEntity;
+import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
@@ -17,6 +21,7 @@ import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 
 import java.io.IOException;
@@ -260,6 +265,179 @@ public final class GameQueries {
         out.put("entities", entities);
         out.put("blocks", blocks);
         return out;
+    }
+
+    /**
+     * 按 UUID 查询实体详细状态（AI 目标、移动、特殊状态等）。
+     * 用于验证实体行为修改（如苦力怕爆炸、末影人传送）。
+     */
+    public static Map<String, Object> entityDetail(String uuid) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ClientPlayerEntity player = client.player;
+        if (player == null || client.world == null) {
+            return error("NOT_IN_WORLD", "玩家尚未进入世界");
+        }
+        World world = client.world;
+        Entity target = null;
+        // 在玩家附近 128 格内查找（足够覆盖测试场景，避免全世界遍历性能问题）
+        Box searchBox = player.getBoundingBox().expand(128.0);
+        for (Entity e : world.getOtherEntities(player, searchBox)) {
+            if (e.getUuidAsString().equals(uuid)) {
+                target = e;
+                break;
+            }
+        }
+        if (target == null) {
+            return error("ENTITY_NOT_FOUND", "未找到 UUID 为 " + uuid + " 的实体（玩家附近 128 格内）");
+        }
+        return entityDetailMap(target, player);
+    }
+
+    /**
+     * 按实体类型查找最近的实体并返回详细状态。
+     * type 形如 "minecraft:creeper" 或 "creeper"。
+     */
+    public static Map<String, Object> entityByType(String type) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ClientPlayerEntity player = client.player;
+        if (player == null || client.world == null) {
+            return error("NOT_IN_WORLD", "玩家尚未进入世界");
+        }
+        World world = client.world;
+        // 归一化 type：允许 "creeper" 或 "minecraft:creeper"
+        String normalizedType = type.contains(":") ? type : "minecraft:" + type;
+        Box searchBox = player.getBoundingBox().expand(64.0);
+        Entity nearest = null;
+        double nearestDistSq = Double.MAX_VALUE;
+        for (Entity e : world.getOtherEntities(player, searchBox)) {
+            String entityId = Registries.ENTITY_TYPE.getId(e.getType()).toString();
+            if (!entityId.equals(normalizedType)) {
+                continue;
+            }
+            double dSq = player.squaredDistanceTo(e);
+            if (dSq < nearestDistSq) {
+                nearestDistSq = dSq;
+                nearest = e;
+            }
+        }
+        if (nearest == null) {
+            return error("ENTITY_NOT_FOUND", "未找到类型为 " + normalizedType + " 的实体（玩家附近 64 格内）");
+        }
+        return entityDetailMap(nearest, player);
+    }
+
+    /**
+     * 构造实体详细状态 Map（复用 entitySummary 基础信息 + AI/移动/特殊状态）。
+     */
+    private static Map<String, Object> entityDetailMap(Entity target, ClientPlayerEntity player) {
+        Map<String, Object> m = new LinkedHashMap<>(entitySummary(target));
+
+        // 移动状态
+        Vec3d vel = target.getVelocity();
+        m.put("velocityX", round(vel.x));
+        m.put("velocityY", round(vel.y));
+        m.put("velocityZ", round(vel.z));
+        m.put("speed", round(vel.length()));
+        m.put("onGround", target.isOnGround());
+        m.put("fallDistance", round(target.fallDistance));
+        m.put("yaw", round(target.getYaw()));
+        m.put("pitch", round(target.getPitch()));
+
+        // LivingEntity 通用属性
+        if (target instanceof LivingEntity living) {
+            // 移动速度属性
+            try {
+                double moveSpeed = living.getAttributeValue(EntityAttributes.MOVEMENT_SPEED);
+                m.put("movementSpeed", round(moveSpeed));
+            } catch (Exception ignored) {
+                // 某些实体可能未注册该属性
+            }
+            try {
+                double attackSpeed = living.getAttributeValue(EntityAttributes.ATTACK_SPEED);
+                m.put("attackSpeed", round(attackSpeed));
+            } catch (Exception ignored) {
+            }
+            try {
+                double attackDamage = living.getAttributeValue(EntityAttributes.ATTACK_DAMAGE);
+                m.put("attackDamage", round(attackDamage));
+            } catch (Exception ignored) {
+            }
+            // 状态效果
+            try {
+                List<String> effects = new ArrayList<>();
+                living.getActiveStatusEffects().forEach((effect, instance) -> {
+                    // 1.21.4 中 effect 是 RegistryEntry<StatusEffect>，需要 .value() 取实际 StatusEffect
+                    String effectId = Registries.STATUS_EFFECT.getId(effect.value()).toString();
+                    int amplifier = instance.getAmplifier();
+                    int duration = instance.getDuration();
+                    effects.add(effectId + " (amp=" + amplifier + ", dur=" + duration + ")");
+                });
+                m.put("activeStatusEffects", effects);
+            } catch (Exception ignored) {
+            }
+            // 是否在攻击/受伤
+            m.put("hurtTime", living.hurtTime);
+            m.put("maxHurtTime", living.maxHurtTime);
+            m.put("deathTime", living.deathTime);
+        }
+
+        // MobEntity AI 状态
+        if (target instanceof MobEntity mob) {
+            try {
+                LivingEntity targetEntity = mob.getTarget();
+                m.put("targetEntity", targetEntity != null ? entitySummary(targetEntity) : null);
+                // 用 targetEntity != null 判断是否愤怒/仇恨中
+                m.put("angry", targetEntity != null);
+            } catch (Exception ignored) {
+                m.put("targetEntity", null);
+                m.put("angry", false);
+            }
+            try {
+                m.put("persistent", mob.isPersistent());
+            } catch (Exception ignored) {
+            }
+            // AI 状态标志
+            try {
+                m.put("AiDisabled", mob.isAiDisabled());
+            } catch (Exception ignored) {
+            }
+        }
+
+        // CreeperEntity 特殊状态（爆炸倒计时）
+        if (target instanceof CreeperEntity creeper) {
+            try {
+                // getClientFuseTime(float tickDelta) 返回客户端爆炸倒计时（0~1）
+                float clientFuse = creeper.getClientFuseTime(0.0F);
+                m.put("currentFuseTime", round(clientFuse));
+            } catch (Exception ignored) {
+            }
+            try {
+                m.put("ignited", creeper.isIgnited());
+            } catch (Exception ignored) {
+            }
+            try {
+                m.put("charged", creeper.isCharged());
+            } catch (Exception ignored) {
+            }
+        }
+
+        // EndermanEntity 特殊状态（愤怒/传送）
+        // 1.21.4 Yarn 中 NeutralMob 接口方法为 getAngerTime()（Mojang 名 getRemainingPersistentAngerTime）
+        if (target instanceof EndermanEntity enderman) {
+            try {
+                int angerTime = enderman.getAngerTime();
+                m.put("angerTime", angerTime);
+                m.put("angry", angerTime > 0);
+            } catch (Exception ignored) {
+            }
+            try {
+                // 搬运的方块状态（DATA_CARRY_STATE）
+                m.put("carriedBlock", String.valueOf(enderman.getCarriedBlock()));
+            } catch (Exception ignored) {
+            }
+        }
+
+        return m;
     }
 
     /** 防重入标志：截图进行中拒绝新触发 */
