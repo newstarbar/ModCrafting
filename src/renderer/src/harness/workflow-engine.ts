@@ -1346,6 +1346,41 @@ export class WorkflowEngine {
 						this.emitRejected(id, guided);
 						continue;
 					}
+					// inspect/write/recipe/mixin 步骤的 complete_step 被拒绝（缺少证据）时，
+					// 必须给 AI 明确的反馈，避免 AI 反复调用 complete_step 陷入循环
+					if (rejected.toolName === "complete_step" && (step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin")) {
+						const missingPaths = step.kind === "write" ? missingWriteEvidencePaths(step, [...resultsById.values()]) : [];
+						let evidenceHint: string;
+						if (step.kind === "inspect") {
+							const readHint = step.targetPath ? `read_file("${step.targetPath}")` : "read_file / grep";
+							evidenceHint = `当前 inspect 步骤缺少证据：请先调用 ${readHint} 读取目标文件，确认代码事实后再 complete_step。`;
+						} else if (step.kind === "write") {
+							evidenceHint = missingPaths.length > 0
+								? `当前 write 步骤缺少写入证据：以下文件尚未写入 ${missingPaths.map((p) => `"${p}"`).join(", ")}。请用 write_file/edit_file 写入目标文件后再 complete_step。`
+								: `当前 write 步骤缺少写入证据：请用 write_file/edit_file 写入目标文件后再 complete_step。`;
+						} else if (step.kind === "recipe") {
+							evidenceHint = `当前 recipe 步骤缺少证据：请用 create_recipe / fabric_recipe_generate 生成配方并校验后再 complete_step。`;
+						} else {
+							evidenceHint = `当前 mixin 步骤缺少证据：请用 fabric_mixin_scaffold / fabric_mixin_register 生成并注册 Mixin 后再 complete_step。`;
+						}
+						const guidedOutput =
+							`blocked: [evidence_required] 步骤 #${step.id}（${step.title}）的 complete_step 被拒绝：验收证据未满足。\n` +
+							evidenceHint +
+							`\n禁止反复调用 complete_step；请先执行上述工具获取证据。`;
+						const guided: ToolResult = {
+							output: guidedOutput,
+							error: guidedOutput,
+							durationMs: 0,
+							ok: false,
+							toolName: "complete_step",
+							args: rejected.args,
+							exitCode: null,
+							errorKind: "evidence_required"
+						};
+						validation.rejected.set(id, guided);
+						this.emitRejected(id, guided);
+						continue;
+					}
 					this.emitRejected(id, rejected);
 				}
 				// Hard-ban tools that already hit the not-offered streak brake.
