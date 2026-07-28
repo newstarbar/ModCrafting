@@ -374,24 +374,36 @@ async function waitForInWorld(instanceId?: string): Promise<BridgeCallResult> {
 /**
  * 自动创建测试世界：点击"创建新的世界"→开启作弊→确认创建→等待加载。
  * 封装在 mc_ensure_test_world 内部，不消耗 AI 的迭代次数。
+ * @param alreadyInCreateScreen 如果已经在 CreateWorldScreen 中，跳过第一步（点击"创建新的世界"进入创建界面）
  */
-async function autoCreateTestWorld(instanceId?: string): Promise<{ ok: boolean; message: string }> {
-  // 1. 点击"创建新的世界"进入创建界面
-  const enterCreate = await callMcBridge(
-    'POST', '/v1/input',
-    { action: 'click_widget', label: '创建新的世界' },
-    instanceId
-  )
-  if (!enterCreate.ok) {
-    return {
-      ok: false,
-      message: '自动创建测试世界失败：无法点击"创建新的世界"按钮。' + formatBridgeResult(enterCreate) +
-        '\n提示：请用 mc_input 手动创建世界。'
+async function autoCreateTestWorld(instanceId?: string, alreadyInCreateScreen = false): Promise<{ ok: boolean; message: string }> {
+  // 1. 点击"创建新的世界"进入创建界面（如果已经在创建界面则跳过）
+  if (!alreadyInCreateScreen) {
+    const enterCreate = await callMcBridge(
+      'POST', '/v1/input',
+      { action: 'click_widget', label: '创建新的世界' },
+      instanceId
+    )
+    if (!enterCreate.ok) {
+      // 尝试备选文案
+      const altEnter = await callMcBridge(
+        'POST', '/v1/input',
+        { action: 'click_widget', label: '创建新世界' },
+        instanceId
+      )
+      if (!altEnter.ok) {
+        return {
+          ok: false,
+          message: '自动创建测试世界失败：无法点击"创建新的世界"按钮。' + formatBridgeResult(enterCreate) +
+            '\n提示：请用 mc_inspect 检视当前界面，用 mc_input click_widget 手动点击创建按钮。'
+        }
+      }
     }
+    await sleep(1500)
   }
-  await sleep(1500)
 
   // 2. 开启"允许命令"（作弊权限）
+  // 1.21.4 中按钮文案可能是"允许命令"或"Allow Commands"
   const cheatsToggle = await callMcBridge(
     'POST', '/v1/input',
     { action: 'click_widget', label: '允许命令' },
@@ -400,25 +412,25 @@ async function autoCreateTestWorld(instanceId?: string): Promise<{ ok: boolean; 
   // 即使切换失败也继续（可能已开启或按钮文案不同）
   if (cheatsToggle.ok) await sleep(500)
 
-  // 3. 点击"创建新的世界"确认按钮
-  const confirmCreate = await callMcBridge(
-    'POST', '/v1/input',
-    { action: 'click_widget', label: '创建新的世界' },
-    instanceId
-  )
-  if (!confirmCreate.ok) {
-    // 尝试备选文案
-    const altConfirm = await callMcBridge(
+  // 3. 点击确认创建按钮（1.21.4 中文案为"创建新世界"，旧版为"创建新的世界"）
+  const confirmLabels = ['创建新世界', '创建新的世界', 'Create New World']
+  let confirmOk = false
+  for (const label of confirmLabels) {
+    const confirmCreate = await callMcBridge(
       'POST', '/v1/input',
-      { action: 'click_widget', label: '创建新世界' },
+      { action: 'click_widget', label },
       instanceId
     )
-    if (!altConfirm.ok) {
-      return {
-        ok: false,
-        message: '自动创建测试世界失败：无法确认创建。' + formatBridgeResult(confirmCreate) +
-          '\n提示：请用 mc_inspect 检视当前界面，用 mc_input 手动确认创建。'
-      }
+    if (confirmCreate.ok) {
+      confirmOk = true
+      break
+    }
+  }
+  if (!confirmOk) {
+    return {
+      ok: false,
+      message: '自动创建测试世界失败：无法找到确认创建按钮（尝试了"创建新世界"/"创建新的世界"）。' +
+        '\n提示：请用 mc_inspect 检视当前界面，用 mc_input click_widget 手动点击创建确认按钮。'
     }
   }
 
@@ -586,7 +598,7 @@ export const mcEnsureTestWorldTool: Tool = {
       }
       // 如果已经直接进入 CreateWorldScreen（无存档场景），跳过世界条目查找，直接自动创建
       if (isCreateWorld && !isSelectWorld) {
-        const createResult = await autoCreateTestWorld(instanceId)
+        const createResult = await autoCreateTestWorld(instanceId, true)
         return createResult.message
       }
 

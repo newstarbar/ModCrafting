@@ -1514,6 +1514,12 @@ export const completeStepTool: Tool = {
 		let stepId = String(args.stepId || "").trim();
 		const numMatch = stepId.match(/^#?(\d+)/);
 		if (numMatch) stepId = numMatch[1];
+		// AI 完成步骤时关闭游戏内输入护栏提示，避免 AI 不操控时仍显示"AI自测中"
+		try {
+			await setMcInputGuard({ active: false });
+		} catch {
+			// 关闭护栏失败不影响 complete_step 主流程
+		}
 		if (ctx.planTracker) {
 			const current = ctx.planTracker.currentStep;
 			if (!current) return "Error: 所有计划步骤已完成，无需再调用 complete_step。";
