@@ -1054,7 +1054,9 @@ function stripHtmlToText(html: string): string {
  * 非关键功能，失败不影响主流程。
  */
 async function showInputGuardForInstance(instanceId: string): Promise<void> {
-  await setMcInputGuard({ active: true, locked: true, instanceId })
+  // locked=false：不阻止玩家键盘/鼠标输入，仅显示"AI自测中"提示
+  // 用户期望 AI 操控时只是提醒，不剥夺玩家操控能力
+  await setMcInputGuard({ active: true, locked: false, instanceId })
 }
 
 function buildLogTail(text: string, maxChars = 8000): string {

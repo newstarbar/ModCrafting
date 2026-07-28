@@ -214,7 +214,7 @@ function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'recipe') return 4
   if (kind === 'mixin') return 6
   if (kind === 'build') return 6
-  if (kind === 'run') return 8
+  if (kind === 'run') return 20
   // write often needs a few docs lookups before the first write_file
   if (kind === 'write') return 6
   if (kind === 'inspect') return 2
