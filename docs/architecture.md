@@ -111,4 +111,4 @@ ModCrafting/
 - **工具链下载逻辑双份**：`scripts/toolchain/toolchain-download.mjs`（构建脚本）与 `src/main/toolchain-download.ts`（运行时）需同步修改 URL/版本。
 - **安装器静态资源**：`packaging/` 目录（原 `build/`），生成物在 `packaging/nsisbi/`（gitignore）。
 - **更新清单 URL**：`packaging/update-manifest.json` 的 raw 路径为 `main/packaging/update-manifest.json`。
-- **MC 版本升级**：升级 `resources/fabric-versions.json` 中的 `minecraft_version` 时，需重新运行 `npm run knowledge:build-all` 重建对应版本的知识库索引。
+- **MC 版本升级**：升级 `resources/fabric-versions.json` 中的 `minecraft_version` 时，需重新运行 `npm run knowledge:download` 下载对应版本的知识库索引。

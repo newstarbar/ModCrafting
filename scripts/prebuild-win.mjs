@@ -25,21 +25,21 @@ function nodeScript(rel, label) {
   run('node', [path.join(root, rel)], label)
 }
 
-// 知识库构建失败时仅警告但不中断 prebuild（知识库为可选增强，缺失时 agent 会返回服务不可用提示）
-function tryKnowledgeBuild() {
+// 知识库下载失败时仅警告但不中断 prebuild（知识库为可选增强，缺失时 agent 会返回服务不可用提示）
+function tryKnowledgeDownload() {
   if (skipKnowledge) {
-    console.log('[prebuild] 跳过知识库构建（--skip-knowledge）')
+    console.log('[prebuild] 跳过知识库下载（--skip-knowledge）')
     return
   }
-  console.log('[prebuild] build minecraft knowledge bases (minecraft-data + mc-wiki-zh)')
-  const result = spawnSync('npm', ['run', 'knowledge:build-all'], {
+  console.log('[prebuild] download minecraft knowledge bases')
+  const result = spawnSync('node', [path.join(root, 'scripts/knowledge/download-knowledge-base.mjs')], {
     stdio: 'inherit',
     cwd: root,
-    shell: process.platform === 'win32'
+    shell: false
   })
   if (result.status !== 0) {
-    console.warn('[prebuild][warn] 知识库构建失败，agent 将在运行时返回"服务不可用"提示。')
-    console.warn('[prebuild][warn] 可稍后手动运行 `npm run knowledge:build-all` 重新构建。')
+    console.warn('[prebuild][warn] 知识库下载失败，agent 将在运行时返回"服务不可用"提示。')
+    console.warn('[prebuild][warn] 可稍后手动运行 `npm run knowledge:download` 重新下载。')
   }
 }
 
@@ -62,4 +62,4 @@ nodeScript('scripts/toolchain/archive-gradle-home-seed.mjs', 'archive gradle hom
 nodeScript('scripts/release/split-seed-shards.mjs', 'split seed shards')
 nodeScript('scripts/packaging/setup-nsisbi.mjs', 'setup nsisbi')
 nodeScript('scripts/packaging/patch-nsis-install-ui.mjs', 'patch nsis install ui')
-tryKnowledgeBuild()
+tryKnowledgeDownload()

@@ -29,7 +29,7 @@ npm run dev                     # 开发模式（热更新）
 npm run test                    # harness 单元测试
 npm run build:win               # Windows 构建（Setup + Portable）
 npm run toolchain:verify       # 检查 JDK/Gradle 是否齐全
-npm run knowledge:build-all    # 构建所有离线知识库
+npm run knowledge:download    # 下载所有离线知识库
 ```
 
 完整命令清单见 [docs/commands.md](./docs/commands.md)。
@@ -46,12 +46,12 @@ npm run knowledge:build-all    # 构建所有离线知识库
 
 ## Minecraft 知识库
 
-内置两套离线知识库 + Fabric 官方中文文档，运行时不联网。详见 [docs/knowledge-base.md](./docs/knowledge-base.md)。
+内置两套离线知识库 + Fabric 官方中文文档，运行时不联网。知识库构建已迁移到独立仓库 [ModCrafting-knowledge-base](https://github.com/newstarbar/ModCrafting-knowledge-base)。详见 [docs/knowledge-base.md](./docs/knowledge-base.md)。
 
-| 知识库 | 工具入口 | 构建命令 |
+| 知识库 | 工具入口 | 下载命令 |
 |--------|---------|---------|
-| minecraft-data 结构化数据 | `minecraft_data_lookup` | `npm run knowledge:build-data-index` |
-| 中文 MC 百科向量库 | `mc_wiki_search` | `npm run knowledge:build-wiki-embeddings` |
+| minecraft-data 结构化数据 | `minecraft_data_lookup` | `npm run knowledge:download` |
+| 中文 MC 百科向量库 | `mc_wiki_search` | `npm run knowledge:download` |
 | Fabric 官方中文文档 | `fabric_docs_search` | `npm run docs:sync-fabric` |
 
 **代码生成铁律**：编写方块/物品/实体/附魔注册代码前**必须**先调用 `minecraft_data_lookup` 查询标准 ID 与原版属性，禁止凭记忆填写参数。
@@ -59,7 +59,7 @@ npm run knowledge:build-all    # 构建所有离线知识库
 ## 维护红线
 
 - **工具链下载逻辑双份**：`scripts/toolchain/toolchain-download.mjs` 与 `src/main/toolchain-download.ts` 需同步修改
-- **MC 版本升级**：升级 `resources/fabric-versions.json` 后必须重新运行 `npm run knowledge:build-all`
+- **MC 版本升级**：升级 `resources/fabric-versions.json` 后必须重新运行 `npm run knowledge:download`
 - **AGENTS.md / CLAUDE.md ≤ 150 行**：只保留摘要与索引，详细内容写到 `docs/`
 - **提交前确认**：未包含 API Key、`.env`、个人路径；未提交 `node_modules/`、`release/`、`runtime/`、`resources/jdk-21/`
 

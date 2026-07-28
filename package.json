@@ -53,17 +53,13 @@
 		"sync:gitee": "npm run release:sync-gitee",
 		"push:gitee": "npm run release:push-gitee",
 		"postinstall": "node scripts/lib/ensure-native-deps.mjs",
-		"knowledge:fetch-data": "node scripts/knowledge/fetch-minecraft-data.mjs",
-		"knowledge:fetch-wiki": "node scripts/knowledge/fetch-mc-wiki-zh.mjs",
-		"knowledge:build-data-index": "node scripts/knowledge/build-mc-data-index.mjs",
-		"knowledge:build-wiki-embeddings": "node scripts/knowledge/build-wiki-embeddings.mjs",
-		"knowledge:cache-model": "node scripts/knowledge/cache-transformer-model.mjs",
-		"knowledge:build-all": "node scripts/knowledge/build-all.mjs",
-		"knowledge:prefetch": "npm run knowledge:build-all"
+		"knowledge:download": "node scripts/knowledge/download-knowledge-base.mjs",
+		"knowledge:prefetch": "npm run knowledge:download"
 	},
 	"dependencies": {
 		"@electron-toolkit/utils": "^4.0.0",
 		"@fontsource/press-start-2p": "^5.2.7",
+		"@xenova/transformers": "^2.17.2",
 		"@xterm/addon-fit": "^0.11.0",
 		"@xterm/xterm": "^6.0.0",
 		"ajv": "^8.20.0",
@@ -79,7 +75,6 @@
 		"@types/react": "^19.1.2",
 		"@types/react-dom": "^19.1.2",
 		"@vitejs/plugin-react": "^6.0.2",
-		"@xenova/transformers": "^2.17.2",
 		"electron": "^42.4.1",
 		"electron-builder": "^26.0.0",
 		"electron-vite": "^6.0.0-beta.1",

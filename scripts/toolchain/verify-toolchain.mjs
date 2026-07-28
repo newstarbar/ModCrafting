@@ -73,7 +73,7 @@ try {
 
 const mcDataIndex = path.join(root, 'resources', 'minecraft-data', mcVersion, 'index.json')
 let mcDataOk = false
-let mcDataHint = 'run: npm run knowledge:build-data-index'
+let mcDataHint = 'run: npm run knowledge:download'
 try {
   if (existsSync(mcDataIndex)) {
     const idx = JSON.parse(readFileSync(mcDataIndex, 'utf-8'))
@@ -91,7 +91,7 @@ check(`minecraft-data index (${mcVersion})`, mcDataOk, mcDataHint)
 
 const wikiManifest = path.join(root, 'resources', 'mc-wiki-zh-index', 'manifest.json')
 let wikiOk = false
-let wikiHint = 'run: npm run knowledge:build-wiki-embeddings'
+let wikiHint = 'run: npm run knowledge:download'
 try {
   if (existsSync(wikiManifest)) {
     const manifest = JSON.parse(readFileSync(wikiManifest, 'utf-8'))
@@ -107,7 +107,7 @@ check('mc-wiki-zh vector index', wikiOk, wikiHint)
 
 const wikiModelDir = path.join(root, 'resources', 'mc-wiki-model')
 let modelOk = false
-let modelHint = 'run: npm run knowledge:cache-model'
+let modelHint = 'run: npm run knowledge:download'
 try {
   if (existsSync(wikiModelDir)) {
     // 模型目录应包含 onnx 权重文件

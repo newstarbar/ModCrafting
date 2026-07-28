@@ -39,7 +39,7 @@ test('minecraft_data_lookup: window.api 不可用时返回服务未就绪错误'
   try {
     const result = await minecraftDataLookupTool.execute(ctx, { query: 'diamond_ore' })
     assert.match(result as string, /minecraft_data_lookup 服务不可用/)
-    assert.match(result as string, /knowledge:build-data-index/)
+    assert.match(result as string, /knowledge:download/)
   } finally {
     ;(globalThis as { window?: unknown }).window = prior
   }
@@ -278,7 +278,7 @@ test('minecraft_data_lookup: 全部未命中时返回未命中提示与 miss tra
     const result = await minecraftDataLookupTool.execute(ctx, { query: '不存在的物品xyz' })
     const text = result as string
     assert.match(text, /未命中结构化数据集/)
-    assert.match(text, /knowledge:build-all/)
+    assert.match(text, /knowledge:download/)
     assert.match(text, /::kh::未命中/)
     assert.match(text, /摘要：查「不存在的物品xyz」→ 无命中/)
   } finally {

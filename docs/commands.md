@@ -32,18 +32,13 @@ npm run assets:items           # 从已解压资源生成 public/items 与 items
 npm run assets:icon            # 从 appIcon.png 生成 .ico
 ```
 
-## 知识库构建
+## 知识库下载
+
+知识库构建已迁移到独立仓库 [ModCrafting-knowledge-base](https://github.com/newstarbar/ModCrafting-knowledge-base)，本仓库通过以下命令下载预构建的知识库资源：
 
 ```bash
-npm run knowledge:fetch-data   # 拉取 minecraft-data 结构化数据（PrismarineJS）
-npm run knowledge:fetch-wiki   # 抓取中文 MC 百科核心词条（zh.minecraft.wiki）
-npm run knowledge:build-data-index  # 构建 minecraft-data 查询索引（含中英文别名）
-npm run knowledge:build-wiki-embeddings  # 计算百科向量 embeddings（需 @xenova/transformers）
-npm run knowledge:cache-model  # 缓存 transformers.js 模型到本地
-npm run knowledge:build-all   # 一键构建所有知识库
+npm run knowledge:download   # 下载所有离线知识库（minecraft-data + 百科向量索引 + 模型缓存）
 ```
-
-`knowledge:build-all` 支持参数：`--skip-data`、`--skip-wiki`、`--skip-embeddings`、`--skip-model`。
 
 ## 发布与清理
 

@@ -31,17 +31,17 @@ packaging/*.7z
 runtime/
 
 # 工具链（由脚本下载/生成，不进仓库）
-resources/jdk-21/
-resources/gradle-9.5/
-resources/*.zip
-resources/*jdk*.tar.gz
-resources/_jdk-21-download.*
-resources/gradle-home-seed/
-resources/gradle-home-seed.zip
-resources/gradle-home-seed.tar.xz
-resources/.gradle-home-seed.zip.stamp
-resources/jre-21-minimal/
-resources/seed-shards/
+# resources/jdk-21/
+# resources/gradle-9.5/
+# resources/*.zip
+# resources/*jdk*.tar.gz
+# resources/_jdk-21-download.*
+# resources/gradle-home-seed/
+# resources/gradle-home-seed.zip
+# resources/gradle-home-seed.tar.xz
+# resources/.gradle-home-seed.zip.stamp
+# resources/jre-21-minimal/
+# resources/seed-shards/
 
 # TypeScript 增量编译缓存
 *.tsbuildinfo

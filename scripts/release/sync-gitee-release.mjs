@@ -152,6 +152,9 @@ function resolveAsset(dir, exactNames, fallbackMatch) {
   return null
 }
 
+/** Gitee 免费用户单文件上传限制 100MB */
+const GITEE_MAX_FILE_SIZE = 100 * 1024 * 1024
+
 function collectReleaseAssets(dir) {
   if (!existsSync(dir)) return []
 
@@ -172,9 +175,20 @@ function collectReleaseAssets(dir) {
     (n) => /^ModCrafting[- ]Setup[- ].*\.blockmap$/i.test(n)
   )
 
-  const files = [latest, blockmap, setup, portable].filter(Boolean)
+  const allFiles = [latest, blockmap, setup, portable].filter(Boolean)
 
-  if (files.length === 0) {
+  // Gitee 单文件限制 100MB，跳过超限文件（如 Setup 完整版）
+  const files = []
+  for (const f of allFiles) {
+    const size = statSync(f).size
+    if (size > GITEE_MAX_FILE_SIZE) {
+      console.log(`[gitee] 跳过 ${path.basename(f)} (${formatSize(size)})：超过 Gitee 100MB 限制，请从 GitHub Release 下载`)
+      continue
+    }
+    files.push(f)
+  }
+
+  if (files.length === 0 && allFiles.length === 0) {
     console.warn('[gitee] expected filenames missing, listing release/:')
     for (const name of readdirSync(dir)) {
       console.warn(`  - ${name}`)

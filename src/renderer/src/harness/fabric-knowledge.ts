@@ -680,7 +680,7 @@ export async function buildVanillaWikiQuerySummary(keyword: string, _lang: 'zh_c
     `Minecraft 原版机制查询（只读）`,
     `关键词：${normalized}`,
     `说明：内置中文 MC 百科向量知识库尚未构建或为空。`,
-    `建议：1) 运行 npm run knowledge:build-all 构建知识库；2) 改用 mc_wiki_search 工具检索；3) 模组 API/注册/事件可用 fabric_docs_search。`,
+    `建议：1) 运行 npm run knowledge:download 构建知识库；2) 改用 mc_wiki_search 工具检索；3) 模组 API/注册/事件可用 fabric_docs_search。`,
     `摘要：查「${normalized}」→ 本地百科未就绪`,
     formatKnowledgeHitLine({ kind: 'Wiki', category: '未构建', doc: normalized.slice(0, 32), section: '空索引' })
   ].join('\n')

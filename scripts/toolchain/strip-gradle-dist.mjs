@@ -28,6 +28,15 @@ const STRIPPABLE_ENTRIES = [
   'NOTICE'
 ]
 
+function entrySize(p) {
+  try {
+    const stat = statSync(p)
+    if (stat.isFile()) return stat.size
+    if (stat.isDirectory()) return dirSize(p)
+  } catch { /* ignore */ }
+  return 0
+}
+
 function dirSize(p) {
   let total = 0
   const walk = (d) => {
@@ -65,8 +74,10 @@ function main() {
     const target = path.join(gradleDir, name)
     if (!existsSync(target)) continue
     try {
-      const size = dirSize(target)
-      rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+      const stat = statSync(target)
+      const size = stat.isFile() ? stat.size : dirSize(target)
+      const isDir = stat.isDirectory()
+      rmSync(target, { recursive: isDir, force: true, maxRetries: 3, retryDelay: 200 })
       savedBytes += size
       console.log(`[strip-gradle]   removed ${name} (${(size / 1024 / 1024).toFixed(1)} MB)`)
     } catch (err) {

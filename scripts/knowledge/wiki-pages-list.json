@@ -1,5 +1,5 @@
 {
-  "description": "ModCrafting 中文 MC 百科核心词条清单。可按需扩展，运行 npm run knowledge:fetch-wiki 抓取。",
+  "description": "ModCrafting 中文 MC 百科核心词条清单。可按需扩展，运行 npm run knowledge:download 抓取。",
   "pages": [
     { "title": "钻石矿石", "category": "block", "standardId": "minecraft:diamond_ore" },
     { "title": "钻石块", "category": "block", "standardId": "minecraft:diamond_block" },

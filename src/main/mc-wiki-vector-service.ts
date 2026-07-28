@@ -68,7 +68,7 @@ function loadIndexFiles (): { ok: boolean; error?: string } {
   const chunksPath = path.join(root, 'chunks.json')
 
   if (!fs.existsSync(manifestPath) || !fs.existsSync(binPath) || !fs.existsSync(chunksPath)) {
-    return { ok: false, error: `百科向量索引缺失：${root}（请运行 npm run knowledge:build-wiki-embeddings）` }
+    return { ok: false, error: `百科向量索引缺失：${root}（请运行 npm run knowledge:download）` }
   }
 
   try {

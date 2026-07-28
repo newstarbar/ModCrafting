@@ -36,7 +36,7 @@ test('mc_wiki_search: window.api 不可用时返回服务未就绪错误', async
   try {
     const result = await mcWikiSearchTool.execute(ctx, { query: '红石电路' })
     assert.match(result as string, /mc_wiki_search 服务不可用/)
-    assert.match(result as string, /knowledge:build-wiki-embeddings/)
+    assert.match(result as string, /knowledge:download/)
   } finally {
     ;(globalThis as { window?: unknown }).window = prior
   }
@@ -70,7 +70,7 @@ test('mc_wiki_search: info 显示未就绪且有错误时返回错误信息', as
     const text = result as string
     assert.match(text, /中文 MC 百科向量知识库不可用/)
     assert.match(text, /索引缺失：resources\/mc-wiki-zh-index\//)
-    assert.match(text, /knowledge:build-wiki-embeddings/)
+    assert.match(text, /knowledge:download/)
     assert.match(text, /当前切片数：0/)
   } finally {
     restore()
@@ -150,7 +150,7 @@ test('mc_wiki_search: 命中 0 条时返回空提示', async () => {
     const text = result as string
     assert.match(text, /未命中百科词条/)
     assert.match(text, /切片库可能为空/)
-    assert.match(text, /knowledge:fetch-wiki/)
+    assert.match(text, /knowledge:download/)
   } finally {
     restore()
   }

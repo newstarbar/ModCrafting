@@ -92,6 +92,9 @@ jobs:
       - name: Prepare renderer assets
         run: npm run assets:prepare
 
+      - name: Download knowledge bases
+        run: node scripts/knowledge/download-knowledge-base.mjs
+
       - name: Render release notes
         run: npm run release:notes -- "${{ github.ref_name }}"
 

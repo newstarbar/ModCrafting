@@ -135,7 +135,7 @@ export const minecraftDataLookupTool: Tool = {
 		if (typeof window === "undefined" || !window.api?.mcDataLookupBlock) {
 			return [
 				"Error: minecraft_data_lookup 服务不可用（主进程未就绪或测试环境）。",
-				"请确认 resources/minecraft-data/<version>/index.json 已生成（运行 npm run knowledge:build-data-index）。"
+				"请确认 resources/minecraft-data/<version>/index.json 已生成（运行 npm run knowledge:download）。"
 			].join("\n");
 		}
 
@@ -204,7 +204,7 @@ export const minecraftDataLookupTool: Tool = {
 		else if (kind === "enchantment") hit = await tryEnchantment();
 
 		if (!hit) {
-			sections.push("（未命中结构化数据集；可能原因：1) 数据未构建，请运行 npm run knowledge:build-all；2) 关键字太模糊，建议改用英文 ID 或标准 name）");
+			sections.push("（未命中结构化数据集；可能原因：1) 数据未构建，请运行 npm run knowledge:download；2) 关键字太模糊，建议改用英文 ID 或标准 name）");
 			trails.push({ kind: "未命中", category: "结构化数据", doc: query.slice(0, 32), section: "" });
 		}
 
@@ -250,7 +250,7 @@ export const mcWikiSearchTool: Tool = {
 		if (typeof window === "undefined" || !window.api?.mcWikiSearch) {
 			return [
 				"Error: mc_wiki_search 服务不可用（主进程未就绪或测试环境）。",
-				"请确认 resources/mc-wiki-zh-index/ 与 resources/mc-wiki-model/ 已生成（运行 npm run knowledge:build-wiki-embeddings）。"
+				"请确认 resources/mc-wiki-zh-index/ 与 resources/mc-wiki-model/ 已生成（运行 npm run knowledge:download）。"
 			].join("\n");
 		}
 
@@ -260,7 +260,7 @@ export const mcWikiSearchTool: Tool = {
 				return [
 					"中文 MC 百科向量知识库不可用：",
 					`- 错误：${info.error}`,
-					"- 请运行 `npm run knowledge:build-wiki-embeddings` 与 `npm run knowledge:cache-model` 预计算索引。",
+					"- 请运行 `npm run knowledge:download` 预计算索引。",
 					`- 当前切片数：${info.chunkCount}；模型：${info.model}`
 				].join("\n");
 			}
@@ -280,7 +280,7 @@ export const mcWikiSearchTool: Tool = {
 			return [`检索失败：${res.error || "未知错误"}`, "建议改用 minecraft_data_lookup 查结构化数据，或调整查询关键字后重试。"].join("\n");
 		}
 		if (res.results.length === 0) {
-			return [`查询：${query}`, "结果：未命中百科词条（切片库可能为空）", "建议：1) 运行 npm run knowledge:fetch-wiki 抓取核心词条；2) 改用更准确的中英文术语重试。"].join("\n");
+			return [`查询：${query}`, "结果：未命中百科词条（切片库可能为空）", "建议：1) 运行 npm run knowledge:download 抓取核心词条；2) 改用更准确的中英文术语重试。"].join("\n");
 		}
 
 		const trails: KnowledgeHitTrail[] = res.results.map((r) => ({
