@@ -25,6 +25,14 @@ function check(label, pass, hint) {
   if (!pass) ok = false
 }
 
+/**
+ * 可选资源检查：缺失时仅 WARN，不影响退出码。
+ * 知识库资源已改为按需下载（瘦包二期），CI 构建时无需预装。
+ */
+function warn(label, pass, hint) {
+  console.log(`${pass ? 'OK' : 'WARN'}  ${label}${hint ? ` — ${hint}` : ''}`)
+}
+
 check('JDK 21 bundled', existsSync(jdkJava), 'run: npm run setup:toolchain')
 check('gradle-wrapper.jar', existsSync(wrapperJar), wrapperJar)
 check('Gradle lib/ complete', existsSync(gradleLauncher), 'run: npm run setup:toolchain')
@@ -87,7 +95,7 @@ try {
 } catch (err) {
   mcDataHint = String(err)
 }
-check(`minecraft-data index (${mcVersion})`, mcDataOk, mcDataHint)
+warn(`minecraft-data index (${mcVersion})`, mcDataOk, mcDataHint)
 
 const wikiManifest = path.join(root, 'resources', 'mc-wiki-zh-index', 'manifest.json')
 let wikiOk = false
@@ -103,7 +111,7 @@ try {
 } catch (err) {
   wikiHint = String(err)
 }
-check('mc-wiki-zh vector index', wikiOk, wikiHint)
+warn('mc-wiki-zh vector index', wikiOk, wikiHint)
 
 const wikiModelDir = path.join(root, 'resources', 'mc-wiki-model')
 let modelOk = false
@@ -128,6 +136,6 @@ try {
 } catch (err) {
   modelHint = String(err)
 }
-check('mc-wiki transformers model', modelOk, modelHint)
+warn('mc-wiki transformers model', modelOk, modelHint)
 
 process.exit(ok ? 0 : 1)
