@@ -90,6 +90,9 @@ jobs:
       - name: Split JRE shards
         run: node scripts/release/split-jre-shards.mjs
 
+      - name: Archive extra resources (knowledge base + symbol index + base mods)
+        run: node scripts/release/archive-extra-resources.mjs
+
       - name: Prepare installer assets
         run: |
           npm run assets:icon
@@ -165,6 +168,23 @@ jobs:
             fi
           done
           echo "JRE shards uploaded."
+
+      - name: Upload extra resources to GitHub Release
+        shell: bash
+        run: |
+          EXTRA_DIR="resources/extra-zips"
+          if [ ! -d "$EXTRA_DIR" ]; then
+            echo "Extra resources dir not found: $EXTRA_DIR"
+            exit 1
+          fi
+          echo "Uploading extra resources (agent-knowledge / fabric-symbol-index / base-mods)..."
+          for f in "$EXTRA_DIR"/*.zip; do
+            if [ -f "$f" ]; then
+              echo "  uploading $(basename "$f")"
+              gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+            fi
+          done
+          echo "Extra resources uploaded."
 
       - name: Apply release notes to GitHub Release
         shell: bash

@@ -1,11 +1,15 @@
 import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
+import { getRuntimeRoot } from './build-env'
 
 const MAX_FETCH_CHARS = 12_000
 const FETCH_TIMEOUT_MS = 12_000
 
 function bundledKnowledgeRoot(): string {
+  // 优先 runtime/knowledge/agent-knowledge（按需下载）
+  const runtimePath = path.join(getRuntimeRoot(), 'knowledge', 'agent-knowledge')
+  if (fs.existsSync(runtimePath)) return runtimePath
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'agent-knowledge')
   }

@@ -2,7 +2,7 @@ import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { gunzipSync } from 'zlib'
-import { loadFabricVersions } from './build-env'
+import { loadFabricVersions, getRuntimeRoot } from './build-env'
 
 export type FabricSide = 'common' | 'client'
 
@@ -50,7 +50,10 @@ let cachedIndex: FabricSymbolIndex | null = null
 function indexSearchPaths(): string[] {
   const version = loadFabricVersions().minecraft_version
   const file = `fabric-symbol-index-${version}.json.gz`
+  // 优先 runtime/knowledge/fabric-symbol-index/ 目录（瘦包二期按需下载，zip 解压后存放于此）
+  const runtimeDir = path.join(getRuntimeRoot(), 'knowledge', 'fabric-symbol-index')
   return [
+    path.join(runtimeDir, file),
     path.join(process.resourcesPath || '', file),
     path.join(app.getAppPath(), 'resources', file),
     path.join(__dirname, '..', 'resources', file),

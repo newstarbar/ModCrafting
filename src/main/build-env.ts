@@ -11,6 +11,7 @@ import {
 } from './toolchain-download'
 import { ensureGradleHomeOnline } from './portable-prefetch'
 import { downloadAndExtractSeedShards, downloadAndExtractJreShards } from './seed-downloader'
+import { ensureKnowledgeBase, isKnowledgeBaseReady } from './knowledge-downloader'
 import {
   collectParamNames,
   formatYarnField,
@@ -385,6 +386,18 @@ async function initFullToolchainImpl(
     onProgress({ phase: 'deps', message: `Fabric API 知识库已就绪（${kb.extracted} 个源码文件）`, percent: 90 })
   }
 
+  // 瘦包二期：下载按需知识库（约 34MB，失败仅 warning 不阻塞）
+  onProgress({ phase: 'deps', message: '准备知识库资源（约 34MB）…', percent: 88 })
+  const kbDl = await ensureKnowledgeBase((msg, pct) => {
+    onProgress({ phase: 'deps', message: msg, percent: lerpPercent(88, 98, pct) })
+  })
+  if (!kbDl.ok) {
+    console.warn('[toolchain] knowledge base degraded:', kbDl.error)
+  } else if (kbDl.error) {
+    // 部分失败也警告，但不阻塞
+    console.warn('[toolchain] knowledge base partial:', kbDl.error)
+  }
+
   onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })
   return { ok: true }
 }
@@ -679,7 +692,10 @@ export function needsFirstTimeDownload(): boolean {
   const jdkReady = isValidJdk(getRuntimeJdkPath())
   const gradleReady = isCompleteGradleDist(getRuntimeGradlePath())
   // 三者均已就绪才跳过下载
-  if (gradleHomeReady && jdkReady && gradleReady) return false
+  if (gradleHomeReady && jdkReady && gradleReady) {
+    // 知识库未就绪也要触发首启下载流程（瘦包二期）
+    return !isKnowledgeBaseReady()
+  }
   return true
 }
 
@@ -733,6 +749,8 @@ async function extractGradleHomeSeedArchive(
 
 function bundledBaseModsSearchPaths(): string[] {
   return [
+    // 优先 runtime/knowledge/_base_mods（瘦包二期按需下载）
+    path.join(getRuntimeRoot(), 'knowledge', '_base_mods'),
     path.join(process.resourcesPath || '', '_base_mods'),
     path.join(__dirname, '..', 'resources', '_base_mods'),
     path.join(__dirname, '..', '..', 'resources', '_base_mods')

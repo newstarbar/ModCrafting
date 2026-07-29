@@ -254,6 +254,33 @@ function collectJreShards() {
   return files
 }
 
+/**
+ * 收集瘦包二期按需下载的辅助资源 zip（agent-knowledge / fabric-symbol-index / base-mods）。
+ * NSIS 瘦包首次启动时从 Gitee 下载这些 zip 解压到 runtime/knowledge/。
+ */
+function collectExtraResources() {
+  const extraDir = path.join(root, 'resources', 'extra-zips')
+  if (!existsSync(extraDir)) {
+    console.warn(`[gitee] extra-zips dir not found: ${extraDir}`)
+    return []
+  }
+
+  const files = []
+  for (const name of readdirSync(extraDir)) {
+    const full = path.join(extraDir, name)
+    if (!statSync(full).isFile()) continue
+    if (name.endsWith('.zip')) {
+      files.push(full)
+    }
+  }
+
+  if (files.length === 0) {
+    console.warn('[gitee] no extra resource zips found in resources/extra-zips/')
+  }
+
+  return files
+}
+
 function readReleaseBody() {
   const bodyPath = path.join(root, 'packaging', 'release-body.md')
   if (!existsSync(bodyPath)) {
@@ -385,7 +412,8 @@ async function main() {
   const releaseAssets = collectReleaseAssets(releaseDir)
   const seedShards = collectSeedShards()
   const jreShards = collectJreShards()
-  const assets = [...releaseAssets, ...seedShards, ...jreShards]
+  const extraResources = collectExtraResources()
+  const assets = [...releaseAssets, ...seedShards, ...jreShards, ...extraResources]
 
   if (assets.length === 0) {
     console.error(`[gitee] No release assets in ${releaseDir}`)

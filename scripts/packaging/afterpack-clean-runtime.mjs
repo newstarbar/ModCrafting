@@ -19,7 +19,8 @@ import path from 'node:path'
  */
 export default async function afterPack(context) {
   const { appOutDir, electronPlatformName } = context
-  if (electronPlatformName !== 'win') return
+  // electron-builder passes "win32" / "darwin" / "linux" (not "win"/"mac"/"linux")
+  if (electronPlatformName !== 'win32' && electronPlatformName !== 'win') return
 
   const runtimeDir = path.join(appOutDir, 'runtime')
   if (!existsSync(runtimeDir)) {

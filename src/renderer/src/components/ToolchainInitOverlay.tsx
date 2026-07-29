@@ -83,13 +83,17 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
                 <span className="toolchain-init-download-name">Fabric 依赖种子（分片）</span>
                 <span className="toolchain-init-download-size">约 500MB（Gitee 镜像）</span>
               </li>
+              <li>
+                <span className="toolchain-init-download-name">知识库与辅助资源</span>
+                <span className="toolchain-init-download-size">约 34MB（百科/数据/符号索引/调试模组）</span>
+              </li>
             </ul>
             <div className="toolchain-init-download-total">
               <span>总计下载量</span>
-              <span className="toolchain-init-download-total-size">约 685MB</span>
+              <span className="toolchain-init-download-total-size">约 720MB</span>
             </div>
             <p className="toolchain-init-download-hint">
-              国内网络环境下约需 5-10 分钟，下载完成后可完全离线使用。
+              国内网络环境下约需 5-10 分钟，下载完成后可完全离线使用。知识库下载失败不阻塞启动，AI 会降级运行。
             </p>
           </div>
 

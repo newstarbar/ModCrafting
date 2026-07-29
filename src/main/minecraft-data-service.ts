@@ -1,10 +1,13 @@
 import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
+import { getRuntimeRoot } from './build-env'
 
 /**
  * Minecraft 结构化数据查询服务。
  * 加载 resources/minecraft-data/<version>/index.json，提供按 ID / 口语名称查询方块、物品、实体、附魔属性。
+ *
+ * 路径优先级：runtime/knowledge/minecraft-data（按需下载） → process.resourcesPath → 开发态 resources/
  */
 
 export interface McBlockProperties {
@@ -76,6 +79,9 @@ interface McDataIndex {
 }
 
 function bundledMinecraftDataRoot (): string {
+  // 优先：runtime/knowledge/minecraft-data（瘦包二期按需下载目录）
+  const runtimePath = path.join(getRuntimeRoot(), 'knowledge', 'minecraft-data')
+  if (fs.existsSync(runtimePath)) return runtimePath
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'minecraft-data')
   }

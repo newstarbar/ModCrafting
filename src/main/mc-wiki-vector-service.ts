@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
+import { getRuntimeRoot } from './build-env'
 
 /**
  * 中文 MC 百科向量检索服务。
@@ -48,6 +49,9 @@ let initFailed = false
 let initError: string | null = null
 
 function bundledWikiIndexRoot (): string {
+  // 优先 runtime/knowledge/mc-wiki-zh-index（按需下载）
+  const runtimePath = path.join(getRuntimeRoot(), 'knowledge', 'mc-wiki-zh-index')
+  if (fs.existsSync(runtimePath)) return runtimePath
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'mc-wiki-zh-index')
   }
@@ -55,6 +59,9 @@ function bundledWikiIndexRoot (): string {
 }
 
 function bundledModelRoot (): string {
+  // 优先 runtime/knowledge/mc-wiki-model（按需下载）
+  const runtimePath = path.join(getRuntimeRoot(), 'knowledge', 'mc-wiki-model')
+  if (fs.existsSync(runtimePath)) return runtimePath
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'mc-wiki-model')
   }

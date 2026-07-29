@@ -37,6 +37,7 @@
 		"release:cleanup-github": "node scripts/release/cleanup-github-release.mjs",
 		"release:split-seed": "node scripts/release/split-seed-shards.mjs",
 		"release:split-jre": "node scripts/release/split-jre-shards.mjs",
+		"release:archive-extra": "node scripts/release/archive-extra-resources.mjs",
 		"toolchain:archive-jre": "node scripts/toolchain/archive-jre-minimal.mjs",
 		"clean:local": "node scripts/clean-local.mjs",
 		"docs:sync-fabric": "node --experimental-strip-types scripts/sync-fabric-docs-knowledge.ts",
@@ -91,6 +92,13 @@
 	},
 	"build": {
 		"extends": "./electron-builder.base.json",
+		"afterPack": "./scripts/packaging/afterpack-clean-runtime.mjs",
+		"beforePack": "./scripts/packaging/patch-nsis-install-ui.mjs",
+		"files": [
+			"out/**/*",
+			"!node_modules/opencode-windows-x64/**",
+			"!node_modules/opencode-windows-x64-baseline/**"
+		],
 		"extraResources": [
 	{
 		"from": "resources/gradle-wrapper.jar",
@@ -101,55 +109,8 @@
 			"to": "fabric-versions.json"
 		},
 		{
-			"from": "resources/fabric-symbol-index-1.21.4.json.gz",
-			"to": "fabric-symbol-index-1.21.4.json.gz"
-		},
-		{
-			"from": "resources/agent-knowledge",
-			"to": "agent-knowledge",
-			"filter": [
-				"**/*.md"
-			]
-		},
-		{
 			"from": "packaging/appIcon.png",
 			"to": "icon.png"
-		},
-		{
-			"from": "resources/_base_mods",
-			"to": "_base_mods",
-			"filter": [
-				"**/*.jar"
-			]
-		},
-		{
-			"from": "resources/minecraft-data",
-			"to": "minecraft-data",
-			"filter": [
-				"**/*.json"
-			]
-		},
-		{
-			"from": "resources/mc-wiki-zh",
-			"to": "mc-wiki-zh",
-			"filter": [
-				"**/*.md"
-			]
-		},
-		{
-			"from": "resources/mc-wiki-zh-index",
-			"to": "mc-wiki-zh-index",
-			"filter": [
-				"**/*.bin",
-				"**/*.json"
-			]
-		},
-		{
-			"from": "resources/mc-wiki-model",
-			"to": "mc-wiki-model",
-			"filter": [
-				"**/*"
-			]
 		}
 	],
 		"win": {
