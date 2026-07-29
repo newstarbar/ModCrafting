@@ -7,9 +7,9 @@
  * 从应用自身 Release（与 jre/seed 同 tag）下载 zip 解压到 runtime/knowledge/。
  *
  * 产物清单：
- *   resources/extra-zips/agent-knowledge.zip        ← resources/agent-knowledge/**/*.md
+ *   resources/extra-zips/agent-knowledge.zip        ← resources/agent-knowledge/ 下的 .md 文件
  *   resources/extra-zips/fabric-symbol-index.zip    ← resources/fabric-symbol-index-1.21.4.json.gz
- *   resources/extra-zips/base-mods.zip              ← resources/_base_mods/**/*.jar
+ *   resources/extra-zips/base-mods.zip              ← resources/_base_mods/ 下的 .jar 文件
  *
  * 运行：node scripts/release/archive-extra-resources.mjs
  */
