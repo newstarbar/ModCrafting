@@ -19,9 +19,9 @@ dist/
 temp/
 design/
 
-# 打包产物
-release/
-release2/
+# 打包产物（仅根目录 release/，不影响 scripts/release/）
+/release/
+/release2/
 
 # 安装器生成物（packaging/ 内静态资源可跟踪）
 packaging/nsisbi/
