@@ -255,8 +255,10 @@ function collectJreShards() {
 }
 
 /**
- * 收集瘦包二期按需下载的辅助资源 zip（agent-knowledge / fabric-symbol-index / base-mods）。
- * NSIS 瘦包首次启动时从 Gitee 下载这些 zip 解压到 runtime/knowledge/。
+ * 收集瘦包二期/三期按需下载的辅助资源（zip + tar.xz）。
+ * - zip：agent-knowledge / fabric-symbol-index / base-mods（瘦包二期）
+ * - tar.xz：opencode-windows-x64.tar.xz（瘦包三期）
+ * NSIS 瘦包首次启动时从 Gitee 下载这些文件解压到 runtime/。
  */
 function collectExtraResources() {
   const extraDir = path.join(root, 'resources', 'extra-zips')
@@ -269,13 +271,13 @@ function collectExtraResources() {
   for (const name of readdirSync(extraDir)) {
     const full = path.join(extraDir, name)
     if (!statSync(full).isFile()) continue
-    if (name.endsWith('.zip')) {
+    if (name.endsWith('.zip') || name.endsWith('.tar.xz') || name.endsWith('.xz')) {
       files.push(full)
     }
   }
 
   if (files.length === 0) {
-    console.warn('[gitee] no extra resource zips found in resources/extra-zips/')
+    console.warn('[gitee] no extra resource archives found in resources/extra-zips/')
   }
 
   return files

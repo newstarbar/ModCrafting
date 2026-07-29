@@ -12,6 +12,7 @@ import {
 import { ensureGradleHomeOnline } from './portable-prefetch'
 import { downloadAndExtractSeedShards, downloadAndExtractJreShards } from './seed-downloader'
 import { ensureKnowledgeBase, isKnowledgeBaseReady } from './knowledge-downloader'
+import { ensureOpencode, isOpencodeReady } from './opencode-downloader'
 import {
   collectParamNames,
   formatYarnField,
@@ -398,6 +399,15 @@ async function initFullToolchainImpl(
     console.warn('[toolchain] knowledge base partial:', kbDl.error)
   }
 
+  // 瘦包三期：下载 opencode 引擎（约 70MB，失败仅 warning 不阻塞）
+  onProgress({ phase: 'deps', message: '准备 opencode 引擎（约 70MB）…', percent: 98 })
+  const ocDl = await ensureOpencode((msg, pct) => {
+    onProgress({ phase: 'deps', message: msg, percent: lerpPercent(98, 99, pct) })
+  })
+  if (!ocDl.ok) {
+    console.warn('[toolchain] opencode degraded:', ocDl.error)
+  }
+
   onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })
   return { ok: true }
 }
@@ -693,8 +703,8 @@ export function needsFirstTimeDownload(): boolean {
   const gradleReady = isCompleteGradleDist(getRuntimeGradlePath())
   // 三者均已就绪才跳过下载
   if (gradleHomeReady && jdkReady && gradleReady) {
-    // 知识库未就绪也要触发首启下载流程（瘦包二期）
-    return !isKnowledgeBaseReady()
+    // 知识库或 opencode 未就绪也要触发首启下载流程（瘦包二期/三期）
+    return !isKnowledgeBaseReady() || !isOpencodeReady()
   }
   return true
 }

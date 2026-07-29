@@ -5,7 +5,8 @@
   "files": [
     "out/**/*",
     "!node_modules/opencode-windows-x64/**",
-    "!node_modules/opencode-windows-x64-baseline/**"
+    "!node_modules/opencode-windows-x64-baseline/**",
+    "!node_modules/opencode-ai/bin/opencode.exe"
   ],
   "extraResources": [
     {

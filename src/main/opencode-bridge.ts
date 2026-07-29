@@ -2,6 +2,7 @@ import { spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { app, shell } from 'electron'
+import { getOpencodeExePath } from './opencode-downloader'
 
 export interface OpenCodeDetectResult {
   installed: boolean
@@ -19,8 +20,14 @@ function isWindows(): boolean {
   return process.platform === 'win32'
 }
 
-/** Resolve opencode executable: bundled path (future), project node_modules, then PATH. */
+/** Resolve opencode executable: runtime on-demand path (瘦包三期), project node_modules, then PATH. */
 export function resolveOpenCodeCommand(): string {
+  // 优先：runtime/opencode/opencode.exe（瘦包三期按需下载）
+  if (isWindows()) {
+    const runtimeExe = getOpencodeExePath()
+    if (fs.existsSync(runtimeExe)) return runtimeExe
+  }
+
   const binName = isWindows() ? 'opencode.cmd' : 'opencode'
 
   const candidates: string[] = []

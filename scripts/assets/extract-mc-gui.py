@@ -50,8 +50,7 @@ JAR_EXTRACT_MAP = [
 
 BLOCK_COPY_MAP = [
     ("dirt.png", "block/dirt.png"),
-    ("water_still.png", "block/water_still.png"),
-    ("water_flow.png", "block/water_flow.png"),
+    # water_still.png / water_flow.png 跳过：项目内已是蓝色版本，不从 MC assets 覆盖灰度原版
 ]
 
 TITLE_COPY = [
