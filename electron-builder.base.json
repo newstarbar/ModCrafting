@@ -15,8 +15,9 @@
     "mirror": "https://npmmirror.com/mirrors/electron/"
   },
   "electronDist": "node_modules/electron/dist",
-  "afterPack": null,
+  "afterPack": "./scripts/packaging/afterpack-clean-runtime.mjs",
   "beforePack": "./scripts/packaging/patch-nsis-install-ui.mjs",
+  "electronLanguages": ["zh-CN", "en-US"],
   "npmRebuild": "false",
   "extraResources": [
     {

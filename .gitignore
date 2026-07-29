@@ -41,7 +41,10 @@ runtime/
 # resources/gradle-home-seed.tar.xz
 # resources/.gradle-home-seed.zip.stamp
 # resources/jre-21-minimal/
+# resources/jre-21-minimal.tar.xz
+# resources/.jre-21-minimal.tar.xz.stamp
 # resources/seed-shards/
+# resources/jre-shards/
 
 # TypeScript 增量编译缓存
 *.tsbuildinfo

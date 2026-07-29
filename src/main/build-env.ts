@@ -10,7 +10,7 @@ import {
   isCompleteGradleDist
 } from './toolchain-download'
 import { ensureGradleHomeOnline } from './portable-prefetch'
-import { downloadAndExtractSeedShards } from './seed-downloader'
+import { downloadAndExtractSeedShards, downloadAndExtractJreShards } from './seed-downloader'
 import {
   collectParamNames,
   formatYarnField,
@@ -661,12 +661,13 @@ function gradleHomeDirLooksValid(home: string): boolean {
 }
 
 /**
- * 检测 NSIS 瘦包首次启动是否需要联网下载 Fabric 依赖种子。
+ * 检测 NSIS 瘦包首次启动是否需要联网下载 JRE + Gradle + Fabric 依赖种子。
  *
  * 满足以下全部条件时返回 true：
  *  - 应用已打包且为 full 版（NSIS 完整版）
  *  - 无 bundled seed archive（瘦包不再内置 gradle-home-seed.zip）
- *  - runtime 中的 gradle-home 未就绪（首次启动或之前未完成下载）
+ *  - runtime 中的 gradle-home / jdk-21 / gradle-9.5 任一未就绪
+ *    （首次启动或之前未完成下载）
  *
  * 渲染进程据此显示下载预估对话框，用户确认后再调用 initToolchain。
  */
@@ -674,7 +675,11 @@ export function needsFirstTimeDownload(): boolean {
   if (!app.isPackaged || !isFullEdition()) return false
   if (resolveBundledGradleHomeSeedArchivePath() !== null) return false
   const runtimeHome = runtimeGradleHomePath()
-  if (fs.existsSync(runtimeHome) && gradleHomeDirLooksValid(runtimeHome)) return false
+  const gradleHomeReady = fs.existsSync(runtimeHome) && gradleHomeDirLooksValid(runtimeHome)
+  const jdkReady = isValidJdk(getRuntimeJdkPath())
+  const gradleReady = isCompleteGradleDist(getRuntimeGradlePath())
+  // 三者均已就绪才跳过下载
+  if (gradleHomeReady && jdkReady && gradleReady) return false
   return true
 }
 
@@ -1181,6 +1186,23 @@ export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultPr
     return ensurePortableGradle(onProgress)
   }
 
+  // NSIS 瘦包:无 bundled Gradle,从腾讯云镜像下载
+  if (app.isPackaged && isFullEdition()) {
+    try {
+      onProgress({ phase: 'gradle', message: '正在下载 Gradle 9.5（约 120MB，腾讯云镜像）…', percent: 26 })
+      await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg) => {
+        onProgress({ phase: 'gradle', message: msg, percent: 28 })
+      })
+      if (isCompleteGradleDist(dest)) {
+        onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
+        return true
+      }
+    } catch (err) {
+      console.error(`[ensureRuntimeGradle] download failed: ${err}`)
+    }
+    return false
+  }
+
   return false
 }
 
@@ -1230,7 +1252,42 @@ export async function ensureJdkReady(onProgress: ProgressSender = defaultProgres
     return ensurePortableJdk(onProgress)
   }
 
+  // NSIS 瘦包:无 bundled JRE,从 Gitee Releases 下载 JRE 分片
+  if (app.isPackaged && isFullEdition()) {
+    const dl = await ensureRuntimeJreFromShards(runtimeJdk, onProgress)
+    if (dl.ok) return { ok: true, path: runtimeJdk }
+    return { ok: false, error: dl.error || 'JRE 21 下载失败，请检查网络后重启应用' }
+  }
+
   return { ok: false, error: app.isPackaged ? (isPortableEdition() ? 'JDK 未就绪' : '安装包不完整，缺少捆绑 JDK 21') : '未找到 JDK 21，请运行 npm run prefetch:deps 或检查 resources/jdk-21' }
+}
+
+/**
+ * NSIS 瘦包首次启动时从 Gitee Releases 下载 JRE 21 分片并解压到 runtime/jdk-21。
+ * 进度映射到 jdk 阶段的 5-25% 区间,与复制 JDK 的进度范围一致。
+ */
+async function ensureRuntimeJreFromShards(
+  runtimeJdk: string,
+  onProgress: ProgressSender
+): Promise<{ ok: boolean; error?: string }> {
+  onProgress({ phase: 'jdk', message: '正在从 Gitee 下载 JRE 21（约 65MB 压缩包）…', percent: 5 })
+  try {
+    fs.mkdirSync(path.dirname(runtimeJdk), { recursive: true })
+    const result = await downloadAndExtractJreShards(runtimeJdk, (msg, pct) => {
+      // 将 0-100 的下载进度映射到 jdk 阶段的 5-25 区间
+      onProgress({ phase: 'jdk', message: msg, percent: lerpPercent(5, 25, pct) })
+    })
+    if (!result.ok) {
+      return { ok: false, error: result.error }
+    }
+    if (!isValidJdk(runtimeJdk)) {
+      return { ok: false, error: 'JRE 21 解压后验证失败（缺少 bin/java.exe）' }
+    }
+    onProgress({ phase: 'jdk', message: 'JRE 21 已就绪', percent: 25 })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: `JRE 21 下载失败: ${String(err)}` }
+  }
 }
 
 function shouldUseOfflineGradle(): boolean {

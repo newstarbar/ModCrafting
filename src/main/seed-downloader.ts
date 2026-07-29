@@ -26,6 +26,9 @@ const GITHUB_RELEASE_BASE = `https://github.com/newstarbar/ModCrafting/releases/
 const MANIFEST_FILENAME = 'manifest.json'
 const SEED_ARCHIVE_NAME = 'gradle-home-seed.tar.xz'
 
+const JRE_MANIFEST_FILENAME = 'jre-manifest.json'
+const JRE_ARCHIVE_NAME = 'jre-21-minimal.tar.xz'
+
 // Parallelism for shard downloads
 const DOWNLOAD_CONCURRENCY = 3
 
@@ -63,16 +66,16 @@ async function fetchJson(url: string): Promise<SeedManifest> {
   return (await res.json()) as SeedManifest
 }
 
-async function fetchManifest(): Promise<{ manifest: SeedManifest; baseUrl: string }> {
+async function fetchManifest(manifestFilename: string): Promise<{ manifest: SeedManifest; baseUrl: string }> {
   // Gitee primary
   try {
-    const manifest = await fetchJson(`${GITEE_RELEASE_BASE}${MANIFEST_FILENAME}`)
+    const manifest = await fetchJson(`${GITEE_RELEASE_BASE}${manifestFilename}`)
     return { manifest, baseUrl: GITEE_RELEASE_BASE }
   } catch (err) {
     console.warn(`[seed-downloader] Gitee manifest fetch failed: ${String(err)}, trying GitHub…`)
   }
   // GitHub fallback
-  const manifest = await fetchJson(`${GITHUB_RELEASE_BASE}${MANIFEST_FILENAME}`)
+  const manifest = await fetchJson(`${GITHUB_RELEASE_BASE}${manifestFilename}`)
   return { manifest, baseUrl: GITHUB_RELEASE_BASE }
 }
 
@@ -145,7 +148,8 @@ async function downloadAllShards(
   manifest: SeedManifest,
   baseUrl: string,
   shardsDir: string,
-  onOverallProgress: (message: string, percent: number) => void
+  onOverallProgress: (message: string, percent: number) => void,
+  progressLabel: string
 ): Promise<string[]> {
   mkdirSync(shardsDir, { recursive: true })
   const totalBytes = manifest.totalSize
@@ -158,7 +162,7 @@ async function downloadAllShards(
 
   const reportProgress = () => {
     const pct = totalBytes > 0 ? Math.floor((receivedBytes / totalBytes) * 80) + 10 : 50
-    onOverallProgress(`下载 Fabric 依赖分片… ${receivedBytes}/${totalBytes} bytes (${pct}%)`, pct)
+    onOverallProgress(`${progressLabel} ${receivedBytes}/${totalBytes} bytes (${pct}%)`, pct)
   }
 
   for (let i = 0; i < Math.min(DOWNLOAD_CONCURRENCY, queue.length); i++) {
@@ -209,22 +213,32 @@ async function extractTarXz(
   })
 }
 
-export async function downloadAndExtractSeedShards(
-  destDir: string,
+interface ShardedArchiveOptions {
+  destDir: string
   onProgress: ProgressFn
-): Promise<{ ok: boolean; error?: string }> {
+  manifestFilename: string
+  /** 用于进度消息的标签,如 "Fabric 依赖" 或 "JRE 21" */
+  label: string
+  /** 解压阶段的提示文案,例如 "约 1GB" 或 "约 185MB" */
+  extractHint: string
+  /** 替换现有目录失败时的错误提示 */
+  replaceBusyHint: string
+}
+
+async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Promise<{ ok: boolean; error?: string }> {
+  const { destDir, onProgress, manifestFilename, label, extractHint, replaceBusyHint } = opts
   const staging = `${destDir}.staging`
   const shardsDir = `${destDir}.shards`
   const archivePath = `${destDir}.tar.xz`
 
-  onProgress('正在获取 Fabric 依赖清单…', 5)
+  onProgress(`正在获取${label}清单…`, 5)
 
   let manifest: SeedManifest
   let baseUrl: string
   try {
-    ({ manifest, baseUrl } = await fetchManifest())
+    ({ manifest, baseUrl } = await fetchManifest(manifestFilename))
   } catch (err) {
-    return { ok: false, error: `无法获取 Fabric 依赖清单: ${String(err)}` }
+    return { ok: false, error: `无法获取${label}清单: ${String(err)}` }
   }
 
   onProgress(
@@ -246,9 +260,9 @@ export async function downloadAndExtractSeedShards(
 
   try {
     // 1. Download all shards
-    const shardPaths = await downloadAllShards(manifest, baseUrl, shardsDir, onProgress)
+    const shardPaths = await downloadAllShards(manifest, baseUrl, shardsDir, onProgress, `下载${label}分片…`)
 
-    // 2. Concatenate into seed.tar.xz
+    // 2. Concatenate into archive
     onProgress('正在合并分片…', 92)
     await concatenateShards(shardPaths, archivePath)
 
@@ -260,7 +274,7 @@ export async function downloadAndExtractSeedShards(
     }
 
     // 4. Extract tar.xz
-    onProgress('正在解压 Fabric 依赖（约 1GB，请稍候）…', 96)
+    onProgress(`正在解压${label}（${extractHint}，请稍候）…`, 96)
     const exitCode = await extractTarXz(archivePath, staging)
     if (exitCode !== 0) {
       return { ok: false, error: `解压失败 (tar exit ${exitCode})` }
@@ -271,7 +285,7 @@ export async function downloadAndExtractSeedShards(
       try {
         rmSync(destDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
       } catch {
-        return { ok: false, error: '无法替换现有的 Fabric 依赖目录（文件被占用）。请关闭所有 Gradle/Minecraft 进程后重试。' }
+        return { ok: false, error: replaceBusyHint }
       }
     }
     renameSync(staging, destDir)
@@ -284,7 +298,7 @@ export async function downloadAndExtractSeedShards(
       /* ignore cleanup failures */
     }
 
-    onProgress('Fabric 依赖已就绪', 100)
+    onProgress(`${label}已就绪`, 100)
     return { ok: true }
   } catch (err) {
     // Cleanup on failure
@@ -299,8 +313,36 @@ export async function downloadAndExtractSeedShards(
   }
 }
 
+export async function downloadAndExtractSeedShards(
+  destDir: string,
+  onProgress: ProgressFn
+): Promise<{ ok: boolean; error?: string }> {
+  return downloadAndExtractShardedArchive({
+    destDir,
+    onProgress,
+    manifestFilename: MANIFEST_FILENAME,
+    label: 'Fabric 依赖',
+    extractHint: '约 1GB',
+    replaceBusyHint: '无法替换现有的 Fabric 依赖目录（文件被占用）。请关闭所有 Gradle/Minecraft 进程后重试。'
+  })
+}
+
+export async function downloadAndExtractJreShards(
+  destDir: string,
+  onProgress: ProgressFn
+): Promise<{ ok: boolean; error?: string }> {
+  return downloadAndExtractShardedArchive({
+    destDir,
+    onProgress,
+    manifestFilename: JRE_MANIFEST_FILENAME,
+    label: 'JRE 21',
+    extractHint: '约 185MB',
+    replaceBusyHint: '无法替换现有的 JRE 目录（文件被占用）。请关闭所有 Java/Gradle 进程后重试。'
+  })
+}
+
 export function getSeedReleaseInfo(): { tag: string; giteeBase: string; githubBase: string } {
   return { tag: SEED_RELEASE_TAG, giteeBase: GITEE_RELEASE_BASE, githubBase: GITHUB_RELEASE_BASE }
 }
 
-export { SEED_ARCHIVE_NAME, MANIFEST_FILENAME }
+export { SEED_ARCHIVE_NAME, MANIFEST_FILENAME, JRE_ARCHIVE_NAME, JRE_MANIFEST_FILENAME }

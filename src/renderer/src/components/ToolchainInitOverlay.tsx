@@ -68,15 +68,15 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
 
           <div className="toolchain-init-download-estimate">
             <p className="toolchain-init-download-intro">
-              安装包已精简至约 400MB，首次使用需联网下载以下资源后即可完全离线开发：
+              安装包已精简至约 100MB，首次使用需联网下载以下资源后即可完全离线开发：
             </p>
             <ul className="toolchain-init-download-list">
               <li>
                 <span className="toolchain-init-download-name">JRE 21（精简版）</span>
-                <span className="toolchain-init-download-size">已内置</span>
+                <span className="toolchain-init-download-size">约 65MB（Gitee 镜像）</span>
               </li>
               <li>
-                <span className="toolchain-init-download-name">Gradle 9.5 精简版</span>
+                <span className="toolchain-init-download-name">Gradle 9.5</span>
                 <span className="toolchain-init-download-size">约 120MB（腾讯云镜像）</span>
               </li>
               <li>
@@ -86,7 +86,7 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
             </ul>
             <div className="toolchain-init-download-total">
               <span>总计下载量</span>
-              <span className="toolchain-init-download-total-size">约 620MB</span>
+              <span className="toolchain-init-download-total-size">约 685MB</span>
             </div>
             <p className="toolchain-init-download-hint">
               国内网络环境下约需 5-10 分钟，下载完成后可完全离线使用。

@@ -36,6 +36,8 @@
 		"release:sync-gitee": "node scripts/release/sync-gitee-release.mjs",
 		"release:cleanup-github": "node scripts/release/cleanup-github-release.mjs",
 		"release:split-seed": "node scripts/release/split-seed-shards.mjs",
+		"release:split-jre": "node scripts/release/split-jre-shards.mjs",
+		"toolchain:archive-jre": "node scripts/toolchain/archive-jre-minimal.mjs",
 		"clean:local": "node scripts/clean-local.mjs",
 		"docs:sync-fabric": "node --experimental-strip-types scripts/sync-fabric-docs-knowledge.ts",
 		"docs:prefetch-fabric": "npm run docs:sync-fabric",
@@ -90,15 +92,8 @@
 	"build": {
 		"extends": "./electron-builder.base.json",
 		"extraResources": [
-		{
-			"from": "resources/jre-21-minimal",
-			"to": "jre-21-minimal",
-			"filter": [
-				"**/*"
-			]
-		},
-		{
-			"from": "resources/gradle-wrapper.jar",
+	{
+		"from": "resources/gradle-wrapper.jar",
 			"to": "gradle-wrapper.jar"
 		},
 		{
