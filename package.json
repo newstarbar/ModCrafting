@@ -98,7 +98,13 @@
 			"out/**/*",
 			"!node_modules/opencode-windows-x64/**",
 			"!node_modules/opencode-windows-x64-baseline/**",
-			"!node_modules/opencode-ai/bin/opencode.exe"
+			"!node_modules/opencode-ai/bin/opencode.exe",
+			"!node_modules/@xenova/**",
+			"!node_modules/onnxruntime-node/**",
+			"!node_modules/onnxruntime-web/**",
+			"!node_modules/onnxruntime-common/**",
+			"!node_modules/sharp/**",
+			"!node_modules/@img/**"
 		],
 		"extraResources": [
 	{

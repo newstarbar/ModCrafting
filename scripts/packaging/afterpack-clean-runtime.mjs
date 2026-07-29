@@ -45,4 +45,20 @@ export default async function afterPack(context) {
     console.error(`[afterpack][error] failed to remove runtime/: ${err?.message || err}`)
     // 不抛出,避免阻塞打包;NSIS 会再次尝试,且通常清理已足够
   }
+
+  // 删除 Electron 运行时大文件以进一步缩小 Setup.exe
+  // - LICENSES.chromium.html: Chromium 开源许可证（可用在线链接替代）
+  // - dxcompiler.dll: DirectX 着色器编译器（Chromium 回退到 d3dcompiler_47.dll）
+  const filesToDelete = ['LICENSES.chromium.html', 'dxcompiler.dll']
+  for (const fname of filesToDelete) {
+    const fpath = path.join(appOutDir, fname)
+    if (existsSync(fpath)) {
+      try {
+        rmSync(fpath, { force: true, maxRetries: 3, retryDelay: 200 })
+        console.log(`[afterpack] removed ${fname}`)
+      } catch (err) {
+        console.warn(`[afterpack][warn] failed to remove ${fname}: ${err?.message || err}`)
+      }
+    }
+  }
 }
