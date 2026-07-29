@@ -84,6 +84,12 @@ jobs:
       - name: Split seed shards
         run: node scripts/release/split-seed-shards.mjs
 
+      - name: Archive JRE minimal (tar.xz)
+        run: node scripts/toolchain/archive-jre-minimal.mjs
+
+      - name: Split JRE shards
+        run: node scripts/release/split-jre-shards.mjs
+
       - name: Prepare installer assets
         run: |
           npm run assets:icon
@@ -142,6 +148,23 @@ jobs:
             fi
           done
           echo "Seed shards uploaded."
+
+      - name: Upload JRE shards to GitHub Release
+        shell: bash
+        run: |
+          JRE_SHARDS_DIR="resources/jre-shards"
+          if [ ! -d "$JRE_SHARDS_DIR" ]; then
+            echo "JRE shards dir not found: $JRE_SHARDS_DIR"
+            exit 1
+          fi
+          echo "Uploading JRE shards..."
+          for f in "$JRE_SHARDS_DIR"/*; do
+            if [ -f "$f" ]; then
+              echo "  uploading $(basename "$f")"
+              gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+            fi
+          done
+          echo "JRE shards uploaded."
 
       - name: Apply release notes to GitHub Release
         shell: bash

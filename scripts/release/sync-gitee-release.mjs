@@ -226,6 +226,34 @@ function collectSeedShards() {
   return files
 }
 
+/**
+ * 收集 JRE 分片文件（jre-manifest.json + jre.part.001 ~ jre.part.00N）。
+ * NSIS 瘦包首次启动时从 Gitee 下载这些分片来恢复 JRE 21。
+ */
+function collectJreShards() {
+  const shardsDir = path.join(root, 'resources', 'jre-shards')
+  if (!existsSync(shardsDir)) {
+    console.warn(`[gitee] jre shards dir not found: ${shardsDir}`)
+    return []
+  }
+
+  const files = []
+  for (const name of readdirSync(shardsDir)) {
+    const full = path.join(shardsDir, name)
+    if (!statSync(full).isFile()) continue
+    // jre-manifest.json + jre.part.NNN
+    if (name === 'jre-manifest.json' || /^jre\.part\.\d{3}$/.test(name)) {
+      files.push(full)
+    }
+  }
+
+  if (files.length === 0) {
+    console.warn('[gitee] no jre shards found in resources/jre-shards/')
+  }
+
+  return files
+}
+
 function readReleaseBody() {
   const bodyPath = path.join(root, 'packaging', 'release-body.md')
   if (!existsSync(bodyPath)) {
@@ -356,7 +384,8 @@ async function uploadAsset(releaseId, filePath) {
 async function main() {
   const releaseAssets = collectReleaseAssets(releaseDir)
   const seedShards = collectSeedShards()
-  const assets = [...releaseAssets, ...seedShards]
+  const jreShards = collectJreShards()
+  const assets = [...releaseAssets, ...seedShards, ...jreShards]
 
   if (assets.length === 0) {
     console.error(`[gitee] No release assets in ${releaseDir}`)
