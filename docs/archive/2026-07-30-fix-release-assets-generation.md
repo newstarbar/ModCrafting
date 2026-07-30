@@ -34,3 +34,11 @@ GitHub Actions 的 Release 工作流在执行 `npm run assets:prepare` 时失败
 ## 经验教训
 
 被忽略的生成文件不能作为 CI 目录存在性的隐式前提。每个生成器都应在写入目标文件前自行创建父目录，确保在本地缓存和干净检出环境中行为一致。
+
+## 后续修复：NSISBI 校验失败
+
+`v1.0.1` 的 Release 在构建 NSIS 安装包时失败。`run-electron-builder.mjs` 在本地 NSISBI 缺失时把 Base64 SHA-512 值传给 electron-builder 的 `customNsisBinary` 下载配置；该下载路径按校验文件格式解析该值，因而在下载完成后报“Could not parse checksum file”。
+
+Release 工作流现在会缓存并显式执行 `setup-nsisbi.mjs`；打包脚本也会在本地工具包缺失时同步执行该初始化脚本，再通过 `ELECTRON_BUILDER_NSIS_DIR` 使用已验证的本地工具包。移除了有问题的临时下载配置。
+
+验证：`node --check` 检查两个打包脚本、`node scripts/packaging/setup-nsisbi.mjs`、`npm run build` 均通过。应用版本提升至 `1.0.2`，使用新标签触发发布。

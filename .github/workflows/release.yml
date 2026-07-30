@@ -54,6 +54,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Cache NSISBI toolset
+        uses: actions/cache@v4
+        with:
+          path: packaging/nsisbi
+          key: nsisbi-3.10.3-${{ runner.os }}
+
+      - name: Setup NSISBI toolset
+        run: node scripts/packaging/setup-nsisbi.mjs
+
       - name: Run harness tests
         run: npm run test
 
