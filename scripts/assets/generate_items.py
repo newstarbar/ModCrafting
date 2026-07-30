@@ -457,6 +457,9 @@ export function searchItems(query: string): MinecraftItem[] {
 }
 '''
 
+    # items.ts is generated and ignored by Git, so a clean CI checkout does
+    # not contain its parent directory. Create it before writing the index.
+    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         f.write(ts_content)
 
