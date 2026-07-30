@@ -138,7 +138,7 @@ jobs:
       - name: Upload Portable to GitHub Release
         shell: bash
         run: |
-          VER="${GITHUB_REF_NAME#v}"
+          VER=$(node -p "require('./package.json').version")
           PORTABLE="release/ModCrafting ${VER} Portable.exe"
           if [ -f "$PORTABLE" ]; then
             gh release upload "${GITHUB_REF_NAME}" "$PORTABLE" --clobber
