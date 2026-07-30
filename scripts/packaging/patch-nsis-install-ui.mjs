@@ -60,7 +60,7 @@ const extractMacro = `!macro extractUsing7za FILE
     \${if} $R1 < 10
       Goto RetryExtract7za
     \${else}
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "无法写入安装目录。$\r$\n$\r$\n请确认：$\r$\n• ModCrafting 已完全关闭$\r$\n• 未打开安装目录中的文件$\r$\n• 杀毒软件未锁定文件$\r$\n$\r$\n点击「重试」继续，或「取消」退出。" /SD IDRETRY IDCANCEL AbortExtract7za
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "无法写入安装目录。$\\r$\\n$\\r$\\n请确认：$\\r$\\n• ModCrafting 已完全关闭$\\r$\\n• 未打开安装目录中的文件$\\r$\\n• 杀毒软件未锁定文件$\\r$\\n$\\r$\\n点击「重试」继续，或「取消」退出。" /SD IDRETRY IDCANCEL AbortExtract7za
     \${endIf}
 
     RMDir /r "$PLUGINSDIR\\7z-out"
@@ -93,9 +93,15 @@ if (callbackStart !== -1) {
 
 const macroStart = extractContent.indexOf('!macro extractUsing7za FILE')
 const macroEnd = extractContent.indexOf('!macroend', macroStart) + '!macroend'.length
+// Re-patch when:
+//   1. Fresh install (no '无法写入安装目录' yet), or
+//   2. Previously patched by buggy script that wrote raw CR/LF instead of literal "$\r$\n"
+//      (the file contains the message but not the literal NSIS escape sequence)
+const needsPatch = !extractContent.includes('无法写入安装目录') ||
+  !extractContent.includes('$\\r$\\n')
 if (macroStart === -1 || macroEnd === -1) {
   console.warn('[nsis] extractUsing7za macro not found — skip extract patch')
-} else if (!extractContent.includes('无法写入安装目录')) {
+} else if (needsPatch) {
   extractContent = extractContent.slice(0, macroStart) + extractMacro + '\n' + extractContent.slice(macroEnd)
   writeFileSync(extractPath, extractContent)
   console.log('[nsis] extractAppPackage.nsh: extractUsing7za retry/message patch applied')
