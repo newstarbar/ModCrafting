@@ -49,7 +49,13 @@ export default async function afterPack(context) {
   // 删除 Electron 运行时大文件以进一步缩小 Setup.exe
   // - LICENSES.chromium.html: Chromium 开源许可证（可用在线链接替代）
   // - dxcompiler.dll: DirectX 着色器编译器（Chromium 回退到 d3dcompiler_47.dll）
-  const filesToDelete = ['LICENSES.chromium.html', 'dxcompiler.dll']
+  // - chrome_100_percent.pak / chrome_200_percent.pak: DevTools UI 资源包，生产应用不需要
+  const filesToDelete = [
+    'LICENSES.chromium.html',
+    'dxcompiler.dll',
+    'chrome_100_percent.pak',
+    'chrome_200_percent.pak'
+  ]
   for (const fname of filesToDelete) {
     const fpath = path.join(appOutDir, fname)
     if (existsSync(fpath)) {

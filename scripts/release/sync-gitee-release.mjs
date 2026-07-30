@@ -30,7 +30,8 @@ const { owner, repo, source } = resolveGiteeRepo()
 const tag = version.startsWith('v') ? version : `v${version}`
 const ver = tag.replace(/^v/, '')
 const apiBase = 'https://gitee.com/api/v5'
-const UPLOAD_TIMEOUT_MS = 45 * 60 * 1000
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000
+const MAX_UPLOAD_RETRIES = 3
 
 async function giteeApi(method, endpoint, body) {
   const sep = endpoint.includes('?') ? '&' : '?'
@@ -121,8 +122,18 @@ async function listAttachFiles(releaseId) {
 async function cleanupStaleAttachments(releaseId, expectedBasenames) {
   const expected = new Set(expectedBasenames.map((n) => n.toLowerCase()))
   const files = await listAttachFiles(releaseId)
-  if (files.length === 0) return
+  if (files.length === 0) {
+    console.log('[gitee] No existing attachments to clean')
+    return
+  }
 
+  console.log(`[gitee] Found ${files.length} existing attachments:`)
+  for (const file of files) {
+    const name = file.name || file.file_name || ''
+    console.log(`  - ${name} (#${file.id})`)
+  }
+
+  const kept = []
   for (const file of files) {
     const name = file.name || file.file_name || ''
     const id = file.id
@@ -132,10 +143,16 @@ async function cleanupStaleAttachments(releaseId, expectedBasenames) {
       /^builder-debug\.yml$/i.test(name) ||
       expected.has(name.toLowerCase())
 
-    if (!stale) continue
+    if (!stale) {
+      kept.push(name)
+      continue
+    }
 
     console.log(`[gitee] Removing stale attachment: ${name} (#${id})`)
     await giteeApi('DELETE', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files/${id}`)
+  }
+  if (kept.length > 0) {
+    console.log(`[gitee] Keeping ${kept.length} non-matching attachments: ${kept.join(', ')}`)
   }
 }
 
@@ -351,7 +368,7 @@ function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function uploadWithCurl(releaseId, filePath) {
+function uploadWithCurl(releaseId, filePath, attempt = 1) {
   const fileName = path.basename(filePath)
   const size = statSync(filePath).size
   const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
@@ -359,35 +376,57 @@ function uploadWithCurl(releaseId, filePath) {
   return new Promise((resolve, reject) => {
     const args = [
       '-fS',
-      '--retry', '3',
-      '--retry-delay', '10',
-      '--connect-timeout', '60',
+      '--progress-bar',
+      '--retry', '0',
+      '--connect-timeout', '30',
       '-m', String(Math.ceil(UPLOAD_TIMEOUT_MS / 1000)),
       '-X', 'POST',
       '-F', `file=@${filePath}`,
       url
     ]
-    console.log(`[gitee] Uploading ${fileName} (${formatSize(size)})...`)
+    console.log(`[gitee] Uploading ${fileName} (${formatSize(size)}) attempt ${attempt}/${MAX_UPLOAD_RETRIES}...`)
     const child = spawn('curl.exe', args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
     let stderr = ''
-    child.stderr.on('data', (d) => { stderr += d.toString() })
+    child.stderr.on('data', (d) => {
+      const chunk = d.toString()
+      stderr += chunk
+      // curl --progress-bar 输出到 stderr，实时显示进度
+      process.stderr.write(chunk)
+    })
     child.on('error', reject)
     child.on('close', (code) => {
       if (code === 0) {
         console.log(`[gitee] Uploaded: ${fileName}`)
         resolve()
       } else {
-        reject(new Error(`curl upload ${fileName} failed (${code}): ${stderr.trim()}`))
+        reject(new Error(`curl upload ${fileName} failed (exit ${code}): ${stderr.trim().slice(-500)}`))
       }
     })
   })
+}
+
+/** 带重试的上传：脚本层控制重试，每次独立超时 */
+async function uploadWithRetry(releaseId, filePath) {
+  let lastErr
+  for (let attempt = 1; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+    try {
+      return await uploadWithCurl(releaseId, filePath, attempt)
+    } catch (err) {
+      lastErr = err
+      if (attempt < MAX_UPLOAD_RETRIES) {
+        console.warn(`[gitee] Upload attempt ${attempt} failed, retrying in 5s... (${err.message})`)
+        await new Promise((r) => setTimeout(r, 5000))
+      }
+    }
+  }
+  throw lastErr
 }
 
 async function uploadAsset(releaseId, filePath) {
   const size = statSync(filePath).size
   // 大文件用 curl 流式上传，避免 Node fetch 读入 1GB 内存超时
   if (size > 8 * 1024 * 1024) {
-    return uploadWithCurl(releaseId, filePath)
+    return uploadWithRetry(releaseId, filePath)
   }
 
   const fileName = path.basename(filePath)

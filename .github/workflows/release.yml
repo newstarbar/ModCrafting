@@ -125,6 +125,17 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Verify version matches tag
+        shell: bash
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VER" != "$TAG_VER" ]; then
+            echo "ERROR: package.json version ($PKG_VER) != tag ($TAG_VER)"
+            exit 1
+          fi
+          echo "Version OK: $PKG_VER"
+
       - name: Cleanup duplicate GitHub Release
         shell: bash
         run: npm run release:cleanup-github -- "${{ github.ref_name }}"
