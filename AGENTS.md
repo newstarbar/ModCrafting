@@ -65,6 +65,21 @@ npm run knowledge:download    # 下载所有离线知识库
 - **AGENTS.md / CLAUDE.md ≤ 150 行**：只保留摘要与索引，详细内容写到 `docs/`
 - **提交前确认**：未包含 API Key、`.env`、个人路径；未提交 `node_modules/`、`release/`、`runtime/`、`resources/jdk-21/`
 
+## 发布流程
+
+当开发者要求发布新版本时，Agent 按以下步骤执行：
+
+1. 读取 `package.json` version，基于近期 commit 推荐下一迭代版本（`feat:`→minor，`fix:`→patch，破坏性变更→major），说明推荐理由
+2. 开发者确认版本后，更新 `package.json` version
+3. 运行 `npm run release:publish`，一条命令完成：
+   - 生成 `packaging/release-body.md` + 归档 `docs/releases/vX.Y.Z.md`
+   - 创建并推送 tag 到 GitHub（触发 CI 自动发布 GitHub Release）
+   - 推送 git + tag 到 Gitee 并上传 Release 附件
+
+**前置条件**：本地已构建产物（`npm run build:win` 等）；`.env` 配置 `GITEE_TOKEN`（见 `.env.example`，已 gitignore）。
+
+**幂等**：Gitee 已存在该版本时自动跳过。详见 [RELEASE.md](./RELEASE.md)。
+
 ## 归档机制（重要）
 
 AI Agent 必须在以下场景触发归档，将工作总结写入 [`docs/archive/`](./docs/archive/)：

@@ -1,6 +1,6 @@
 # 发布说明
 
-Release 正文由 CI **自动生成**，无需每次手改 Markdown。格式参考 [NapCatQQ Releases](https://github.com/NapNeko/NapCatQQ/releases)。
+Release 正文由 `npm run release:publish` **自动生成**，无需每次手改 Markdown。格式参考 [NapCatQQ Releases](https://github.com/NapNeko/NapCatQQ/releases)。
 
 ## 瘦包策略（v1.0.0+）
 
@@ -25,7 +25,7 @@ Fabric 依赖种子（`gradle-home-seed.tar.xz`）压缩后约 500 MB，超过 G
 - 生成脚本：[`scripts/release/split-seed-shards.mjs`](scripts/release/split-seed-shards.mjs)
 - 下载器：[`src/main/seed-downloader.ts`](src/main/seed-downloader.ts)（多镜像回退：Gitee → GitHub）
 
-CI 上传到 GitHub Release 和 Gitee Release 后，应用首次启动自动从 Gitee 下载分片、校验、合并、解压。
+CI 上传到 GitHub Release、本地 `release:publish` 上传到 Gitee Release 后，应用首次启动自动从 Gitee 下载分片、校验、合并、解压。
 
 ## 自动生成的内容
 
@@ -50,15 +50,27 @@ CI 上传到 GitHub Release 和 Gitee Release 后，应用首次启动自动从 
    - `fix:` / `修复:` → 修复
    - `perf:` / `优化:` / `refactor:` → 优化
    - `chore:` / `ci:` / `build:` → 默认不展示在 Release 正文
-3. 打 tag 并推送：`git tag v1.0.1 && git push origin v1.0.1`
-4. GitHub Actions 自动：
-   - 构建工具链（setup → strip-gradle → build-jre → prefetch → archive → split-seed）
-   - 构建 Setup + Portable
-   - 发布 GitHub Release（Setup + Portable + seed 分片）
-   - 更新 `packaging/update-manifest.json` 到 main
-5. 本地同步 Gitee（见下方「Gitee 配置」章节）：
-   - 设置 `$env:GITEE_TOKEN`
-   - 运行 `npm run release:gitee-local`
+3. 本地构建产物（供 Gitee Release 上传）：
+   - 工具链：`npm run toolchain:setup` → `toolchain:strip-gradle` → `toolchain:build-jre` → `toolchain:prefetch` → `toolchain:symbol-index`
+   - 知识库：`npm run knowledge:download`
+   - 应用包：`npm run build:win`
+   - 分片资源：`npm run release:split-seed` → `release:split-jre` → `release:archive-extra`
+4. 配置 `.env`（首次发布需要）：
+   ```bash
+   cp .env.example .env
+   # 编辑 .env 填入 GITEE_TOKEN
+   ```
+5. 运行一条命令同时发布 GitHub + Gitee：
+   ```bash
+   npm run release:publish
+   ```
+   脚本自动完成：
+   - 生成 `packaging/release-body.md` + 归档 `docs/releases/vX.Y.Z.md`
+   - 创建并推送 tag 到 GitHub（触发 CI 自动构建并发布 GitHub Release）
+   - 推送 git + tag 到 Gitee
+   - 上传本地产物到 Gitee Release（Setup / Portable / seed 分片 / JRE 分片 / 额外资源）
+
+**幂等**：Gitee 已存在该版本时自动跳过 Gitee 部分，但仍会推送 tag 触发 CI。
 
 ## CI 构建步骤（toolchain）
 
@@ -75,40 +87,30 @@ CI 上传到 GitHub Release 和 Gitee Release 后，应用首次启动自动从 
 
 ## Gitee 配置
 
-见 [`packaging/gitee-config.json`](packaging/gitee-config.json)。
+Gitee 仓库配置见 [`packaging/gitee-config.json`](packaging/gitee-config.json)（owner/repo）。
 
-> Gitee 同步已从 GitHub Actions 迁移到本地执行。CI 不再负责 Gitee 同步，改由 `npm run release:gitee-local` 在本地完成。
+### .env 配置
 
-### 本地同步 Gitee
+`GITEE_TOKEN` 从项目根目录 `.env` 文件读取（已被 `.gitignore` 忽略，不会提交）：
 
-GitHub Release 发布完成后，本地执行以下步骤同步到 Gitee：
+```bash
+cp .env.example .env
+# 编辑 .env，填入 GITEE_TOKEN
+```
 
-1. 设置 Gitee 私人令牌（PowerShell）：
+令牌获取：https://gitee.com/profile/personal_access_tokens
 
-   ```powershell
-   $env:GITEE_TOKEN = "<你的 Gitee 私人令牌>"
-   ```
+也可通过系统环境变量设置（PowerShell）：
 
-   令牌获取：https://gitee.com/profile/personal_access_tokens
+```powershell
+$env:GITEE_TOKEN = "<你的 Gitee 私人令牌>"
+```
 
-2. 确保本地构建产物齐全（Setup / Portable / seed 分片 / JRE 分片 / 额外资源 / `packaging/release-body.md`）。产物缺失时脚本会报错并列出需运行的构建命令。
+### docs/releases/ 归档
 
-3. 运行同步命令：
+每次运行 `npm run release:publish` 会将 `packaging/release-body.md` 复制到 `docs/releases/vX.Y.Z.md` 作为版本文档归档。
 
-   ```bash
-   npm run release:gitee-local
-   ```
-
-脚本逻辑（幂等）：
-
-- 读取 `package.json` 的 `version`，构造 tag `vX.Y.Z`
-- 查询 Gitee 是否已存在该 tag 的 Release，存在则跳过同步
-- 查询 GitHub 最新 Release tag 作为信息对比（不阻断）
-- 检查本地构建产物，缺失则报错并给出构建命令提示
-- 调用 `release:push-gitee` 推送 commit + tag 到 Gitee
-- 调用 `release:sync-gitee` 创建 Release 并上传附件（含 seed 分片）
-
-若 Gitee 仓库没有对应代码，会报「创建标签失败」，此时需先确保 `release:push-gitee` 成功执行。
+若 Gitee 仓库没有对应代码，会报「创建标签失败」，此时需先确保 `release:push-gitee` 成功执行（`release:publish` 已自动调用）。
 
 ## 本地预览 Release 正文
 
