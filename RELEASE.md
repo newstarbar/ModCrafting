@@ -55,8 +55,10 @@ CI 上传到 GitHub Release 和 Gitee Release 后，应用首次启动自动从 
    - 构建工具链（setup → strip-gradle → build-jre → prefetch → archive → split-seed）
    - 构建 Setup + Portable
    - 发布 GitHub Release（Setup + Portable + seed 分片）
-   - 同步 Gitee Release（Setup + Portable + seed 分片）
    - 更新 `packaging/update-manifest.json` 到 main
+5. 本地同步 Gitee（见下方「Gitee 配置」章节）：
+   - 设置 `$env:GITEE_TOKEN`
+   - 运行 `npm run release:gitee-local`
 
 ## CI 构建步骤（toolchain）
 
@@ -73,9 +75,40 @@ CI 上传到 GitHub Release 和 Gitee Release 后，应用首次启动自动从 
 
 ## Gitee 配置
 
-见 [`packaging/gitee-config.json`](packaging/gitee-config.json)。GitHub Actions 还需 Secret `GITEE_TOKEN`。
+见 [`packaging/gitee-config.json`](packaging/gitee-config.json)。
 
-CI 发版时会先执行 `release:push-gitee`（把当前 commit + tag 推到 Gitee），再 `release:sync-gitee` 上传附件（含 seed 分片）。若 Gitee 仓库没有对应代码，会报「创建标签失败」。
+> Gitee 同步已从 GitHub Actions 迁移到本地执行。CI 不再负责 Gitee 同步，改由 `npm run release:gitee-local` 在本地完成。
+
+### 本地同步 Gitee
+
+GitHub Release 发布完成后，本地执行以下步骤同步到 Gitee：
+
+1. 设置 Gitee 私人令牌（PowerShell）：
+
+   ```powershell
+   $env:GITEE_TOKEN = "<你的 Gitee 私人令牌>"
+   ```
+
+   令牌获取：https://gitee.com/profile/personal_access_tokens
+
+2. 确保本地构建产物齐全（Setup / Portable / seed 分片 / JRE 分片 / 额外资源 / `packaging/release-body.md`）。产物缺失时脚本会报错并列出需运行的构建命令。
+
+3. 运行同步命令：
+
+   ```bash
+   npm run release:gitee-local
+   ```
+
+脚本逻辑（幂等）：
+
+- 读取 `package.json` 的 `version`，构造 tag `vX.Y.Z`
+- 查询 Gitee 是否已存在该 tag 的 Release，存在则跳过同步
+- 查询 GitHub 最新 Release tag 作为信息对比（不阻断）
+- 检查本地构建产物，缺失则报错并给出构建命令提示
+- 调用 `release:push-gitee` 推送 commit + tag 到 Gitee
+- 调用 `release:sync-gitee` 创建 Release 并上传附件（含 seed 分片）
+
+若 Gitee 仓库没有对应代码，会报「创建标签失败」，此时需先确保 `release:push-gitee` 成功执行。
 
 ## 本地预览 Release 正文
 

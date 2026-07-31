@@ -218,23 +218,6 @@ jobs:
             --notes-file packaging/release-body.md \
             --draft=false
 
-      - name: Push git ref and tag to Gitee
-        continue-on-error: false
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
-          GITEE_REPO: ${{ vars.GITEE_REPO }}
-        run: npm run release:push-gitee -- "${{ github.ref_name }}"
-
-      - name: Sync Gitee Release
-        continue-on-error: true
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
-          GITEE_REPO: ${{ vars.GITEE_REPO }}
-          GITHUB_SHA: ${{ github.sha }}
-        run: npm run release:sync-gitee -- "${{ github.ref_name }}"
-
       - name: Commit update manifest
         continue-on-error: true
         shell: bash
