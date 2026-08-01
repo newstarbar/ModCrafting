@@ -35,6 +35,7 @@
 		"release:push-gitee": "node scripts/release/push-gitee-git.mjs",
 		"release:sync-gitee": "node scripts/release/sync-gitee-release.mjs",
 		"release:publish": "node scripts/release/publish-release.mjs",
+		"release:gitee-only": "node scripts/release/sync-gitee-only.mjs",
 		"release:cleanup-github": "node scripts/release/cleanup-github-release.mjs",
 		"release:split-seed": "node scripts/release/split-seed-shards.mjs",
 		"release:split-jre": "node scripts/release/split-jre-shards.mjs",

@@ -240,10 +240,21 @@ async function main() {
     console.error('[publish] 错误: GITEE_TOKEN 未设置')
     console.error('[publish] 请复制 .env.example 为 .env 并填入 Gitee 私人令牌:')
     console.error('  cp .env.example .env')
-    console.error('  # 然后编辑 .env 填入 GITEE_TOKEN')
-    console.error('[publish] 或通过环境变量设置(PowerShell):')
-    console.error('  $env:GITEE_TOKEN = "<你的 Gitee 私人令牌>"')
+    console.error('  # 然后编辑 .env,把 GITEE_TOKEN= 后面替换成真实令牌')
     console.error('[publish] 令牌获取: https://gitee.com/profile/personal_access_tokens')
+    console.error('')
+    console.error('[publish] 注意:load-env.mjs 遵循"系统环境变量优先",若曾误设 $env:GITEE_TOKEN,')
+    console.error('[publish]       请先清除: Remove-Item Env:GITEE_TOKEN  (PowerShell)')
+    process.exit(1)
+  }
+  // 占位符检测:防止 .env.example 中的字面量或 PowerShell 提示中的占位符被当令牌
+  if (/^<.*>$/.test(token) || token.includes('你的') || token.includes('令牌')) {
+    console.error('')
+    console.error('[publish] 错误: GITEE_TOKEN 看起来是占位符而非真实令牌:')
+    console.error(`[publish]   实际值 = "${token}"`)
+    console.error('[publish] 请编辑 .env,把 GITEE_TOKEN= 后面替换成真实令牌')
+    console.error('[publish] 令牌获取: https://gitee.com/profile/personal_access_tokens')
+    console.error('[publish] 若为环境变量误设,请清除: Remove-Item Env:GITEE_TOKEN  (PowerShell)')
     process.exit(1)
   }
   console.log(`[publish] .env 加载完成(读取 ${Object.keys(envLoaded).length} 个变量)`)

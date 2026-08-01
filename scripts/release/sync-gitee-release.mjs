@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 /**
- * Sync release assets to Gitee Releases.
- * Requires env GITEE_TOKEN. Usage: node scripts/sync-gitee-release.mjs <version> [release_dir]
+ * Sync release assets to Gitee Releases (split across main + env repos).
+ *
+ * Gitee 单仓库附件配额 1GB，全部 18 个发布文件共 1.12GB 装不下。
+ * 拆分策略：
+ *   - 主仓 <owner>/<repo>：发布二进制（Setup/Portable/latest.yml/blockmap）≈176MB
+ *   - 环境仓 <owner>/<envRepo>：seed-shards + jre-shards + extra-zips ≈943MB
+ *
+ * 两仓各自创建同 tag 的 Release。GitHub 不分仓（容量足够）。
+ *
+ * Requires env GITEE_TOKEN. Usage: node scripts/release/sync-gitee-release.mjs <version> [release_dir]
  */
 import { readFileSync, existsSync, statSync, readdirSync } from 'fs'
 import { spawn } from 'node:child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { resolveGiteeRepo } from './gitee-config.mjs'
+import { resolveGiteeRepo, resolveGiteeEnvRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..', '..')
@@ -16,7 +24,7 @@ const version = process.argv[2]
 const releaseDir = process.argv[3] || path.join(root, 'release')
 
 if (!version) {
-  console.error('Usage: node scripts/sync-gitee-release.mjs <version> [release_dir]')
+  console.error('Usage: node scripts/release/sync-gitee-release.mjs <version> [release_dir]')
   process.exit(1)
 }
 
@@ -26,133 +34,283 @@ if (!token) {
   process.exit(0)
 }
 
-const { owner, repo, source } = resolveGiteeRepo()
+const mainRepo = resolveGiteeRepo()
+const envRepo = resolveGiteeEnvRepo()
 const tag = version.startsWith('v') ? version : `v${version}`
 const ver = tag.replace(/^v/, '')
 const apiBase = 'https://gitee.com/api/v5'
 const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000
 const MAX_UPLOAD_RETRIES = 3
 
-async function giteeApi(method, endpoint, body) {
-  const sep = endpoint.includes('?') ? '&' : '?'
-  const url = `${apiBase}${endpoint}${sep}access_token=${token}`
-  const res = await fetch(url, {
-    method,
-    headers: body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
-    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
-  })
-  const text = await res.text()
-  let data
-  try {
-    data = text ? JSON.parse(text) : null
-  } catch {
-    data = text
-  }
-  if (!res.ok) {
-    throw new Error(`Gitee API ${method} ${endpoint}: ${res.status} ${text}`)
-  }
-  return data
-}
+// ─── Gitee 客户端工厂：每个仓库一个独立闭包，避免 owner/repo 串扰 ───────────
+function createGiteeClient(owner, repo, label) {
+  const prefix = `[gitee:${label}]`
 
-async function verifyRepoAccess() {
-  await giteeApi('GET', `/repos/${owner}/${repo}`)
-}
-
-async function getDefaultBranch() {
-  const info = await giteeApi('GET', `/repos/${owner}/${repo}`)
-  return info?.default_branch || 'main'
-}
-
-async function tagExistsOnGitee(tagName) {
-  try {
-    await giteeApi('GET', `/repos/${owner}/${repo}/tags/${tagName}`)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function findReleaseByTag(tagName) {
-  try {
-    const byTag = await giteeApi('GET', `/repos/${owner}/${repo}/releases/tags/${tagName}`)
-    if (byTag?.id) return byTag
-  } catch {
-    /* list fallback */
-  }
-  const releases = await listAllReleases()
-  return releases.find((r) => r.tag_name === tagName) || null
-}
-
-async function listAllReleases() {
-  const all = []
-  for (let page = 1; page <= 10; page++) {
-    const batch = await giteeApi('GET', `/repos/${owner}/${repo}/releases?per_page=100&page=${page}`)
-    if (!Array.isArray(batch) || batch.length === 0) break
-    all.push(...batch)
-    if (batch.length < 100) break
-  }
-  return all
-}
-
-/** 同 tag 多条 Release 时删除旧的，只保留最新一条 */
-async function cleanupDuplicateReleasesForTag(tagName) {
-  const matches = (await listAllReleases()).filter((r) => r.tag_name === tagName)
-  if (matches.length <= 1) return matches[0] || null
-
-  matches.sort((a, b) => b.id - a.id)
-  const keep = matches[0]
-  for (const dup of matches.slice(1)) {
-    console.log(`[gitee] Deleting duplicate release #${dup.id} for ${tagName}`)
-    await giteeApi('DELETE', `/repos/${owner}/${repo}/releases/${dup.id}`)
-  }
-  console.log(`[gitee] Kept release #${keep.id} for ${tagName}`)
-  return keep
-}
-
-async function listAttachFiles(releaseId) {
-  try {
-    const data = await giteeApi('GET', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files`)
-    return Array.isArray(data) ? data : []
-  } catch {
-    return []
-  }
-}
-
-/** 删除旧附件：builder-debug.yml、以及即将重新上传的同名文件 */
-async function cleanupStaleAttachments(releaseId, expectedBasenames) {
-  const expected = new Set(expectedBasenames.map((n) => n.toLowerCase()))
-  const files = await listAttachFiles(releaseId)
-  if (files.length === 0) {
-    console.log('[gitee] No existing attachments to clean')
-    return
+  async function api(method, endpoint, body) {
+    const sep = endpoint.includes('?') ? '&' : '?'
+    const url = `${apiBase}${endpoint}${sep}access_token=${token}`
+    const res = await fetch(url, {
+      method,
+      headers: body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
+      body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
+    })
+    const text = await res.text()
+    let data
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch {
+      data = text
+    }
+    if (!res.ok) {
+      throw new Error(`Gitee API ${method} ${endpoint}: ${res.status} ${text}`)
+    }
+    return data
   }
 
-  console.log(`[gitee] Found ${files.length} existing attachments:`)
-  for (const file of files) {
-    const name = file.name || file.file_name || ''
-    console.log(`  - ${name} (#${file.id})`)
+  async function verifyRepoAccess() {
+    await api('GET', `/repos/${owner}/${repo}`)
   }
 
-  const kept = []
-  for (const file of files) {
-    const name = file.name || file.file_name || ''
-    const id = file.id
-    if (!id || !name) continue
+  async function getDefaultBranch() {
+    const info = await api('GET', `/repos/${owner}/${repo}`)
+    return info?.default_branch || 'main'
+  }
 
-    const stale =
-      /^builder-debug\.yml$/i.test(name) ||
-      expected.has(name.toLowerCase())
+  async function tagExistsOnGitee(tagName) {
+    try {
+      await api('GET', `/repos/${owner}/${repo}/tags/${tagName}`)
+      return true
+    } catch {
+      return false
+    }
+  }
 
-    if (!stale) {
-      kept.push(name)
-      continue
+  async function listAllReleases() {
+    const all = []
+    for (let page = 1; page <= 10; page++) {
+      const batch = await api('GET', `/repos/${owner}/${repo}/releases?per_page=100&page=${page}`)
+      if (!Array.isArray(batch) || batch.length === 0) break
+      all.push(...batch)
+      if (batch.length < 100) break
+    }
+    return all
+  }
+
+  async function findReleaseByTag(tagName) {
+    try {
+      const byTag = await api('GET', `/repos/${owner}/${repo}/releases/tags/${tagName}`)
+      if (byTag?.id) return byTag
+    } catch {
+      /* list fallback */
+    }
+    const releases = await listAllReleases()
+    return releases.find((r) => r.tag_name === tagName) || null
+  }
+
+  /** 同 tag 多条 Release 时删除旧的，只保留最新一条 */
+  async function cleanupDuplicateReleasesForTag(tagName) {
+    const matches = (await listAllReleases()).filter((r) => r.tag_name === tagName)
+    if (matches.length <= 1) return matches[0] || null
+
+    matches.sort((a, b) => b.id - a.id)
+    const keep = matches[0]
+    for (const dup of matches.slice(1)) {
+      console.log(`${prefix} Deleting duplicate release #${dup.id} for ${tagName}`)
+      await api('DELETE', `/repos/${owner}/${repo}/releases/${dup.id}`)
+    }
+    console.log(`${prefix} Kept release #${keep.id} for ${tagName}`)
+    return keep
+  }
+
+  async function listAttachFiles(releaseId) {
+    try {
+      const data = await api('GET', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files`)
+      return Array.isArray(data) ? data : []
+    } catch {
+      return []
+    }
+  }
+
+  /** 删除旧附件：builder-debug.yml、以及即将重新上传的同名文件 */
+  async function cleanupStaleAttachments(releaseId, expectedBasenames) {
+    const expected = new Set(expectedBasenames.map((n) => n.toLowerCase()))
+    const files = await listAttachFiles(releaseId)
+    if (files.length === 0) {
+      console.log(`${prefix} No existing attachments to clean`)
+      return
     }
 
-    console.log(`[gitee] Removing stale attachment: ${name} (#${id})`)
-    await giteeApi('DELETE', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files/${id}`)
+    console.log(`${prefix} Found ${files.length} existing attachments:`)
+    for (const file of files) {
+      const name = file.name || file.file_name || ''
+      console.log(`  - ${name} (#${file.id})`)
+    }
+
+    const kept = []
+    for (const file of files) {
+      const name = file.name || file.file_name || ''
+      const id = file.id
+      if (!id || !name) continue
+
+      const stale =
+        /^builder-debug\.yml$/i.test(name) ||
+        expected.has(name.toLowerCase())
+
+      if (!stale) {
+        kept.push(name)
+        continue
+      }
+
+      console.log(`${prefix} Removing stale attachment: ${name} (#${id})`)
+      await api('DELETE', `/repos/${owner}/${repo}/releases/${releaseId}/attach_files/${id}`)
+    }
+    if (kept.length > 0) {
+      console.log(`${prefix} Keeping ${kept.length} non-matching attachments: ${kept.join(', ')}`)
+    }
   }
-  if (kept.length > 0) {
-    console.log(`[gitee] Keeping ${kept.length} non-matching attachments: ${kept.join(', ')}`)
+
+  async function createRelease(body) {
+    const hasTag = await tagExistsOnGitee(tag)
+    const defaultBranch = await getDefaultBranch()
+    const target = process.env.GITHUB_SHA || defaultBranch
+
+    const basePayload = {
+      tag_name: tag,
+      name: `ModCrafting ${tag}`,
+      body,
+      prerelease: false
+    }
+
+    if (!hasTag) {
+      basePayload.target_commitish = target.length === 40 ? target : defaultBranch
+    }
+
+    try {
+      return await api('POST', `/repos/${owner}/${repo}/releases`, basePayload)
+    } catch (err) {
+      if (String(err.message).includes('创建标签失败') || String(err.message).includes('400')) {
+        console.warn(`${prefix} create release retry without target_commitish`)
+        return api('POST', `/repos/${owner}/${repo}/releases`, {
+          tag_name: tag,
+          name: `ModCrafting ${tag}`,
+          body,
+          prerelease: false
+        })
+      }
+      throw err
+    }
+  }
+
+  async function ensureRelease(body) {
+    await cleanupDuplicateReleasesForTag(tag)
+    const existing = await findReleaseByTag(tag)
+
+    if (existing?.id) {
+      await api('PATCH', `/repos/${owner}/${repo}/releases/${existing.id}`, {
+        tag_name: tag,
+        name: `ModCrafting ${tag}`,
+        body,
+        prerelease: false
+      })
+      console.log(`${prefix} Updated release body #${existing.id}`)
+      return existing
+    }
+
+    const created = await createRelease(body)
+    console.log(`${prefix} Created release #${created.id}`)
+    return created
+  }
+
+  function uploadWithCurl(releaseId, filePath, attempt = 1) {
+    const fileName = path.basename(filePath)
+    const size = statSync(filePath).size
+    const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
+
+    return new Promise((resolve, reject) => {
+      const args = [
+        '-fS',
+        '--progress-bar',
+        '--retry', '0',
+        '--connect-timeout', '30',
+        '-m', String(Math.ceil(UPLOAD_TIMEOUT_MS / 1000)),
+        '-X', 'POST',
+        '-F', `file=@${filePath}`,
+        url
+      ]
+      console.log(`${prefix} Uploading ${fileName} (${formatSize(size)}) attempt ${attempt}/${MAX_UPLOAD_RETRIES}...`)
+      const child = spawn('curl.exe', args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+      let stderr = ''
+      child.stderr.on('data', (d) => {
+        const chunk = d.toString()
+        stderr += chunk
+        // curl --progress-bar 输出到 stderr，实时显示进度
+        process.stderr.write(chunk)
+      })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code === 0) {
+          console.log(`${prefix} Uploaded: ${fileName}`)
+          resolve()
+        } else {
+          reject(new Error(`curl upload ${fileName} failed (exit ${code}): ${stderr.trim().slice(-500)}`))
+        }
+      })
+    })
+  }
+
+  /** 带重试的上传：脚本层控制重试，每次独立超时 */
+  async function uploadWithRetry(releaseId, filePath) {
+    let lastErr
+    for (let attempt = 1; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+      try {
+        return await uploadWithCurl(releaseId, filePath, attempt)
+      } catch (err) {
+        lastErr = err
+        if (attempt < MAX_UPLOAD_RETRIES) {
+          console.warn(`${prefix} Upload attempt ${attempt} failed, retrying in 5s... (${err.message})`)
+          await new Promise((r) => setTimeout(r, 5000))
+        }
+      }
+    }
+    throw lastErr
+  }
+
+  async function uploadAsset(releaseId, filePath) {
+    const size = statSync(filePath).size
+    // 大文件用 curl 流式上传，避免 Node fetch 读入 1GB 内存超时
+    if (size > 8 * 1024 * 1024) {
+      return uploadWithRetry(releaseId, filePath)
+    }
+
+    const fileName = path.basename(filePath)
+    const buffer = readFileSync(filePath)
+    const form = new FormData()
+    form.append('file', new Blob([buffer]), fileName)
+    const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000)
+    try {
+      const res = await fetch(url, { method: 'POST', body: form, signal: controller.signal })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`Upload ${fileName} failed: ${res.status} ${text}`)
+      }
+      console.log(`${prefix} Uploaded: ${fileName}`)
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  return {
+    owner,
+    repo,
+    label,
+    prefix,
+    verifyRepoAccess,
+    ensureRelease,
+    cleanupStaleAttachments,
+    uploadAsset
   }
 }
 
@@ -310,142 +468,42 @@ function readReleaseBody() {
   return body
 }
 
-async function createRelease(body) {
-  const hasTag = await tagExistsOnGitee(tag)
-  const defaultBranch = await getDefaultBranch()
-  const target = process.env.GITHUB_SHA || defaultBranch
-
-  const basePayload = {
-    tag_name: tag,
-    name: `ModCrafting ${tag}`,
-    body,
-    prerelease: false
-  }
-
-  if (!hasTag) {
-    basePayload.target_commitish = target.length === 40 ? target : defaultBranch
-  }
-
-  try {
-    return await giteeApi('POST', `/repos/${owner}/${repo}/releases`, basePayload)
-  } catch (err) {
-    if (String(err.message).includes('创建标签失败') || String(err.message).includes('400')) {
-      console.warn('[gitee] create release retry without target_commitish')
-      return giteeApi('POST', `/repos/${owner}/${repo}/releases`, {
-        tag_name: tag,
-        name: `ModCrafting ${tag}`,
-        body,
-        prerelease: false
-      })
-    }
-    throw err
-  }
-}
-
-async function ensureRelease() {
-  const body = readReleaseBody()
-  await cleanupDuplicateReleasesForTag(tag)
-  const existing = await findReleaseByTag(tag)
-
-  if (existing?.id) {
-    await giteeApi('PATCH', `/repos/${owner}/${repo}/releases/${existing.id}`, {
-      tag_name: tag,
-      name: `ModCrafting ${tag}`,
-      body,
-      prerelease: false
-    })
-    console.log(`[gitee] Updated release body #${existing.id}`)
-    return existing
-  }
-
-  const created = await createRelease(body)
-  console.log(`[gitee] Created release #${created.id}`)
-  return created
-}
-
 function formatSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function uploadWithCurl(releaseId, filePath, attempt = 1) {
-  const fileName = path.basename(filePath)
-  const size = statSync(filePath).size
-  const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
-
-  return new Promise((resolve, reject) => {
-    const args = [
-      '-fS',
-      '--progress-bar',
-      '--retry', '0',
-      '--connect-timeout', '30',
-      '-m', String(Math.ceil(UPLOAD_TIMEOUT_MS / 1000)),
-      '-X', 'POST',
-      '-F', `file=@${filePath}`,
-      url
-    ]
-    console.log(`[gitee] Uploading ${fileName} (${formatSize(size)}) attempt ${attempt}/${MAX_UPLOAD_RETRIES}...`)
-    const child = spawn('curl.exe', args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stderr = ''
-    child.stderr.on('data', (d) => {
-      const chunk = d.toString()
-      stderr += chunk
-      // curl --progress-bar 输出到 stderr，实时显示进度
-      process.stderr.write(chunk)
-    })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) {
-        console.log(`[gitee] Uploaded: ${fileName}`)
-        resolve()
-      } else {
-        reject(new Error(`curl upload ${fileName} failed (exit ${code}): ${stderr.trim().slice(-500)}`))
-      }
-    })
-  })
+function logAssets(prefix, assets) {
+  assets.forEach((a) => console.log(`  - ${path.basename(a)} (${formatSize(statSync(a).size)})`))
 }
 
-/** 带重试的上传：脚本层控制重试，每次独立超时 */
-async function uploadWithRetry(releaseId, filePath) {
-  let lastErr
-  for (let attempt = 1; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+async function syncToRepo(client, assets, body) {
+  if (assets.length === 0) {
+    console.log(`${client.prefix} no assets to upload, skip`)
+    return
+  }
+
+  console.log(`\n${client.prefix} Syncing ${assets.length} assets to ${client.owner}/${client.repo} ${tag}...`)
+  logAssets(client.prefix, assets)
+
+  await client.verifyRepoAccess()
+  const release = await client.ensureRelease(body)
+  const expectedNames = assets.map((a) => path.basename(a))
+  await client.cleanupStaleAttachments(release.id, expectedNames)
+
+  const failed = []
+  for (const asset of assets) {
     try {
-      return await uploadWithCurl(releaseId, filePath, attempt)
+      await client.uploadAsset(release.id, asset)
     } catch (err) {
-      lastErr = err
-      if (attempt < MAX_UPLOAD_RETRIES) {
-        console.warn(`[gitee] Upload attempt ${attempt} failed, retrying in 5s... (${err.message})`)
-        await new Promise((r) => setTimeout(r, 5000))
-      }
+      failed.push({ asset, err })
+      console.error(`${client.prefix} FAILED: ${path.basename(asset)} — ${err.message || err}`)
     }
   }
-  throw lastErr
-}
 
-async function uploadAsset(releaseId, filePath) {
-  const size = statSync(filePath).size
-  // 大文件用 curl 流式上传，避免 Node fetch 读入 1GB 内存超时
-  if (size > 8 * 1024 * 1024) {
-    return uploadWithRetry(releaseId, filePath)
-  }
-
-  const fileName = path.basename(filePath)
-  const buffer = readFileSync(filePath)
-  const form = new FormData()
-  form.append('file', new Blob([buffer]), fileName)
-  const url = `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/attach_files?access_token=${token}`
-
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000)
-  try {
-    const res = await fetch(url, { method: 'POST', body: form, signal: controller.signal })
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`Upload ${fileName} failed: ${res.status} ${text}`)
-    }
-    console.log(`[gitee] Uploaded: ${fileName}`)
-  } finally {
-    clearTimeout(timer)
+  if (failed.length > 0) {
+    const names = failed.map((f) => path.basename(f.asset)).join(', ')
+    throw new Error(`${client.prefix} ${failed.length} asset(s) failed: ${names}`)
   }
 }
 
@@ -454,37 +512,30 @@ async function main() {
   const seedShards = collectSeedShards()
   const jreShards = collectJreShards()
   const extraResources = collectExtraResources()
-  const assets = [...releaseAssets, ...seedShards, ...jreShards, ...extraResources]
+  const envAssets = [...seedShards, ...jreShards, ...extraResources]
 
-  if (assets.length === 0) {
+  if (releaseAssets.length === 0 && envAssets.length === 0) {
     console.error(`[gitee] No release assets in ${releaseDir}`)
     process.exit(1)
   }
 
-  console.log(`[gitee] Syncing ${assets.length} assets to ${owner}/${repo} ${tag} (from ${source})...`)
-  assets.forEach((a) => console.log(`  - ${path.basename(a)} (${formatSize(statSync(a).size)})`))
+  console.log(`[gitee] Split-sync plan:`)
+  console.log(`  - Main repo ${mainRepo.owner}/${mainRepo.repo} (binaries): ${releaseAssets.length} files`)
+  console.log(`  - Env repo  ${envRepo.owner}/${envRepo.repo} (seed/jre/extra): ${envAssets.length} files`)
 
-  await verifyRepoAccess()
-  const release = await ensureRelease()
-  const expectedNames = assets.map((a) => path.basename(a))
-  await cleanupStaleAttachments(release.id, expectedNames)
+  const body = readReleaseBody()
 
-  const failed = []
-  for (const asset of assets) {
-    try {
-      await uploadAsset(release.id, asset)
-    } catch (err) {
-      failed.push({ asset, err })
-      console.error(`[gitee] FAILED: ${path.basename(asset)} — ${err.message || err}`)
-    }
-  }
+  // 主仓：发布二进制（Setup/Portable/latest.yml/blockmap）
+  const mainClient = createGiteeClient(mainRepo.owner, mainRepo.repo, 'main')
+  await syncToRepo(mainClient, releaseAssets, body)
 
-  if (failed.length > 0) {
-    const names = failed.map((f) => path.basename(f.asset)).join(', ')
-    throw new Error(`${failed.length} asset(s) failed: ${names}`)
-  }
+  // 环境仓：seed/jre 分片 + extra-zips（>100MB 聚合，避免主仓配额溢出）
+  const envClient = createGiteeClient(envRepo.owner, envRepo.repo, 'env')
+  await syncToRepo(envClient, envAssets, body)
 
-  console.log('[gitee] Release sync complete.')
+  console.log('\n[gitee] Release split-sync complete.')
+  console.log(`  - Main: https://gitee.com/${mainRepo.owner}/${mainRepo.repo}/releases/tag/${tag}`)
+  console.log(`  - Env:  https://gitee.com/${envRepo.owner}/${envRepo.repo}/releases/tag/${tag}`)
 }
 
 main().catch((err) => {

@@ -1,4 +1,5 @@
 {
   "owner": "chenmo-starry-sky",
-  "repo": "mod-crafting"
+  "repo": "mod-crafting",
+  "envRepo": "mod-crafting-env"
 }

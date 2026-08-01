@@ -106,7 +106,11 @@ async function resolveKnowledgeReleaseTag(mcVersion: string): Promise<{
 }
 
 /**
- * 应用自身 Release 的辅助资源 URL（与 jre/seed 共用 tag，复用 seed-downloader 的 tag 常量）。
+ * 应用自身 Release 的辅助资源 URL。
+ *
+ * Gitee 侧：与 jre/seed 分片一起放在环境仓 mod-crafting-env（>100MB 聚合，避免主仓配额溢出）。
+ * GitHub 侧：不分仓，与二进制一起放在主仓 newstarbar/ModCrafting。
+ * 与 jre/seed 共用 tag，复用 seed-downloader 的 tag 常量。
  */
 function resolveExtraArtifactUrl(zipName: string): { gitee: string; github: string } {
   const { giteeBase, githubBase } = getSeedReleaseInfo()

@@ -19,9 +19,47 @@ import { pipeline } from 'stream/promises'
 // Release tag hosting the seed shards. Update when publishing a new seed version.
 const SEED_RELEASE_TAG = 'v1.0.0'
 
-// Gitee primary (国内速度快), GitHub fallback (国外/兜底)
-const GITEE_RELEASE_BASE = `https://gitee.com/newstarbar/ModCrafting/releases/download/${SEED_RELEASE_TAG}/`
+// GitHub 不分仓（容量足够），始终指向主仓 newstarbar/ModCrafting
 const GITHUB_RELEASE_BASE = `https://github.com/newstarbar/ModCrafting/releases/download/${SEED_RELEASE_TAG}/`
+
+/**
+ * Gitee 环境仓（seed/jre/extra-zips 分片所在）。
+ *
+ * Gitee 单仓库附件配额 1GB，全部 18 个发布文件共 1.12GB 装不下，
+ * 因此 Gitee 侧拆分到环境仓 mod-crafting-env，主仓 mod-crafting 只放二进制。
+ *
+ * 从打包后的 process.resourcesPath/gitee-config.json 读取 envRepo；
+ * dev 模式回退到源码 packaging/gitee-config.json；最终 fallback 到默认值。
+ */
+function loadGiteeEnvRepo(): { owner: string; repo: string } {
+  const candidates = [
+    // 生产模式：electron-builder extraResources 打包到 process.resourcesPath/
+    path.join(process.resourcesPath || '', 'gitee-config.json'),
+    // Dev 模式：源码 packaging/gitee-config.json（__dirname = out/main/）
+    path.join(__dirname, '..', '..', 'packaging', 'gitee-config.json'),
+    // 旧版兼容
+    path.join(__dirname, '..', '..', 'build', 'gitee-config.json')
+  ]
+  for (const filePath of candidates) {
+    try {
+      if (!existsSync(filePath)) continue
+      const data = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+        owner?: string
+        envRepo?: string
+      }
+      if (data.owner && data.envRepo) {
+        return { owner: data.owner, repo: data.envRepo }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return { owner: 'chenmo-starry-sky', repo: 'mod-crafting-env' }
+}
+
+const giteeEnvRepo = loadGiteeEnvRepo()
+// Gitee primary (国内速度快), GitHub fallback (国外/兜底)
+const GITEE_RELEASE_BASE = `https://gitee.com/${giteeEnvRepo.owner}/${giteeEnvRepo.repo}/releases/download/${SEED_RELEASE_TAG}/`
 
 const MANIFEST_FILENAME = 'manifest.json'
 const SEED_ARCHIVE_NAME = 'gradle-home-seed.tar.xz'
