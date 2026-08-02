@@ -116,7 +116,8 @@ const App: React.FC = () => {
 		percent: 0,
 		message: "正在启动…",
 		error: null,
-		ready: false
+		ready: false,
+		probe: null
 	});
 	const [projectPreparing, setProjectPreparing] = useState(false);
 	const [appEdition, setAppEdition] = useState<'dev' | 'full' | 'portable'>('dev');
@@ -509,6 +510,15 @@ const App: React.FC = () => {
 			}));
 			setToolchainProgress(payload.message);
 		});
+		// 测速选优结构化事件 → 专门测速面板（done 后 5s 自动收起）
+		const unsubProbe = window.api.onSourceProbe((event) => {
+			setToolchainInit((prev) => ({ ...prev, probe: event }));
+			if (event.done) {
+				setTimeout(() => {
+					setToolchainInit((prev) => (prev.probe?.done ? { ...prev, probe: null } : prev));
+				}, 5000);
+			}
+		});
 		const unsubUpdate = window.api.onUpdateStatus((payload) => {
 			if (payload.phase === 'downloading') {
 				setUpdateBanner({
@@ -524,6 +534,7 @@ const App: React.FC = () => {
 		return () => {
 			unsubDownload();
 			unsubToolchain();
+			unsubProbe();
 			unsubUpdate();
 		};
 	}, []);
@@ -542,7 +553,8 @@ const App: React.FC = () => {
 				percent: 100,
 				message: "构建环境已就绪",
 				error: null,
-				ready: true
+				ready: true,
+				probe: null
 			});
 			setToolchainProgress("");
 		} else {
@@ -573,7 +585,8 @@ const App: React.FC = () => {
 				percent: 0,
 				message: "初始化异常",
 				error: String(err),
-				ready: false
+				ready: false,
+				probe: null
 			});
 		});
 	}, [runToolchainInit]);
@@ -584,7 +597,8 @@ const App: React.FC = () => {
 			percent: 0,
 			message: "正在重新初始化…",
 			error: null,
-			ready: false
+			ready: false,
+			probe: null
 		});
 		void runToolchainInit(true);
 	}, [runToolchainInit]);
@@ -596,7 +610,8 @@ const App: React.FC = () => {
 			percent: 0,
 			message: "正在启动下载…",
 			error: null,
-			ready: false
+			ready: false,
+			probe: null
 		});
 		void runToolchainInit(false);
 	}, [runToolchainInit]);

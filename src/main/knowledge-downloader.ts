@@ -17,6 +17,8 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { getRuntimeRoot, loadFabricVersions } from './build-env'
 import { getSeedReleaseInfo } from './seed-downloader'
+import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
+import { pickFastestUrls } from './download-probe'
 
 // 知识库仓库（与 scripts/knowledge/download-knowledge-base.mjs 一致）
 const KB_REPO_GITHUB = 'newstarbar/ModCrafting-knowledge-base'
@@ -59,9 +61,9 @@ async function resolveKnowledgeReleaseTag(mcVersion: string): Promise<{
 
   // Gitee
   try {
-    const res = await fetch(
+    const res = await getDownloadFetch()(
       `https://gitee.com/api/v5/repos/${KB_REPO_GITEE_OWNER}/${KB_REPO_GITEE_REPO}/releases?per_page=20`,
-      { headers: { 'User-Agent': 'ModCrafting/1.0' } }
+      { headers: { 'User-Agent': DOWNLOAD_USER_AGENT } }
     )
     if (res.ok) {
       const releases = (await res.json()) as Array<{
@@ -84,8 +86,8 @@ async function resolveKnowledgeReleaseTag(mcVersion: string): Promise<{
   }
 
   // GitHub fallback
-  const res = await fetch(`https://api.github.com/repos/${KB_REPO_GITHUB}/releases`, {
-    headers: { 'User-Agent': 'ModCrafting/1.0', Accept: 'application/vnd.github+json' }
+  const res = await getDownloadFetch()(`https://api.github.com/repos/${KB_REPO_GITHUB}/releases`, {
+    headers: { 'User-Agent': DOWNLOAD_USER_AGENT, Accept: 'application/vnd.github+json' }
   })
   if (!res.ok) throw new Error(`GitHub API ${res.status}`)
   const releases = (await res.json()) as Array<{
@@ -121,11 +123,11 @@ function resolveExtraArtifactUrl(zipName: string): { gitee: string; github: stri
 }
 
 async function downloadFile(url: string, destPath: string): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'ModCrafting/1.0' } })
+  const res = await getDownloadFetch()(url, { redirect: 'follow', headers: { 'User-Agent': DOWNLOAD_USER_AGENT } })
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${url}`)
   const sink = fs.createWriteStream(destPath)
   try {
-    for await (const chunk of res.body as NodeJS.ReadableStream) {
+    for await (const chunk of res.body as unknown as NodeJS.ReadableStream) {
       sink.write(chunk)
     }
     sink.end()
@@ -291,18 +293,22 @@ export async function ensureKnowledgeBase(
   }
 
   // ── 阶段 2：辅助资源 3 件（来自应用自身 Release，与 jre/seed 同 tag） ──
-  // Gitee 主，GitHub 兜底
+  // Gitee 主、GitHub 兜底；下载前测速选优决定优先顺序（不同网络差异大）
   for (const artifact of EXTRA_ARTIFACTS) {
     const { gitee, github } = resolveExtraArtifactUrl(artifact.zip)
     const destDir = path.join(root, artifact.dir)
-    onProgress(`下载 ${artifact.dir}…`, Math.round(5 + (completed / totalArtifacts) * 90))
+    const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
+    onProgress(`下载 ${artifact.dir}…`, stepPercent)
 
-    // Gitee 主
-    let r = await downloadAndExtractArtifact(gitee, destDir, artifact.dir)
-    if (!r.ok) {
-      console.warn(`[knowledge-downloader] ${artifact.dir} Gitee 失败，尝试 GitHub: ${r.error}`)
-      // GitHub 兜底
-      r = await downloadAndExtractArtifact(github, destDir, artifact.dir)
+    const ordered = await pickFastestUrls([
+      { url: gitee, label: 'Gitee' },
+      { url: github, label: 'GitHub' }
+    ])
+    let r: { ok: boolean; error?: string } = { ok: false, error: '无可用下载源' }
+    for (const candidate of ordered) {
+      r = await downloadAndExtractArtifact(candidate.url, destDir, artifact.dir)
+      if (r.ok) break
+      console.warn(`[knowledge-downloader] ${artifact.dir} ${candidate.label} 失败，尝试下一个: ${r.error}`)
     }
     results.push({ dir: artifact.dir, ...r })
     completed++

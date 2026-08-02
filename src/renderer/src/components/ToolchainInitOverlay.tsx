@@ -8,6 +8,12 @@ export interface ToolchainInitState {
   message: string
   error: string | null
   ready: boolean
+  /** 测速选优结构化数据（渲染专门测速面板；null = 无测速或已收起） */
+  probe: {
+    candidates: Array<{ url: string; label: string; speedKBps: number | null }>
+    done: boolean
+    chosen?: string
+  } | null
 }
 
 interface ToolchainInitOverlayProps {
@@ -72,12 +78,12 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
             </p>
             <ul className="toolchain-init-download-list">
               <li>
-                <span className="toolchain-init-download-name">JRE 21（精简版）</span>
-                <span className="toolchain-init-download-size">约 65MB（Gitee 镜像）</span>
+                <span className="toolchain-init-download-name">JDK 21（完整版）</span>
+                <span className="toolchain-init-download-size">约 200MB（公共镜像，自动选最快源）</span>
               </li>
               <li>
                 <span className="toolchain-init-download-name">Gradle 9.5</span>
-                <span className="toolchain-init-download-size">约 120MB（腾讯云镜像）</span>
+                <span className="toolchain-init-download-size">约 120MB（公共镜像，自动选最快源）</span>
               </li>
               <li>
                 <span className="toolchain-init-download-name">Fabric 依赖种子（分片）</span>
@@ -94,10 +100,10 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
             </ul>
             <div className="toolchain-init-download-total">
               <span>总计下载量</span>
-              <span className="toolchain-init-download-total-size">约 790MB</span>
+              <span className="toolchain-init-download-total-size">约 925MB</span>
             </div>
             <p className="toolchain-init-download-hint">
-              国内网络环境下约需 5-10 分钟，下载完成后可完全离线使用。知识库与 opencode 引擎下载失败不阻塞启动，AI 会降级运行。
+              国内网络环境下约需 5-15 分钟，下载完成后可完全离线使用。JDK/Gradle 自动测速选择最快下载源。知识库与 opencode 引擎下载失败不阻塞启动，AI 会降级运行。
             </p>
           </div>
 
@@ -162,6 +168,36 @@ const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, proj
             <span className="toolchain-init-progress-percent">{displayPercent}%</span>
           </div>
         </div>
+
+        {/* 测速选优专门面板（结构化事件驱动，非字符消息） */}
+        {state.probe && state.probe.candidates.length > 0 && (
+          <div className="toolchain-init-probe-panel">
+            <div className="toolchain-init-probe-title">
+              <span className="toolchain-init-probe-icon">⏱</span>
+              下载源测速{state.probe.done ? '完成' : '中…'}
+            </div>
+            {state.probe.candidates.map((c) => (
+              <div
+                key={c.label}
+                className={`toolchain-init-probe-row ${
+                  state.probe.done && state.probe.chosen === c.label ? 'toolchain-init-probe-row--chosen' : ''
+                }`}
+              >
+                <span className="toolchain-init-probe-name">{c.label}</span>
+                <span className="toolchain-init-probe-speed">
+                  {c.speedKBps === null
+                    ? '失败'
+                    : c.speedKBps >= 1024
+                      ? `${(c.speedKBps / 1024).toFixed(1)}MB/s`
+                      : `${c.speedKBps}KB/s`}
+                </span>
+                {state.probe.done && state.probe.chosen === c.label && (
+                  <span className="toolchain-init-probe-check">✓ 已选用</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {!isError && state.phase === 'deps' && displayPercent < 90 && (
           <p className="toolchain-init-hint">

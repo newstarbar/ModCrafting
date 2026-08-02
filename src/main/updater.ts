@@ -2,6 +2,7 @@ import { app, dialog, shell, BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 import * as fs from 'fs'
 import * as path from 'path'
+import { getDownloadFetch } from './download-shared'
 
 const { autoUpdater } = electronUpdater
 import { is } from '@electron-toolkit/utils'
@@ -94,7 +95,7 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { signal: controller.signal, redirect: 'follow' })
+    return await getDownloadFetch()(url, { signal: controller.signal, redirect: 'follow' })
   } finally {
     clearTimeout(timer)
   }

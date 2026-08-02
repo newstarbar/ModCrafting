@@ -15,6 +15,8 @@ import { createHash } from 'crypto'
 import { Transform } from 'stream'
 import * as path from 'path'
 import { pipeline } from 'stream/promises'
+import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
+import { pickFastestUrls } from './download-probe'
 
 // Release tag hosting the seed shards. Update when publishing a new seed version.
 const SEED_RELEASE_TAG = 'v1.0.0'
@@ -67,8 +69,15 @@ const SEED_ARCHIVE_NAME = 'gradle-home-seed.tar.xz'
 const JRE_MANIFEST_FILENAME = 'jre-manifest.json'
 const JRE_ARCHIVE_NAME = 'jre-21-minimal.tar.xz'
 
+const GRADLE_MANIFEST_FILENAME = 'gradle-manifest.json'
+const GRADLE_ARCHIVE_NAME = 'gradle-9.5.tar.xz'
+
 // Parallelism for shard downloads
 const DOWNLOAD_CONCURRENCY = 3
+
+// 进度上报节流：字节增量 ≥256KB 或时间间隔 ≥300ms 且收到新数据才上报，避免高频 IPC
+const PROGRESS_THROTTLE_BYTES = 256 * 1024
+const PROGRESS_THROTTLE_MS = 300
 
 interface SeedShard {
   index: number
@@ -91,30 +100,49 @@ interface SeedManifest {
 
 type ProgressFn = (message: string, percent: number) => void
 
-function sha256File(filePath: string): string {
+/** 流式计算文件 SHA256（异步，避免 readFileSync 全量读入阻塞事件循环，阻塞期间进度/速度无法上报） */
+async function sha256File(filePath: string): Promise<string> {
   const h = createHash('sha256')
-  const data = readFileSync(filePath)
-  h.update(data)
+  for await (const chunk of createReadStream(filePath)) {
+    h.update(chunk as Buffer)
+  }
   return h.digest('hex')
 }
 
 async function fetchJson(url: string): Promise<SeedManifest> {
-  const res = await fetch(url, { redirect: 'follow' })
+  const res = await getDownloadFetch()(url, { redirect: 'follow', headers: { 'User-Agent': DOWNLOAD_USER_AGENT } })
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
   return (await res.json()) as SeedManifest
 }
 
-async function fetchManifest(manifestFilename: string): Promise<{ manifest: SeedManifest; baseUrl: string }> {
-  // Gitee primary
+async function fetchManifest(
+  manifestFilename: string,
+  onProgress?: ProgressFn
+): Promise<{ manifest: SeedManifest; baseUrl: string }> {
+  // Gitee primary，GitHub fallback（manifest 本身小，保持原逻辑）
+  let manifest: SeedManifest | null = null
   try {
-    const manifest = await fetchJson(`${GITEE_RELEASE_BASE}${manifestFilename}`)
-    return { manifest, baseUrl: GITEE_RELEASE_BASE }
+    manifest = await fetchJson(`${GITEE_RELEASE_BASE}${manifestFilename}`)
   } catch (err) {
     console.warn(`[seed-downloader] Gitee manifest fetch failed: ${String(err)}, trying GitHub…`)
   }
-  // GitHub fallback
-  const manifest = await fetchJson(`${GITHUB_RELEASE_BASE}${manifestFilename}`)
-  return { manifest, baseUrl: GITHUB_RELEASE_BASE }
+  if (!manifest) {
+    manifest = await fetchJson(`${GITHUB_RELEASE_BASE}${manifestFilename}`)
+    return { manifest, baseUrl: GITHUB_RELEASE_BASE }
+  }
+  // 双 base 测速选优：不同网络下 Gitee/GitHub 速度差异大（500MB 种子值得 512KB 探测），
+  // 对两个源的首个分片实测速度，选最快的作为下载源（探测失败的按默认 Gitee 兜底）；结果经面板展示
+  const firstShard = manifest.shards[0]
+  if (firstShard) {
+    const ordered = await pickFastestUrls([
+      { url: `${GITEE_RELEASE_BASE}${firstShard.filename}`, label: 'Gitee' },
+      { url: `${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'GitHub' }
+    ])
+    const chosen = ordered.find((c) => c.speedKBps && c.speedKBps > 0)
+    const baseUrl = chosen?.label === 'GitHub' ? GITHUB_RELEASE_BASE : GITEE_RELEASE_BASE
+    return { manifest, baseUrl }
+  }
+  return { manifest, baseUrl: GITEE_RELEASE_BASE }
 }
 
 async function downloadFileWithProgress(
@@ -123,7 +151,7 @@ async function downloadFileWithProgress(
   expectedSize: number,
   onProgress: (received: number) => void
 ): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow' })
+  const res = await getDownloadFetch()(url, { redirect: 'follow', headers: { 'User-Agent': DOWNLOAD_USER_AGENT } })
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
   if (!res.body) throw new Error(`Empty response body for ${url}`)
 
@@ -131,14 +159,14 @@ async function downloadFileWithProgress(
   const sink = createWriteStream(dest)
   // Tee stream to count bytes
   const countingStream = new Transform({
-    transform(chunk: Buffer, _encoding: string, callback: () => void) {
+    transform(chunk: Buffer, _encoding: string, callback: (err?: Error | null, data?: Buffer) => void) {
       received += chunk.length
       onProgress(received)
       callback(null, chunk)
     }
   })
 
-  await pipeline(res.body as NodeJS.ReadableStream, countingStream, sink)
+  await pipeline(res.body as unknown as NodeJS.ReadableStream, countingStream, sink)
 
   if (expectedSize > 0 && received !== expectedSize) {
     throw new Error(`Size mismatch: expected ${expectedSize}, got ${received}`)
@@ -156,7 +184,7 @@ async function downloadShard(
   if (existsSync(shardPath)) {
     try {
       const stat = statSync(shardPath)
-      if (stat.size === shard.size && sha256File(shardPath) === shard.sha256) {
+      if (stat.size === shard.size && (await sha256File(shardPath)) === shard.sha256) {
         console.log(`[seed-downloader] shard ${shard.filename} already valid, skipping`)
         onProgress(shard.size, shard.index)
         return shardPath
@@ -174,7 +202,7 @@ async function downloadShard(
   })
 
   // Verify SHA256
-  const actualSha = sha256File(shardPath)
+  const actualSha = await sha256File(shardPath)
   if (actualSha !== shard.sha256) {
     throw new Error(`Shard ${shard.filename} SHA256 mismatch: expected ${shard.sha256}, got ${actualSha}`)
   }
@@ -191,17 +219,50 @@ async function downloadAllShards(
 ): Promise<string[]> {
   mkdirSync(shardsDir, { recursive: true })
   const totalBytes = manifest.totalSize
-  let receivedBytes = 0
   const shardPaths: string[] = new Array(manifest.shards.length)
+  // 每个分片已下载字节数（按 shard.index-1 索引）。
+  // 并发写不同索引在 JS 单线程事件循环下无 race，实时累计后合并为总体进度。
+  const progressBytes: number[] = new Array(manifest.shards.length).fill(0)
+  let lastReportedBytes = 0
+  let lastReportedAt = 0
+  let speedBytes = 0
+
+  const reportProgress = (force = false) => {
+    const receivedBytes = progressBytes.reduce((a, b) => a + b, 0)
+    const now = Date.now()
+    const pct = totalBytes > 0 ? Math.floor((receivedBytes / totalBytes) * 80) + 10 : 50
+    if (
+      !force &&
+      receivedBytes - lastReportedBytes < PROGRESS_THROTTLE_BYTES &&
+      now - lastReportedAt < PROGRESS_THROTTLE_MS
+    ) return
+    // 瞬时速度 → EMA 指数平滑：单次停顿（连接间隙 / SHA256 阻塞）不会把速度拉低。
+    // force 上报（分片完成瞬间）不代表持续传输速率，不更新；超长间隔视为卡顿/连接建立，跳过
+    if (!force && lastReportedAt > 0 && receivedBytes > lastReportedBytes) {
+      const dt = (now - lastReportedAt) / 1000
+      if (dt > 0 && dt <= 10) {
+        const inst = (receivedBytes - lastReportedBytes) / dt
+        speedBytes = speedBytes > 0 ? speedBytes * 0.7 + inst * 0.3 : inst
+      }
+    }
+    lastReportedBytes = receivedBytes
+    lastReportedAt = now
+    const fmtMb = (n: number) => (n / 1024 / 1024).toFixed(1)
+    const sizeText = totalBytes > 0 ? `${fmtMb(receivedBytes)}MB/${fmtMb(totalBytes)}MB` : `${receivedBytes} bytes`
+    // 动态单位：<1MB/s 用 KB/s，避免 0.0MB 无意义显示
+    const speedText =
+      speedBytes > 0
+        ? speedBytes >= 1024 * 1024
+          ? ` ${fmtMb(speedBytes)}MB/s`
+          : ` ${Math.max(1, Math.round(speedBytes / 1024))}KB/s`
+        : ''
+    onOverallProgress(`${progressLabel} ${sizeText} (${pct}%)${speedText}`, pct)
+  }
 
   // Parallel download with concurrency limit
   const queue = [...manifest.shards]
   const workers: Promise<void>[] = []
-
-  const reportProgress = () => {
-    const pct = totalBytes > 0 ? Math.floor((receivedBytes / totalBytes) * 80) + 10 : 50
-    onOverallProgress(`${progressLabel} ${receivedBytes}/${totalBytes} bytes (${pct}%)`, pct)
-  }
+  const startAt = Date.now()
 
   for (let i = 0; i < Math.min(DOWNLOAD_CONCURRENCY, queue.length); i++) {
     workers.push((async () => {
@@ -209,17 +270,29 @@ async function downloadAllShards(
         const shard = queue.shift()
         if (!shard) break
         const shardPath = await downloadShard(shard, baseUrl, shardsDir, (received) => {
-          // Note: this callback may be invoked multiple times; we track cumulative progress
-          // by re-deriving from per-shard file size on completion (simpler & avoids races)
+          // 实时记录该分片已下载字节数（每次 chunk 到达即更新）
+          progressBytes[shard.index - 1] = received
+          reportProgress()
         })
         shardPaths[shard.index - 1] = shardPath
-        receivedBytes += shard.size
-        reportProgress()
+        // 分片完成，确保字节数计入并强制上报一次
+        progressBytes[shard.index - 1] = shard.size
+        reportProgress(true)
       }
     })())
   }
 
   await Promise.all(workers)
+
+  // 下载诊断日志：确认 Gitee/GitHub 对匿名下载（无登录 cookie）是否限速
+  const downloadedBytes = progressBytes.reduce((a, b) => a + b, 0)
+  const elapsedSec = (Date.now() - startAt) / 1000
+  const avgSpeed = downloadedBytes / 1024 / 1024 / (elapsedSec || 1)
+  console.log(
+    `[seed-downloader] 分片下载完成: ${downloadedBytes} bytes in ${elapsedSec.toFixed(1)}s = ` +
+      `${avgSpeed.toFixed(2)} MB/s (from ${new URL(baseUrl).host}, UA=${DOWNLOAD_USER_AGENT.slice(0, 24)}…)`
+  )
+
   return shardPaths
 }
 
@@ -274,7 +347,7 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
   let manifest: SeedManifest
   let baseUrl: string
   try {
-    ({ manifest, baseUrl } = await fetchManifest(manifestFilename))
+    ({ manifest, baseUrl } = await fetchManifest(manifestFilename, onProgress))
   } catch (err) {
     return { ok: false, error: `无法获取${label}清单: ${String(err)}` }
   }
@@ -297,8 +370,15 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
   mkdirSync(staging, { recursive: true })
 
   try {
-    // 1. Download all shards
-    const shardPaths = await downloadAllShards(manifest, baseUrl, shardsDir, onProgress, `下载${label}分片…`)
+    // 1. Download all shards（进度消息带实际下载源名，用户可见走了哪个源）
+    const sourceName = baseUrl === GITHUB_RELEASE_BASE ? 'GitHub' : 'Gitee'
+    const shardPaths = await downloadAllShards(
+      manifest,
+      baseUrl,
+      shardsDir,
+      onProgress,
+      `下载${label}分片（${sourceName}）…`
+    )
 
     // 2. Concatenate into archive
     onProgress('正在合并分片…', 92)
@@ -306,7 +386,7 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
 
     // 3. Verify total SHA256
     onProgress('正在校验完整性…', 94)
-    const actualTotalSha = sha256File(archivePath)
+    const actualTotalSha = await sha256File(archivePath)
     if (actualTotalSha !== manifest.totalSha256) {
       return { ok: false, error: `合并后 SHA256 校验失败: expected ${manifest.totalSha256}, got ${actualTotalSha}` }
     }
@@ -379,8 +459,30 @@ export async function downloadAndExtractJreShards(
   })
 }
 
+/**
+ * 从 Gitee/GitHub Releases 下载 Gradle 发行版分片并解压到 destDir。
+ *
+ * 与 jre/seed 共用同一 manifest/分片/解压管线：发布侧由
+ * `npm run release:split-gradle` 产出 gradle-9.5.tar.xz 分片与 gradle-manifest.json。
+ * 未部署 Gradle 资产时，fetchManifest 会失败并返回 { ok:false, error }，
+ * 调用方（ensureRuntimeGradle）据此回退到腾讯云镜像。
+ */
+export async function downloadAndExtractGradleShards(
+  destDir: string,
+  onProgress: ProgressFn
+): Promise<{ ok: boolean; error?: string }> {
+  return downloadAndExtractShardedArchive({
+    destDir,
+    onProgress,
+    manifestFilename: GRADLE_MANIFEST_FILENAME,
+    label: 'Gradle 9.5',
+    extractHint: '约 120MB',
+    replaceBusyHint: '无法替换现有的 Gradle 目录（文件被占用）。请关闭所有 Gradle 进程后重试。'
+  })
+}
+
 export function getSeedReleaseInfo(): { tag: string; giteeBase: string; githubBase: string } {
   return { tag: SEED_RELEASE_TAG, giteeBase: GITEE_RELEASE_BASE, githubBase: GITHUB_RELEASE_BASE }
 }
 
-export { SEED_ARCHIVE_NAME, MANIFEST_FILENAME, JRE_ARCHIVE_NAME, JRE_MANIFEST_FILENAME }
+export { SEED_ARCHIVE_NAME, MANIFEST_FILENAME, JRE_ARCHIVE_NAME, JRE_MANIFEST_FILENAME, GRADLE_ARCHIVE_NAME, GRADLE_MANIFEST_FILENAME }

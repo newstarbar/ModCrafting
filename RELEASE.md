@@ -4,17 +4,17 @@ Release 正文由 `npm run release:publish` **自动生成**，无需每次手�
 
 ## 瘦包策略（v1.0.0+）
 
-为兼顾国内网络环境与安装包体积，v1.0.0 起采用**瘦包 + 首次下载**策略：
+为兼顾国内网络环境与安装包体积，v1.0.0 起采用**瘦包 + 首次下载**策略（安装包版与便携版一致，JDK/Gradle 从公共镜像测速选最快源下载）：
 
 | 资源 | 位置 | 大小 |
 |------|------|------|
-| 精简 JRE（jlink） | 安装包内置 | ~60 MB |
-| Gradle 9.5 精简版 | 首次从腾讯云镜像下载 | ~120 MB |
-| Fabric 依赖种子 | 首次从 Gitee Release 下载分片 | ~500 MB |
-| **安装包总计** | | **~400-500 MB** |
-| **首次下载量** | | **~620 MB** |
+| JDK 21（完整版） | 首次从公共镜像下载（华为云/Adoptium 等，测速选优） | ~200 MB |
+| Gradle 9.5 精简版 | 首次从公共镜像下载（腾讯云/华为云/官方，测速选优） | ~120 MB |
+| Fabric 依赖种子 | 首次从 Gitee/GitHub Release 下载分片 | ~500 MB |
+| **安装包总计** | | **~100 MB** |
+| **首次下载量** | | **~925 MB** |
 
-用户首次启动时会看到**下载预估对话框**，确认后开始下载（国内镜像 5-10 分钟）。下载完成后可完全离线使用。
+用户首次启动时会看到**下载预估对话框**，确认后开始下载（国内镜像 5-15 分钟，JDK/Gradle 自动测速选择最快源）。下载完成后可完全离线使用。
 
 ## seed 分片
 
@@ -26,6 +26,17 @@ Fabric 依赖种子（`gradle-home-seed.tar.xz`）压缩后约 500 MB，超过 G
 - 下载器：[`src/main/seed-downloader.ts`](src/main/seed-downloader.ts)（多镜像回退：Gitee → GitHub）
 
 CI 上传到 GitHub Release、本地 `release:publish` 上传到 Gitee Release 后，应用首次启动自动从 Gitee 下载分片、校验、合并、解压。
+
+> **多源测速**：JRE/seed/Gradle 分片下载前会对 Gitee 与 GitHub 两个源实测速度、自动选最快的（下载进度区显示"⏱ 下载源测速"面板）。**请确保分片资产同时部署到 Gitee 与 GitHub Releases**——只部署 Gitee 时 GitHub 探测失败、按 Gitee 单源兜底（多源退化为单源）。
+
+## Gradle 发行版资产
+
+Gradle 9.5 发行版（`resources/gradle-9.5/`）精简后压缩约 60-90 MB，与 seed/JRE 一样部署到 Gitee Release（`mod-crafting-env`），首次启动**优先从 Gitee 下载**，未部署或下载失败时自动回退腾讯云镜像（存量用户不受影响）：
+
+- 生成：`npm run release:split-gradle`（自动执行 strip 精简 → 压缩 `gradle-9.5.tar.xz` → 按 90 MB 分片）
+- 文件命名：`gradle.part.001` ~ `gradle.part.00N` + `gradle-manifest.json`（含 SHA256 校验）
+- 上传：将 `resources/gradle-shards/` 中所有文件作为独立资产上传到 `mod-crafting-env` Release（与 jre/seed 分片同 tag）
+- 下载器：[`src/main/seed-downloader.ts`](src/main/seed-downloader.ts)（Gitee → GitHub 回退）+ [`src/main/build-env.ts`](src/main/build-env.ts)（Gitee 优先、腾讯云镜像兜底）
 
 ## 自动生成的内容
 
@@ -54,7 +65,7 @@ CI 上传到 GitHub Release、本地 `release:publish` 上传到 Gitee Release �
    - 工具链：`npm run toolchain:setup` → `toolchain:strip-gradle` → `toolchain:build-jre` → `toolchain:prefetch` → `toolchain:symbol-index`
    - 知识库：`npm run knowledge:download`
    - 应用包：`npm run build:win`
-   - 分片资源：`npm run release:split-seed` → `release:split-jre` → `release:archive-extra`
+   - 分片资源：`npm run release:split-seed` → `release:split-gradle` → `release:archive-extra`（注：JDK/Gradle 走公共镜像下载，不再需要 JRE 分片）
 4. 配置 `.env`（首次发布需要）：
    ```bash
    cp .env.example .env
@@ -68,7 +79,7 @@ CI 上传到 GitHub Release、本地 `release:publish` 上传到 Gitee Release �
    - 生成 `packaging/release-body.md` + 归档 `docs/releases/vX.Y.Z.md`
    - 创建并推送 tag 到 GitHub（触发 CI 自动构建并发布 GitHub Release）
    - 推送 git + tag 到 Gitee
-   - 上传本地产物到 Gitee Release（Setup / Portable / seed 分片 / JRE 分片 / 额外资源）
+   - 上传本地产物到 Gitee Release（Setup / Portable / seed 分片 / Gradle 分片 / 额外资源）
 
 **幂等**：Gitee 已存在该版本时自动跳过 Gitee 部分，但仍会推送 tag 触发 CI。
 
@@ -84,6 +95,7 @@ CI 上传到 GitHub Release、本地 `release:publish` 上传到 Gitee Release �
 | 准备 seed | `node scripts/toolchain/prepare-seed-for-packaging.mjs` | 清理 + 规范化 |
 | 压缩 seed | `node scripts/toolchain/archive-gradle-home-seed.mjs` | `resources/gradle-home-seed.tar.xz` |
 | 分片 seed | `node scripts/release/split-seed-shards.mjs` | `resources/seed-shards/` |
+| 分片 Gradle | `node scripts/release/archive-gradle.mjs` | `resources/gradle-shards/` |
 
 ## Gitee 配置
 

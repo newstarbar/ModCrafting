@@ -11,6 +11,8 @@ import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
 import { initUpdater } from './updater'
 import { stopGradleDaemonsOnExit } from './build-env'
 import { clearBadge, initAppBadge } from './app-badge'
+import { enableElectronNetFetch } from './download-shared'
+import { setProbeListener } from './download-probe'
 import {
   setupContextIngressHandlers,
   startContextIngressServer,
@@ -137,7 +139,18 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Gitee 等下载源按客户端 TLS/请求指纹限速（undici 60KB/s vs Chromium 44MB/s），
+  // 应用内所有下载（JRE/Gradle/Fabric 种子/知识库/opencode）切换到 Chromium 网络栈
+  await enableElectronNetFetch()
+
+  // 测速选优结构化事件 → 渲染层专门测速面板（env:sourceProbe）
+  setProbeListener((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      win.webContents.send('env:sourceProbe', event)
+    })
+  })
+
   setupMenu()
   setupIpcHandlers()
   setupContextIngressHandlers()

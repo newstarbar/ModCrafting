@@ -67,7 +67,15 @@ function setupPrefetchProject(
   const buildGradle = `plugins { id 'fabric-loom' version '${v.loom_version}'; id 'maven-publish' }
 version = project.mod_version; group = "${groupId}"
 base { archivesName = "${projectName}" }
-repositories { mavenCentral() }
+ext {
+    // Mojang 库（libraries.minecraft.net 直连国外慢）走 BMCLAPI 国内镜像。
+    // 注意：Minecraft client/server jar 由 Loom 用 manifest 原样 URL 下载，无法经此镜像。
+    loom_libraries_base = "https://bmclapi2.bangbang93.com/maven/"
+}
+repositories {
+    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/central') }
+    mavenCentral()
+}
 loom { splitEnvironmentSourceSets()
   mods { "${modId}" { sourceSet sourceSets.main; sourceSet sourceSets.client } } }
 dependencies {
@@ -81,6 +89,7 @@ java { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaV
 
   const settingsGradle = `pluginManagement {
   repositories {
+    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/central') }
     maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net/') }
     mavenCentral()
     gradlePluginPortal()
@@ -96,6 +105,9 @@ yarn_mappings=${v.yarn_mappings}
 mod_version=1.0.0
 maven_group=com.example
 java_version=21
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.workers.max=4
 `
 
   const fabricModJson = JSON.stringify({
@@ -159,10 +171,11 @@ function runGradle(
   cwd: string,
   runtimeRoot: string,
   args: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  onOutput?: (line: string) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('cmd', ['/c', '.\\gradlew.bat', ...args], {
+    const child = spawn('cmd', ['/c', '.\\gradlew.bat', '--console=plain', ...args], {
       cwd,
       env: {
         ...process.env,
@@ -172,6 +185,16 @@ function runGradle(
         PATH: `${path.join(runtimeRoot, 'jdk-21', 'bin')};${process.env.PATH || ''}`
       }
     })
+    // 转发 Gradle 输出（--console=plain 下下载行为一行一条，可解析为进度）
+    const forward = (chunk: Buffer): void => {
+      if (!onOutput) return
+      for (const line of chunk.toString().split(/\r?\n/)) {
+        const trimmed = line.trim()
+        if (trimmed) onOutput(trimmed)
+      }
+    }
+    child.stdout?.on('data', forward)
+    child.stderr?.on('data', forward)
     let timer: NodeJS.Timeout | undefined
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
@@ -218,7 +241,35 @@ export async function ensureGradleHomeOnline(
     fs.mkdirSync(gradleHomePath, { recursive: true })
 
     onProgress({ phase: 'deps', message: '正在拉取 Fabric 构建依赖…', percent: 50 })
-    await runGradle(projectDir, runtimeRoot, ['build', '--refresh-dependencies', '--no-daemon'], 30 * 60 * 1000)
+    const depsStart = Date.now()
+    let lastArtifactAt = 0
+    // 心跳兜底：Gradle 下载依赖期间若无匹配输出行，周期性提示避免用户以为卡死
+    const heartbeat = setInterval(() => {
+      if (Date.now() - lastArtifactAt > 5000) {
+        const pct = Math.min(73, 50 + Math.floor(((Date.now() - depsStart) / 1000 / 30)) * 2)
+        onProgress({ phase: 'deps', message: '正在下载依赖（首次约 1GB，需 5-15 分钟）…', percent: pct })
+      }
+    }, 4000)
+    try {
+      await runGradle(
+        projectDir,
+        runtimeRoot,
+        // 不强制 --refresh-dependencies：避免下载失败重试时已缓存依赖被全量刷新重下
+        ['build', '--no-daemon'],
+        30 * 60 * 1000,
+        (line) => {
+          // 解析 Gradle 下载输出（--console=plain 下 "Downloading xxx" 每行一条）→ 动态进度消息
+          const m = line.match(/(?:Downloading|Unzipping|Downloaded)\s+(.+)/)
+          if (!m) return
+          lastArtifactAt = Date.now()
+          const target = (m[1].trim().split('/').pop() || m[1].trim()).slice(0, 60)
+          const pct = Math.min(73, 50 + Math.floor(((Date.now() - depsStart) / 1000 / 30)) * 2)
+          onProgress({ phase: 'deps', message: `正在下载依赖：${target}…`, percent: pct })
+        }
+      )
+    } finally {
+      clearInterval(heartbeat)
+    }
 
     onProgress({ phase: 'deps', message: '正在拉取游戏资源…', percent: 75 })
     try {

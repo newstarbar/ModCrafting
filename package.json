@@ -39,6 +39,7 @@
 		"release:cleanup-github": "node scripts/release/cleanup-github-release.mjs",
 		"release:split-seed": "node scripts/release/split-seed-shards.mjs",
 		"release:split-jre": "node scripts/release/split-jre-shards.mjs",
+		"release:split-gradle": "node scripts/release/archive-gradle.mjs",
 		"release:archive-extra": "node scripts/release/archive-extra-resources.mjs",
 		"toolchain:archive-jre": "node scripts/toolchain/archive-jre-minimal.mjs",
 		"clean:local": "node scripts/clean-local.mjs",

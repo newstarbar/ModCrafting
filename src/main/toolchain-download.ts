@@ -1,16 +1,21 @@
 import { createWriteStream, existsSync, mkdirSync, rmSync, statSync, cpSync, readdirSync } from 'fs'
+import { Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { execSync, spawn } from 'child_process'
 import * as path from 'path'
+import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
+import { pickFastestUrls } from './download-probe'
 
 export const GRADLE_VERSION = '9.5.0'
 export const GRADLE_DIST_NAME = `gradle-${GRADLE_VERSION}-bin`
 export const GRADLE_RUNTIME_FOLDER = 'gradle-9.5'
 export const GRADLE_LAUNCHER_JAR = `gradle-launcher-${GRADLE_VERSION}.jar`
 
+// Gradle 发行版候选源（下载前会实测各源速度并优先用最快的；默认顺序仅作测速失败时的兜底）
 export const GRADLE_MIRROR_URLS = [
-  `https://services.gradle.org/distributions/${GRADLE_DIST_NAME}.zip`,
-  `https://mirrors.cloud.tencent.com/gradle/${GRADLE_DIST_NAME}.zip`
+  `https://mirrors.cloud.tencent.com/gradle/${GRADLE_DIST_NAME}.zip`,
+  `https://mirrors.huaweicloud.com/gradle/${GRADLE_DIST_NAME}.zip`,
+  `https://services.gradle.org/distributions/${GRADLE_DIST_NAME}.zip`
 ]
 
 // 国内 JDK 镜像（Windows x64，按优先级排序）
@@ -66,53 +71,142 @@ function removeDirBestEffort(dir: string): void {
   }
 }
 
+/** 下载进度回调：receivedBytes 已接收字节数，totalBytes 总字节数（Content-Length，可能为 0 表示未知） */
+export type DownloadProgressFn = (receivedBytes: number, totalBytes: number) => void
+
+/** 进度上报节流：字节增量 ≥256KB 或时间间隔 ≥300ms 且收到新数据才上报，避免高频回调刷爆 IPC */
+const PROGRESS_THROTTLE_BYTES = 256 * 1024
+const PROGRESS_THROTTLE_MS = 300
+
 async function downloadWithPowerShell(url: string, dest: string): Promise<void> {
   const escapedUrl = url.replace(/'/g, "''")
   const escapedDest = dest.replace(/'/g, "''")
+  const escapedUa = DOWNLOAD_USER_AGENT.replace(/'/g, "''")
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       'powershell',
       [
         '-NoProfile',
         '-Command',
-        `& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${escapedUrl}' -OutFile '${escapedDest}' -UseBasicParsing}`
+        `& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${escapedUrl}' -OutFile '${escapedDest}' -UserAgent '${escapedUa}' -UseBasicParsing}`
       ],
-      { stdio: 'inherit', shell: false }
+      { stdio: ['ignore', 'inherit', 'pipe'], shell: false }
     )
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Download failed: ${code}`))))
+    // 捕获 stderr 以便失败时给出确切原因（如 HTTP 403 / 无法解析主机）
+    let stderrBuf = ''
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrBuf = (stderrBuf + chunk.toString()).slice(-4000)
+    })
+    child.on('close', (code) => {
+      if (code === 0) return resolve()
+      const detail = stderrBuf.trim().split('\n').pop()?.trim() || ''
+      reject(new Error(`Download failed (exit ${code})${detail ? `: ${detail}` : ''}`))
+    })
     child.on('error', reject)
   })
 }
 
-async function downloadWithFetch(url: string, dest: string): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow' })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  await pipeline(res.body as NodeJS.ReadableStream, createWriteStream(dest))
+/** 下载首字节超时：连接建立后服务器无数据（挂起/空 body）时失败触发换源。
+ * 30s 平衡两点：挂起源不至于无限等待；慢速但可用的源（国内访问国外 CDN 首字节可达 20s+）不被误杀。
+ * 空 body（立即 EOF）场景不依赖此超时（快速完成 → 上层大小校验失败换源）。 */
+const FIRST_BYTE_TIMEOUT_MS = 30_000
+
+async function downloadWithFetch(url: string, dest: string, onProgress?: DownloadProgressFn): Promise<void> {
+  // 首字节超时：挂起的下载源（如间歇空 body 的镜像）在 15s 内失败，触发下载循环换源
+  const controller = new AbortController()
+  const firstByteTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await getDownloadFetch()(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': DOWNLOAD_USER_AGENT },
+      signal: controller.signal
+    })
+  } catch (err) {
+    clearTimeout(firstByteTimer)
+    throw err
+  }
+  if (!res.ok) {
+    clearTimeout(firstByteTimer)
+    throw new Error(`HTTP ${res.status}`)
+  }
+  if (!res.body) {
+    clearTimeout(firstByteTimer)
+    throw new Error('Empty response body')
+  }
+  const totalBytes = Number(res.headers.get('content-length') || 0)
+  let received = 0
+  let lastReportedBytes = 0
+  let lastReportedAt = 0
+  let firstByteArrived = false
+  const countingStream = new Transform({
+    transform(chunk: Buffer, _encoding: string, callback: (err?: Error | null, data?: Buffer) => void) {
+      // 首个 chunk 到达：数据开始流动，取消首字节超时
+      if (!firstByteArrived) {
+        firstByteArrived = true
+        clearTimeout(firstByteTimer)
+      }
+      received += chunk.length
+      const now = Date.now()
+      if (
+        onProgress &&
+        (received - lastReportedBytes >= PROGRESS_THROTTLE_BYTES ||
+          (now - lastReportedAt >= PROGRESS_THROTTLE_MS && received > lastReportedBytes))
+      ) {
+        lastReportedBytes = received
+        lastReportedAt = now
+        onProgress(received, totalBytes)
+      }
+      callback(null, chunk)
+    }
+  })
+  try {
+    await pipeline(res.body as unknown as NodeJS.ReadableStream, countingStream, createWriteStream(dest))
+  } finally {
+    // pipeline 完成后（含首个 chunk 已清除）清理计时器，防止挂起时泄漏
+    if (!firstByteArrived) clearTimeout(firstByteTimer)
+  }
+  // 下载完成，确保进度到达 100%（totalBytes 未知时补报已接收字节）
+  if (onProgress) onProgress(totalBytes > 0 ? totalBytes : received, totalBytes)
 }
 
-async function downloadFile(url: string, dest: string): Promise<void> {
+export async function downloadFile(url: string, dest: string, onProgress?: DownloadProgressFn): Promise<void> {
   if (process.platform === 'win32') {
+    try {
+      await downloadWithFetch(url, dest, onProgress)
+      return
+    } catch (err) {
+      // HTTP 状态错误（4xx/5xx）fetch 已精确报告；PowerShell 的 Invoke-WebRequest
+      // 对部分 4xx 响应不抛异常也不置非零退出码，无法可靠检测，因此不回退
+      if (err instanceof Error && /^HTTP \d{3}$/.test(err.message)) throw err
+      // 超时类错误（首字节挂起）不回退：PowerShell 同样会挂起，直接抛出让下载循环换源；
+      // 错误消息可读化（聚合错误中显示"下载超时"而非内部 AbortError）
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('下载超时：服务器连接后无响应，已跳过该源')
+      }
+      // 其他网络层失败（DNS/TLS/代理等）时回退 PowerShell 兜底
+      console.warn(`[download] fetch 失败，回退 PowerShell: ${String(err)}`)
+      try {
+        rmSync(dest, { force: true })
+      } catch {
+        /* ignore */
+      }
+    }
     await downloadWithPowerShell(url, dest)
   } else {
-    await downloadWithFetch(url, dest)
+    await downloadWithFetch(url, dest, onProgress)
   }
 }
 
-async function resolveJdkDownloadUrl(): Promise<string | null> {
-  // 优先国内镜像（仅 Windows x64，HEAD 检测可用性）
+async function resolveJdkDownloadUrl(onLog?: (msg: string) => void): Promise<string | null> {
+  const log = onLog || (() => {})
+  const candidates: Array<{ url: string; label: string }> = []
+
+  // 候选源：国内镜像 + Adoptium API + Microsoft
   if (process.platform === 'win32' && adoptiumArch() === 'x64') {
     for (const url of JDK_MIRROR_URLS_WIN_X64) {
-      try {
-        const res = await fetch(url, { method: 'HEAD', redirect: 'follow' })
-        if (res.ok) {
-          console.log(`[jdk-download] using mirror: ${new URL(url).host}`)
-          return url
-        }
-      } catch {
-        /* try next mirror */
-      }
+      candidates.push({ url, label: new URL(url).host })
     }
-    console.warn('[jdk-download] 国内镜像不可用，回退到 Adoptium API')
   }
 
   const os = adoptiumOs()
@@ -122,19 +216,26 @@ async function resolveJdkDownloadUrl(): Promise<string | null> {
     `?os=${os}&architecture=${arch}&image_type=jdk&release_type=ga`
 
   try {
-    const res = await fetch(api, { headers: { Accept: 'application/json' } })
+    const res = await getDownloadFetch()(api, {
+      headers: { Accept: 'application/json', 'User-Agent': DOWNLOAD_USER_AGENT },
+      signal: AbortSignal.timeout(8000)
+    })
     if (!res.ok) throw new Error(`Adoptium API HTTP ${res.status}`)
     const assets = (await res.json()) as Array<{ binary?: { package?: { link?: string } } }>
     const link = assets?.[0]?.binary?.package?.link
-    if (link) return link
+    if (link) candidates.push({ url: link, label: 'Adoptium' })
   } catch {
     /* fallback */
   }
 
   if (process.platform === 'win32' && arch === 'x64') {
-    return 'https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip'
+    candidates.push({ url: 'https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip', label: 'Microsoft' })
   }
-  return null
+  if (candidates.length === 0) return null
+
+  // 测速选优：不同网络下各源速度差异大，实测最快者优先（探测失败的排最后兜底）；结果经面板展示
+  const ordered = await pickFastestUrls(candidates)
+  return ordered[0].url
 }
 
 function findJdkRootInDir(dir: string): string | null {
@@ -182,10 +283,13 @@ export function extractJdkArchive(archivePath: string, targetDir: string, tempPa
   }
 }
 
+/** 下载解压过程日志回调：msg 文本消息，pct 可选下载进度 0-100 */
+export type DownloadLogFn = (msg: string, pct?: number) => void
+
 export async function downloadAndExtractJdk(
   targetDir: string,
   workDir: string,
-  onLog?: (msg: string) => void
+  onLog?: DownloadLogFn
 ): Promise<void> {
   const log = onLog || (() => {})
   mkdirSync(workDir, { recursive: true })
@@ -197,32 +301,45 @@ export async function downloadAndExtractJdk(
   if (isValidJdkDir(targetDir)) return
 
   const urls: string[] = []
-  const adoptium = await resolveJdkDownloadUrl()
+  const adoptium = await resolveJdkDownloadUrl(log)
   if (adoptium) urls.push(adoptium)
   if (process.platform === 'win32' && adoptiumArch() === 'x64') {
     urls.push('https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip')
   }
 
   const seen = new Set<string>()
+  const failures: string[] = []
   let downloaded = false
   for (const url of urls) {
     if (!url || seen.has(url)) continue
     seen.add(url)
-    log(`正在下载 JDK 21…`)
+    log(`正在下载 JDK 21…（源：${new URL(url).host}）`)
     if (existsSync(archivePath)) rmSync(archivePath)
     try {
-      await downloadFile(url, archivePath)
+      await downloadFile(url, archivePath, (received, total) => {
+        if (total > 0) {
+          const pct = Math.floor((received / total) * 100)
+          log(`正在下载 JDK 21… ${pct}%`, pct)
+        } else {
+          log(`正在下载 JDK 21… 已下载 ${(received / 1024 / 1024).toFixed(1)}MB`)
+        }
+      })
       if (isValidArchive(archivePath, 40_000_000)) {
         downloaded = true
         break
       }
+      failures.push(`${new URL(url).host}: 下载文件校验失败（大小异常）`)
     } catch (err) {
-      log(`JDK 下载失败: ${String(err)}`)
+      const reason = `${new URL(url).host}: ${String(err)}`
+      failures.push(reason)
+      log(`JDK 下载失败: ${reason}`)
     }
   }
 
   if (!downloaded) {
-    throw new Error('无法下载 JDK 21，便携版需要网络连接，请检查网络后重试')
+    throw new Error(
+      `无法下载 JDK 21（便携版需联网）: ${failures.join('；') || '无可用下载源'}。请检查网络连接与系统代理设置后重试`
+    )
   }
 
   log('正在解压 JDK 21…')
@@ -268,7 +385,7 @@ export function extractGradleArchive(zipPath: string, targetDir: string, tempPar
 export async function downloadAndExtractGradle(
   targetDir: string,
   workDir: string,
-  onLog?: (msg: string) => void
+  onLog?: DownloadLogFn
 ): Promise<void> {
   const log = onLog || (() => {})
   mkdirSync(workDir, { recursive: true })
@@ -276,23 +393,42 @@ export async function downloadAndExtractGradle(
 
   if (isCompleteGradleDist(targetDir)) return
 
+  // 测速选优：不同网络下各源速度差异巨大（实测官方源 43KB/s vs 腾讯云 14MB/s），
+  // 先并发探测候选源，按最快顺序依次下载（失败自动换下一个）；结果经 env:sourceProbe 面板展示
+  const ordered = await pickFastestUrls(
+    GRADLE_MIRROR_URLS.map((url) => ({ url, label: new URL(url).host }))
+  )
+
+  const failures: string[] = []
   let downloaded = false
-  for (const url of GRADLE_MIRROR_URLS) {
-    log('正在下载 Gradle 9.5…')
+  for (const { url, label } of ordered) {
+    log(`正在下载 Gradle 9.5…（源：${label}）`)
     if (existsSync(zipPath)) rmSync(zipPath)
     try {
-      await downloadFile(url, zipPath)
+      await downloadFile(url, zipPath, (received, total) => {
+        if (total > 0) {
+          const pct = Math.floor((received / total) * 100)
+          log(`正在下载 Gradle 9.5… ${pct}%`, pct)
+        } else {
+          log(`正在下载 Gradle 9.5… 已下载 ${(received / 1024 / 1024).toFixed(1)}MB`)
+        }
+      })
       if (isValidArchive(zipPath, 1_000_000)) {
         downloaded = true
         break
       }
+      failures.push(`${new URL(url).host}: 下载文件校验失败（大小异常）`)
     } catch (err) {
-      log(`Gradle 下载失败: ${String(err)}`)
+      const reason = `${new URL(url).host}: ${String(err)}`
+      failures.push(reason)
+      log(`Gradle 下载失败: ${reason}`)
     }
   }
 
   if (!downloaded) {
-    throw new Error('无法下载 Gradle，便携版需要网络连接，请检查网络后重试')
+    throw new Error(
+      `无法下载 Gradle（便携版需联网）: ${failures.join('；') || '无可用下载源'}。请检查网络连接与系统代理设置后重试`
+    )
   }
 
   log('正在解压 Gradle…')

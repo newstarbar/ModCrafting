@@ -7,10 +7,10 @@ import { getAppEdition, isPortableEdition, isFullEdition } from './edition'
 import {
   downloadAndExtractGradle,
   downloadAndExtractJdk,
-  isCompleteGradleDist
+  downloadFile
 } from './toolchain-download'
 import { ensureGradleHomeOnline } from './portable-prefetch'
-import { downloadAndExtractSeedShards, downloadAndExtractJreShards } from './seed-downloader'
+import { downloadAndExtractSeedShards, downloadAndExtractGradleShards } from './seed-downloader'
 import { ensureKnowledgeBase, isKnowledgeBaseReady } from './knowledge-downloader'
 import { ensureOpencode, isOpencodeReady } from './opencode-downloader'
 import {
@@ -234,8 +234,8 @@ async function initPortableToolchainImpl(
 
   onProgress({ phase: 'gradle', message: '准备 Gradle（联网下载）…', percent: 25 })
   const gradleOk = await ensurePortableGradle(onProgress)
-  if (!gradleOk) {
-    const err = 'Gradle 下载失败，请检查网络后重试'
+  if (!gradleOk.ok) {
+    const err = gradleOk.error || 'Gradle 下载失败，请检查网络后重试'
     onProgress({ phase: 'error', message: err, percent: 28, error: err })
     return { ok: false, error: err }
   }
@@ -264,8 +264,12 @@ async function ensurePortableJdk(onProgress: ProgressSender): Promise<{ ok: bool
     return { ok: true, path: runtimeJdk }
   }
   try {
-    await downloadAndExtractJdk(runtimeJdk, getRuntimeRoot(), (msg) => {
-      onProgress({ phase: 'jdk', message: msg, percent: 15 })
+    await downloadAndExtractJdk(runtimeJdk, getRuntimeRoot(), (msg, pct) => {
+      onProgress({
+        phase: 'jdk',
+        message: msg,
+        percent: pct !== undefined ? lerpPercent(5, 25, pct) : 15
+      })
     })
     return isValidJdk(runtimeJdk) ? { ok: true, path: runtimeJdk } : { ok: false, error: 'JDK 验证失败' }
   } catch (err) {
@@ -273,16 +277,22 @@ async function ensurePortableJdk(onProgress: ProgressSender): Promise<{ ok: bool
   }
 }
 
-async function ensurePortableGradle(onProgress: ProgressSender): Promise<boolean> {
+async function ensurePortableGradle(onProgress: ProgressSender): Promise<{ ok: boolean; error?: string }> {
   const dest = getRuntimeGradlePath()
-  if (isCompleteGradleDist(dest)) return true
+  if (isCompleteGradleDist(dest)) return { ok: true }
   try {
-    await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg) => {
-      onProgress({ phase: 'gradle', message: msg, percent: 30 })
+    await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg, pct) => {
+      onProgress({
+        phase: 'gradle',
+        message: msg,
+        percent: pct !== undefined ? lerpPercent(25, 35, pct) : 30
+      })
     })
     return isCompleteGradleDist(dest)
-  } catch {
-    return false
+      ? { ok: true }
+      : { ok: false, error: 'Gradle 解压后校验失败（缺少 gradle-launcher jar）' }
+  } catch (err) {
+    return { ok: false, error: String(err) }
   }
 }
 
@@ -367,8 +377,8 @@ async function initFullToolchainImpl(
 
   onProgress({ phase: 'gradle', message: '准备 Gradle 构建工具…', percent: 25 })
   const gradleOk = await ensureRuntimeGradle(onProgress)
-  if (!gradleOk) {
-    const err = 'Gradle 运行时未就绪，请重新安装完整版 ModCrafting'
+  if (!gradleOk.ok) {
+    const err = gradleOk.error || 'Gradle 运行时未就绪，请重新安装完整版 ModCrafting'
     onProgress({ phase: 'error', message: err, percent: 28, error: err })
     return { ok: false, error: err }
   }
@@ -972,6 +982,17 @@ export function isGradleHomeSeedReady(): boolean {
   return true
 }
 
+/**
+ * 便携版 gradle-home 就绪检查：marker 有效 + 版本匹配 + Fabric 依赖缓存存在。
+ * 与 ensureGradleHomeOnline 的完成条件完全一致（Gradle 联网构建生成，loom cache 非完成前提）。
+ * 完整版 seed 复制方式用 isGradleHomeSeedReady（额外要求 loom cache）。
+ */
+export function isPortableGradleHomeReady(home: string = runtimeGradleHomePath()): boolean {
+  const marker = readSeedMarker(path.join(home, SEED_MARKER))
+  const expected = loadFabricVersions()
+  return Boolean(marker && versionsMatchSeed(marker, expected) && gradleHomeHasFabricCache(home))
+}
+
 export function getGradleUserHome(): string {
   const runtimeHome = runtimeGradleHomePath()
   const runtimeMarker = readSeedMarker(path.join(runtimeHome, SEED_MARKER))
@@ -1183,9 +1204,9 @@ export function checkRuntimeWritable(): { writable: boolean; runtimeRoot: string
   }
 }
 
-export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultProgress): Promise<boolean> {
+export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultProgress): Promise<{ ok: boolean; error?: string }> {
   const dest = getRuntimeGradlePath()
-  if (isCompleteGradleDist(dest)) return true
+  if (isCompleteGradleDist(dest)) return { ok: true }
   for (const src of bundledGradleSearchPaths()) {
     if (isCompleteGradleDist(src)) {
       if (!isCompleteGradleDist(dest)) {
@@ -1207,6 +1228,8 @@ export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultPr
         onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
       }
       return isCompleteGradleDist(dest)
+        ? { ok: true }
+        : { ok: false, error: 'Gradle 运行时复制后校验失败（缺少 gradle-launcher jar）' }
     }
   }
 
@@ -1214,24 +1237,49 @@ export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultPr
     return ensurePortableGradle(onProgress)
   }
 
-  // NSIS 瘦包:无 bundled Gradle,从腾讯云镜像下载
+  // NSIS 瘦包:无 bundled Gradle,优先从 Gitee Releases 下载分片（用户部署 gradle-manifest 后走此路径），
+  // 未部署或下载失败则回退腾讯云镜像，保证存量用户不受影响
   if (app.isPackaged && isFullEdition()) {
+    // 1. Gitee 分片优先
+    try {
+      onProgress({ phase: 'gradle', message: '正在从 Gitee 下载 Gradle 9.5（约 120MB）…', percent: 26 })
+      const giteeDl = await downloadAndExtractGradleShards(dest, (msg, pct) => {
+        onProgress({ phase: 'gradle', message: msg, percent: lerpPercent(26, 35, pct) })
+      })
+      if (giteeDl.ok) {
+        if (!isCompleteGradleDist(dest)) {
+          return { ok: false, error: 'Gradle 解压后校验失败（缺少 gradle-launcher jar）' }
+        }
+        onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
+        return { ok: true }
+      }
+      console.warn(`[ensureRuntimeGradle] Gitee 分片下载失败，回退镜像: ${giteeDl.error}`)
+    } catch (err) {
+      console.warn(`[ensureRuntimeGradle] Gitee 下载异常，回退镜像: ${err}`)
+    }
+
+    // 2. 回退腾讯云镜像
     try {
       onProgress({ phase: 'gradle', message: '正在下载 Gradle 9.5（约 120MB，腾讯云镜像）…', percent: 26 })
-      await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg) => {
-        onProgress({ phase: 'gradle', message: msg, percent: 28 })
+      await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg, pct) => {
+        onProgress({
+          phase: 'gradle',
+          message: msg,
+          percent: pct !== undefined ? lerpPercent(26, 35, pct) : 28
+        })
       })
       if (isCompleteGradleDist(dest)) {
         onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
-        return true
+        return { ok: true }
       }
+      return { ok: false, error: 'Gradle 解压后校验失败（缺少 gradle-launcher jar）' }
     } catch (err) {
-      console.error(`[ensureRuntimeGradle] download failed: ${err}`)
+      console.error(`[ensureRuntimeGradle] mirror download failed: ${err}`)
+      return { ok: false, error: String(err) }
     }
-    return false
   }
 
-  return false
+  return { ok: false, error: 'Gradle 运行时未就绪（未找到捆绑或已下载的 Gradle 发行版）' }
 }
 
 export async function ensureJdkReady(onProgress: ProgressSender = defaultProgress): Promise<{
@@ -1276,46 +1324,13 @@ export async function ensureJdkReady(onProgress: ProgressSender = defaultProgres
     }
   }
 
-  if (isPortableEdition() && app.isPackaged) {
+  // 便携版与 NSIS 瘦包统一：从公共镜像下载完整 JDK 21（华为云/清华/Adoptium/aka.ms，
+  // 测速选优 + Chromium 网络栈，与便携版一致；镜像天然多源，无需部署私有分片资产）
+  if (app.isPackaged) {
     return ensurePortableJdk(onProgress)
   }
 
-  // NSIS 瘦包:无 bundled JRE,从 Gitee Releases 下载 JRE 分片
-  if (app.isPackaged && isFullEdition()) {
-    const dl = await ensureRuntimeJreFromShards(runtimeJdk, onProgress)
-    if (dl.ok) return { ok: true, path: runtimeJdk }
-    return { ok: false, error: dl.error || 'JRE 21 下载失败，请检查网络后重启应用' }
-  }
-
   return { ok: false, error: app.isPackaged ? (isPortableEdition() ? 'JDK 未就绪' : '安装包不完整，缺少捆绑 JDK 21') : '未找到 JDK 21，请运行 npm run prefetch:deps 或检查 resources/jdk-21' }
-}
-
-/**
- * NSIS 瘦包首次启动时从 Gitee Releases 下载 JRE 21 分片并解压到 runtime/jdk-21。
- * 进度映射到 jdk 阶段的 5-25% 区间,与复制 JDK 的进度范围一致。
- */
-async function ensureRuntimeJreFromShards(
-  runtimeJdk: string,
-  onProgress: ProgressSender
-): Promise<{ ok: boolean; error?: string }> {
-  onProgress({ phase: 'jdk', message: '正在从 Gitee 下载 JRE 21（约 65MB 压缩包）…', percent: 5 })
-  try {
-    fs.mkdirSync(path.dirname(runtimeJdk), { recursive: true })
-    const result = await downloadAndExtractJreShards(runtimeJdk, (msg, pct) => {
-      // 将 0-100 的下载进度映射到 jdk 阶段的 5-25 区间
-      onProgress({ phase: 'jdk', message: msg, percent: lerpPercent(5, 25, pct) })
-    })
-    if (!result.ok) {
-      return { ok: false, error: result.error }
-    }
-    if (!isValidJdk(runtimeJdk)) {
-      return { ok: false, error: 'JRE 21 解压后验证失败（缺少 bin/java.exe）' }
-    }
-    onProgress({ phase: 'jdk', message: 'JRE 21 已就绪', percent: 25 })
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, error: `JRE 21 下载失败: ${String(err)}` }
-  }
 }
 
 function shouldUseOfflineGradle(): boolean {
@@ -1532,11 +1547,9 @@ export async function downloadJdk(onProgress: ProgressSender = defaultProgress):
   onProgress('正在下载 JDK 21...')
   try {
     fs.mkdirSync(getRuntimeRoot(), { recursive: true })
-    const downloadCmd = `powershell -Command "& {Invoke-WebRequest -Uri '${jdkUrl}' -OutFile '${zipPath}'}"`
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(downloadCmd, { shell: true })
-      child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Download failed: ${code}`)))
-      child.on('error', reject)
+    await downloadFile(jdkUrl, zipPath, (received, total) => {
+      const pct = total > 0 ? Math.floor((received / total) * 100) : 0
+      onProgress(`正在下载 JDK 21... ${pct}%`)
     })
 
     onProgress('正在解压 JDK 21...')
@@ -2090,7 +2103,11 @@ export function getToolchainStatus(): {
   return {
     jdk,
     gradle,
-    deps: isGradleHomeSeedReady() ? 'ready' : 'missing',
+    // 便携版：Gradle 联网构建生成的 gradle-home（完成条件 = marker + fabric cache，无 loom cache）；
+    // 完整版/开发模式：seed 复制方式（额外要求 loom cache）
+    deps: isPortableEdition()
+      ? isPortableGradleHomeReady() ? 'ready' : 'missing'
+      : isGradleHomeSeedReady() ? 'ready' : 'missing',
     jdkPath,
     runtimeRoot: getRuntimeRoot(),
     isPackaged: app.isPackaged,

@@ -4209,10 +4209,70 @@ body,
 	white-space: nowrap;
 }
 
+/* 测速选优消息高亮（下载源速度检测 / 已选择最快源 / 测速失败） */
+.toolchain-init-progress-message--probe {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.toolchain-init-probe-icon {
+	margin-right: 4px;
+	font-size: 0.9em;
+}
+
 .toolchain-init-progress-percent {
 	font-weight: 700;
 	color: var(--accent);
 	font-variant-numeric: tabular-nums;
+}
+
+/* 测速选优专门面板（结构化事件驱动） */
+.toolchain-init-probe-panel {
+	margin-top: 10px;
+	padding: 8px 12px;
+	border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+	font-size: 12px;
+}
+
+.toolchain-init-probe-title {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--accent);
+	font-weight: 700;
+	margin-bottom: 6px;
+}
+
+.toolchain-init-probe-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 0;
+}
+
+.toolchain-init-probe-row--chosen {
+	font-weight: 600;
+}
+
+.toolchain-init-probe-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-primary);
+}
+
+.toolchain-init-probe-speed {
+	font-variant-numeric: tabular-nums;
+	color: var(--text-secondary);
+}
+
+.toolchain-init-probe-check {
+	color: var(--accent);
+	font-weight: 700;
 }
 
 .toolchain-init-hint,

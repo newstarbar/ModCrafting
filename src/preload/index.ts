@@ -376,6 +376,19 @@ const api = {
     ipcRenderer.on('env:toolchainProgress', handler)
     return () => ipcRenderer.removeListener('env:toolchainProgress', handler)
   },
+  onSourceProbe: (callback: (event: {
+    candidates: Array<{ url: string; label: string; speedKBps: number | null }>
+    done: boolean
+    chosen?: string
+  }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: {
+      candidates: Array<{ url: string; label: string; speedKBps: number | null }>
+      done: boolean
+      chosen?: string
+    }) => callback(payload)
+    ipcRenderer.on('env:sourceProbe', handler)
+    return () => ipcRenderer.removeListener('env:sourceProbe', handler)
+  },
   initToolchain: (force?: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('env:initToolchain', force),
   isToolchainReady: (): Promise<boolean> =>

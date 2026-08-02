@@ -153,6 +153,11 @@ interface ModCraftingApi {
     percent: number
     error?: string
   }) => void) => () => void
+  onSourceProbe: (callback: (event: {
+    candidates: Array<{ url: string; label: string; speedKBps: number | null }>
+    done: boolean
+    chosen?: string
+  }) => void) => () => void
   initToolchain: (force?: boolean) => Promise<{ ok: boolean; error?: string }>
   isToolchainReady: () => Promise<boolean>
   ensureGradleWrapper: (projectPath: string) => Promise<{ exists: boolean; copied?: boolean; downloaded?: boolean; error?: string }>

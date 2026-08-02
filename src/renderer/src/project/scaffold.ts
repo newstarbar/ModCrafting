@@ -50,7 +50,10 @@ export function generateBuildGradle(config: ProjectCreateConfig): string {
 	return `plugins { id 'fabric-loom' version '${versions.loom_version}'; id 'maven-publish' }
 version = project.mod_version; group = "${groupId}"
 base { archivesName = "${folderName}" }
-repositories { mavenCentral() }
+repositories {
+    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/central') }
+    mavenCentral()
+}
 loom { splitEnvironmentSourceSets()
   runs {
     client { vmArgs "-Dfile.encoding=UTF-8" }
@@ -96,6 +99,10 @@ tasks.named("runClient").configure {
 export function generateSettingsGradle(folderName: string): string {
 	return `pluginManagement {
     repositories {
+        maven {
+            name = 'AliyunCentral'
+            url = uri('https://maven.aliyun.com/repository/central')
+        }
         maven {
             name = 'Fabric'
             url = uri('https://maven.fabricmc.net/')

@@ -15,6 +15,8 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { getRuntimeRoot } from './build-env'
 import { getSeedReleaseInfo } from './seed-downloader'
+import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
+import { pickFastestUrls } from './download-probe'
 
 const OPENCODE_ARCHIVE_NAME = 'opencode-windows-x64.tar.xz'
 const OPENCODE_EXE_NAME = 'opencode.exe'
@@ -33,11 +35,11 @@ export function isOpencodeReady(): boolean {
 }
 
 async function downloadFile(url: string, destPath: string): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'ModCrafting/1.0' } })
+  const res = await getDownloadFetch()(url, { redirect: 'follow', headers: { 'User-Agent': DOWNLOAD_USER_AGENT } })
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${url}`)
   const sink = fs.createWriteStream(destPath)
   try {
-    for await (const chunk of res.body as NodeJS.ReadableStream) {
+    for await (const chunk of res.body as unknown as NodeJS.ReadableStream) {
       sink.write(chunk)
     }
     sink.end()
@@ -100,29 +102,25 @@ export async function ensureOpencode(
   const giteeUrl = `${giteeBase}${OPENCODE_ARCHIVE_NAME}`
   const githubUrl = `${githubBase}${OPENCODE_ARCHIVE_NAME}`
 
+  // 测速选优：Gitee/GitHub 按实测速度决定尝试顺序（会话缓存，仅首次探测；失败源排最后兜底）；结果经面板展示
+  const ordered = await pickFastestUrls([
+    { url: giteeUrl, label: 'Gitee' },
+    { url: githubUrl, label: 'GitHub' }
+  ])
+
   let lastError = ''
   for (let attempt = 1; attempt <= 3; attempt++) {
-    // Gitee 主源
-    onProgress(`下载 opencode 引擎（第 ${attempt} 次，Gitee）…`, 10)
-    let r = await tryDownloadAndExtract(giteeUrl, archivePath, staging, destDir)
-    if (r.ok) {
-      try { fs.rmSync(archivePath, { force: true }) } catch { /* ignore */ }
-      onProgress('opencode 引擎已就绪', 100)
-      return { ok: true }
+    for (const candidate of ordered) {
+      onProgress(`下载 opencode 引擎（第 ${attempt} 次，${candidate.label}）…`, 10)
+      const r = await tryDownloadAndExtract(candidate.url, archivePath, staging, destDir)
+      if (r.ok) {
+        try { fs.rmSync(archivePath, { force: true }) } catch { /* ignore */ }
+        onProgress('opencode 引擎已就绪', 100)
+        return { ok: true }
+      }
+      lastError = r.error || `${candidate.label} 下载失败`
+      console.warn(`[opencode-downloader] ${candidate.label} 第 ${attempt} 次失败: ${lastError}`)
     }
-    lastError = r.error || 'Gitee 下载失败'
-    console.warn(`[opencode-downloader] Gitee 第 ${attempt} 次失败: ${lastError}`)
-
-    // GitHub 兜底
-    onProgress(`下载 opencode 引擎（第 ${attempt} 次，GitHub）…`, 50)
-    r = await tryDownloadAndExtract(githubUrl, archivePath, staging, destDir)
-    if (r.ok) {
-      try { fs.rmSync(archivePath, { force: true }) } catch { /* ignore */ }
-      onProgress('opencode 引擎已就绪', 100)
-      return { ok: true }
-    }
-    lastError = r.error || 'GitHub 下载失败'
-    console.warn(`[opencode-downloader] GitHub 第 ${attempt} 次失败: ${lastError}`)
 
     // 清理后重试
     for (const p of [staging, archivePath]) {
