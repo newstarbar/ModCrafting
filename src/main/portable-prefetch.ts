@@ -75,10 +75,10 @@ function setupPrefetchProject(
   const clientJavaPath = `src/client/java/${groupId.replace(/\./g, '/')}/${pkg}`
 
   // Gradle 子进程刚退出时，Windows 上文件句柄可能尚未释放，立即 rmSync 会
-  // 报 ENOTEMPTY（warmup 二次调用 setupPrefetchProject 时尤其常见）。加 maxRetries
-  // 让 fs 在 300ms × 8 次内重试，与 build-env.ts 的 RM_OPTS 一致。
+  // 报 ENOTEMPTY/EPERM（warmup 二次调用 setupPrefetchProject 时尤其常见）。加 maxRetries
+  // 让 fs 在 500ms × 20 次内重试（共 10s），覆盖 Gradle daemon 退出与句柄释放的窗口。
   if (fs.existsSync(projectDir)) {
-    fs.rmSync(projectDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 })
+    fs.rmSync(projectDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 })
   }
 
   fs.mkdirSync(path.join(projectDir, javaPath), { recursive: true })
@@ -327,6 +327,10 @@ export async function ensureGradleHomeOnline(
       await warmup(true)
     } catch (mirrorError) {
       onProgress({ phase: 'minecraft', message: '国内镜像不可用，正在切换 Mojang 官方源重试…', percent: 60, source: 'Mojang 官方源' })
+      // warmup(true) 的 Gradle daemon 刚退出，Windows 上文件句柄释放是异步的。
+      // 等待 3s 让 daemon 完全退出并释放 _prefetch_project 下的句柄，避免
+      // 紧接着的 setupPrefetchProject rmSync 报 EPERM。
+      await new Promise((r) => setTimeout(r, 3000))
       await warmup(false)
     }
 
