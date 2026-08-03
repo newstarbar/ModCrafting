@@ -264,6 +264,11 @@ export function cancelToolchainInitialization(): void {
   cancelFabricPrefetch()
 }
 
+/** 下载循环检查：用户是否点了"取消并保留已下载内容" */
+export function isToolchainCancellationRequested(): boolean {
+  return initCancellationRequested
+}
+
 export async function initToolchain(
   onProgress: ProgressSender = defaultProgress,
   force = false

@@ -17,7 +17,7 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { Transform } from 'stream'
 import { pipeline } from 'stream/promises'
-import { getRuntimeRoot, loadFabricVersions } from './build-env'
+import { getRuntimeRoot, loadFabricVersions, isToolchainCancellationRequested } from './build-env'
 import { getSeedReleaseInfo } from './seed-downloader'
 import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
 import { pickFastestUrls } from './download-probe'
@@ -394,6 +394,10 @@ export async function ensureKnowledgeBase(
   }
 
   for (const artifact of KB_ARTIFACTS) {
+    if (isToolchainCancellationRequested()) {
+      onProgress('已取消知识库下载（保留已完成部分）', Math.round(5 + (completed / totalArtifacts) * 90))
+      break
+    }
     if (kbGiteeAssets.length === 0 && kbGithubAssets.length === 0) break
     const giteeAsset = kbGiteeAssets.find((a) => a.name === artifact.zip)
     const githubAsset = kbGithubAssets.find((a) => a.name === artifact.zip)
@@ -432,6 +436,10 @@ export async function ensureKnowledgeBase(
   // ── 阶段 2：辅助资源 3 件（来自应用自身 Release，与 jre/seed 同 tag） ──
   // Gitee + GitHub 并发测速选优，不硬编码任何源优先
   for (const artifact of EXTRA_ARTIFACTS) {
+    if (isToolchainCancellationRequested()) {
+      onProgress('已取消知识库下载（保留已完成部分）', Math.round(5 + (completed / totalArtifacts) * 90))
+      break
+    }
     const { gitee, github } = resolveExtraArtifactUrl(artifact.zip)
     const destDir = path.join(root, artifact.dir)
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
