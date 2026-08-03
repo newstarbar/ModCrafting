@@ -1,5 +1,5 @@
 import { app, BrowserWindow } from 'electron'
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { promisify } from 'util'
@@ -35,6 +35,9 @@ export const GRADLE_DIST_NAME = `gradle-${GRADLE_VERSION}-bin`
 export const GRADLE_HOME_DIR = `gradle-${GRADLE_VERSION}`
 export const GRADLE_RUNTIME_DIR = 'gradle-9.5'
 const GRADLE_LAUNCHER_JAR = `gradle-launcher-${GRADLE_VERSION}.jar`
+/** 本地环境标记文件：检测到本地 JDK/Gradle 时写入路径，供 getRuntimeXxxPath 优先读取 */
+const LOCAL_JDK_MARKER = '.local-jdk-path'
+const LOCAL_GRADLE_MARKER = '.local-gradle-path'
 const SEED_MARKER = '.modcrafting-seed.json'
 const SEED_ARCHIVE_NAMES = ['gradle-home-seed.tar.xz', 'gradle-home-seed.zip']
 
@@ -361,7 +364,109 @@ function failToolchain(onProgress: ProgressSender, phase: ToolchainPhase, error:
   return { ok: false, error: `${detail}（错误 ID：${recorded.id}）` }
 }
 
+/**
+ * 检测本地系统是否已安装 JDK 21.x。
+ * 依次检查：JAVA_HOME → 系统 PATH 中的 java，验证版本后向上推导 JAVA_HOME。
+ * 任何检测失败都静默 fallback 到 portable 下载。
+ */
+function detectLocalJdk(): { found: true; path: string } | { found: false } {
+  const candidates: string[] = []
+  const javaHome = process.env.JAVA_HOME
+  if (javaHome) {
+    candidates.push(path.join(javaHome, 'bin', javaBinName()))
+  }
+  // 系统 PATH 中的 java：Windows 用 where，其他平台用 which
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which'
+  try {
+    const whichRes = spawnSync(whichCmd, ['java'], { encoding: 'utf8', timeout: 8000, windowsHide: true })
+    if (whichRes.status === 0 && whichRes.stdout) {
+      for (const line of whichRes.stdout.split(/\r?\n/)) {
+        const trimmed = line.trim()
+        if (trimmed) candidates.push(trimmed)
+      }
+    }
+  } catch { /* where/which 不可用，忽略 */ }
+
+  const versionRe = /version "(\d+)\./
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    let res
+    try {
+      res = spawnSync(candidate, ['-version'], { encoding: 'utf8', timeout: 8000, windowsHide: true })
+    } catch { continue /* 命令执行失败，尝试下一个候选 */ }
+    if (res.error || res.status !== 0) continue
+    // java -version 输出到 stderr
+    const output = `${res.stderr || ''}\n${res.stdout || ''}`
+    const match = versionRe.exec(output)
+    if (!match) continue
+    const major = parseInt(match[1], 10)
+    if (major !== 21) continue
+    // 从 <JAVA_HOME>/bin/java[.exe] 推导 JAVA_HOME（向上两级）
+    const binDir = path.dirname(candidate)
+    const jdkHome = path.dirname(binDir)
+    if (!isValidJdkDir(jdkHome)) continue
+    return { found: true, path: jdkHome }
+  }
+  return { found: false }
+}
+
+/**
+ * 检测本地系统是否已安装 Gradle 9.5.x。
+ * 依次检查：GRADLE_HOME → 系统 PATH 中的 gradle，验证版本后向上推导 GRADLE_HOME。
+ * 任何检测失败都静默 fallback 到 portable 下载。
+ */
+function detectLocalGradle(): { found: true, path: string } | { found: false } {
+  const candidates: string[] = []
+  const gradleHome = process.env.GRADLE_HOME
+  if (gradleHome) {
+    candidates.push(path.join(gradleHome, 'bin', process.platform === 'win32' ? 'gradle.bat' : 'gradle'))
+  }
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which'
+  try {
+    const whichRes = spawnSync(whichCmd, ['gradle'], { encoding: 'utf8', timeout: 8000, windowsHide: true })
+    if (whichRes.status === 0 && whichRes.stdout) {
+      for (const line of whichRes.stdout.split(/\r?\n/)) {
+        const trimmed = line.trim()
+        if (trimmed) candidates.push(trimmed)
+      }
+    }
+  } catch { /* ignore */ }
+
+  const versionRe = /Gradle\s+(\d+)\.(\d+)/
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    let res
+    try {
+      // gradle --version 较慢（要启动 JVM），给 15s 超时
+      res = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true })
+    } catch { continue }
+    if (res.error || res.status !== 0) continue
+    const output = `${res.stdout || ''}\n${res.stderr || ''}`
+    const match = versionRe.exec(output)
+    if (!match) continue
+    const major = parseInt(match[1], 10)
+    const minor = parseInt(match[2], 10)
+    if (major !== 9 || minor !== 5) continue
+    // 从 <GRADLE_HOME>/bin/gradle[.bat] 推导 GRADLE_HOME（向上一级）
+    const binDir = path.dirname(candidate)
+    const gradleHomeDir = path.dirname(binDir)
+    if (!isCompleteGradleDist(gradleHomeDir)) continue
+    return { found: true, path: gradleHomeDir }
+  }
+  return { found: false }
+}
+
 async function ensurePortableJdk(onProgress: ProgressSender): Promise<{ ok: boolean; path?: string; error?: string }> {
+  // 优先检测本地系统 JDK 21.x，有则跳过下载
+  const local = detectLocalJdk()
+  if (local.found && local.path) {
+    onProgress({ phase: 'jdk', message: `使用本地 JDK: ${local.path}`, percent: 25 })
+    try {
+      fs.writeFileSync(path.join(getRuntimeRoot(), LOCAL_JDK_MARKER), local.path, 'utf8')
+    } catch { /* 写 marker 失败不影响功能，下次会重新检测 */ }
+    return { ok: true, path: local.path }
+  }
+
   const runtimeJdk = getRuntimeJdkPath()
   if (isValidJdk(runtimeJdk)) {
     return { ok: true, path: runtimeJdk }
@@ -381,6 +486,16 @@ async function ensurePortableJdk(onProgress: ProgressSender): Promise<{ ok: bool
 }
 
 async function ensurePortableGradle(onProgress: ProgressSender): Promise<{ ok: boolean; error?: string }> {
+  // 优先检测本地系统 Gradle 9.5.x，有则跳过下载
+  const local = detectLocalGradle()
+  if (local.found && local.path) {
+    onProgress({ phase: 'gradle', message: `使用本地 Gradle: ${local.path}`, percent: 35 })
+    try {
+      fs.writeFileSync(path.join(getRuntimeRoot(), LOCAL_GRADLE_MARKER), local.path, 'utf8')
+    } catch { /* ignore */ }
+    return { ok: true }
+  }
+
   const dest = getRuntimeGradlePath()
   if (isCompleteGradleDist(dest)) return { ok: true }
   try {
@@ -729,11 +844,32 @@ function runtimeGradleHomePath(): string {
 }
 
 export function getRuntimeJdkPath(): string {
+  // 优先读 marker 文件，命中本地 JDK 路径则直接返回
+  const markerPath = path.join(getRuntimeRoot(), LOCAL_JDK_MARKER)
+  try {
+    const local = fs.readFileSync(markerPath, 'utf8').trim()
+    if (local && fs.existsSync(local)) return local
+  } catch { /* marker 不存在或读取失败，用 portable 路径 */ }
   return path.join(getRuntimeRoot(), 'jdk-21')
 }
 
 export function getRuntimeGradlePath(): string {
+  // 优先读 marker 文件，命中本地 Gradle 路径则直接返回
+  const markerPath = path.join(getRuntimeRoot(), LOCAL_GRADLE_MARKER)
+  try {
+    const local = fs.readFileSync(markerPath, 'utf8').trim()
+    if (local && fs.existsSync(local)) return local
+  } catch { /* ignore */ }
   return path.join(getRuntimeRoot(), GRADLE_RUNTIME_DIR)
+}
+
+/**
+ * 清除本地 JDK/Gradle 环境标记文件。
+ * 调用后下次 ensurePortableJdk / ensurePortableGradle 会重新检测，必要时回到 portable 下载。
+ */
+export function clearLocalEnvMarkers(): void {
+  try { fs.rmSync(path.join(getRuntimeRoot(), LOCAL_JDK_MARKER), { force: true }) } catch { /* ignore */ }
+  try { fs.rmSync(path.join(getRuntimeRoot(), LOCAL_GRADLE_MARKER), { force: true }) } catch { /* ignore */ }
 }
 
 function bundledJdkSearchPaths(): string[] {
