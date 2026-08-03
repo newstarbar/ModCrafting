@@ -439,6 +439,18 @@ const api = {
   needsFirstTimeDownload: (): Promise<boolean> =>
     ipcRenderer.invoke('env:needsFirstTimeDownload'),
 
+  // 手动导入环境配置 zip
+  selectEnvZip: (): Promise<string | null> =>
+    ipcRenderer.invoke('env:selectEnvZip'),
+  importEnvZip: (zipPath: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('env:importEnvZip', zipPath),
+  onImportProgress: (callback: (payload: { phase: string; message: string; percent: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { phase: string; message: string; percent: number }): void =>
+      callback(payload)
+    ipcRenderer.on('env:importProgress', handler)
+    return () => ipcRenderer.removeListener('env:importProgress', handler)
+  },
+
   // ── 应用数据目录配置（用户自定义 runtime 位置） ──
   appConfigLoad: (): Promise<{ runtimePath?: string }> =>
     ipcRenderer.invoke('appConfig:load'),

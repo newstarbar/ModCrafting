@@ -25,6 +25,7 @@
 		"toolchain:prefetch": "node scripts/toolchain/prefetch-fabric-deps.mjs",
 		"toolchain:verify-offline": "node scripts/toolchain/verify-offline-build.mjs",
 		"toolchain:symbol-index": "node scripts/toolchain/generate-fabric-symbol-index.mjs",
+		"toolchain:export-zip": "node scripts/toolchain/export-runtime-zip.mjs",
 		"assets:prepare": "python scripts/assets/prepare_renderer_assets.py",
 		"assets:mc": "python scripts/assets/ensure_minecraft_assets.py",
 		"assets:items": "python scripts/assets/generate_items.py",

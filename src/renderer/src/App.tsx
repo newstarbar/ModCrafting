@@ -14,6 +14,7 @@ import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import RuntimeDirSetup from "./components/RuntimeDirSetup";
+import EnvImportDialog from "./components/EnvImportDialog";
 import UpdateBanner from "./components/UpdateBanner";
 import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./components/Icon";
 import PanelExpandRail from "./components/PanelExpandRail";
@@ -124,6 +125,7 @@ const App: React.FC = () => {
 	const [appEdition, setAppEdition] = useState<'dev' | 'full' | 'portable'>('dev');
 	const [downloadConfirmRequired, setDownloadConfirmRequired] = useState(false);
 	const [runtimeDirSetupRequired, setRuntimeDirSetupRequired] = useState(false);
+	const [envImportDialogRequired, setEnvImportDialogRequired] = useState(false);
 	const [updateBanner, setUpdateBanner] = useState({ visible: false, message: '', percent: 0 });
 	const toolchainReady = toolchainInit.ready && !projectPreparing;
 	const overlayLocked = !toolchainInit.ready || projectPreparing || toolchainInit.phase === "error";
@@ -619,6 +621,13 @@ const App: React.FC = () => {
 		setDownloadConfirmRequired(true);
 	}, []);
 
+	const handleEnvImportSuccess = useCallback(() => {
+		setEnvImportDialogRequired(false);
+		setDownloadConfirmRequired(false);
+		// 导入成功后直接初始化工具链（此时环境已就绪，会快速通过验证）
+		void runToolchainInit(false);
+	}, [runToolchainInit]);
+
 	const retryToolchainInit = useCallback(() => {
 		setToolchainInit({
 			phase: "checking",
@@ -1028,9 +1037,12 @@ const App: React.FC = () => {
 				onOpen={(dir) => void handleOpenProjectPath(dir)}
 				onRecentChange={() => void refreshRecentProjects()}
 			/>
-			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} onCancel={cancelToolchainInit} onOpenLogs={openEnvironmentLogs} onExportDiagnostics={exportEnvironmentDiagnostics} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} />
+			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} onCancel={cancelToolchainInit} onOpenLogs={openEnvironmentLogs} onExportDiagnostics={exportEnvironmentDiagnostics} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} onOpenImportDialog={() => setEnvImportDialogRequired(true)} />
 		{runtimeDirSetupRequired && (
 			<RuntimeDirSetup onConfirm={handleRuntimeDirConfirm} onSkip={handleRuntimeDirSkip} />
+		)}
+		{envImportDialogRequired && (
+			<EnvImportDialog onSuccess={handleEnvImportSuccess} onClose={() => setEnvImportDialogRequired(false)} />
 		)}
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
 			{appView === "workspace" && (

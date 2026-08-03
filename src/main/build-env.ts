@@ -2727,3 +2727,121 @@ export function searchLocalFabricSources(keyword: string, maxResults = 5): strin
 
   return results.join('\n\n')
 }
+
+/**
+ * 从 zip 压缩包导入 runtime 环境（手动导入功能）。
+ *
+ * 流程：停止 Gradle → 备份当前 runtime → tar 解压 zip → 验证 → 清理/回滚。
+ * 进度通过 onProgress 回调实时上报，解压阶段用基于时间的线性插值避免卡进度。
+ *
+ * @param zipPath zip 文件绝对路径
+ * @param onProgress 进度回调
+ * @returns 导入结果
+ */
+export async function importRuntimeFromZip(
+  zipPath: string,
+  onProgress: (payload: { phase: string; message: string; percent: number }) => void
+): Promise<{ ok: boolean; error?: string }> {
+  // 1. 校验 zip 文件
+  if (!zipPath || !fs.existsSync(zipPath)) {
+    return { ok: false, error: '指定的压缩包文件不存在' }
+  }
+  const stat = fs.statSync(zipPath)
+  if (stat.size < 1024 * 1024) {
+    return { ok: false, error: '压缩包文件过小（< 1MB），可能不是有效的环境包' }
+  }
+
+  onProgress({ phase: 'preparing', message: '正在停止 Gradle daemon…', percent: 2 })
+  await stopGradleDaemonsNow()
+
+  const runtimeRoot = getRuntimeRoot()
+
+  // 2. 备份当前 runtime（如果存在且有内容）
+  let backupDir: string | null = null
+  if (fs.existsSync(runtimeRoot)) {
+    try {
+      const entries = fs.readdirSync(runtimeRoot)
+      if (entries.length > 0) {
+        backupDir = `${runtimeRoot}.bak-import-${Date.now()}`
+        onProgress({ phase: 'preparing', message: '正在备份现有环境数据…', percent: 5 })
+        fs.renameSync(runtimeRoot, backupDir)
+      }
+    } catch (err) {
+      return { ok: false, error: `备份现有环境失败：${String(err)}` }
+    }
+  }
+
+  // 3. 创建新 runtime 目录并解压
+  try {
+    fs.mkdirSync(runtimeRoot, { recursive: true })
+    onProgress({ phase: 'extracting', message: '正在解压环境包…', percent: 10 })
+
+    // 检查 tar.exe 是否可用
+    const tarCheck = spawnSync('tar', ['--version'], { encoding: 'utf-8', shell: true })
+    if (tarCheck.error || tarCheck.status !== 0) {
+      throw new Error('系统缺少 tar.exe（需要 Windows 10 1803+）')
+    }
+
+    // 启动基于时间的进度推进（解压大文件可能需要数分钟）
+    const extractStart = Date.now()
+    const extractDurationMs = 3 * 60 * 1000 // 预估 3 分钟
+    const progressTimer = setInterval(() => {
+      const elapsed = Date.now() - extractStart
+      const ratio = Math.min(elapsed / extractDurationMs, 0.85)
+      const percent = Math.round(10 + 75 * ratio) // 10% → 85%
+      onProgress({ phase: 'extracting', message: '正在解压环境包…', percent })
+    }, 2000)
+
+    try {
+      // 使用 tar.exe 解压 zip（Windows 10+ 自带）
+      const result = spawnSync('tar', ['-xf', zipPath, '-C', runtimeRoot], {
+        stdio: 'pipe',
+        shell: true,
+        timeout: 15 * 60 * 1000 // 15 分钟超时
+      })
+      clearInterval(progressTimer)
+
+      if (result.error) throw result.error
+      if (result.status !== 0) {
+        const stderr = result.stderr?.toString().trim() || ''
+        throw new Error(`tar 解压失败（退出码 ${result.status}）${stderr ? `：${stderr}` : ''}`)
+      }
+    } finally {
+      clearInterval(progressTimer)
+    }
+
+    onProgress({ phase: 'verifying', message: '正在验证环境完整性…', percent: 90 })
+
+    // 4. 验证环境
+    if (!isEnvironmentReady(runtimeRoot)) {
+      throw new Error('环境包解压完成，但完整性验证未通过。请确认压缩包是从有效的 ModCrafting 环境导出的。')
+    }
+
+    onProgress({ phase: 'done', message: '环境导入完成', percent: 100 })
+
+    // 5. 清理备份
+    if (backupDir) {
+      try {
+        fs.rmSync(backupDir, { recursive: true, force: true })
+      } catch {
+        // 备份清理失败不影响导入结果，但提示用户
+        console.warn(`[importRuntimeFromZip] 备份目录清理失败：${backupDir}`)
+      }
+    }
+
+    return { ok: true }
+  } catch (err) {
+    // 6. 失败回滚：删除新 runtime，恢复备份
+    try {
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    } catch { /* best effort */ }
+    if (backupDir) {
+      try {
+        fs.renameSync(backupDir, runtimeRoot)
+      } catch {
+        // 回滚也失败，用户需手动处理
+      }
+    }
+    return { ok: false, error: `导入环境包失败：${String(err)}` }
+  }
+}

@@ -25,6 +25,7 @@ interface Props {
   onExportDiagnostics?: () => void
   downloadConfirmRequired?: boolean
   onConfirmDownload?: () => void
+  onOpenImportDialog?: () => void
 }
 
 const STEPS: Array<{ id: ToolchainPhase; label: string }> = [
@@ -52,7 +53,7 @@ function statusFor(step: ToolchainPhase, current: ToolchainPhase, ready: boolean
   return stepIndex === currentIndex ? 'active' : 'pending'
 }
 
-const ToolchainInitOverlay: React.FC<Props> = ({ state, projectPreparing, edition = 'full', onRetry, onCancel, onOpenLogs, onExportDiagnostics, downloadConfirmRequired, onConfirmDownload }) => {
+const ToolchainInitOverlay: React.FC<Props> = ({ state, projectPreparing, edition = 'full', onRetry, onCancel, onOpenLogs, onExportDiagnostics, downloadConfirmRequired, onConfirmDownload, onOpenImportDialog }) => {
   const failed = state.phase === 'error'
   const percent = Math.max(0, Math.min(100, state.percent))
   const metrics = state.metrics
@@ -78,6 +79,16 @@ const ToolchainInitOverlay: React.FC<Props> = ({ state, projectPreparing, editio
           <p className="toolchain-init-download-hint">下载量按实际版本清单计算；界面会显示当前步骤、来源、文件和速度。</p>
         </div>
         <button type="button" className="toolchain-init-confirm-btn" onClick={onConfirmDownload}>立即下载并验证</button>
+        {onOpenImportDialog && (
+          <button
+            type="button"
+            className="mc-btn"
+            style={{ width: '100%', padding: '8px 20px', fontSize: 12, color: 'var(--text-muted)', background: 'transparent', border: '1px solid var(--border-light)' }}
+            onClick={onOpenImportDialog}
+          >
+            网络慢？从 QQ 群手动导入环境包
+          </button>
+        )}
       </div>
     </div>
   }

@@ -34,7 +34,8 @@ import {
   needsFirstTimeDownload,
   isEnvironmentReady,
   getRuntimeRoot,
-  stopGradleDaemonsNow
+  stopGradleDaemonsNow,
+  importRuntimeFromZip
 } from './build-env'
 import {
   loadAppConfig,
@@ -526,6 +527,31 @@ export function setupIpcHandlers(): void {
       }
     }
     return { success: true, migrated: result.migrated, requireRestart: true }
+  })
+
+  // ── 手动导入环境配置 zip ──
+  // 选择 zip 文件（仅弹窗返回路径，不执行导入）
+  ipcMain.handle('env:selectEnvZip', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择环境配置压缩包',
+      properties: ['openFile'],
+      filters: [
+        { name: '环境压缩包', extensions: ['zip'] },
+        { name: '所有文件', extensions: ['*'] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  // 导入 zip 环境包（解压 + 验证 + 回滚）
+  ipcMain.handle('env:importEnvZip', async (event, zipPath: string) => {
+    const progressSender = (payload: { phase: string; message: string; percent: number }): void => {
+      try {
+        event.sender.send('env:importProgress', payload)
+      } catch { /* receiver may be gone */ }
+    }
+    return importRuntimeFromZip(zipPath, progressSender)
   })
 
   ipcMain.handle('updater:check', async () => checkForUpdates(true))

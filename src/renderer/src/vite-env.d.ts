@@ -182,6 +182,10 @@ interface ModCraftingApi {
   exportEnvironmentDiagnostics: () => Promise<{ success: boolean; path?: string; error?: string }>
   getEdition: () => Promise<'dev' | 'full' | 'portable'>
   needsFirstTimeDownload: () => Promise<boolean>
+  // 手动导入环境配置 zip
+  selectEnvZip: () => Promise<string | null>
+  importEnvZip: (zipPath: string) => Promise<{ ok: boolean; error?: string }>
+  onImportProgress: (callback: (payload: { phase: string; message: string; percent: number }) => void) => () => void
   // 应用数据目录配置（用户自定义 runtime 位置）
   appConfigLoad: () => Promise<{ runtimePath?: string }>
   appConfigSuggestRuntimePath: () => Promise<string>
