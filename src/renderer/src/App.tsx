@@ -13,6 +13,7 @@ import WorkspaceEmpty from "./components/WorkspaceEmpty";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
+import RuntimeDirSetup from "./components/RuntimeDirSetup";
 import UpdateBanner from "./components/UpdateBanner";
 import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./components/Icon";
 import PanelExpandRail from "./components/PanelExpandRail";
@@ -122,6 +123,7 @@ const App: React.FC = () => {
 	const [projectPreparing, setProjectPreparing] = useState(false);
 	const [appEdition, setAppEdition] = useState<'dev' | 'full' | 'portable'>('dev');
 	const [downloadConfirmRequired, setDownloadConfirmRequired] = useState(false);
+	const [runtimeDirSetupRequired, setRuntimeDirSetupRequired] = useState(false);
 	const [updateBanner, setUpdateBanner] = useState({ visible: false, message: '', percent: 0 });
 	const toolchainReady = toolchainInit.ready && !projectPreparing;
 	const overlayLocked = !toolchainInit.ready || projectPreparing || toolchainInit.phase === "error";
@@ -578,6 +580,18 @@ const App: React.FC = () => {
 			setAppEdition(edition);
 			const needsDownload = await window.api.needsFirstTimeDownload();
 			if (needsDownload) {
+				// 安装版首次启动且未配置自定义 runtime 路径时，先引导选择数据目录
+				if (edition === 'full') {
+					try {
+						const cfg = await window.api.appConfigLoad();
+						if (!cfg.runtimePath) {
+							setRuntimeDirSetupRequired(true);
+							return;
+						}
+					} catch {
+						/* 读取配置失败，回退到下载确认流程 */
+					}
+				}
 				setDownloadConfirmRequired(true);
 				return;
 			}
@@ -594,6 +608,16 @@ const App: React.FC = () => {
 			});
 		});
 	}, [runToolchainInit]);
+
+	const handleRuntimeDirConfirm = useCallback(() => {
+		setRuntimeDirSetupRequired(false);
+		setDownloadConfirmRequired(true);
+	}, []);
+
+	const handleRuntimeDirSkip = useCallback(() => {
+		setRuntimeDirSetupRequired(false);
+		setDownloadConfirmRequired(true);
+	}, []);
 
 	const retryToolchainInit = useCallback(() => {
 		setToolchainInit({
@@ -1005,6 +1029,9 @@ const App: React.FC = () => {
 				onRecentChange={() => void refreshRecentProjects()}
 			/>
 			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} onCancel={cancelToolchainInit} onOpenLogs={openEnvironmentLogs} onExportDiagnostics={exportEnvironmentDiagnostics} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} />
+		{runtimeDirSetupRequired && (
+			<RuntimeDirSetup onConfirm={handleRuntimeDirConfirm} onSkip={handleRuntimeDirSkip} />
+		)}
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
 			{appView === "workspace" && (
 				<StatusBar

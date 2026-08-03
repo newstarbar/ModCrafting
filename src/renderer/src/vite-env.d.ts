@@ -182,6 +182,18 @@ interface ModCraftingApi {
   exportEnvironmentDiagnostics: () => Promise<{ success: boolean; path?: string; error?: string }>
   getEdition: () => Promise<'dev' | 'full' | 'portable'>
   needsFirstTimeDownload: () => Promise<boolean>
+  // 应用数据目录配置（用户自定义 runtime 位置）
+  appConfigLoad: () => Promise<{ runtimePath?: string }>
+  appConfigSuggestRuntimePath: () => Promise<string>
+  appConfigGetEffectiveRuntimePath: () => Promise<string>
+  appConfigSelectDirectory: () => Promise<string | null>
+  appConfigSetRuntimePath: (target: string | null) => Promise<{ success: boolean; error?: string }>
+  appConfigMigrateRuntime: (targetPath: string) => Promise<{
+    success: boolean
+    error?: string
+    migrated?: boolean
+    requireRestart?: boolean
+  }>
   checkForUpdates: () => Promise<{ ok: boolean; currentVersion: string; latestVersion?: string; hasUpdate?: boolean; source?: 'gitee' | 'github'; error?: string }>
   getAppVersion: () => Promise<string>
   openReleasePages: () => Promise<{ success: boolean }>

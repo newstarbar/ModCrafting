@@ -95,6 +95,10 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     detail?: string
     error?: string
   } | null>(null)
+  const [runtimePath, setRuntimePath] = useState<string>('')
+  const [runtimePathLoading, setRuntimePathLoading] = useState(false)
+  const [runtimeMigrating, setRuntimeMigrating] = useState(false)
+  const [runtimeMessage, setRuntimeMessage] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null)
   const activeSessionItemRef = useRef<HTMLDivElement | null>(null)
 
   const sortedSessions = sortSessionsByUpdatedAt(sessions)
@@ -118,6 +122,58 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     setKeySaveHint('')
     setDeepseekBalance(null)
   }, [apiConfig.providerId])
+
+  // 加载当前 runtime 数据目录路径（用于设置页展示与修改）
+  const refreshRuntimePath = useCallback(async () => {
+    setRuntimePathLoading(true)
+    try {
+      const p = await window.api.appConfigGetEffectiveRuntimePath()
+      setRuntimePath(p)
+    } catch (err) {
+      setRuntimeMessage({ kind: 'error', text: `读取数据目录失败：${String(err)}` })
+    } finally {
+      setRuntimePathLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshRuntimePath()
+  }, [refreshRuntimePath])
+
+  const handleChangeRuntimeDir = useCallback(async () => {
+    if (runtimeMigrating) return
+    setRuntimeMessage(null)
+    try {
+      const picked = await window.api.appConfigSelectDirectory()
+      if (!picked) return
+      // 在用户选择的目录下追加 ModCrafting-Data/runtime 子目录
+      const target = `${picked.replace(/[\\/]+$/, '')}\\ModCrafting-Data\\runtime`
+      if (target === runtimePath) {
+        setRuntimeMessage({ kind: 'info', text: '选择的目录与当前路径相同' })
+        return
+      }
+      setRuntimeMigrating(true)
+      setRuntimeMessage({ kind: 'info', text: '正在停止 Gradle 并迁移数据，请稍候…' })
+      const result = await window.api.appConfigMigrateRuntime(target)
+      if (!result.success) {
+        setRuntimeMessage({ kind: 'error', text: result.error || '迁移失败' })
+        return
+      }
+      setRuntimePath(target)
+      if (result.migrated) {
+        setRuntimeMessage({
+          kind: 'success',
+          text: `数据已迁移到新位置。${result.requireRestart ? '请重启应用以使新路径完全生效。' : ''}`
+        })
+      } else {
+        setRuntimeMessage({ kind: 'success', text: '数据目录已更新。请重启应用以使新路径完全生效。' })
+      }
+    } catch (err) {
+      setRuntimeMessage({ kind: 'error', text: `操作失败：${String(err)}` })
+    } finally {
+      setRuntimeMigrating(false)
+    }
+  }, [runtimeMigrating, runtimePath])
 
   const refreshDeepSeekBalance = useCallback(async (opts?: { useDraftKey?: boolean }) => {
     if (apiConfig.providerId !== 'deepseek') return
@@ -582,6 +638,57 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
                   </div>
                 )
               })()}
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
+              数据目录
+            </div>
+            <div style={{
+              padding: '8px 10px',
+              borderRadius: 6,
+              background: 'var(--bg-elevated, rgba(255,255,255,0.04))',
+              border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+              marginBottom: '8px'
+            }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                当前位置（JDK / Gradle / 依赖缓存，约 1-2 GB）
+              </div>
+              <div style={{
+                fontSize: '11px',
+                color: 'var(--text-primary)',
+                fontFamily: 'monospace',
+                wordBreak: 'break-all',
+                lineHeight: 1.4,
+                marginBottom: '6px'
+              }}>
+                {runtimePathLoading ? '加载中…' : (runtimePath || '—')}
+              </div>
+              <button
+                type="button"
+                className="mc-btn"
+                style={{ padding: '3px 8px', fontSize: '10px' }}
+                disabled={runtimeMigrating}
+                onClick={() => void handleChangeRuntimeDir()}
+              >
+                {runtimeMigrating ? '迁移中…' : '修改数据目录'}
+              </button>
+              {runtimeMessage && (
+                <div style={{
+                  marginTop: '6px',
+                  fontSize: '10px',
+                  lineHeight: 1.4,
+                  color: runtimeMessage.kind === 'success'
+                    ? 'var(--success)'
+                    : runtimeMessage.kind === 'error'
+                      ? 'var(--error)'
+                      : 'var(--text-muted)',
+                  whiteSpace: 'pre-wrap'
+                }}>
+                  {runtimeMessage.text}
+                </div>
+              )}
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
+                修改后会自动迁移已下载的数据；迁移前会停止 Gradle daemon。
+              </div>
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
               项目

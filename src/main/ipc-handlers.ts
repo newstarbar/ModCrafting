@@ -31,8 +31,18 @@ import {
   getRuntimeLayoutInfo,
   checkRuntimeCapacity,
   searchLocalFabricSources,
-  needsFirstTimeDownload
+  needsFirstTimeDownload,
+  isEnvironmentReady,
+  getRuntimeRoot,
+  stopGradleDaemonsNow
 } from './build-env'
+import {
+  loadAppConfig,
+  setRuntimePath,
+  suggestDefaultRuntimePath,
+  getRuntimePathOverride
+} from './app-config'
+import { migrateRuntimeToPath } from './runtime-layout'
 import { exportEnvironmentDiagnostics, getLastEnvironmentError, openEnvironmentLogs } from './environment-diagnostics'
 import { checkForUpdates, openReleasePages } from './updater'
 import { lookupFabricSymbol, verifyFabricSymbolIndex, type FabricSymbolLookupRequest } from './fabric-metadata'
@@ -442,6 +452,81 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('env:getEdition', async () => getAppEdition())
 
   ipcMain.handle('env:needsFirstTimeDownload', async () => needsFirstTimeDownload())
+
+  // ── 应用数据目录配置（用户自定义 runtime 位置） ──
+  // 读取当前应用配置
+  ipcMain.handle('appConfig:load', async () => loadAppConfig())
+
+  // 读取建议的默认 runtime 路径（检测非 C 盘）
+  ipcMain.handle('appConfig:suggestRuntimePath', async () => suggestDefaultRuntimePath())
+
+  // 读取当前生效的 runtime 路径（含覆盖与默认逻辑）
+  ipcMain.handle('appConfig:getEffectiveRuntimePath', async () => {
+    const override = getRuntimePathOverride()
+    return override || getRuntimeRoot()
+  })
+
+  // 选择数据目录（仅弹窗返回路径，不写配置）
+  ipcMain.handle('appConfig:selectDirectory', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+      title: '选择数据目录位置',
+      buttonLabel: '选择此文件夹'
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  // 保存 runtime 路径覆盖（不迁移数据，仅写配置；首次启动引导用）
+  ipcMain.handle('appConfig:setRuntimePath', async (_event, target: string | null) =>
+    setRuntimePath(target)
+  )
+
+  /**
+   * 迁移 runtime 数据到新目录并更新配置（设置页"修改数据目录"用）。
+   * 步骤：停止 Gradle daemon → 校验目标可写 → cpSync + rename → 更新 config.json。
+   * 失败时回滚 staging，源目录保持不动。
+   */
+  ipcMain.handle('appConfig:migrateRuntime', async (_event, targetPath: string) => {
+    const trimmed = (targetPath || '').trim()
+    if (!trimmed) {
+      return { success: false, error: '目标路径为空' }
+    }
+    const sourceRoot = getRuntimeRoot()
+    // 校验目标不能与源相同
+    if (path.normalize(trimmed) === path.normalize(sourceRoot)) {
+      return { success: false, error: '目标路径与当前路径相同' }
+    }
+    // 校验目标父目录可写
+    try {
+      const parent = path.dirname(trimmed)
+      if (!fs.existsSync(parent)) {
+        fs.mkdirSync(parent, { recursive: true })
+      }
+      // 写入测试文件
+      const probe = path.join(parent, `.modcrafting-probe-${Date.now()}`)
+      fs.writeFileSync(probe, '1', 'utf-8')
+      fs.unlinkSync(probe)
+    } catch (err) {
+      return { success: false, error: `目标位置不可写：${String(err)}` }
+    }
+    // 停止 Gradle daemon，避免文件占用
+    await stopGradleDaemonsNow()
+    // 执行迁移
+    const result = migrateRuntimeToPath(sourceRoot, trimmed, (root) => isEnvironmentReady(root))
+    if (!result.success) {
+      return result
+    }
+    // 更新配置
+    const cfgResult = setRuntimePath(trimmed)
+    if (!cfgResult.success) {
+      return {
+        success: false,
+        error: `数据已迁移但配置写入失败：${cfgResult.error || '未知错误'}。请手动重启应用。`
+      }
+    }
+    return { success: true, migrated: result.migrated, requireRestart: true }
+  })
 
   ipcMain.handle('updater:check', async () => checkForUpdates(true))
 

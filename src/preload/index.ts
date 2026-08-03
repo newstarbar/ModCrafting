@@ -439,6 +439,24 @@ const api = {
   needsFirstTimeDownload: (): Promise<boolean> =>
     ipcRenderer.invoke('env:needsFirstTimeDownload'),
 
+  // ── 应用数据目录配置（用户自定义 runtime 位置） ──
+  appConfigLoad: (): Promise<{ runtimePath?: string }> =>
+    ipcRenderer.invoke('appConfig:load'),
+  appConfigSuggestRuntimePath: (): Promise<string> =>
+    ipcRenderer.invoke('appConfig:suggestRuntimePath'),
+  appConfigGetEffectiveRuntimePath: (): Promise<string> =>
+    ipcRenderer.invoke('appConfig:getEffectiveRuntimePath'),
+  appConfigSelectDirectory: (): Promise<string | null> =>
+    ipcRenderer.invoke('appConfig:selectDirectory'),
+  appConfigSetRuntimePath: (target: string | null): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('appConfig:setRuntimePath', target),
+  appConfigMigrateRuntime: (targetPath: string): Promise<{
+    success: boolean
+    error?: string
+    migrated?: boolean
+    requireRestart?: boolean
+  }> => ipcRenderer.invoke('appConfig:migrateRuntime', targetPath),
+
   checkForUpdates: (): Promise<{
     ok: boolean
     currentVersion: string

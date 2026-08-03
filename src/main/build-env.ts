@@ -702,6 +702,18 @@ export async function stopGradleDaemonsOnExit(): Promise<void> {
   }
 }
 
+/**
+ * 用户主动停止 Gradle daemon（迁移数据目录前调用，避免文件占用）。
+ * 与 stopGradleDaemonsOnExit 行为一致，但语义更明确。
+ */
+export async function stopGradleDaemonsNow(): Promise<void> {
+  try {
+    await stopGradleDaemons(resolveJdkPath())
+  } catch {
+    /* ignore shutdown errors */
+  }
+}
+
 function safeRmSync(target: string): void {
   if (!fs.existsSync(target)) return
   fs.rmSync(target, RM_OPTS)
