@@ -11,8 +11,10 @@ import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
 
 /** 探测下载量：512KB，相对实际下载量（65MB~1GB）可忽略 */
 const PROBE_BYTES = 512 * 1024
-/** 单源探测超时 */
-const PROBE_TIMEOUT_MS = 6000
+/** 单源探测超时（10s：给慢启动/代理握手留余量） */
+const PROBE_TIMEOUT_MS = 10000
+/** 测速有效性阈值：最快的源低于此速度视为测速无效，按原始候选顺序返回 */
+const MIN_VALID_SPEED_KBPS = 200
 
 export interface ProbeCandidate {
   url: string
@@ -27,17 +29,19 @@ export interface ProbeResult extends ProbeCandidate {
 /** 会话级缓存：同一 URL 只探测一次，避免多阶段重复开销 */
 const probeCache = new Map<string, number | null>()
 
-/** 探测单个下载源速度（KB/s），失败/超时返回 null；结果按 URL 缓存 */
-export async function probeSpeed(url: string): Promise<number | null> {
-  const cached = probeCache.get(url)
-  if (cached !== undefined) return cached
-
-  let speed: number | null = null
+/**
+ * 用指定 fetch 实现探测单个源速度。失败/超时返回 null。
+ * 抽出来是为了支持并发用不同网络栈测速。
+ */
+async function probeWith(
+  fetchImpl: typeof globalThis.fetch,
+  url: string
+): Promise<number | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
   try {
     const t0 = Date.now()
-    const res = await getDownloadFetch()(url, {
+    const res = await fetchImpl(url, {
       redirect: 'follow',
       headers: { 'User-Agent': DOWNLOAD_USER_AGENT },
       signal: controller.signal
@@ -52,12 +56,42 @@ export async function probeSpeed(url: string): Promise<number | null> {
     }
     await reader.cancel().catch(() => {})
     const secs = (Date.now() - t0) / 1000
-    if (received > 0 && secs > 0) speed = Math.round(received / 1024 / secs)
+    // 必须下载满 PROBE_BYTES 才算有效测速：API 接口的小响应（如 Adoptium API 返回 JSON）
+    // 不能反映 CDN 下载速度，会让小响应源排在大文件源前面导致选错源
+    if (received >= PROBE_BYTES && secs > 0) return Math.round(received / 1024 / secs)
+    return null
   } catch {
-    /* 探测失败 → null */
+    return null
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * 探测单个下载源速度（KB/s），失败/超时返回 null；结果按 URL 缓存。
+ *
+ * 并发用两个网络栈测速，取较快的：
+ * - net.fetch（Chromium 栈）：走系统代理，对需要代理的国外源（GitHub）有效
+ * - globalThis.fetch（Node undici）：不走系统代理，对国内源（清华 TUNA）有效
+ *
+ * 实测 2026-08：用户系统代理残留时，net.fetch 对清华 TUNA 测速全失败，
+ * 但 curl（不走代理）实测 14MB/s。双栈并发测速能覆盖两种场景。
+ */
+export async function probeSpeed(url: string): Promise<number | null> {
+  const cached = probeCache.get(url)
+  if (cached !== undefined) return cached
+
+  const [chromiumSpeed, nodeSpeed] = await Promise.allSettled([
+    probeWith(getDownloadFetch(), url),
+    probeWith(globalThis.fetch, url)
+  ])
+
+  const c = chromiumSpeed.status === 'fulfilled' ? chromiumSpeed.value : null
+  const n = nodeSpeed.status === 'fulfilled' ? nodeSpeed.value : null
+  // 取两个中较快的；都失败则 null
+  const speed = c !== null && n !== null
+    ? Math.max(c, n)
+    : (c ?? n ?? null)
 
   probeCache.set(url, speed)
   return speed
@@ -107,6 +141,14 @@ export async function pickFastestUrls(
   )
   const sorted = [...results].sort((a, b) => (b.speedKBps ?? -1) - (a.speedKBps ?? -1))
   const chosen = sorted.find((c) => c.speedKBps && c.speedKBps > 0)
-  probeListener?.({ candidates: sorted, done: true, chosen: chosen?.label })
-  return sorted
+
+  // 兜底：如果最快的源速度低于阈值（如只有慢源通过代理测速成功，国内源全失败），
+  // 视为测速无效，按原始候选顺序返回（候选顺序已按"国内主源优先"排好）
+  const maxSpeed = sorted[0]?.speedKBps ?? 0
+  const finalSorted = maxSpeed > 0 && maxSpeed < MIN_VALID_SPEED_KBPS
+    ? results // 原始顺序（不做 sort）
+    : sorted
+
+  probeListener?.({ candidates: finalSorted, done: true, chosen: chosen?.label })
+  return finalSorted
 }

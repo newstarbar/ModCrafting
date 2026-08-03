@@ -409,6 +409,14 @@ export async function ensureKnowledgeBase(
     const destDir = path.join(root, artifact.dir)
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
 
+    // 已下载且非空则跳过（重启不重复下载）
+    if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
+      onProgress(`${artifact.dir} 已存在，跳过下载`, stepPercent)
+      results.push({ dir: artifact.dir, ok: true })
+      completed++
+      continue
+    }
+
     // 构造候选源列表，pickFastestUrls 并发测速选优
     const candidates: Array<{ url: string; label: string }> = []
     if (giteeAsset) candidates.push({ url: giteeAsset.url, label: 'Gitee' })
@@ -443,6 +451,15 @@ export async function ensureKnowledgeBase(
     const { gitee, github } = resolveExtraArtifactUrl(artifact.zip)
     const destDir = path.join(root, artifact.dir)
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
+
+    // 已下载且非空则跳过（重启不重复下载）
+    if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
+      onProgress(`${artifact.dir} 已存在，跳过下载`, stepPercent)
+      results.push({ dir: artifact.dir, ok: true })
+      completed++
+      continue
+    }
+
     onProgress(`测速选优 ${artifact.dir}（Gitee/GitHub）…`, stepPercent)
 
     const ordered = await pickFastestUrls([
