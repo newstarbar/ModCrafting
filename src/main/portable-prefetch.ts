@@ -340,7 +340,25 @@ export async function ensureGradleHomeOnline(
       await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))
       onProgress({ phase: 'minecraft', message: '正在处理 Minecraft 与映射…', percent: 58, source })
       onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent: 64, source })
-      await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
+      // downloadAssets 任务输出可能被缓冲或格式不匹配正则，
+      // 启动定时器在 64%-76% 间基于已用时间线性推进进度，避免进度条卡住。
+      // forward 回调匹配到下载行时仍会更新 currentItem，两者互不冲突。
+      const assetsStart = Date.now()
+      const assetsBase = 64
+      const assetsTarget = 76
+      const assetsDurationMs = 5 * 60 * 1000 // 预估 5 分钟完成，用于线性插值
+      const assetsTimer = setInterval(() => {
+        if (prefetchCancelled) return
+        const elapsed = Date.now() - assetsStart
+        const ratio = Math.min(elapsed / assetsDurationMs, 0.95)
+        const percent = Math.round(assetsBase + (assetsTarget - assetsBase) * ratio)
+        onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent, source })
+      }, 2000)
+      try {
+        await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
+      } finally {
+        clearInterval(assetsTimer)
+      }
     }
 
     try {
