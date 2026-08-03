@@ -13,13 +13,31 @@ type FabricVersions = {
 }
 
 export type PrefetchProgressPayload = {
-  phase: 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
+  phase: 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error'
   message: string
   percent: number
   error?: string
+  currentItem?: string
+  source?: string
+  metrics?: { completedBytes?: number; totalBytes?: number; completedItems?: number; totalItems?: number; speedBytesPerSecond?: number; etaSeconds?: number }
 }
 
 type ProgressSender = (input: string | PrefetchProgressPayload) => void
+
+let activeGradlePid: number | undefined
+let prefetchCancelled = false
+
+/** Stops the complete Gradle process tree. A new initialization reuses .part
+ * downloads and the validated cache, so cancellation is safely resumable. */
+export function cancelFabricPrefetch(): void {
+  prefetchCancelled = true
+  if (!activeGradlePid) return
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(activeGradlePid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    }
+  } catch { /* best effort */ }
+}
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
@@ -46,7 +64,8 @@ function setupPrefetchProject(
   runtimeRoot: string,
   gradleSrc: string,
   wrapperJar: string,
-  v: FabricVersions
+  v: FabricVersions,
+  useDomesticMinecraftMirror: boolean
 ): void {
   const projectName = 'prefetch-mod'
   const groupId = 'com.example'
@@ -68,12 +87,16 @@ function setupPrefetchProject(
 version = project.mod_version; group = "${groupId}"
 base { archivesName = "${projectName}" }
 ext {
-    // Mojang 库（libraries.minecraft.net 直连国外慢）走 BMCLAPI 国内镜像。
-    // 注意：Minecraft client/server jar 由 Loom 用 manifest 原样 URL 下载，无法经此镜像。
-    loom_libraries_base = "https://bmclapi2.bangbang93.com/maven/"
+    // Loom reads these documented extension properties before resolving Minecraft.
+    // Keep all three in sync: libraries alone does not accelerate the 480MB assets phase.
+    loom_libraries_base = "${useDomesticMinecraftMirror ? 'https://bmclapi2.bangbang93.com/maven/' : 'https://libraries.minecraft.net/'}"
+    loom_resources_base = "${useDomesticMinecraftMirror ? 'https://bmclapi2.bangbang93.com/assets/' : 'https://resources.download.minecraft.net/'}"
+    loom_version_manifests = "${useDomesticMinecraftMirror ? 'https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json' : 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'}"
+    loom_fabric_repository = "https://maven.fabricmc.net/"
 }
 repositories {
-    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/central') }
+    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/public') }
+    maven { name = 'HuaweiCentral'; url = uri('https://repo.huaweicloud.com/repository/maven/') }
     mavenCentral()
 }
 loom { splitEnvironmentSourceSets()
@@ -89,8 +112,13 @@ java { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaV
 
   const settingsGradle = `pluginManagement {
   repositories {
-    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/central') }
-    maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net/') }
+    exclusiveContent {
+      forRepository { maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net/') } }
+      filter { includeGroupByRegex('net\\.fabricmc(\\..*)?') }
+    }
+    maven { name = 'AliyunGradlePlugin'; url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
+    maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/public') }
+    maven { name = 'HuaweiCentral'; url = uri('https://repo.huaweicloud.com/repository/maven/') }
     mavenCentral()
     gradlePluginPortal()
   }
@@ -175,6 +203,11 @@ function runGradle(
   onOutput?: (line: string) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (prefetchCancelled) {
+      prefetchCancelled = false
+      reject(new Error('Environment initialization cancelled by user'))
+      return
+    }
     const child = spawn('cmd', ['/c', '.\\gradlew.bat', '--console=plain', ...args], {
       cwd,
       env: {
@@ -185,6 +218,7 @@ function runGradle(
         PATH: `${path.join(runtimeRoot, 'jdk-21', 'bin')};${process.env.PATH || ''}`
       }
     })
+    activeGradlePid = child.pid
     // 转发 Gradle 输出（--console=plain 下下载行为一行一条，可解析为进度）
     const forward = (chunk: Buffer): void => {
       if (!onOutput) return
@@ -196,18 +230,31 @@ function runGradle(
     child.stdout?.on('data', forward)
     child.stderr?.on('data', forward)
     let timer: NodeJS.Timeout | undefined
+    const stopTree = (): void => {
+      try {
+        if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        else child.kill('SIGTERM')
+      } catch { /* ignore */ }
+    }
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
-        try { child.kill('SIGTERM') } catch { /* ignore */ }
+        stopTree()
         reject(new Error(`Gradle timed out: ${args.join(' ')}`))
       }, timeoutMs)
     }
     child.on('error', (err) => {
+      activeGradlePid = undefined
       if (timer) clearTimeout(timer)
       reject(err)
     })
     child.on('close', (code) => {
+      activeGradlePid = undefined
       if (timer) clearTimeout(timer)
+      if (prefetchCancelled) {
+        prefetchCancelled = false
+        reject(new Error('Environment initialization cancelled by user'))
+        return
+      }
       if (code === 0) resolve()
       else reject(new Error(`Gradle exited ${code}: ${args.join(' ')}`))
     })
@@ -224,67 +271,48 @@ export async function ensureGradleHomeOnline(
   writeSeedMarker: () => void,
   onProgress: ProgressSender
 ): Promise<{ ok: boolean; error?: string }> {
+  prefetchCancelled = false
   if (isReady()) {
     onProgress({ phase: 'deps', message: 'Fabric 依赖缓存已就绪', percent: 100 })
     return { ok: true }
   }
 
-  onProgress({
-    phase: 'deps',
-    message: '正在联网下载 Fabric 依赖（首次约 1GB，请保持网络畅通）…',
-    percent: 40
-  })
+  onProgress({ phase: 'fabric', message: '正在解析 Fabric/Loom 依赖…', percent: 38, source: 'Fabric Maven / 国内 Maven 镜像' })
 
   const projectDir = path.join(runtimeRoot, '_prefetch_project')
   try {
-    setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions)
+    setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, true)
     fs.mkdirSync(gradleHomePath, { recursive: true })
 
-    onProgress({ phase: 'deps', message: '正在拉取 Fabric 构建依赖…', percent: 50 })
-    const depsStart = Date.now()
-    let lastArtifactAt = 0
-    // 心跳兜底：Gradle 下载依赖期间若无匹配输出行，周期性提示避免用户以为卡死
-    const heartbeat = setInterval(() => {
-      if (Date.now() - lastArtifactAt > 5000) {
-        const pct = Math.min(73, 50 + Math.floor(((Date.now() - depsStart) / 1000 / 30)) * 2)
-        onProgress({ phase: 'deps', message: '正在下载依赖（首次约 1GB，需 5-15 分钟）…', percent: pct })
-      }
-    }, 4000)
-    try {
-      await runGradle(
-        projectDir,
-        runtimeRoot,
-        // 不强制 --refresh-dependencies：避免下载失败重试时已缓存依赖被全量刷新重下
-        ['build', '--no-daemon'],
-        30 * 60 * 1000,
-        (line) => {
-          // 解析 Gradle 下载输出（--console=plain 下 "Downloading xxx" 每行一条）→ 动态进度消息
-          const m = line.match(/(?:Downloading|Unzipping|Downloaded)\s+(.+)/)
-          if (!m) return
-          lastArtifactAt = Date.now()
-          const target = (m[1].trim().split('/').pop() || m[1].trim()).slice(0, 60)
-          const pct = Math.min(73, 50 + Math.floor(((Date.now() - depsStart) / 1000 / 30)) * 2)
-          onProgress({ phase: 'deps', message: `正在下载依赖：${target}…`, percent: pct })
-        }
-      )
-    } finally {
-      clearInterval(heartbeat)
+    const forward = (phase: PrefetchProgressPayload['phase'], basePercent: number) => (line: string): void => {
+      const m = line.match(/(?:Downloading|Downloaded|Unzipping)\s+(.+)/i)
+      if (!m) return
+      const target = (m[1].trim().split('/').pop() || m[1].trim()).slice(0, 96)
+      onProgress({ phase, message: `正在处理：${target}`, currentItem: target, percent: basePercent })
     }
 
-    onProgress({ phase: 'deps', message: '正在拉取游戏资源…', percent: 75 })
-    try {
-      await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon'], 15 * 60 * 1000)
-    } catch {
-      /* optional */
+    const warmup = async (domestic: boolean): Promise<void> => {
+      setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, domestic)
+      const source = domestic ? 'BMCLAPI 国内镜像' : 'Mojang 官方源'
+      onProgress({ phase: 'fabric', message: '正在下载 Fabric Loader、Yarn 与 Fabric API…', percent: 46, source })
+      await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon', '--console=plain'], 30 * 60 * 1000, forward('fabric', 52))
+      onProgress({ phase: 'minecraft', message: '正在处理 Minecraft 与映射…', percent: 58, source })
+      onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent: 64, source })
+      await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon', '--console=plain'], 30 * 60 * 1000, forward('assets', 76))
     }
 
+    try {
+      await warmup(true)
+    } catch (mirrorError) {
+      onProgress({ phase: 'minecraft', message: '国内镜像不可用，正在切换 Mojang 官方源重试…', percent: 60, source: 'Mojang 官方源' })
+      await warmup(false)
+    }
+
+    onProgress({ phase: 'verify', message: '正在验证离线 Fabric 构建…', percent: 88 })
+    await runGradle(projectDir, runtimeRoot, ['build', '--offline', '--no-daemon', '--console=plain'], 20 * 60 * 1000)
+    if (!isReady()) return { ok: false, error: 'Fabric 离线构建虽完成，但缓存校验未通过' }
     writeSeedMarker()
-
-    if (!isReady()) {
-      return { ok: false, error: 'Fabric 依赖下载后校验失败，请检查网络后重试' }
-    }
-
-    onProgress({ phase: 'deps', message: 'Fabric 依赖已就绪', percent: 95 })
+    onProgress({ phase: 'verify', message: '离线构建验证通过', percent: 96 })
     return { ok: true }
   } catch (err) {
     return { ok: false, error: `联网下载 Fabric 依赖失败: ${String(err)}` }

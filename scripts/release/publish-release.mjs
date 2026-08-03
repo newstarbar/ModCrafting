@@ -110,42 +110,14 @@ async function githubLatestTag() {
 function checkLocalAssets(ver) {
   const missing = []
   const releaseDir = path.join(root, 'release')
-  const setupName = `ModCrafting Setup ${ver}.exe`
-  const portableName = `ModCrafting ${ver} Portable.exe`
+  const setupName = `ModCrafting-Setup-${ver}.exe`
+  const portableName = `ModCrafting-${ver}-Portable.exe`
   if (!existsSync(path.join(releaseDir, setupName))) missing.push(`release/${setupName}`)
   if (!existsSync(path.join(releaseDir, portableName))) missing.push(`release/${portableName}`)
   if (!existsSync(path.join(releaseDir, 'latest.yml'))) missing.push('release/latest.yml')
-
-  const seedDir = path.join(root, 'resources', 'seed-shards')
-  if (!existsSync(seedDir)) {
-    missing.push('resources/seed-shards/ (目录不存在)')
-  } else {
-    const files = readdirSync(seedDir)
-    if (!files.includes('manifest.json') || !files.some((f) => /^seed\.part\.\d{3}$/.test(f))) {
-      missing.push('resources/seed-shards/ (缺少 manifest.json 或 seed.part.NNN)')
-    }
-  }
-
-  const jreDir = path.join(root, 'resources', 'jre-shards')
-  if (!existsSync(jreDir)) {
-    missing.push('resources/jre-shards/ (目录不存在)')
-  } else {
-    const files = readdirSync(jreDir)
-    if (!files.includes('jre-manifest.json') || !files.some((f) => /^jre\.part\.\d{3}$/.test(f))) {
-      missing.push('resources/jre-shards/ (缺少 jre-manifest.json 或 jre.part.NNN)')
-    }
-  }
-
-  const extraDir = path.join(root, 'resources', 'extra-zips')
-  if (!existsSync(extraDir)) {
-    missing.push('resources/extra-zips/ (目录不存在)')
-  } else {
-    const files = readdirSync(extraDir).filter(
-      (f) => f.endsWith('.zip') || f.endsWith('.tar.xz') || f.endsWith('.xz')
-    )
-    if (files.length === 0) {
-      missing.push('resources/extra-zips/ (缺少 *.zip 或 *.tar.xz)')
-    }
+  const setupPath = path.join(releaseDir, setupName)
+  if (existsSync(setupPath) && statSync(setupPath).size >= 100_000_000) {
+    missing.push(`release/${setupName}（${statSync(setupPath).size} bytes，超过 100,000,000 bytes 发布上限）`)
   }
 
   return missing
@@ -155,16 +127,7 @@ function printBuildHints(tag) {
   console.error('')
   console.error('请先依次运行以下命令生成本地产物:')
   console.error(`  npm run release:notes -- ${tag}`)
-  console.error('  npm run toolchain:setup')
-  console.error('  npm run toolchain:strip-gradle')
-  console.error('  npm run toolchain:build-jre')
-  console.error('  npm run toolchain:prefetch')
-  console.error('  npm run toolchain:symbol-index')
-  console.error('  npm run knowledge:download')
   console.error('  npm run build:win')
-  console.error('  npm run release:split-seed')
-  console.error('  npm run release:split-jre')
-  console.error('  npm run release:archive-extra')
 }
 
 // ─── 调用底层脚本 ──────────────────────────────────────────────────────

@@ -148,10 +148,14 @@ interface ModCraftingApi {
   downloadJdk: () => Promise<{ success: boolean; path?: string; error?: string }>
   onDownloadProgress: (callback: (msg: string) => void) => () => void
   onToolchainProgress: (callback: (payload: {
-    phase: 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
+    phase: 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error' | 'deps'
     message: string
     percent: number
     error?: string
+    errorId?: string
+    currentItem?: string
+    source?: string
+    metrics?: { completedBytes?: number; totalBytes?: number; completedItems?: number; totalItems?: number; speedBytesPerSecond?: number; etaSeconds?: number }
   }) => void) => () => void
   onSourceProbe: (callback: (event: {
     candidates: Array<{ url: string; label: string; speedKBps: number | null }>
@@ -159,6 +163,7 @@ interface ModCraftingApi {
     chosen?: string
   }) => void) => () => void
   initToolchain: (force?: boolean) => Promise<{ ok: boolean; error?: string }>
+  cancelToolchainInit: () => Promise<{ ok: boolean }>
   isToolchainReady: () => Promise<boolean>
   ensureGradleWrapper: (projectPath: string) => Promise<{ exists: boolean; copied?: boolean; downloaded?: boolean; error?: string }>
   copyBundledGradle: (projectPath: string) => Promise<{ copied: boolean; reason?: string; error?: string }>
@@ -170,6 +175,11 @@ interface ModCraftingApi {
   runGradleTask: (projectPath: string, task: string) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean }>
   getToolchainStatus: () => Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean; edition: 'dev' | 'full' | 'portable' }>
   checkRuntimeWritable: () => Promise<{ writable: boolean; runtimeRoot: string; error?: string }>
+  checkRuntimeCapacity: () => Promise<{ ok: boolean; freeBytes?: number; error?: string }>
+  getRuntimeLayout: () => Promise<{ edition: 'dev' | 'full' | 'portable'; runtimeRoot: string; cacheRoot: string; logRoot: string; legacyRuntimeRoot?: string; migrated: boolean }>
+  getLastEnvironmentError: () => Promise<{ id: string; code: string; phase: string; message: string; technicalMessage: string; retryable: boolean; source?: string; occurredAt: string } | null>
+  openEnvironmentLogs: () => Promise<{ success: boolean; path: string }>
+  exportEnvironmentDiagnostics: () => Promise<{ success: boolean; path?: string; error?: string }>
   getEdition: () => Promise<'dev' | 'full' | 'portable'>
   needsFirstTimeDownload: () => Promise<boolean>
   checkForUpdates: () => Promise<{ ok: boolean; currentVersion: string; latestVersion?: string; hasUpdate?: boolean; source?: 'gitee' | 'github'; error?: string }>

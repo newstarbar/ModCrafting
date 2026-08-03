@@ -50,6 +50,15 @@ export function generateBuildGradle(config: ProjectCreateConfig): string {
 	return `plugins { id 'fabric-loom' version '${versions.loom_version}'; id 'maven-publish' }
 version = project.mod_version; group = "${groupId}"
 base { archivesName = "${folderName}" }
+// ModCrafting uses BMCLAPI for Minecraft metadata, libraries and assets. Loom
+// verifies Minecraft artifacts against Mojang's checksums; Fabric coordinates
+// are deliberately kept on Fabric Maven because public mirrors return 404.
+ext {
+  loom_libraries_base = "https://bmclapi2.bangbang93.com/maven/"
+  loom_resources_base = "https://bmclapi2.bangbang93.com/assets/"
+  loom_version_manifests = "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json"
+  loom_fabric_repository = "https://maven.fabricmc.net/"
+}
 repositories {
     maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/central') }
     mavenCentral()
@@ -99,6 +108,12 @@ tasks.named("runClient").configure {
 export function generateSettingsGradle(folderName: string): string {
 	return `pluginManagement {
     repositories {
+        exclusiveContent {
+            forRepository {
+                maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net/') }
+            }
+            filter { includeGroupByRegex('net\\.fabricmc(\\..*)?') }
+        }
         maven {
             name = 'AliyunCentral'
             url = uri('https://maven.aliyun.com/repository/central')

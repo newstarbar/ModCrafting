@@ -1,6 +1,7 @@
 {
   "appId": "com.modcrafting.app",
   "productName": "ModCrafting",
+	"compression": "maximum",
   "directories": {
     "output": "release"
   },

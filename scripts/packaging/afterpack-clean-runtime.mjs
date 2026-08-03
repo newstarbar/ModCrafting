@@ -46,25 +46,6 @@ export default async function afterPack(context) {
     // 不抛出,避免阻塞打包;NSIS 会再次尝试,且通常清理已足够
   }
 
-  // 删除 Electron 运行时大文件以进一步缩小 Setup.exe
-  // - LICENSES.chromium.html: Chromium 开源许可证（可用在线链接替代）
-  // - dxcompiler.dll: DirectX 着色器编译器（Chromium 回退到 d3dcompiler_47.dll）
-  // - chrome_100_percent.pak / chrome_200_percent.pak: DevTools UI 资源包，生产应用不需要
-  const filesToDelete = [
-    'LICENSES.chromium.html',
-    'dxcompiler.dll',
-    'chrome_100_percent.pak',
-    'chrome_200_percent.pak'
-  ]
-  for (const fname of filesToDelete) {
-    const fpath = path.join(appOutDir, fname)
-    if (existsSync(fpath)) {
-      try {
-        rmSync(fpath, { force: true, maxRetries: 3, retryDelay: 200 })
-        console.log(`[afterpack] removed ${fname}`)
-      } catch (err) {
-        console.warn(`[afterpack][warn] failed to remove ${fname}: ${err?.message || err}`)
-      }
-    }
-  }
+  // Do not remove Electron's pak/DLL/license files. chrome_100_percent.pak and
+  // dxcompiler.dll are runtime dependencies, not optional DevTools resources.
 }

@@ -1,76 +1,52 @@
-# 工具链
+# 工具链与首次初始化
 
-ModCrafting 内置离线工具链，确保在无网络或弱网环境下仍可完成模组编译与 `runClient` 测试。
+ModCrafting 仅支持 Windows x64。安装版和便携版使用同一套首次初始化管线：完整 Temurin JDK 21、Gradle 9.5、Fabric/Loom、Minecraft 依赖、游戏资源和一次离线 Fabric 构建。
 
-## 捆绑组件
+## 运行时目录
 
-| 组件 | 版本 | 位置 |
-|------|------|------|
-| JDK | Eclipse Temurin 21 | `resources/jdk-21` |
-| Gradle | 9.5 | `resources/gradle-9.5` |
-| Fabric 依赖种子 | — | `resources/gradle-home-seed/` |
-| 辅助 mod | Mod Menu、ModCrafting Observer 等 | `resources/_base_mods/` |
+| 版本 | 运行时目录 |
+|---|---|
+| Setup | `%LOCALAPPDATA%\ModCrafting\runtime` |
+| Portable | `PORTABLE_EXECUTABLE_DIR\runtime` |
+| 开发模式 | 仓库 `runtime/` |
 
-## 版本类型
+Setup 升级和卸载不会删除 `%LOCALAPPDATA%` 中的运行时。旧版位于 exe 邻近目录的完整缓存会在首次启动时迁移并校验；不完整缓存不会被当作完成状态。
 
-由 `src/main/edition.ts` 检测：
+## 下载和校验
 
-| 类型 | 标识 | 说明 |
-|------|------|------|
-| `dev` | 未打包（`app.isPackaged === false`） | 开发模式，使用系统 PATH 中的工具 |
-| `full` | 完整安装版 | 捆绑 JDK + Gradle + 依赖种子，可离线构建 |
-| `portable` | `PORTABLE_EXECUTABLE_DIR` 环境变量存在 | 首次启动联网下载工具链到 `runtime/` |
+- JDK 固定为 Temurin `21.0.11+10` Windows x64。必须同时包含 `java.exe`、`javac.exe`、`jar.exe` 和匹配版本的 `release` 文件。
+- Gradle 固定为 `9.5.0`。JDK、Gradle 下载支持 `.part`、Range 续传、空闲超时、重试、SHA-256 校验和原子替换。
+- JDK 优先南京大学 Adoptium 镜像，官方 Adoptium 回退；Gradle 优先腾讯云/华为云，官方回退。
+- Minecraft libraries、版本清单和 assets 优先 BMCLAPI，Mojang 官方回退；文件由 Mojang 清单的大小和 SHA-1 校验。
+- `net.fabricmc` 坐标始终路由到 `maven.fabricmc.net`，不会先访问已知返回 404 的公共国内 Maven。
 
-## 模块
+初始化前会检查至少 3GB 空闲空间，并使用单实例与跨进程初始化锁保护 staging、Gradle 缓存和完成凭据。
 
-`src/main/build-env.ts` 是工具链子系统核心：
+## 完成条件
 
-- 配置 JDK 21 + Gradle 9.5 路径
-- 管理 Fabric 离线依赖缓存（`gradle-home-seed`）
-- 生成 `gradlew.bat`
-- 启动遮罩 + 进度条，环境未就绪前锁定构建
+环境只有在下列步骤全部成功后才会写入完成凭据并显示 100%：
 
-## 启动初始化流程
+1. JDK 和 Gradle 校验；
+2. Fabric Loader、Yarn、Fabric API 与 Loom 缓存；
+3. Minecraft client/server、映射和游戏资源；
+4. Loom `downloadAssets`；
+5. 同一缓存下的 `gradlew build --offline --no-daemon`。
 
-1. **Setup 完整版**：内置 JDK/Gradle/依赖种子，首次启动复制到 `runtime/`，完成后可离线构建
-2. **Portable 便携版**：仅含应用本体，首次启动自动联网下载 JDK / Gradle / Fabric 依赖（约 1GB）到 `runtime/`
-3. **开发模式**：使用系统 PATH 中的工具，但仍可通过 `npm run toolchain:setup` 准备本地工具链
+完成凭据记录版本、缓存规模、asset 验证和离线构建结果。启动时会快速复核凭据和关键文件；缺失或版本变化只修复受影响部分。
 
-## 离线构建验证
+## 进度、取消与诊断
+
+界面显示六步：JDK、Gradle、Fabric/Loom、Minecraft、游戏资源、离线验证。下载任务展示来源、当前文件、字节/文件数、速度和 ETA；未知总量的 Gradle 任务不会伪造百分比。取消会结束 Gradle 进程树并保留可续传的下载和缓存。
+
+初始化错误会带错误 ID、阶段、是否可重试和技术原因。界面可重试、打开日志或导出诊断包；日志位于运行时 `logs/`，会脱敏并轮转。可选知识库、向量搜索或 OpenCode 失败时为“部分功能未就绪”，不阻塞核心构建环境。
+
+## 本地命令
 
 ```bash
-npm run toolchain:verify          # 检查 JDK/Gradle/Wrapper 文件是否齐全
-npm run toolchain:verify-offline   # 验证离线构建流程
+npm run toolchain:verify       # 开发资源的静态检查
+npm run toolchain:verify-offline # 离线构建检查
+npm test
+npm run build:win              # Setup + Portable + Windows 产物门禁
 ```
 
-## EBUSY 重试
-
-`build-env.ts` 中 `retryRmdirSync()` 对 Windows 文件锁（EBUSY/EPERM/ENOTEMPTY）最多 3 次重试，100ms 递增退避。
-
-## 工具链下载逻辑双份
-
-⚠️ 维护注意：工具链下载逻辑存在两份，修改时需同步：
-
-- `scripts/toolchain/toolchain-download.mjs`（构建脚本，用于 `npm run toolchain:setup`）
-- `src/main/toolchain-download.ts`（运行时，用于 Portable 首次启动）
-
-修改 URL/版本时，**两处都要改**。
-
-## 安装器静态资源
-
-- `packaging/` 目录（原 `build/`）
-- 生成物在 `packaging/nsisbi/`（gitignore）
-
-## 更新清单
-
-`packaging/update-manifest.json` 的 raw 路径为 `main/packaging/update-manifest.json`。
-
-由 `npm run release:manifest` 渲染。CI 自动同步到 GitHub 与 Gitee。
-
-## 多实例联机测试
-
-`mc-runtime.ts` 为每个游戏实例分配：
-- 独立 `gameDir`
-- 独立 Gradle 守护进程目录（`GRADLE_USER_HOME`）
-
-避免第二个 `runClient` 停止第一个实例的 Daemon。
+发布包不再内置或生成 JRE、Fabric seed、Gradle seed，也不再上传这些大文件分片到 Gitee。

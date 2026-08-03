@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import appIcon from '../../../../packaging/appIcon.png'
-import installerIcon from '../../../../packaging/installerIcon.png'
 import { Controller } from '../harness/controller'
 import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'
@@ -2082,7 +2081,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             </>
           ) : (
             <>
-              <img src={installerIcon} alt="" />
+              <img src={appIcon} alt="" />
               <span className="role">AI 助手</span>
               {msg.turnStatus === 'completed' && <span className="turn-badge turn-badge--done">已完成</span>}
               {msg.turnStatus === 'planned' && <span className="turn-badge turn-badge--planned">计划就绪</span>}

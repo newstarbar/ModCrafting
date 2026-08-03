@@ -52,16 +52,9 @@ if (target === 'portable') {
 nodeScript('scripts/assets/generate-icon-ico.mjs', 'generate icons')
 nodeScript('scripts/assets/generate-installer-assets.mjs', 'generate installer assets')
 npm('assets:prepare', 'prepare renderer assets')
-nodeScript('scripts/toolchain/setup-toolchain.mjs', 'setup toolchain')
-nodeScript('scripts/toolchain/strip-gradle-dist.mjs', 'strip gradle dist')
-nodeScript('scripts/toolchain/build-jlink-jre.mjs', 'build jlink JRE')
-nodeScript('scripts/toolchain/prefetch-fabric-deps.mjs', 'prefetch fabric deps')
-npm('toolchain:symbol-index', 'generate fabric symbol index')
-nodeScript('scripts/toolchain/prepare-seed-for-packaging.mjs', 'prepare seed for packaging')
-nodeScript('scripts/toolchain/archive-gradle-home-seed.mjs', 'archive gradle home seed (tar.xz)')
-nodeScript('scripts/release/split-seed-shards.mjs', 'split seed shards')
-nodeScript('scripts/toolchain/archive-jre-minimal.mjs', 'archive jre-21-minimal (tar.xz)')
-nodeScript('scripts/release/split-jre-shards.mjs', 'split jre shards')
+// Runtime JDK, Gradle and Fabric caches are intentionally downloaded on first
+// launch into the edition-specific runtime directory. Do not create a JRE,
+// Gradle/Fabric seed or any Gitee shards while building a release.
 nodeScript('scripts/packaging/setup-nsisbi.mjs', 'setup nsisbi')
 nodeScript('scripts/packaging/patch-nsis-install-ui.mjs', 'patch nsis install ui')
 tryKnowledgeDownload()

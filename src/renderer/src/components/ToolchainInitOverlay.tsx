@@ -1,6 +1,6 @@
 import React from 'react'
 
-export type ToolchainPhase = 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
+export type ToolchainPhase = 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error' | 'deps'
 
 export interface ToolchainInitState {
   phase: ToolchainPhase
@@ -8,231 +8,99 @@ export interface ToolchainInitState {
   message: string
   error: string | null
   ready: boolean
-  /** 测速选优结构化数据（渲染专门测速面板；null = 无测速或已收起） */
-  probe: {
-    candidates: Array<{ url: string; label: string; speedKBps: number | null }>
-    done: boolean
-    chosen?: string
-  } | null
+  errorId?: string
+  currentItem?: string
+  source?: string
+  metrics?: { completedBytes?: number; totalBytes?: number; completedItems?: number; totalItems?: number; speedBytesPerSecond?: number; etaSeconds?: number }
+  probe: { candidates: Array<{ url: string; label: string; speedKBps: number | null }>; done: boolean; chosen?: string } | null
 }
 
-interface ToolchainInitOverlayProps {
+interface Props {
   state: ToolchainInitState
   projectPreparing: boolean
   edition?: 'dev' | 'full' | 'portable'
   onRetry: () => void
+  onCancel?: () => void
+  onOpenLogs?: () => void
+  onExportDiagnostics?: () => void
   downloadConfirmRequired?: boolean
   onConfirmDownload?: () => void
 }
 
-const STEPS: { id: ToolchainPhase; label: string }[] = [
-  { id: 'checking', label: '检查环境' },
-  { id: 'jdk', label: 'JDK 21' },
-  { id: 'gradle', label: 'Gradle' },
-  { id: 'deps', label: '离线依赖' },
-  { id: 'project', label: '项目环境' }
+const STEPS: Array<{ id: ToolchainPhase; label: string }> = [
+  { id: 'jdk', label: 'Complete JDK 21' },
+  { id: 'gradle', label: 'Gradle 9.5' },
+  { id: 'fabric', label: 'Fabric / Loom' },
+  { id: 'minecraft', label: 'Minecraft' },
+  { id: 'assets', label: 'Game assets' },
+  { id: 'verify', label: 'Offline verification' }
 ]
+const ORDER = STEPS.map((step) => step.id)
 
-const PHASE_ORDER: ToolchainPhase[] = ['checking', 'jdk', 'gradle', 'deps', 'project', 'ready']
-
-function stepStatus(
-  stepId: ToolchainPhase,
-  current: ToolchainPhase,
-  globalReady: boolean,
-  projectPreparing: boolean,
-  isError: boolean
-): 'done' | 'active' | 'pending' | 'error' {
-  if (isError && stepId === current) return 'error'
-  if (stepId === 'project') {
-    if (projectPreparing) return 'active'
-    if (globalReady && !projectPreparing && current === 'ready') return 'done'
-    return globalReady ? 'pending' : 'pending'
-  }
-  const stepIdx = PHASE_ORDER.indexOf(stepId)
-  const currentIdx = PHASE_ORDER.indexOf(current)
-  if (globalReady && stepId !== 'project') return 'done'
-  if (stepIdx < currentIdx) return 'done'
-  if (stepIdx === currentIdx) return 'active'
-  return 'pending'
+function fmtBytes(value?: number): string | null {
+  if (value === undefined) return null
+  return `${(value / 1024 / 1024).toFixed(value > 100 * 1024 * 1024 ? 0 : 1)} MB`
 }
 
-const ToolchainInitOverlay: React.FC<ToolchainInitOverlayProps> = ({ state, projectPreparing, edition = 'full', onRetry, downloadConfirmRequired, onConfirmDownload }) => {
-  const showOverlay = !state.ready || projectPreparing || state.phase === 'error' || downloadConfirmRequired
-  if (!showOverlay) return null
+function statusFor(step: ToolchainPhase, current: ToolchainPhase, ready: boolean, failed: boolean): 'done' | 'active' | 'pending' | 'error' {
+  if (ready) return 'done'
+  if (failed && step === current) return 'error'
+  const currentIndex = ORDER.indexOf(current)
+  const stepIndex = ORDER.indexOf(step)
+  if (currentIndex < 0) return 'pending'
+  if (stepIndex < currentIndex) return 'done'
+  return stepIndex === currentIndex ? 'active' : 'pending'
+}
+
+const ToolchainInitOverlay: React.FC<Props> = ({ state, projectPreparing, edition = 'full', onRetry, onCancel, onOpenLogs, onExportDiagnostics, downloadConfirmRequired, onConfirmDownload }) => {
+  const failed = state.phase === 'error'
+  const percent = Math.max(0, Math.min(100, state.percent))
+  const metrics = state.metrics
+  const bytes = metrics?.completedBytes !== undefined ? `${fmtBytes(metrics.completedBytes)}${metrics.totalBytes ? ` / ${fmtBytes(metrics.totalBytes)}` : ''}` : null
+  const detail = [
+    bytes,
+    metrics?.completedItems !== undefined ? `${metrics.completedItems}${metrics.totalItems ? ` / ${metrics.totalItems}` : ''} files` : null,
+    metrics?.speedBytesPerSecond ? `${fmtBytes(metrics.speedBytesPerSecond)}/s` : null,
+    metrics?.etaSeconds ? `ETA ${Math.ceil(metrics.etaSeconds / 60)} min` : null
+  ].filter(Boolean).join(' · ')
 
   if (downloadConfirmRequired && onConfirmDownload) {
-    return (
-      <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="toolchain-dl-title">
-        <div className="toolchain-init-card toolchain-init-card--download">
-          <div className="toolchain-init-brand">
-            <span className="toolchain-init-logo">M</span>
-            <div>
-              <h1 id="toolchain-dl-title">ModCrafting</h1>
-              <p className="toolchain-init-subtitle">首次启动需要下载构建环境</p>
-            </div>
-          </div>
-
-          <div className="toolchain-init-download-estimate">
-            <p className="toolchain-init-download-intro">
-              安装包已精简至约 100MB，首次使用需联网下载以下资源后即可完全离线开发：
-            </p>
-            <ul className="toolchain-init-download-list">
-              <li>
-                <span className="toolchain-init-download-name">JDK 21（完整版）</span>
-                <span className="toolchain-init-download-size">约 200MB（公共镜像，自动选最快源）</span>
-              </li>
-              <li>
-                <span className="toolchain-init-download-name">Gradle 9.5</span>
-                <span className="toolchain-init-download-size">约 120MB（公共镜像，自动选最快源）</span>
-              </li>
-              <li>
-                <span className="toolchain-init-download-name">Fabric 依赖种子（分片）</span>
-                <span className="toolchain-init-download-size">约 500MB（Gitee 镜像）</span>
-              </li>
-              <li>
-                <span className="toolchain-init-download-name">知识库与辅助资源</span>
-                <span className="toolchain-init-download-size">约 34MB（百科/数据/符号索引/调试模组）</span>
-              </li>
-              <li>
-                <span className="toolchain-init-download-name">opencode AI 引擎</span>
-                <span className="toolchain-init-download-size">约 70MB（压缩后）</span>
-              </li>
-            </ul>
-            <div className="toolchain-init-download-total">
-              <span>总计下载量</span>
-              <span className="toolchain-init-download-total-size">约 925MB</span>
-            </div>
-            <p className="toolchain-init-download-hint">
-              国内网络环境下约需 5-15 分钟，下载完成后可完全离线使用。JDK/Gradle 自动测速选择最快下载源。知识库与 opencode 引擎下载失败不阻塞启动，AI 会降级运行。
-            </p>
-          </div>
-
-          <button type="button" className="toolchain-init-confirm-btn" onClick={onConfirmDownload}>
-            立即下载
-          </button>
-          <p className="toolchain-init-lock-notice">
-            环境准备完成前，构建、运行与 AI 开发功能将暂时锁定。
-          </p>
+    return <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="toolchain-dl-title">
+      <div className="toolchain-init-card toolchain-init-card--download">
+        <div className="toolchain-init-brand"><span className="toolchain-init-logo">M</span><div><h1 id="toolchain-dl-title">ModCrafting</h1><p className="toolchain-init-subtitle">首次启动需要准备开发环境</p></div></div>
+        <div className="toolchain-init-download-estimate">
+          <p className="toolchain-init-download-intro">将下载完整 JDK、Gradle、Fabric/Minecraft 依赖和游戏资源；完成后会验证离线构建。</p>
+          <ul className="toolchain-init-download-list">
+            <li><span className="toolchain-init-download-name">完整 JDK 21</span><span className="toolchain-init-download-size">国内镜像优先，官方源回退</span></li>
+            <li><span className="toolchain-init-download-name">Gradle 9.5</span><span className="toolchain-init-download-size">国内镜像测速选优</span></li>
+            <li><span className="toolchain-init-download-name">Fabric 与游戏资源</span><span className="toolchain-init-download-size">BMCLAPI 优先，Mojang 官方源回退</span></li>
+          </ul>
+          <p className="toolchain-init-download-hint">下载量按实际版本清单计算；界面会显示当前步骤、来源、文件和速度。</p>
         </div>
-      </div>
-    )
-  }
-
-  const isError = state.phase === 'error'
-  const displayPercent = Math.min(100, Math.max(0, state.percent))
-  const isPortable = edition === 'portable'
-  const depsLabel = isPortable ? 'Fabric 依赖' : '离线依赖'
-
-  const steps = STEPS.map((s) => (s.id === 'deps' ? { ...s, label: depsLabel } : s))
-
-  const subtitle = projectPreparing && state.ready
-    ? '正在准备当前项目环境'
-    : isPortable
-      ? '正在联网下载构建环境（首次约 1GB，需稳定网络）'
-      : '正在准备离线构建环境'
-
-  return (
-    <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="toolchain-init-title">
-      <div className="toolchain-init-card">
-        <div className="toolchain-init-brand">
-          <span className="toolchain-init-logo">⛏</span>
-          <div>
-            <h1 id="toolchain-init-title">ModCrafting</h1>
-            <p className="toolchain-init-subtitle">{subtitle}</p>
-          </div>
-        </div>
-
-        <div className="toolchain-init-steps toolchain-init-steps--5">
-          {steps.map((step) => {
-            const status = stepStatus(step.id, state.phase, state.ready, projectPreparing, isError)
-            return (
-              <div key={step.id} className={`toolchain-init-step toolchain-init-step--${status}`}>
-                <span className="toolchain-init-step-icon">
-                  {status === 'done' ? '✓' : status === 'error' ? '!' : status === 'active' ? '●' : '○'}
-                </span>
-                <span>{step.label}</span>
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="toolchain-init-progress-wrap">
-          <div className="toolchain-init-progress-track">
-            <div
-              className={`toolchain-init-progress-fill ${isError ? 'toolchain-init-progress-fill--error' : ''}`}
-              style={{ width: `${displayPercent}%` }}
-            />
-          </div>
-          <div className="toolchain-init-progress-meta">
-            <span className="toolchain-init-progress-message">{state.message}</span>
-            <span className="toolchain-init-progress-percent">{displayPercent}%</span>
-          </div>
-        </div>
-
-        {/* 测速选优专门面板（结构化事件驱动，非字符消息） */}
-        {state.probe && state.probe.candidates.length > 0 && (
-          <div className="toolchain-init-probe-panel">
-            <div className="toolchain-init-probe-title">
-              <span className="toolchain-init-probe-icon">⏱</span>
-              下载源测速{state.probe.done ? '完成' : '中…'}
-            </div>
-            {state.probe.candidates.map((c) => (
-              <div
-                key={c.label}
-                className={`toolchain-init-probe-row ${
-                  state.probe.done && state.probe.chosen === c.label ? 'toolchain-init-probe-row--chosen' : ''
-                }`}
-              >
-                <span className="toolchain-init-probe-name">{c.label}</span>
-                <span className="toolchain-init-probe-speed">
-                  {c.speedKBps === null
-                    ? '失败'
-                    : c.speedKBps >= 1024
-                      ? `${(c.speedKBps / 1024).toFixed(1)}MB/s`
-                      : `${c.speedKBps}KB/s`}
-                </span>
-                {state.probe.done && state.probe.chosen === c.label && (
-                  <span className="toolchain-init-probe-check">✓ 已选用</span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {!isError && state.phase === 'deps' && displayPercent < 90 && (
-          <p className="toolchain-init-hint">
-            {isPortable
-              ? '便携版首次启动需联网下载 JDK、Gradle 与 Fabric 依赖，完成后可离线构建。'
-              : '正在从 Gitee 镜像下载 Fabric 依赖种子（约 500MB），请耐心等待。'}
-          </p>
-        )}
-
-        {isError && (
-          <div className="toolchain-init-error">
-            <p>{state.error || state.message}</p>
-            <ul>
-              <li>请勿将应用安装到 Program Files 等受保护目录</li>
-              <li>便携版请放在可写文件夹（如桌面、D 盘）</li>
-              {isPortable ? (
-                <li>便携版需要稳定网络连接，请检查网络后重试</li>
-              ) : (
-                <li>若网络不稳定，请检查后点击重新初始化</li>
-              )}
-            </ul>
-            <button type="button" className="toolchain-init-retry-btn" onClick={onRetry}>
-              重新初始化
-            </button>
-          </div>
-        )}
-
-        {!isError && (
-          <p className="toolchain-init-lock-notice">
-            环境准备完成前，构建、运行与 AI 开发功能将暂时锁定。
-          </p>
-        )}
+        <button type="button" className="toolchain-init-confirm-btn" onClick={onConfirmDownload}>立即下载并验证</button>
       </div>
     </div>
-  )
+  }
+
+  if (state.ready && !projectPreparing && !failed) return null
+  return <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="toolchain-init-title">
+    <div className="toolchain-init-card">
+      <div className="toolchain-init-brand"><span className="toolchain-init-logo">M</span><div><h1 id="toolchain-init-title">ModCrafting</h1><p className="toolchain-init-subtitle">{projectPreparing ? '正在准备当前项目环境' : `${edition === 'portable' ? '便携版' : '安装版'}开发环境初始化`}</p></div></div>
+      <div className="toolchain-init-steps toolchain-init-steps--6">
+        {STEPS.map((step) => { const status = statusFor(step.id, state.phase, state.ready, failed); return <div key={step.id} className={`toolchain-init-step toolchain-init-step--${status}`}><span className="toolchain-init-step-icon">{status === 'done' ? '✓' : status === 'error' ? '!' : status === 'active' ? '◉' : '○'}</span><span>{step.label}</span></div> })}
+      </div>
+      <div className="toolchain-init-progress-wrap">
+        <div className="toolchain-init-progress-track"><div className={`toolchain-init-progress-fill ${failed ? 'toolchain-init-progress-fill--error' : ''}`} style={{ width: `${percent}%` }} /></div>
+        <div className="toolchain-init-progress-meta"><span className="toolchain-init-progress-message">{state.message}</span><span className="toolchain-init-progress-percent">{percent}%</span></div>
+        {(state.source || state.currentItem || detail) && <p className="toolchain-init-hint">{[state.source, state.currentItem, detail].filter(Boolean).join(' · ')}</p>}
+      </div>
+      {state.probe?.candidates.length ? <div className="toolchain-init-probe-panel"><div className="toolchain-init-probe-title">下载源测速{state.probe.done ? '完成' : '中…'}</div>{state.probe.candidates.map((candidate) => <div key={candidate.label} className={`toolchain-init-probe-row ${state.probe.done && state.probe.chosen === candidate.label ? 'toolchain-init-probe-row--chosen' : ''}`}><span className="toolchain-init-probe-name">{candidate.label}</span><span className="toolchain-init-probe-speed">{candidate.speedKBps === null ? '失败' : candidate.speedKBps >= 1024 ? `${(candidate.speedKBps / 1024).toFixed(1)}MB/s` : `${candidate.speedKBps}KB/s`}</span></div>)}</div> : null}
+      {state.phase === 'degraded' && <div className="toolchain-init-error"><p>{state.message}</p><p>核心构建环境已通过验证；可选知识库或 AI 引擎未就绪，可稍后重试。</p><button type="button" className="toolchain-init-retry-btn" onClick={onRetry}>重试可选下载</button></div>}
+      {failed && <div className="toolchain-init-error"><p>{state.error || state.message}</p>{state.errorId && <p>错误 ID：{state.errorId}</p>}<p>下载可恢复；请检查网络或磁盘空间后重试。可打开日志或导出诊断包以便定位问题。</p><div className="toolchain-init-actions"><button type="button" className="toolchain-init-retry-btn" onClick={onRetry}>重试初始化</button>{onOpenLogs && <button type="button" className="toolchain-init-retry-btn" onClick={onOpenLogs}>打开日志</button>}{onExportDiagnostics && <button type="button" className="toolchain-init-retry-btn" onClick={onExportDiagnostics}>导出诊断包</button>}</div></div>}
+      {!failed && !state.ready && !downloadConfirmRequired && onCancel && <button type="button" className="toolchain-init-cancel-btn" onClick={onCancel}>取消并保留已下载内容</button>}
+      {!failed && state.phase !== 'degraded' && <p className="toolchain-init-lock-notice">只有资源和离线构建验证通过后，才会解锁构建、运行和 AI 开发功能。</p>}
+    </div>
+  </div>
 }
 
 export default ToolchainInitOverlay

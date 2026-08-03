@@ -2,6 +2,7 @@ import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { getRuntimeRoot } from './build-env'
+import { recordEnvironmentError, writeDiagnostic } from './environment-diagnostics'
 
 /**
  * 中文 MC 百科向量检索服务。
@@ -149,6 +150,11 @@ export async function initWikiVectorService (): Promise<void> {
         initFailed = true
         initError = loadResult.error || 'unknown error'
         console.warn(`[mc-wiki-vector] 索引加载失败：${initError}`)
+        recordEnvironmentError('optional', initError, {
+          code: 'WIKI_VECTOR_INDEX_UNAVAILABLE',
+          message: '中文百科向量搜索暂不可用，可在设置中重新下载知识库。',
+          retryable: true
+        })
         return
       }
       await loadExtractor()
@@ -157,6 +163,11 @@ export async function initWikiVectorService (): Promise<void> {
       initFailed = true
       initError = String(err)
       console.warn(`[mc-wiki-vector] 初始化失败：${initError}`)
+      recordEnvironmentError('optional', err, {
+        code: 'WIKI_VECTOR_RUNTIME_UNAVAILABLE',
+        message: '中文百科向量搜索暂不可用，可在设置中重试初始化。',
+        retryable: true
+      })
     }
   })()
   return initPromise
@@ -180,6 +191,7 @@ function cosineSimilarity (a: Float32Array, aOffset: number, b: Float32Array, di
 export async function searchMcWiki (query: string, topK = 5): Promise<McWikiSearchResult[]> {
   if (initFailed) {
     console.warn(`[mc-wiki-vector] 服务不可用：${initError}`)
+    writeDiagnostic('optional-wiki-search-unavailable', initError || 'unknown error')
     return []
   }
   if (!extractor || !embeddings || chunks.length === 0) {

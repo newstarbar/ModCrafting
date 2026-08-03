@@ -506,7 +506,11 @@ const App: React.FC = () => {
 				phase: payload.phase === "ready" && prev.ready ? prev.phase : payload.phase,
 				percent: payload.percent,
 				message: payload.message,
-				error: payload.phase === "error" ? payload.error || payload.message : prev.error
+				error: payload.phase === "error" ? payload.error || payload.message : prev.error,
+				errorId: payload.errorId,
+				currentItem: payload.currentItem,
+				source: payload.source,
+				metrics: payload.metrics
 			}));
 			setToolchainProgress(payload.message);
 		});
@@ -615,6 +619,21 @@ const App: React.FC = () => {
 		});
 		void runToolchainInit(false);
 	}, [runToolchainInit]);
+
+	const cancelToolchainInit = useCallback(() => {
+		void window.api.cancelToolchainInit();
+		setToolchainInit((prev) => ({ ...prev, message: "正在取消并保留已下载内容…" }));
+	}, []);
+
+	const openEnvironmentLogs = useCallback(() => {
+		void window.api.openEnvironmentLogs();
+	}, []);
+
+	const exportEnvironmentDiagnostics = useCallback(() => {
+		void window.api.exportEnvironmentDiagnostics().then((result) => {
+			if (!result.success) setToolchainInit((prev) => ({ ...prev, error: result.error || "导出诊断包失败" }));
+		});
+	}, []);
 
 	const handleRuntimeStatusChange = useCallback((game: GameDevStatus, phase: PhaseDevStatus | null) => {
 		setGameDevStatus((prev) => (
@@ -985,7 +1004,7 @@ const App: React.FC = () => {
 				onOpen={(dir) => void handleOpenProjectPath(dir)}
 				onRecentChange={() => void refreshRecentProjects()}
 			/>
-			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} />
+			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} onCancel={cancelToolchainInit} onOpenLogs={openEnvironmentLogs} onExportDiagnostics={exportEnvironmentDiagnostics} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} />
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
 			{appView === "workspace" && (
 				<StatusBar

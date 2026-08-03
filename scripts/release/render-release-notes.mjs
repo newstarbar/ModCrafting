@@ -141,7 +141,7 @@ function buildBody() {
   const downloadTable = `| 版本 | 大小 | 说明 | Gitee | GitHub |
 |------|------|------|-------|--------|
 | **完整版 Setup** | ~400-500 MB | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](${gitee.setup}) | [GitHub 下载](${githubBase}/ModCrafting%20Setup%20${ver}.exe) |
-| **便携版 Portable** | ~80-150 MB | 体积小；**首次需联网**下载工具链（约 1 GB） | [Gitee 下载](${gitee.portable}) | [GitHub 下载](${githubBase}/ModCrafting%20${ver}%20Portable.exe) |`
+| **便携版 Portable** | ~80-150 MB | 体积小；**首次需联网**下载并验证工具链 | [Gitee 下载](${gitee.portable}) | [GitHub 下载](${githubBase}/ModCrafting-${ver}-Portable.exe) |`
 
   const changelog = buildChangelogSection(prev, tag)
 

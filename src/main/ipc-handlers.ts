@@ -23,13 +23,17 @@ import {
   ensureGradleHomeFromSeed,
   loadFabricVersions,
   initToolchain,
+  cancelToolchainInitialization,
   isGlobalToolchainReady,
   resetToolchainInitState,
   createWindowProgressSender,
   getAppEdition,
+  getRuntimeLayoutInfo,
+  checkRuntimeCapacity,
   searchLocalFabricSources,
   needsFirstTimeDownload
 } from './build-env'
+import { exportEnvironmentDiagnostics, getLastEnvironmentError, openEnvironmentLogs } from './environment-diagnostics'
 import { checkForUpdates, openReleasePages } from './updater'
 import { lookupFabricSymbol, verifyFabricSymbolIndex, type FabricSymbolLookupRequest } from './fabric-metadata'
 import {
@@ -372,6 +376,10 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('env:initToolchain', async (event, force?: boolean) =>
     initToolchain(ipcProgress(event), Boolean(force))
   )
+  ipcMain.handle('env:cancelToolchainInit', async () => {
+    cancelToolchainInitialization()
+    return { ok: true }
+  })
 
   ipcMain.handle('env:isToolchainReady', async () => isGlobalToolchainReady())
 
@@ -421,6 +429,11 @@ export function setupIpcHandlers(): void {
   )
 
   ipcMain.handle('env:checkRuntimeWritable', async () => checkRuntimeWritable())
+  ipcMain.handle('env:checkRuntimeCapacity', async () => checkRuntimeCapacity())
+  ipcMain.handle('env:getRuntimeLayout', async () => getRuntimeLayoutInfo())
+  ipcMain.handle('env:getLastError', async () => getLastEnvironmentError())
+  ipcMain.handle('env:openLogs', async () => openEnvironmentLogs())
+  ipcMain.handle('env:exportDiagnostics', async () => exportEnvironmentDiagnostics())
 
   ipcMain.handle('env:getEdition', async () => getAppEdition())
 

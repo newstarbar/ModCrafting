@@ -1,8 +1,9 @@
-import { createWriteStream, existsSync, mkdirSync, rmSync, statSync, cpSync, readdirSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, rmSync, statSync, cpSync, readdirSync, renameSync, readFileSync, openSync, readSync, closeSync } from 'fs'
 import { Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { execSync, spawn } from 'child_process'
 import * as path from 'path'
+import { createHash } from 'crypto'
 import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
 import { pickFastestUrls } from './download-probe'
 
@@ -10,6 +11,10 @@ export const GRADLE_VERSION = '9.5.0'
 export const GRADLE_DIST_NAME = `gradle-${GRADLE_VERSION}-bin`
 export const GRADLE_RUNTIME_FOLDER = 'gradle-9.5'
 export const GRADLE_LAUNCHER_JAR = `gradle-launcher-${GRADLE_VERSION}.jar`
+export const JDK_VERSION = '21.0.11+10'
+export const JDK_ARCHIVE_NAME = 'OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip'
+const JDK_SHA256 = 'd3625e7cadf23787ea540229544b6e2ab494b3b54da1801879e583e1dfee0a64'
+const GRADLE_SHA256 = '553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746'
 
 // Gradle 发行版候选源（下载前会实测各源速度并优先用最快的；默认顺序仅作测速失败时的兜底）
 export const GRADLE_MIRROR_URLS = [
@@ -21,8 +26,8 @@ export const GRADLE_MIRROR_URLS = [
 // 国内 JDK 镜像（Windows x64，按优先级排序）
 // 优先于 Adoptium API 使用，显著提升国内下载速度
 const JDK_MIRROR_URLS_WIN_X64 = [
-  'https://mirrors.huaweicloud.com/adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip',
-  'https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip'
+  `https://mirror.nju.edu.cn/adoptium/21/jdk/x64/windows/${JDK_ARCHIVE_NAME}`,
+  `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/${JDK_ARCHIVE_NAME}`
 ]
 
 function adoptiumOs(): string {
@@ -40,13 +45,30 @@ export function javaBinName(): string {
 }
 
 export function isValidJdkDir(jdkDir: string): boolean {
-  const bin = path.join(jdkDir, 'bin', javaBinName())
-  if (!existsSync(bin)) return false
+  const binDir = path.join(jdkDir, 'bin')
+  const bin = path.join(binDir, javaBinName())
+  const javac = path.join(binDir, process.platform === 'win32' ? 'javac.exe' : 'javac')
+  const jar = path.join(binDir, process.platform === 'win32' ? 'jar.exe' : 'jar')
+  const release = path.join(jdkDir, 'release')
+  if (!existsSync(bin) || !existsSync(javac) || !existsSync(jar) || !existsSync(release)) return false
   try {
-    return statSync(bin).size > 10_000
+    return statSync(bin).size > 10_000 && /JAVA_VERSION="21\./.test(readFileSync(release, 'utf8'))
   } catch {
     return false
   }
+}
+
+function sha256File(filePath: string): string {
+  const hash = createHash('sha256')
+  const fd = openSync(filePath, 'r')
+  try {
+    const buffer = Buffer.allocUnsafe(1024 * 1024)
+    let bytes = 0
+    while ((bytes = readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, bytes))
+  } finally {
+    closeSync(fd)
+  }
+  return hash.digest('hex')
 }
 
 export function isCompleteGradleDist(gradleDir: string): boolean {
@@ -198,39 +220,95 @@ export async function downloadFile(url: string, dest: string, onProgress?: Downl
   }
 }
 
+/**
+ * Download to a persistent .part file. A server that ignores Range starts a
+ * clean replacement; a valid 206 response resumes exactly where it stopped.
+ */
+export async function downloadFileResumable(
+  url: string,
+  destination: string,
+  expectedSha256: string,
+  onProgress?: DownloadProgressFn
+): Promise<void> {
+  const part = `${destination}.part`
+  const existing = existsSync(part) ? statSync(part).size : 0
+  const controller = new AbortController()
+  const firstByteTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await getDownloadFetch()(url, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': DOWNLOAD_USER_AGENT,
+        ...(existing > 0 ? { Range: `bytes=${existing}-` } : {})
+      },
+      signal: controller.signal
+    })
+  } catch (error) {
+    clearTimeout(firstByteTimer)
+    throw error
+  }
+  if (!response.ok || (existing > 0 && response.status !== 206 && response.status !== 200)) {
+    clearTimeout(firstByteTimer)
+    throw new Error(`HTTP ${response.status}`)
+  }
+  const type = response.headers.get('content-type') || ''
+  if (/text\/html|application\/json/i.test(type)) {
+    clearTimeout(firstByteTimer)
+    throw new Error(`下载源返回非归档内容 (${type})`)
+  }
+  if (!response.body) {
+    clearTimeout(firstByteTimer)
+    throw new Error('Empty response body')
+  }
+  const append = existing > 0 && response.status === 206
+  if (!append && existsSync(part)) rmSync(part, { force: true })
+  const base = append ? existing : 0
+  const contentLength = Number(response.headers.get('content-length') || 0)
+  const total = contentLength ? base + contentLength : 0
+  let received = base
+  let firstByte = false
+  let lastActivity = Date.now()
+  const idleTimer = setInterval(() => {
+    if (Date.now() - lastActivity > 45_000) controller.abort()
+  }, 5_000)
+  const counting = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      if (!firstByte) { firstByte = true; clearTimeout(firstByteTimer) }
+      lastActivity = Date.now()
+      received += chunk.length
+      onProgress?.(received, total)
+      callback(null, chunk)
+    }
+  })
+  try {
+    await pipeline(response.body as unknown as NodeJS.ReadableStream, counting, createWriteStream(part, { flags: append ? 'a' : 'w' }))
+  } finally {
+    clearTimeout(firstByteTimer)
+    clearInterval(idleTimer)
+  }
+  const actual = sha256File(part)
+  if (actual !== expectedSha256.toLowerCase()) {
+    // A completed but invalid archive cannot be repaired by resuming from a
+    // different source: discard it so the next retry starts with trusted bytes.
+    rmSync(part, { force: true })
+    throw new Error(`SHA256 校验失败: expected ${expectedSha256}, got ${actual}`)
+  }
+  renameSync(part, destination)
+  onProgress?.(statSync(destination).size, statSync(destination).size)
+}
+
 async function resolveJdkDownloadUrl(onLog?: (msg: string) => void): Promise<string | null> {
   const log = onLog || (() => {})
   const candidates: Array<{ url: string; label: string }> = []
 
-  // 候选源：国内镜像 + Adoptium API + Microsoft
+  // Candidate order is pinned to a full JDK. Never select a JRE/API result.
   if (process.platform === 'win32' && adoptiumArch() === 'x64') {
     for (const url of JDK_MIRROR_URLS_WIN_X64) {
       candidates.push({ url, label: new URL(url).host })
     }
   }
 
-  const os = adoptiumOs()
-  const arch = adoptiumArch()
-  const api =
-    `https://api.adoptium.net/v3/assets/latest/21/hotspot` +
-    `?os=${os}&architecture=${arch}&image_type=jdk&release_type=ga`
-
-  try {
-    const res = await getDownloadFetch()(api, {
-      headers: { Accept: 'application/json', 'User-Agent': DOWNLOAD_USER_AGENT },
-      signal: AbortSignal.timeout(8000)
-    })
-    if (!res.ok) throw new Error(`Adoptium API HTTP ${res.status}`)
-    const assets = (await res.json()) as Array<{ binary?: { package?: { link?: string } } }>
-    const link = assets?.[0]?.binary?.package?.link
-    if (link) candidates.push({ url: link, label: 'Adoptium' })
-  } catch {
-    /* fallback */
-  }
-
-  if (process.platform === 'win32' && arch === 'x64') {
-    candidates.push({ url: 'https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip', label: 'Microsoft' })
-  }
   if (candidates.length === 0) return null
 
   // 测速选优：不同网络下各源速度差异大，实测最快者优先（探测失败的排最后兜底）；结果经面板展示
@@ -303,9 +381,6 @@ export async function downloadAndExtractJdk(
   const urls: string[] = []
   const adoptium = await resolveJdkDownloadUrl(log)
   if (adoptium) urls.push(adoptium)
-  if (process.platform === 'win32' && adoptiumArch() === 'x64') {
-    urls.push('https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip')
-  }
 
   const seen = new Set<string>()
   const failures: string[] = []
@@ -314,9 +389,8 @@ export async function downloadAndExtractJdk(
     if (!url || seen.has(url)) continue
     seen.add(url)
     log(`正在下载 JDK 21…（源：${new URL(url).host}）`)
-    if (existsSync(archivePath)) rmSync(archivePath)
     try {
-      await downloadFile(url, archivePath, (received, total) => {
+      await downloadFileResumable(url, archivePath, JDK_SHA256, (received, total) => {
         if (total > 0) {
           const pct = Math.floor((received / total) * 100)
           log(`正在下载 JDK 21… ${pct}%`, pct)
@@ -403,9 +477,8 @@ export async function downloadAndExtractGradle(
   let downloaded = false
   for (const { url, label } of ordered) {
     log(`正在下载 Gradle 9.5…（源：${label}）`)
-    if (existsSync(zipPath)) rmSync(zipPath)
     try {
-      await downloadFile(url, zipPath, (received, total) => {
+      await downloadFileResumable(url, zipPath, GRADLE_SHA256, (received, total) => {
         if (total > 0) {
           const pct = Math.floor((received / total) * 100)
           log(`正在下载 Gradle 9.5… ${pct}%`, pct)

@@ -362,16 +362,24 @@ const api = {
     return () => ipcRenderer.removeListener('env:downloadProgress', handler)
   },
   onToolchainProgress: (callback: (payload: {
-    phase: 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
+    phase: 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error' | 'deps'
     message: string
     percent: number
     error?: string
+    errorId?: string
+    currentItem?: string
+    source?: string
+    metrics?: { completedBytes?: number; totalBytes?: number; completedItems?: number; totalItems?: number; speedBytesPerSecond?: number; etaSeconds?: number }
   }) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: {
-      phase: 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
+      phase: 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error' | 'deps'
       message: string
       percent: number
       error?: string
+      errorId?: string
+      currentItem?: string
+      source?: string
+      metrics?: { completedBytes?: number; totalBytes?: number; completedItems?: number; totalItems?: number; speedBytesPerSecond?: number; etaSeconds?: number }
     }) => callback(payload)
     ipcRenderer.on('env:toolchainProgress', handler)
     return () => ipcRenderer.removeListener('env:toolchainProgress', handler)
@@ -391,6 +399,7 @@ const api = {
   },
   initToolchain: (force?: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('env:initToolchain', force),
+  cancelToolchainInit: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('env:cancelToolchainInit'),
   isToolchainReady: (): Promise<boolean> =>
     ipcRenderer.invoke('env:isToolchainReady'),
   ensureGradleWrapper: (projectPath: string): Promise<{ exists: boolean; copied?: boolean; downloaded?: boolean; error?: string }> =>
@@ -418,6 +427,11 @@ const api = {
     ipcRenderer.invoke('env:getToolchainStatus'),
   checkRuntimeWritable: (): Promise<{ writable: boolean; runtimeRoot: string; error?: string }> =>
     ipcRenderer.invoke('env:checkRuntimeWritable'),
+  checkRuntimeCapacity: (): Promise<{ ok: boolean; freeBytes?: number; error?: string }> => ipcRenderer.invoke('env:checkRuntimeCapacity'),
+  getRuntimeLayout: (): Promise<{ edition: 'dev' | 'full' | 'portable'; runtimeRoot: string; cacheRoot: string; logRoot: string; legacyRuntimeRoot?: string; migrated: boolean }> => ipcRenderer.invoke('env:getRuntimeLayout'),
+  getLastEnvironmentError: (): Promise<{ id: string; code: string; phase: string; message: string; technicalMessage: string; retryable: boolean; source?: string; occurredAt: string } | null> => ipcRenderer.invoke('env:getLastError'),
+  openEnvironmentLogs: (): Promise<{ success: boolean; path: string }> => ipcRenderer.invoke('env:openLogs'),
+  exportEnvironmentDiagnostics: (): Promise<{ success: boolean; path?: string; error?: string }> => ipcRenderer.invoke('env:exportDiagnostics'),
 
   getEdition: (): Promise<'dev' | 'full' | 'portable'> =>
     ipcRenderer.invoke('env:getEdition'),

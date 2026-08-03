@@ -54,7 +54,7 @@ const manifest = {
     github: {
       manifest: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/latest.yml`,
       setup: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`,
-      portable: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20${ver}%20Portable.exe`,
+      portable: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting-${ver}-Portable.exe`,
       releasesPage: 'https://github.com/newstarbar/ModCrafting/releases'
     }
   },

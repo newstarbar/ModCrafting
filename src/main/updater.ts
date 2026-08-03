@@ -68,6 +68,11 @@ export type UpdateCheckResult = {
 
 let pendingManifest: UpdateManifest | null = null
 let pendingSource: 'gitee' | 'github' | null = null
+let updateInstallRequested = false
+
+export function isUpdateInstallRequested(): boolean {
+  return updateInstallRequested
+}
 let downloadSource: 'gitee' | 'github' | null = null
 let checking = false
 
@@ -263,6 +268,7 @@ async function onUpdateDownloaded(): Promise<void> {
     cancelId: 1
   })
   if (confirm.response === 0) {
+    updateInstallRequested = true
     autoUpdater.quitAndInstall(false, true)
   }
 }

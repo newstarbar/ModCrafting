@@ -60,8 +60,8 @@ export function giteeUrls(owner, repo, tag, ver) {
   const base = `https://gitee.com/${owner}/${repo}`
   return {
     manifest: `${base}/releases/download/${tag}/latest.yml`,
-    setup: `${base}/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`,
-    portable: `${base}/releases/download/${tag}/ModCrafting%20${ver}%20Portable.exe`,
+    setup: `${base}/releases/download/${tag}/ModCrafting-Setup-${ver}.exe`,
+    portable: `${base}/releases/download/${tag}/ModCrafting-${ver}-Portable.exe`,
     releasesPage: `${base}/releases`,
     manifestRaw: `${base}/raw/main/packaging/update-manifest.json`
   }

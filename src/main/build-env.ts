@@ -4,13 +4,15 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { promisify } from 'util'
 import { getAppEdition, isPortableEdition, isFullEdition } from './edition'
+import { getRuntimeLayout, migrateLegacyRuntime, type RuntimeLayout } from './runtime-layout'
+import { recordEnvironmentError, writeDiagnostic, type EnvironmentError } from './environment-diagnostics'
 import {
   downloadAndExtractGradle,
   downloadAndExtractJdk,
-  downloadFile
+  downloadFile,
+  isValidJdkDir
 } from './toolchain-download'
-import { ensureGradleHomeOnline } from './portable-prefetch'
-import { downloadAndExtractSeedShards, downloadAndExtractGradleShards } from './seed-downloader'
+import { cancelFabricPrefetch, ensureGradleHomeOnline } from './portable-prefetch'
 import { ensureKnowledgeBase, isKnowledgeBaseReady } from './knowledge-downloader'
 import { ensureOpencode, isOpencodeReady } from './opencode-downloader'
 import {
@@ -49,6 +51,9 @@ type SeedMarker = FabricVersions & {
   totalBytes?: number
   createdAt?: string
   verifiedOffline?: boolean
+  assetsVerified?: boolean
+  jdkVersion?: string
+  receiptVersion?: 1
 }
 
 /** Fabric API modules required for the default template offline build. */
@@ -79,13 +84,17 @@ const REQUIRED_FABRIC_API_MODULES = [
   'fabric-transitive-access-wideners-v1'
 ]
 
-export type ToolchainPhase = 'checking' | 'jdk' | 'gradle' | 'deps' | 'project' | 'ready' | 'error'
+export type ToolchainPhase = 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error' | 'deps'
 
 export interface ToolchainProgressPayload {
   phase: ToolchainPhase
   message: string
   percent: number
   error?: string
+  errorId?: string
+  currentItem?: string
+  source?: string
+  metrics?: { completedBytes?: number; totalBytes?: number; completedItems?: number; totalItems?: number; speedBytesPerSecond?: number; etaSeconds?: number }
 }
 
 type ProgressInput = string | ToolchainProgressPayload
@@ -98,6 +107,33 @@ let toolchainInitLock: Promise<{ ok: boolean; error?: string }> | null = null
 let toolchainInitDone = false
 let copyModsLock: Promise<{ copied: number; skipped: boolean }> | null = null
 let copyModsLockPath: string | null = null
+let initCancellationRequested = false
+
+const INITIALIZATION_LOCK_FILE = '.modcrafting-initialize.lock'
+
+async function withCrossProcessInitializationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const lockPath = path.join(getRuntimeRoot(), INITIALIZATION_LOCK_FILE)
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true })
+  try {
+    const fd = fs.openSync(lockPath, 'wx')
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf8')
+    fs.closeSync(fd)
+  } catch (error) {
+    try {
+      const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs
+      if (ageMs > 2 * 60 * 60 * 1000) fs.rmSync(lockPath, { force: true })
+      else throw new Error('Another ModCrafting window is already preparing the environment. Close it or wait for it to finish.')
+      return withCrossProcessInitializationLock(operation)
+    } catch (lockError) {
+      throw lockError instanceof Error ? lockError : error
+    }
+  }
+  try {
+    return await operation()
+  } finally {
+    try { fs.rmSync(lockPath, { force: true }) } catch { /* stale locks are repaired on next launch */ }
+  }
+}
 
 function modFilesMatch(src: string, dest: string): boolean {
   try {
@@ -126,8 +162,9 @@ export function normalizeProgress(input: ProgressInput): ToolchainProgressPayloa
   if (input.includes('Gradle') && !input.includes('离线')) {
     return { phase: 'gradle', message: input, percent: stepPct ? lerpPercent(25, 35, stepPct) : 28 }
   }
-  if (input.includes('离线') || input.includes('依赖')) {
-    return { phase: 'deps', message: input, percent: stepPct ? lerpPercent(35, 88, stepPct) : 40 }
+  if (input.includes('资源')) return { phase: 'assets', message: input, percent: stepPct ? lerpPercent(64, 86, stepPct) : 68 }
+  if (input.includes('Fabric') || input.includes('依赖')) {
+    return { phase: 'fabric', message: input, percent: stepPct ? lerpPercent(35, 64, stepPct) : 42 }
   }
   if (input.includes('模组') || input.includes('wrapper') || input.includes('Wrapper')) {
     return { phase: 'project', message: input, percent: stepPct ? lerpPercent(90, 99, stepPct) : 95 }
@@ -170,13 +207,16 @@ export function isToolchainInitializing(): boolean {
 }
 
 export function isGlobalToolchainReady(): boolean {
-  if (!toolchainInitDone) return false
-  const status = getToolchainStatus()
-  return status.jdk === 'ready' && status.gradle === 'ready' && status.deps === 'ready'
+  return toolchainInitDone && isEnvironmentReady()
 }
 
 export function resetToolchainInitState(): void {
   toolchainInitDone = false
+}
+
+export function cancelToolchainInitialization(): void {
+  initCancellationRequested = true
+  cancelFabricPrefetch()
 }
 
 export async function initToolchain(
@@ -189,13 +229,14 @@ export async function initToolchain(
     onProgress({ phase: 'checking', message: '验证构建环境…', percent: 10 })
     onProgress({ phase: 'jdk', message: 'JDK 已就绪', percent: 30 })
     onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 50 })
-    onProgress({ phase: 'deps', message: '离线依赖已就绪', percent: 80 })
+    onProgress({ phase: 'verify', message: '离线构建验证已通过', percent: 96 })
     onProgress({ phase: 'ready', message: '构建环境已就绪', percent: 100 })
     return { ok: true }
   }
   if (toolchainInitLock) return toolchainInitLock
 
-  toolchainInitLock = initToolchainImpl(onProgress).finally(() => {
+  initCancellationRequested = false
+  toolchainInitLock = withCrossProcessInitializationLock(() => initToolchainImpl(onProgress)).finally(() => {
     toolchainInitLock = null
   })
   const result = await toolchainInitLock
@@ -206,56 +247,68 @@ export async function initToolchain(
 async function initToolchainImpl(
   onProgress: ProgressSender
 ): Promise<{ ok: boolean; error?: string }> {
-  if (isPortableEdition()) {
-    return initPortableToolchainImpl(onProgress)
-  }
-  return initFullToolchainImpl(onProgress)
+  return initPortableToolchainImpl(onProgress)
 }
 
 async function initPortableToolchainImpl(
   onProgress: ProgressSender
 ): Promise<{ ok: boolean; error?: string }> {
-  onProgress({ phase: 'checking', message: '检查运行时目录（便携版需联网）…', percent: 0 })
+  onProgress({ phase: 'checking', message: '检查运行时目录与可用磁盘…', percent: 0 })
+
+  const layout = getRuntimeLayoutInfo()
+  if (layout.migrated) onProgress({ phase: 'checking', message: '已迁移旧版安装缓存到安全运行时目录', percent: 3 })
 
   const writable = checkRuntimeWritable()
   if (!writable.writable) {
-    const err = writable.error || '运行时目录不可写'
-    onProgress({ phase: 'error', message: err, percent: 0, error: err })
-    return { ok: false, error: err }
+    return failToolchain(onProgress, 'checking', writable.error || '运行时目录不可写')
   }
+
+  const capacity = checkRuntimeCapacity()
+  if (!capacity.ok) return failToolchain(onProgress, 'checking', capacity.error || '可用磁盘空间不足')
 
   onProgress({ phase: 'jdk', message: '准备 JDK 21（联网下载）…', percent: 5 })
   const jdk = await ensurePortableJdk(onProgress)
   if (!jdk.ok) {
-    const err = jdk.error || 'JDK 21 准备失败'
-    onProgress({ phase: 'error', message: err, percent: 10, error: err })
-    return { ok: false, error: err }
+    return failToolchain(onProgress, 'jdk', jdk.error || 'JDK 21 准备失败')
   }
 
   onProgress({ phase: 'gradle', message: '准备 Gradle（联网下载）…', percent: 25 })
   const gradleOk = await ensurePortableGradle(onProgress)
   if (!gradleOk.ok) {
-    const err = gradleOk.error || 'Gradle 下载失败，请检查网络后重试'
-    onProgress({ phase: 'error', message: err, percent: 28, error: err })
-    return { ok: false, error: err }
+    return failToolchain(onProgress, 'gradle', gradleOk.error || 'Gradle 下载失败，请检查网络后重试')
   }
 
-  onProgress({ phase: 'deps', message: '准备 Fabric 依赖（联网下载）…', percent: 35 })
+  onProgress({ phase: 'fabric', message: '准备 Fabric 开发环境（联网下载）…', percent: 35 })
   const deps = await ensurePortableGradleHome(onProgress)
   if (!deps.ok) {
-    const err = deps.error || 'Fabric 依赖准备失败'
-    onProgress({ phase: 'error', message: err, percent: 40, error: err })
-    return { ok: false, error: err }
+    return failToolchain(onProgress, 'fabric', deps.error || 'Fabric 依赖准备失败')
   }
 
-  onProgress({ phase: 'deps', message: '构建 Fabric API 本地知识库…', percent: 80 })
+  onProgress({ phase: 'optional', message: '构建 Fabric API 本地知识库…', percent: 97 })
   const kb = ensureFabricKnowledgeBase(jdk.path)
   if (kb.extracted > 0) {
-    onProgress({ phase: 'deps', message: `Fabric API 知识库已就绪（${kb.extracted} 个源码文件）`, percent: 90 })
+    onProgress({ phase: 'optional', message: `Fabric API 知识库已就绪（${kb.extracted} 个源码文件）`, percent: 98 })
+  }
+
+  const optionalErrors: string[] = []
+  const kbDl = await ensureKnowledgeBase((msg, pct) => onProgress({ phase: 'optional', message: msg, percent: lerpPercent(97, 99, pct) }))
+  if (!kbDl.ok || kbDl.error) optionalErrors.push(kbDl.error || '知识库未完全就绪')
+  const ocDl = await ensureOpencode((msg, pct) => onProgress({ phase: 'optional', message: msg, percent: lerpPercent(98, 99, pct) }))
+  if (!ocDl.ok || ocDl.error) optionalErrors.push(ocDl.error || 'opencode 未完全就绪')
+  if (optionalErrors.length) {
+    writeDiagnostic('optional-runtime-degraded', optionalErrors)
+    onProgress({ phase: 'degraded', message: `构建环境已完成；${optionalErrors.length} 个可选功能待重试`, percent: 99 })
   }
 
   onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })
   return { ok: true }
+}
+
+function failToolchain(onProgress: ProgressSender, phase: ToolchainPhase, error: unknown): { ok: false; error: string } {
+  const detail = String(error)
+  const recorded = recordEnvironmentError(phase, error, { message: detail, retryable: true })
+  onProgress({ phase: 'error', message: detail, percent: 0, error: detail, errorId: recorded.id })
+  return { ok: false, error: `${detail}（错误 ID：${recorded.id}）` }
 }
 
 async function ensurePortableJdk(onProgress: ProgressSender): Promise<{ ok: boolean; path?: string; error?: string }> {
@@ -315,7 +368,10 @@ function writeRuntimeSeedMarker(gradleHome: string): void {
     ...expected,
     fileCount,
     totalBytes,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    verifiedOffline: true,
+    assetsVerified: true,
+    receiptVersion: 1
   }
   fs.writeFileSync(path.join(gradleHome, SEED_MARKER), JSON.stringify(marker, null, 2), 'utf-8')
 }
@@ -327,7 +383,7 @@ async function ensurePortableGradleHome(onProgress: ProgressSender): Promise<{ o
 
   const isReady = (): boolean => {
     const marker = readSeedMarker(path.join(gradleHome, SEED_MARKER))
-    return Boolean(marker && versionsMatchSeed(marker, expected) && gradleHomeHasFabricCache(gradleHome))
+    return Boolean(marker && marker.verifiedOffline && marker.assetsVerified && versionsMatchSeed(marker, expected) && gradleHomeHasFabricCache(gradleHome) && gradleHomeHasLoomCache(gradleHome))
   }
 
   const wrapperJar = wrapperJarSearchPaths().find((p) => fs.existsSync(p)) || path.join(runtimeRoot, 'gradle-wrapper.jar')
@@ -426,13 +482,13 @@ function javaBinName(): string {
   return process.platform === 'win32' ? 'java.exe' : 'java'
 }
 
-/** Writable runtime root next to the app executable (or ModCrafting/runtime in dev). */
+/** Runtime is per-edition: Setup uses LocalAppData, Portable stays beside its original executable. */
 export function getRuntimeRoot(): string {
-  if (app.isPackaged) {
-    return path.join(path.dirname(app.getPath('exe')), 'runtime')
-  }
-  // Dev: out/main -> ModCrafting/runtime (not parent Full-stack/runtime)
-  return path.resolve(__dirname, '..', '..', 'runtime')
+  return getRuntimeLayout().runtimeRoot
+}
+
+export function getRuntimeLayoutInfo(): RuntimeLayout {
+  return migrateLegacyRuntime((root) => isEnvironmentReady(root))
 }
 
 async function stopGradleDaemons(jdkPath?: string | null): Promise<void> {
@@ -705,18 +761,7 @@ function gradleHomeDirLooksValid(home: string): boolean {
  * 渲染进程据此显示下载预估对话框，用户确认后再调用 initToolchain。
  */
 export function needsFirstTimeDownload(): boolean {
-  if (!app.isPackaged || !isFullEdition()) return false
-  if (resolveBundledGradleHomeSeedArchivePath() !== null) return false
-  const runtimeHome = runtimeGradleHomePath()
-  const gradleHomeReady = fs.existsSync(runtimeHome) && gradleHomeDirLooksValid(runtimeHome)
-  const jdkReady = isValidJdk(getRuntimeJdkPath())
-  const gradleReady = isCompleteGradleDist(getRuntimeGradlePath())
-  // 三者均已就绪才跳过下载
-  if (gradleHomeReady && jdkReady && gradleReady) {
-    // 知识库或 opencode 未就绪也要触发首启下载流程（瘦包二期/三期）
-    return !isKnowledgeBaseReady() || !isOpencodeReady()
-  }
-  return true
+  return app.isPackaged && !isEnvironmentReady()
 }
 
 async function extractGradleHomeSeedArchive(
@@ -990,7 +1035,21 @@ export function isGradleHomeSeedReady(): boolean {
 export function isPortableGradleHomeReady(home: string = runtimeGradleHomePath()): boolean {
   const marker = readSeedMarker(path.join(home, SEED_MARKER))
   const expected = loadFabricVersions()
-  return Boolean(marker && versionsMatchSeed(marker, expected) && gradleHomeHasFabricCache(home))
+  return Boolean(marker && marker.verifiedOffline && marker.assetsVerified && versionsMatchSeed(marker, expected) && gradleHomeHasFabricCache(home) && gradleHomeHasLoomCache(home))
+}
+
+/** Sole success predicate for startup, build gating, and Setup-cache migration. */
+export function isEnvironmentReady(root: string = getRuntimeRoot()): boolean {
+  const home = path.join(root, 'gradle-home')
+  const marker = readSeedMarker(path.join(home, SEED_MARKER))
+  const expected = loadFabricVersions()
+  return Boolean(
+    marker?.receiptVersion === 1 && marker.verifiedOffline && marker.assetsVerified &&
+    versionsMatchSeed(marker, expected) &&
+    isValidJdk(path.join(root, 'jdk-21')) &&
+    isCompleteGradleDist(path.join(root, GRADLE_RUNTIME_DIR)) &&
+    gradleHomeHasFabricCache(home) && gradleHomeHasLoomCache(home)
+  )
 }
 
 export function getGradleUserHome(): string {
@@ -1069,21 +1128,10 @@ async function ensureGradleHomeFromSeedImpl(
     return extractGradleHomeSeedArchive(archive, dest, onProgress)
   }
 
-  // Packaged + 无 bundled archive: 从 Gitee Releases 下载分片（NSIS 瘦包首次启动）
+  // Packaged releases no longer use Gitee seed shards. Use the same verified
+  // online warmup as Portable so Setup and Portable cannot drift.
   if (app.isPackaged) {
-    onProgress({
-      phase: 'deps',
-      message: '需要联网下载 Fabric 依赖种子（约 500MB，国内 Gitee 镜像）…',
-      percent: 36
-    })
-    const result = await downloadAndExtractSeedShards(dest, (msg, pct) => {
-      onProgress({ phase: 'deps', message: msg, percent: pct })
-    })
-    if (result.ok) {
-      return { ok: true }
-    }
-    // 下载失败则继续回退到报错
-    return { ok: false, error: result.error || 'Fabric 依赖种子下载失败，请检查网络后重启应用' }
+    return ensurePortableGradleHome(onProgress)
   }
 
   if (!seedSrc) {
@@ -1164,7 +1212,7 @@ function wrapperJarSearchPaths(): string[] {
 }
 
 function isValidJdk(jdkPath: string): boolean {
-  return fs.existsSync(path.join(jdkPath, 'bin', javaBinName()))
+  return isValidJdkDir(jdkPath)
 }
 
 function isCompleteGradleDist(gradleDir: string): boolean {
@@ -1204,82 +1252,25 @@ export function checkRuntimeWritable(): { writable: boolean; runtimeRoot: string
   }
 }
 
+export function checkRuntimeCapacity(): { ok: boolean; freeBytes?: number; error?: string } {
+  try {
+    const runtimeRoot = getRuntimeRoot()
+    fs.mkdirSync(runtimeRoot, { recursive: true })
+    const stat = fs.statfsSync(runtimeRoot)
+    const freeBytes = Number(stat.bavail) * Number(stat.bsize)
+    if (freeBytes < 3 * 1024 * 1024 * 1024) {
+      return { ok: false, freeBytes, error: `可用磁盘空间不足：需要至少 3GB，当前 ${(freeBytes / 1024 / 1024 / 1024).toFixed(2)}GB` }
+    }
+    return { ok: true, freeBytes }
+  } catch (error) {
+    return { ok: false, error: `无法检查运行时磁盘空间：${String(error)}` }
+  }
+}
+
 export async function ensureRuntimeGradle(onProgress: ProgressSender = defaultProgress): Promise<{ ok: boolean; error?: string }> {
   const dest = getRuntimeGradlePath()
   if (isCompleteGradleDist(dest)) return { ok: true }
-  for (const src of bundledGradleSearchPaths()) {
-    if (isCompleteGradleDist(src)) {
-      if (!isCompleteGradleDist(dest)) {
-        if (fs.existsSync(dest)) await safeRmAsync(dest)
-        onProgress({ phase: 'gradle', message: '正在初始化运行时 Gradle…', percent: 26 })
-        fs.mkdirSync(path.dirname(dest), { recursive: true })
-        let lastGradlePct = -1
-        await copyTreeAsync(src, dest, (copied, total) => {
-          const pct = Math.floor((copied / total) * 100)
-          if (pct >= lastGradlePct + 10 || copied === total) {
-            lastGradlePct = pct
-            onProgress({
-              phase: 'gradle',
-              message: `正在复制 Gradle… ${pct}%`,
-              percent: lerpPercent(26, 35, pct)
-            })
-          }
-        })
-        onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
-      }
-      return isCompleteGradleDist(dest)
-        ? { ok: true }
-        : { ok: false, error: 'Gradle 运行时复制后校验失败（缺少 gradle-launcher jar）' }
-    }
-  }
-
-  if (isPortableEdition()) {
-    return ensurePortableGradle(onProgress)
-  }
-
-  // NSIS 瘦包:无 bundled Gradle,优先从 Gitee Releases 下载分片（用户部署 gradle-manifest 后走此路径），
-  // 未部署或下载失败则回退腾讯云镜像，保证存量用户不受影响
-  if (app.isPackaged && isFullEdition()) {
-    // 1. Gitee 分片优先
-    try {
-      onProgress({ phase: 'gradle', message: '正在从 Gitee 下载 Gradle 9.5（约 120MB）…', percent: 26 })
-      const giteeDl = await downloadAndExtractGradleShards(dest, (msg, pct) => {
-        onProgress({ phase: 'gradle', message: msg, percent: lerpPercent(26, 35, pct) })
-      })
-      if (giteeDl.ok) {
-        if (!isCompleteGradleDist(dest)) {
-          return { ok: false, error: 'Gradle 解压后校验失败（缺少 gradle-launcher jar）' }
-        }
-        onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
-        return { ok: true }
-      }
-      console.warn(`[ensureRuntimeGradle] Gitee 分片下载失败，回退镜像: ${giteeDl.error}`)
-    } catch (err) {
-      console.warn(`[ensureRuntimeGradle] Gitee 下载异常，回退镜像: ${err}`)
-    }
-
-    // 2. 回退腾讯云镜像
-    try {
-      onProgress({ phase: 'gradle', message: '正在下载 Gradle 9.5（约 120MB，腾讯云镜像）…', percent: 26 })
-      await downloadAndExtractGradle(dest, getRuntimeRoot(), (msg, pct) => {
-        onProgress({
-          phase: 'gradle',
-          message: msg,
-          percent: pct !== undefined ? lerpPercent(26, 35, pct) : 28
-        })
-      })
-      if (isCompleteGradleDist(dest)) {
-        onProgress({ phase: 'gradle', message: 'Gradle 已就绪', percent: 35 })
-        return { ok: true }
-      }
-      return { ok: false, error: 'Gradle 解压后校验失败（缺少 gradle-launcher jar）' }
-    } catch (err) {
-      console.error(`[ensureRuntimeGradle] mirror download failed: ${err}`)
-      return { ok: false, error: String(err) }
-    }
-  }
-
-  return { ok: false, error: 'Gradle 运行时未就绪（未找到捆绑或已下载的 Gradle 发行版）' }
+  return ensurePortableGradle(onProgress)
 }
 
 export async function ensureJdkReady(onProgress: ProgressSender = defaultProgress): Promise<{
@@ -2103,11 +2094,7 @@ export function getToolchainStatus(): {
   return {
     jdk,
     gradle,
-    // 便携版：Gradle 联网构建生成的 gradle-home（完成条件 = marker + fabric cache，无 loom cache）；
-    // 完整版/开发模式：seed 复制方式（额外要求 loom cache）
-    deps: isPortableEdition()
-      ? isPortableGradleHomeReady() ? 'ready' : 'missing'
-      : isGradleHomeSeedReady() ? 'ready' : 'missing',
+    deps: isEnvironmentReady() ? 'ready' : 'missing',
     jdkPath,
     runtimeRoot: getRuntimeRoot(),
     isPackaged: app.isPackaged,

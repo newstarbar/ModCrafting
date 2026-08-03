@@ -5,14 +5,14 @@
   "feeds": {
     "gitee": {
       "manifest": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/latest.yml",
-      "setup": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting%20Setup%201.0.0.exe",
-      "portable": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting%201.0.0%20Portable.exe",
+      "setup": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe",
+      "portable": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe",
       "releasesPage": "https://gitee.com/chenmo-starry-sky/mod-crafting/releases"
     },
     "github": {
       "manifest": "https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/latest.yml",
-      "setup": "https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting%20Setup%201.0.0.exe",
-      "portable": "https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting%201.0.0%20Portable.exe",
+      "setup": "https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe",
+      "portable": "https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe",
       "releasesPage": "https://github.com/newstarbar/ModCrafting/releases"
     }
   },

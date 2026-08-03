@@ -509,19 +509,14 @@ async function syncToRepo(client, assets, body) {
 
 async function main() {
   const releaseAssets = collectReleaseAssets(releaseDir)
-  const seedShards = collectSeedShards()
-  const jreShards = collectJreShards()
-  const extraResources = collectExtraResources()
-  const envAssets = [...seedShards, ...jreShards, ...extraResources]
 
-  if (releaseAssets.length === 0 && envAssets.length === 0) {
+  if (releaseAssets.length === 0) {
     console.error(`[gitee] No release assets in ${releaseDir}`)
     process.exit(1)
   }
 
   console.log(`[gitee] Split-sync plan:`)
   console.log(`  - Main repo ${mainRepo.owner}/${mainRepo.repo} (binaries): ${releaseAssets.length} files`)
-  console.log(`  - Env repo  ${envRepo.owner}/${envRepo.repo} (seed/jre/extra): ${envAssets.length} files`)
 
   const body = readReleaseBody()
 
@@ -529,13 +524,8 @@ async function main() {
   const mainClient = createGiteeClient(mainRepo.owner, mainRepo.repo, 'main')
   await syncToRepo(mainClient, releaseAssets, body)
 
-  // 环境仓：seed/jre 分片 + extra-zips（>100MB 聚合，避免主仓配额溢出）
-  const envClient = createGiteeClient(envRepo.owner, envRepo.repo, 'env')
-  await syncToRepo(envClient, envAssets, body)
-
-  console.log('\n[gitee] Release split-sync complete.')
+  console.log('\n[gitee] Release sync complete.')
   console.log(`  - Main: https://gitee.com/${mainRepo.owner}/${mainRepo.repo}/releases/tag/${tag}`)
-  console.log(`  - Env:  https://gitee.com/${envRepo.owner}/${envRepo.repo}/releases/tag/${tag}`)
 }
 
 main().catch((err) => {
