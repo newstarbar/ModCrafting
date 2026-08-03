@@ -119,7 +119,7 @@ java { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaV
   repositories {
     exclusiveContent {
       forRepository { maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net/') } }
-      filter { includeGroupByRegex('net\\.fabricmc(\\..*)?') }
+      filter { includeGroupByRegex("net\\.fabricmc(\\..*)?|fabric-loom") }
     }
     maven { name = 'AliyunGradlePlugin'; url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
     maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/public') }
@@ -224,12 +224,15 @@ function runGradle(
       }
     })
     activeGradlePid = child.pid
+    // 收集完整输出用于失败诊断（Gradle 退出码非 0 时写入 gradle-prefetch.log）
+    const fullOutput: string[] = []
     // 转发 Gradle 输出（--console=plain 下下载行为一行一条，可解析为进度）
     const forward = (chunk: Buffer): void => {
-      if (!onOutput) return
       for (const line of chunk.toString().split(/\r?\n/)) {
         const trimmed = line.trim()
-        if (trimmed) onOutput(trimmed)
+        if (!trimmed) continue
+        fullOutput.push(trimmed)
+        onOutput?.(trimmed)
       }
     }
     child.stdout?.on('data', forward)
@@ -261,7 +264,21 @@ function runGradle(
         return
       }
       if (code === 0) resolve()
-      else reject(new Error(`Gradle exited ${code}: ${args.join(' ')}`))
+      else {
+        // 失败时把完整输出写入诊断日志，并在 error message 附加最后 30 行
+        // 便于 environment.log 和 UI 显示实际错误（而非仅 "Gradle exited 1"）
+        try {
+          const logsDir = path.join(runtimeRoot, 'logs')
+          fs.mkdirSync(logsDir, { recursive: true })
+          fs.appendFileSync(
+            path.join(logsDir, 'gradle-prefetch.log'),
+            `\n=== [${new Date().toISOString()}] gradle ${args.join(' ')} exited ${code} ===\n${fullOutput.join('\n')}\n`,
+            'utf-8'
+          )
+        } catch { /* best effort */ }
+        const tail = fullOutput.slice(-30).join('\n')
+        reject(new Error(`Gradle exited ${code}: ${args.join(' ')}\n${tail}`))
+      }
     })
   })
 }
