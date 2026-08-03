@@ -26,11 +26,17 @@ export const GRADLE_MIRROR_URLS = [
 // JDK 21 GitHub release 地址（Adoptium Temurin 21.0.12+8，作为代理源与官方兜底的基础）
 const GITHUB_JDK_URL = `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/${JDK_ARCHIVE_NAME}`
 
+// 清华 TUNA Adoptium 镜像（国内主源，实测同步完整且满速）
+// 路径格式：/Adoptium/<major>/jdk/<arch>/<os>/OpenJDK21U-jdk_<arch>_<os>_hotspot_<ver>.zip
+const TUNA_JDK_URL = `https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/${JDK_ARCHIVE_NAME}`
+
 // 国内 JDK 镜像（Windows x64，按优先级排序）
-// 国内无 Temurin zip 直镜像（南大仅同步 msi、清华/腾讯/华为均无），改用 GitHub 代理源作为国内加速主源；
-// Adoptium API + GitHub 直连作为官方兜底。下载后由 downloadFileResumable 的 SHA256 校验保证完整性。
+// 实测 2026-08：清华 TUNA 同步完整（200 OK，196MB）；阿里云/中科大该版本 404（同步滞后或路径不同）；
+// ghproxy/gh-proxy 作为 GitHub 代理备选；Adoptium API + GitHub 直连作为官方兜底。
+// 下载前 pickFastestUrls 会实测各源速度并选最快的，顺序仅作测速失败时的兜底。
 const JDK_MIRROR_URLS_WIN_X64 = [
-  `https://ghproxy.com/${GITHUB_JDK_URL}`,      // GitHub 代理（国内加速主源）
+  TUNA_JDK_URL,                                  // 清华 TUNA（国内主源，实测满速）
+  `https://ghproxy.com/${GITHUB_JDK_URL}`,      // GitHub 代理（备选）
   `https://gh-proxy.com/${GITHUB_JDK_URL}`,     // GitHub 代理备选
   `https://api.adoptium.net/v3/binary/version/jdk-21.0.12%2B8/windows/x64/jdk/hotspot/normal/eclipse`,
   GITHUB_JDK_URL                                 // GitHub 直连（官方兜底）

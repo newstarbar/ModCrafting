@@ -111,6 +111,49 @@ let copyModsLockPath: string | null = null
 let initCancellationRequested = false
 
 const INITIALIZATION_LOCK_FILE = '.modcrafting-initialize.lock'
+/** 锁文件僵死超时：10 分钟无更新视为僵死进程残留（原 2 小时太长，崩溃后无法重启） */
+const LOCK_STALE_MS = 10 * 60 * 1000
+
+/**
+ * 检查 PID 是否还存活。Windows 上 process.kill(pid, 0) 对死进程抛 ESRCH，
+ * 对存活进程返回 true（无副作用）。对其他用户进程可能抛 EPERM，视为存活。
+ */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    // ESRCH = 进程不存在；EPERM = 进程存在但无权限（其他用户）
+    return code === 'EPERM'
+  }
+}
+
+/**
+ * 读取锁文件并判断是否僵死。返回 { stale, reason } 供调用方决策。
+ * 僵死判定：锁文件中的 PID 已死，或锁文件 age > LOCK_STALE_MS。
+ */
+function readStaleLock(lockPath: string): { stale: boolean; reason: string; pid?: number } {
+  let pid: number | undefined
+  try {
+    const content = fs.readFileSync(lockPath, 'utf8')
+    const data = JSON.parse(content) as { pid?: number; createdAt?: string }
+    pid = data.pid
+  } catch {
+    return { stale: true, reason: '锁文件损坏' }
+  }
+
+  if (pid !== undefined && !isPidAlive(pid)) {
+    return { stale: true, reason: `PID ${pid} 已退出`, pid }
+  }
+
+  const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs
+  if (ageMs > LOCK_STALE_MS) {
+    return { stale: true, reason: `锁文件 ${Math.round(ageMs / 1000 / 60)} 分钟未更新（PID ${pid}）`, pid }
+  }
+
+  return { stale: false, reason: `PID ${pid} 正在运行`, pid }
+}
 
 async function withCrossProcessInitializationLock<T>(operation: () => Promise<T>): Promise<T> {
   const lockPath = path.join(getRuntimeRoot(), INITIALIZATION_LOCK_FILE)
@@ -120,14 +163,15 @@ async function withCrossProcessInitializationLock<T>(operation: () => Promise<T>
     fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf8')
     fs.closeSync(fd)
   } catch (error) {
-    try {
-      const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs
-      if (ageMs > 2 * 60 * 60 * 1000) fs.rmSync(lockPath, { force: true })
-      else throw new Error('Another ModCrafting window is already preparing the environment. Close it or wait for it to finish.')
+    // 锁文件已存在：先判断是否僵死，僵死则清理重试；否则提示用户
+    const stale = readStaleLock(lockPath)
+    if (stale.stale) {
+      console.warn(`[toolchain] 清理僵死初始化锁: ${stale.reason} (${lockPath})`)
+      try { fs.rmSync(lockPath, { force: true }) } catch { /* ignore */ }
       return withCrossProcessInitializationLock(operation)
-    } catch (lockError) {
-      throw lockError instanceof Error ? lockError : error
     }
+    const hint = `另一个 ModCrafting 窗口正在准备环境（${stale.reason}）。请关闭该窗口或等待其完成；若已无窗口运行，可删除锁文件：${lockPath}`
+    throw new Error(hint)
   }
   try {
     return await operation()
