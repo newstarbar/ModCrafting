@@ -44,16 +44,27 @@ function capitalize(s: string): string {
 }
 
 function writeGradlewBat(projectDir: string, runtimeRoot: string): void {
-  const rt = runtimeRoot.replace(/\\/g, '\\\\')
+  // .bat 文件中路径使用单反斜杠，不需要转义
+  // chcp 65001 切换控制台编码为 UTF-8，避免中文路径/错误信息乱码
   const content = `@echo off
+chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 set DIRNAME=%~dp0
-set "MODCRAFTING_RUNTIME=${rt}"
+set "MODCRAFTING_RUNTIME=${runtimeRoot}"
 set "JAVA_HOME=%MODCRAFTING_RUNTIME%\\jdk-21"
 set "PATH=%JAVA_HOME%\\bin;%PATH%"
 set "GRADLE_USER_HOME=%MODCRAFTING_RUNTIME%\\gradle-home"
 set "MC_BUNDLED_GRADLE=%DIRNAME%.modcrafting\\${GRADLE_RUNTIME_FOLDER}"
-"%JAVA_HOME%\\bin\\java" -Dorg.gradle.appname=gradlew -classpath "%MC_BUNDLED_GRADLE%\\lib\\${GRADLE_LAUNCHER_JAR}" org.gradle.launcher.GradleMain %*
+if not exist "%JAVA_HOME%\\bin\\java.exe" (
+  echo [ModCrafting] JAVA_HOME not found: "%JAVA_HOME%"
+  echo [ModCrafting] MODCRAFTING_RUNTIME: "%MODCRAFTING_RUNTIME%"
+  exit /b 1
+)
+if not exist "%MC_BUNDLED_GRADLE%\\lib\\${GRADLE_LAUNCHER_JAR}" (
+  echo [ModCrafting] Gradle launcher not found: "%MC_BUNDLED_GRADLE%\\lib\\${GRADLE_LAUNCHER_JAR}"
+  exit /b 1
+)
+"%JAVA_HOME%\\bin\\java" -Dfile.encoding=UTF-8 -Dorg.gradle.appname=gradlew -classpath "%MC_BUNDLED_GRADLE%\\lib\\${GRADLE_LAUNCHER_JAR}" org.gradle.launcher.GradleMain %*
 exit /b !ERRORLEVEL!
 `
   fs.writeFileSync(path.join(projectDir, 'gradlew.bat'), content, 'utf-8')
