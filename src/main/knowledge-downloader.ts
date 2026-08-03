@@ -15,6 +15,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
+import { Transform } from 'stream'
+import { pipeline } from 'stream/promises'
 import { getRuntimeRoot, loadFabricVersions } from './build-env'
 import { getSeedReleaseInfo } from './seed-downloader'
 import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
@@ -46,6 +48,23 @@ interface KnowledgeArtifactResult {
   dir: string
   ok: boolean
   error?: string
+}
+
+/** 下载首字节超时：服务器挂起时 30s 内 abort，触发上层换源/重试 */
+const FIRST_BYTE_TIMEOUT_MS = 30_000
+/** 下载 stall 检测：30s 内无新数据则 abort，覆盖 body 流半开挂起 */
+const STALL_TIMEOUT_MS = 30_000
+/** 进度上报节流：避免高频 IPC */
+const PROGRESS_THROTTLE_BYTES = 64 * 1024
+const PROGRESS_THROTTLE_MS = 300
+
+/** 下载字节进度回调：received 已接收字节，totalBytes 来自 Content-Length（0 表示未知） */
+type DownloadProgressFn = (received: number, totalBytes: number) => void
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)}KB`
+  return `${(n / 1024 / 1024).toFixed(1)}MB`
 }
 
 /**
@@ -122,23 +141,99 @@ function resolveExtraArtifactUrl(zipName: string): { gitee: string; github: stri
   }
 }
 
-async function downloadFile(url: string, destPath: string): Promise<void> {
-  const res = await getDownloadFetch()(url, { redirect: 'follow', headers: { 'User-Agent': DOWNLOAD_USER_AGENT } })
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${url}`)
-  const sink = fs.createWriteStream(destPath)
+/**
+ * 下载单个文件到 destPath，带首字节超时、stall 检测和进度回调。
+ *
+ * 之前版本无任何超时/进度：服务器挂起或 body 流半开时无限等待，
+ * UI 停在 "下载 agent-knowledge…" 不更新。现在参考 toolchain-download.ts
+ * 的成熟模式：30s 首字节超时 + 30s stall 检测 + 节流进度回调。
+ */
+async function downloadFile(
+  url: string,
+  destPath: string,
+  onProgress?: DownloadProgressFn
+): Promise<void> {
+  const controller = new AbortController()
+  const firstByteTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS)
+  // stall 计时器：每个 chunk 到达时重置；超时未收到新数据则 abort
+  let stallTimer: NodeJS.Timeout | null = null
+  const resetStall = (): void => {
+    if (stallTimer) clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
+  }
+  const clearTimers = (): void => {
+    clearTimeout(firstByteTimer)
+    if (stallTimer) clearTimeout(stallTimer)
+  }
+
+  let res: Response
   try {
-    for await (const chunk of res.body as unknown as NodeJS.ReadableStream) {
-      sink.write(chunk)
-    }
-    sink.end()
-    await new Promise<void>((resolve, reject) => {
-      sink.on('finish', resolve)
-      sink.on('error', reject)
+    res = await getDownloadFetch()(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': DOWNLOAD_USER_AGENT },
+      signal: controller.signal
     })
   } catch (err) {
-    try { fs.unlinkSync(destPath) } catch { /* ignore */ }
+    clearTimers()
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`下载超时（首字节 ${FIRST_BYTE_TIMEOUT_MS / 1000}s 内无响应）: ${url}`)
+    }
     throw err
   }
+  if (!res.ok || !res.body) {
+    clearTimers()
+    throw new Error(`HTTP ${res.status} for ${url}`)
+  }
+
+  const totalBytes = Number(res.headers.get('content-length') || 0)
+  let received = 0
+  let lastReportedBytes = 0
+  let lastReportedAt = 0
+  let firstByteArrived = false
+
+  const countingStream = new Transform({
+    transform(chunk: Buffer, _encoding: string, callback: (err?: Error | null, data?: Buffer) => void) {
+      if (!firstByteArrived) {
+        firstByteArrived = true
+        clearTimeout(firstByteTimer)
+      }
+      resetStall()
+      received += chunk.length
+      const now = Date.now()
+      if (
+        onProgress &&
+        (received - lastReportedBytes >= PROGRESS_THROTTLE_BYTES ||
+          (now - lastReportedAt >= PROGRESS_THROTTLE_MS && received > lastReportedBytes))
+      ) {
+        lastReportedBytes = received
+        lastReportedAt = now
+        onProgress(received, totalBytes)
+      }
+      callback(null, chunk)
+    }
+  })
+
+  try {
+    await pipeline(
+      res.body as unknown as NodeJS.ReadableStream,
+      countingStream,
+      fs.createWriteStream(destPath)
+    )
+  } catch (err) {
+    clearTimers()
+    try { fs.unlinkSync(destPath) } catch { /* ignore */ }
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(
+        firstByteArrived
+          ? `下载超时（${STALL_TIMEOUT_MS / 1000}s 内无新数据，stall）: ${url}`
+          : `下载超时（首字节 ${FIRST_BYTE_TIMEOUT_MS / 1000}s 内无响应）: ${url}`
+      )
+    }
+    throw err
+  }
+  clearTimers()
+  // 下载完成，确保进度到达 100%（totalBytes 未知时补报已接收字节）
+  if (onProgress) onProgress(totalBytes > 0 ? totalBytes : received, totalBytes)
 }
 
 function extractZip(zipPath: string, destDir: string): Promise<void> {
@@ -168,11 +263,15 @@ function extractZip(zipPath: string, destDir: string): Promise<void> {
  * 下载并解压单个 zip 到 runtime/knowledge/<dir>/。
  * 先写 staging 目录，再 rename，避免半成品。
  * 失败重试 3 次（每个 zip <25MB，单文件下载无需分片）。
+ *
+ * onProgress 用于实时上报下载字节进度（received, totalBytes），
+ * 调用方据此更新 UI 消息，避免长时间停留 "下载 xxx…" 无变化。
  */
 async function downloadAndExtractArtifact(
   url: string,
   destDir: string,
-  label: string
+  label: string,
+  onProgress?: DownloadProgressFn
 ): Promise<{ ok: boolean; error?: string }> {
   const staging = `${destDir}.staging`
   const zipPath = `${destDir}.zip`
@@ -189,7 +288,7 @@ async function downloadAndExtractArtifact(
   let lastError = ''
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await downloadFile(url, zipPath)
+      await downloadFile(url, zipPath, onProgress)
       fs.mkdirSync(staging, { recursive: true })
       await extractZip(zipPath, staging)
 
@@ -285,8 +384,12 @@ export async function ensureKnowledgeBase(
       continue
     }
     const destDir = path.join(root, artifact.dir)
-    onProgress(`下载 ${artifact.dir}…`, Math.round(5 + (completed / totalArtifacts) * 90))
-    const r = await downloadAndExtractArtifact(asset.url, destDir, artifact.dir)
+    const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
+    onProgress(`下载 ${artifact.dir}…`, stepPercent)
+    const r = await downloadAndExtractArtifact(asset.url, destDir, artifact.dir, (received, total) => {
+      const sizeStr = total > 0 ? `${formatBytes(received)}/${formatBytes(total)}` : formatBytes(received)
+      onProgress(`下载 ${artifact.dir} ${sizeStr}…`, stepPercent)
+    })
     results.push({ dir: artifact.dir, ...r })
     completed++
     onProgress(`${artifact.dir} ${r.ok ? '完成' : '失败'}`, Math.round(5 + (completed / totalArtifacts) * 90))
@@ -306,7 +409,10 @@ export async function ensureKnowledgeBase(
     ])
     let r: { ok: boolean; error?: string } = { ok: false, error: '无可用下载源' }
     for (const candidate of ordered) {
-      r = await downloadAndExtractArtifact(candidate.url, destDir, artifact.dir)
+      r = await downloadAndExtractArtifact(candidate.url, destDir, artifact.dir, (received, total) => {
+        const sizeStr = total > 0 ? `${formatBytes(received)}/${formatBytes(total)}` : formatBytes(received)
+        onProgress(`下载 ${artifact.dir} ${sizeStr}…`, stepPercent)
+      })
       if (r.ok) break
       console.warn(`[knowledge-downloader] ${artifact.dir} ${candidate.label} 失败，尝试下一个: ${r.error}`)
     }

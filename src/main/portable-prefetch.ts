@@ -336,8 +336,12 @@ export async function ensureGradleHomeOnline(
 
     onProgress({ phase: 'verify', message: '正在验证离线 Fabric 构建…', percent: 88 })
     await runGradle(projectDir, runtimeRoot, ['build', '--offline', '--no-daemon',], 20 * 60 * 1000)
-    if (!isReady()) return { ok: false, error: 'Fabric 离线构建虽完成，但缓存校验未通过' }
+    // 离线 build 成功说明缓存足够支持离线构建，先写 seed marker，
+    // 再由 isReady() 验证 marker + 缓存目录完整性。
+    // 注意：writeSeedMarker 必须在 isReady 之前调用，否则首次运行时
+    // marker 不存在导致 isReady 永远返回 false，writeSeedMarker 永远执行不到。
     writeSeedMarker()
+    if (!isReady()) return { ok: false, error: 'Fabric 离线构建虽完成，但缓存校验未通过' }
     onProgress({ phase: 'verify', message: '离线构建验证通过', percent: 96 })
     return { ok: true }
   } catch (err) {
