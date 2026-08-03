@@ -6,8 +6,8 @@
 
 | 版本 | 大小 | 说明 | Gitee | GitHub |
 |------|------|------|-------|--------|
-| **完整版 Setup** | ~400-500 MB | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting%20Setup%201.0.0.exe) |
-| **便携版 Portable** | ~80-150 MB | 体积小；**首次需联网**下载并验证工具链 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe) |
+| **完整版 Setup** | 95.1 MB | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) |
+| **便携版 Portable** | 84.8 MB | 体积小；**首次需联网**下载并验证工具链 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe) |
 
 ### 如何选择
 

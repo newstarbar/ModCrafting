@@ -4,7 +4,7 @@
  * Usage: node scripts/render-release-notes.mjs <tag> [outputPath]
  */
 import { execSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, statSync, existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'url'
 import { giteeUrls, resolveGiteeRepo } from './gitee-config.mjs'
@@ -132,16 +132,44 @@ function buildChangelogSection(prev, current) {
   return `## 更新\n\n${parts.join('\n')}\n---\n\n**完整更新日志**: [${prev || '首个版本'}...${current}](${compareUrl})\n`
 }
 
+/** 从 release/ 目录读取实际产物大小（字节） */
+function resolveAssetSize(pattern) {
+  const releaseDir = path.join(root, 'release')
+  if (!existsSync(releaseDir)) return null
+  const hit = readdirSync(releaseDir).find(pattern)
+  if (!hit) return null
+  try {
+    return statSync(path.join(releaseDir, hit)).size
+  } catch {
+    return null
+  }
+}
+
+function formatSizeMB(bytes) {
+  if (!bytes) return '未知'
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 function buildBody() {
   const { owner, repo } = resolveGiteeRepo()
   const gitee = giteeUrls(owner, repo, tag, ver)
   const githubBase = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${tag}`
   const prev = previousTag(tag)
 
+  // 从本地 release/ 读取实际产物大小，找不到则回退到范围描述
+  const setupSize = resolveAssetSize((n) =>
+    new RegExp(`^ModCrafting[- ]Setup[- ]${ver.replace(/\./g, '\\.')}.*\\.exe$`, 'i').test(n)
+  )
+  const portableSize = resolveAssetSize((n) =>
+    new RegExp(`^ModCrafting[- ]${ver.replace(/\./g, '\\.')}[- ]Portable\\.exe$`, 'i').test(n)
+  )
+  const setupSizeText = setupSize ? formatSizeMB(setupSize) : '~95 MB'
+  const portableSizeText = portableSize ? formatSizeMB(portableSize) : '~85 MB'
+
   const downloadTable = `| 版本 | 大小 | 说明 | Gitee | GitHub |
 |------|------|------|-------|--------|
-| **完整版 Setup** | ~400-500 MB | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](${gitee.setup}) | [GitHub 下载](${githubBase}/ModCrafting%20Setup%20${ver}.exe) |
-| **便携版 Portable** | ~80-150 MB | 体积小；**首次需联网**下载并验证工具链 | [Gitee 下载](${gitee.portable}) | [GitHub 下载](${githubBase}/ModCrafting-${ver}-Portable.exe) |`
+| **完整版 Setup** | ${setupSizeText} | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](${gitee.setup}) | [GitHub 下载](${githubBase}/ModCrafting-Setup-${ver}.exe) |
+| **便携版 Portable** | ${portableSizeText} | 体积小；**首次需联网**下载并验证工具链 | [Gitee 下载](${gitee.portable}) | [GitHub 下载](${githubBase}/ModCrafting-${ver}-Portable.exe) |`
 
   const changelog = buildChangelogSection(prev, tag)
 
