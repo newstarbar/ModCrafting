@@ -68,24 +68,35 @@ function formatBytes(n: number): string {
 }
 
 /**
- * 探测 ModCrafting-knowledge-base 仓库最新匹配 MC 版本的 Release tag。
- * Gitee 优先，GitHub 兜底。失败抛错。
+ * 并发探测 ModCrafting-knowledge-base 仓库最新匹配 MC 版本的 Release tag。
+ * 同时查询 Gitee 和 GitHub，返回双源 assets 供后续 pickFastestUrls 测速选优。
+ * 不再硬编码 Gitee 优先 —— 不同网络环境下 GitHub 可能更快。
  */
 async function resolveKnowledgeReleaseTag(mcVersion: string): Promise<{
   tag: string
-  source: 'gitee' | 'github'
-  assets: { name: string; url: string }[]
+  giteeAssets: { name: string; url: string }[]
+  githubAssets: { name: string; url: string }[]
 }> {
   const prefix = `knowledge-${mcVersion}-`
 
-  // Gitee
-  try {
-    const res = await getDownloadFetch()(
+  const [giteeRes, githubRes] = await Promise.allSettled([
+    getDownloadFetch()(
       `https://gitee.com/api/v5/repos/${KB_REPO_GITEE_OWNER}/${KB_REPO_GITEE_REPO}/releases?per_page=20`,
       { headers: { 'User-Agent': DOWNLOAD_USER_AGENT } }
-    )
-    if (res.ok) {
-      const releases = (await res.json()) as Array<{
+    ),
+    getDownloadFetch()(`https://api.github.com/repos/${KB_REPO_GITHUB}/releases`, {
+      headers: { 'User-Agent': DOWNLOAD_USER_AGENT, Accept: 'application/vnd.github+json' }
+    })
+  ])
+
+  let tag = ''
+  let giteeAssets: { name: string; url: string }[] = []
+  let githubAssets: { name: string; url: string }[] = []
+
+  // 解析 Gitee
+  if (giteeRes.status === 'fulfilled' && giteeRes.value.ok) {
+    try {
+      const releases = (await giteeRes.value.json()) as Array<{
         tag_name: string
         assets?: Array<{ name: string; browser_download_url: string }>
       }>
@@ -93,37 +104,38 @@ async function resolveKnowledgeReleaseTag(mcVersion: string): Promise<{
         .filter((r) => r.tag_name?.startsWith(prefix))
         .sort((a, b) => b.tag_name.localeCompare(a.tag_name))
       if (matched.length > 0 && matched[0].assets?.length) {
-        return {
-          tag: matched[0].tag_name,
-          source: 'gitee',
-          assets: matched[0].assets.map((a) => ({ name: a.name, url: a.browser_download_url }))
-        }
+        tag = matched[0].tag_name
+        giteeAssets = matched[0].assets.map((a) => ({ name: a.name, url: a.browser_download_url }))
       }
+    } catch (err) {
+      console.warn(`[knowledge-downloader] Gitee Release 解析失败: ${String(err)}`)
     }
-  } catch (err) {
-    console.warn(`[knowledge-downloader] Gitee 探测失败: ${String(err)}`)
   }
 
-  // GitHub fallback
-  const res = await getDownloadFetch()(`https://api.github.com/repos/${KB_REPO_GITHUB}/releases`, {
-    headers: { 'User-Agent': DOWNLOAD_USER_AGENT, Accept: 'application/vnd.github+json' }
-  })
-  if (!res.ok) throw new Error(`GitHub API ${res.status}`)
-  const releases = (await res.json()) as Array<{
-    tag_name: string
-    assets?: Array<{ name: string; browser_download_url: string }>
-  }>
-  const matched = releases
-    .filter((r) => r.tag_name?.startsWith(prefix))
-    .sort((a, b) => b.tag_name.localeCompare(a.tag_name))
-  if (matched.length === 0) {
+  // 解析 GitHub
+  if (githubRes.status === 'fulfilled' && githubRes.value.ok) {
+    try {
+      const releases = (await githubRes.value.json()) as Array<{
+        tag_name: string
+        assets?: Array<{ name: string; browser_download_url: string }>
+      }>
+      const matched = releases
+        .filter((r) => r.tag_name?.startsWith(prefix))
+        .sort((a, b) => b.tag_name.localeCompare(a.tag_name))
+      if (matched.length > 0 && matched[0].assets?.length) {
+        if (!tag) tag = matched[0].tag_name
+        githubAssets = matched[0].assets.map((a) => ({ name: a.name, url: a.browser_download_url }))
+      }
+    } catch (err) {
+      console.warn(`[knowledge-downloader] GitHub Release 解析失败: ${String(err)}`)
+    }
+  }
+
+  if (!tag || (giteeAssets.length === 0 && githubAssets.length === 0)) {
     throw new Error(`未找到匹配 MC ${mcVersion} 的知识库 Release（前缀 ${prefix}）`)
   }
-  return {
-    tag: matched[0].tag_name,
-    source: 'github',
-    assets: (matched[0].assets || []).map((a) => ({ name: a.name, url: a.browser_download_url }))
-  }
+
+  return { tag, giteeAssets, githubAssets }
 }
 
 /**
@@ -360,13 +372,19 @@ export async function ensureKnowledgeBase(
   let completed = 0
 
   // ── 阶段 1：知识库 4 件（来自 ModCrafting-knowledge-base 仓库 Release） ──
-  onProgress('查询知识库 Release…', 2)
-  let kbAssets: { name: string; url: string }[] = []
+  // 并发查询 Gitee + GitHub，下载时对每个 artifact 测速选优（不硬编码 Gitee 优先）
+  onProgress('查询知识库 Release（Gitee + GitHub 并发）…', 2)
+  let kbTag = ''
+  let kbGiteeAssets: { name: string; url: string }[] = []
+  let kbGithubAssets: { name: string; url: string }[] = []
   try {
     const mcVersion = loadFabricVersions().minecraft_version
     const release = await resolveKnowledgeReleaseTag(mcVersion)
-    kbAssets = release.assets
-    onProgress(`知识库 Release: ${release.tag} (${release.source})`, 5)
+    kbTag = release.tag
+    kbGiteeAssets = release.giteeAssets
+    kbGithubAssets = release.githubAssets
+    const sources = `${kbGiteeAssets.length ? 'Gitee' : ''}${kbGiteeAssets.length && kbGithubAssets.length ? '+' : ''}${kbGithubAssets.length ? 'GitHub' : ''}`
+    onProgress(`知识库 Release: ${kbTag} (${sources})`, 5)
   } catch (err) {
     console.warn(`[knowledge-downloader] 知识库 Release 探测失败: ${String(err)}`)
     onProgress('知识库 Release 不可用，跳过百科/数据下载', 50)
@@ -376,32 +394,48 @@ export async function ensureKnowledgeBase(
   }
 
   for (const artifact of KB_ARTIFACTS) {
-    if (kbAssets.length === 0) break
-    const asset = kbAssets.find((a) => a.name === artifact.zip)
-    if (!asset) {
+    if (kbGiteeAssets.length === 0 && kbGithubAssets.length === 0) break
+    const giteeAsset = kbGiteeAssets.find((a) => a.name === artifact.zip)
+    const githubAsset = kbGithubAssets.find((a) => a.name === artifact.zip)
+    if (!giteeAsset && !githubAsset) {
       console.warn(`[knowledge-downloader] 知识库 Release 缺少 ${artifact.zip}`)
       results.push({ dir: artifact.dir, ok: false, error: `${artifact.zip} 缺失` })
       continue
     }
     const destDir = path.join(root, artifact.dir)
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
-    onProgress(`下载 ${artifact.dir}…`, stepPercent)
-    const r = await downloadAndExtractArtifact(asset.url, destDir, artifact.dir, (received, total) => {
-      const sizeStr = total > 0 ? `${formatBytes(received)}/${formatBytes(total)}` : formatBytes(received)
-      onProgress(`下载 ${artifact.dir} ${sizeStr}…`, stepPercent)
-    })
+
+    // 构造候选源列表，pickFastestUrls 并发测速选优
+    const candidates: Array<{ url: string; label: string }> = []
+    if (giteeAsset) candidates.push({ url: giteeAsset.url, label: 'Gitee' })
+    if (githubAsset) candidates.push({ url: githubAsset.url, label: 'GitHub' })
+
+    onProgress(`测速选优 ${artifact.dir}（${candidates.map((c) => c.label).join('/')}）…`, stepPercent)
+    const ordered = candidates.length > 1
+      ? await pickFastestUrls(candidates)
+      : candidates.map((c) => ({ ...c, speedKBps: null }))
+
+    let r: { ok: boolean; error?: string } = { ok: false, error: '无可用下载源' }
+    for (const candidate of ordered) {
+      r = await downloadAndExtractArtifact(candidate.url, destDir, artifact.dir, (received, total) => {
+        const sizeStr = total > 0 ? `${formatBytes(received)}/${formatBytes(total)}` : formatBytes(received)
+        onProgress(`下载 ${artifact.dir} ${sizeStr}…`, stepPercent)
+      })
+      if (r.ok) break
+      console.warn(`[knowledge-downloader] ${artifact.dir} ${candidate.label} 失败，尝试下一个: ${r.error}`)
+    }
     results.push({ dir: artifact.dir, ...r })
     completed++
     onProgress(`${artifact.dir} ${r.ok ? '完成' : '失败'}`, Math.round(5 + (completed / totalArtifacts) * 90))
   }
 
   // ── 阶段 2：辅助资源 3 件（来自应用自身 Release，与 jre/seed 同 tag） ──
-  // Gitee 主、GitHub 兜底；下载前测速选优决定优先顺序（不同网络差异大）
+  // Gitee + GitHub 并发测速选优，不硬编码任何源优先
   for (const artifact of EXTRA_ARTIFACTS) {
     const { gitee, github } = resolveExtraArtifactUrl(artifact.zip)
     const destDir = path.join(root, artifact.dir)
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
-    onProgress(`下载 ${artifact.dir}…`, stepPercent)
+    onProgress(`测速选优 ${artifact.dir}（Gitee/GitHub）…`, stepPercent)
 
     const ordered = await pickFastestUrls([
       { url: gitee, label: 'Gitee' },
