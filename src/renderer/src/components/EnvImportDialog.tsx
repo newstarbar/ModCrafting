@@ -14,6 +14,8 @@ interface ImportProgress {
 }
 
 const QQ_GROUP = '203657694'
+// tencent 协议链接，点击后直接打开 QQ 客户端的加群界面
+const QQ_GROUP_URL = `tencent://groupchat/?subcmd=join&group=${QQ_GROUP}`
 
 /**
  * 环境配置手动导入对话框。
@@ -59,6 +61,12 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
       setImporting(false)
     }
   }, [importing, onSuccess])
+
+  const handleOpenQQGroup = useCallback(async () => {
+    try {
+      await window.api.openExternalUrl(QQ_GROUP_URL)
+    } catch { /* ignore */ }
+  }, [])
 
   const handleSelectFile = useCallback(async () => {
     if (importing) return
@@ -139,7 +147,27 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
                 使用步骤
               </div>
               <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-                <li>加入 QQ 群：<strong style={{ color: 'var(--accent)' }}>{QQ_GROUP}</strong></li>
+                <li>
+                  加入 QQ 群：
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenQQGroup()}
+                    style={{
+                      display: 'inline',
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      fontWeight: 600,
+                      color: 'var(--accent)',
+                      cursor: 'pointer',
+                      textDecoration: 'underline'
+                    }}
+                    title="点击打开 QQ 加群界面"
+                  >
+                    {QQ_GROUP}
+                  </button>
+                </li>
                 <li>打开群文件，下载「ModCrafting-runtime-env.zip」</li>
                 <li>将下载的 zip 文件拖拽到下方区域，或点击「选择文件」按钮</li>
                 <li>等待解压和验证完成即可使用</li>
