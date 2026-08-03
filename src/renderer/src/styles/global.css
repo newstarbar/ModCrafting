@@ -4414,6 +4414,98 @@ body,
 	filter: brightness(1.08);
 }
 
+.toolchain-init-secondary-btn {
+	width: 100%;
+	padding: 9px 20px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-secondary);
+	background: transparent;
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	cursor: pointer;
+	transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.toolchain-init-secondary-btn:hover {
+	background: var(--bg-surface);
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.toolchain-init-cancel-btn {
+	width: 100%;
+	padding: 9px 20px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-muted);
+	background: transparent;
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+	cursor: pointer;
+	transition: background 0.15s, color 0.15s;
+}
+
+.toolchain-init-cancel-btn:hover {
+	background: rgba(255, 123, 114, 0.08);
+	color: var(--error);
+}
+
+.toolchain-init-path-section {
+	margin: 12px 0;
+	padding: 12px 14px;
+	border-radius: 8px;
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-light);
+}
+
+.toolchain-init-path-label {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-muted);
+	margin-bottom: 6px;
+	letter-spacing: 0.02em;
+}
+
+.toolchain-init-path-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.toolchain-init-path-value {
+	flex: 1;
+	font-size: 12px;
+	font-family: var(--font-mono, 'Cascadia Code', 'Consolas', monospace);
+	color: var(--text-primary);
+	word-break: break-all;
+	line-height: 1.4;
+}
+
+.toolchain-init-path-btn {
+	width: auto;
+	padding: 4px 12px;
+	font-size: 11px;
+	flex-shrink: 0;
+}
+
+.toolchain-init-path-hint {
+	margin: 8px 0 0;
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.toolchain-init-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.toolchain-init-actions .toolchain-init-secondary-btn {
+	width: auto;
+}
+
 .chat-toolchain-lock-banner {
 	width: 100%;
 	margin-bottom: 8px;

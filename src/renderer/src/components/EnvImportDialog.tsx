@@ -119,7 +119,6 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
     <div className="toolchain-init-overlay" role="dialog" aria-modal="true" aria-labelledby="env-import-title">
       <div className="toolchain-init-card toolchain-init-card--download" style={{ maxWidth: 480 }}>
         <div className="toolchain-init-brand">
-          <span className="toolchain-init-logo">M</span>
           <div>
             <h1 id="env-import-title">手动导入环境包</h1>
             <p className="toolchain-init-subtitle">网络慢？从 QQ 群下载环境压缩包</p>
@@ -200,8 +199,8 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
               </button>
               <button
                 type="button"
-                className="mc-btn"
-                style={{ padding: '10px 16px', fontSize: 13, color: 'var(--text-muted)' }}
+                className="toolchain-init-secondary-btn"
+                style={{ width: 'auto' }}
                 onClick={onClose}
               >
                 返回

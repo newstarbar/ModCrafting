@@ -13,7 +13,6 @@ import WorkspaceEmpty from "./components/WorkspaceEmpty";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
-import RuntimeDirSetup from "./components/RuntimeDirSetup";
 import EnvImportDialog from "./components/EnvImportDialog";
 import UpdateBanner from "./components/UpdateBanner";
 import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./components/Icon";
@@ -22,20 +21,10 @@ import PanelResizeHandle from "./components/PanelResizeHandle";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import { EMPTY_USAGE, normalizeSessionUsage, sumSessionsCost, type UsageStats } from "./utils/usage";
 import { loadProjectVersions, type ProjectVersions } from "./utils/project-versions";
-import {
-	pickMcRuntimeSlot,
-	type BuildDevStatus,
-	type GameDevStatus,
-	type McRuntimeSlot,
-	type PhaseDevStatus
-} from "./types/dev-status";
+import { pickMcRuntimeSlot, type BuildDevStatus, type GameDevStatus, type McRuntimeSlot, type PhaseDevStatus } from "./types/dev-status";
 import type { ChatSession, PersistedMessage } from "./types/chat";
 import type { ContextPayload } from "./context/context-ingress";
-import {
-	loadSessionsWithMeta,
-	saveSessions,
-	saveCurrentSessionId
-} from "./utils/session-storage";
+import { loadSessionsWithMeta, saveSessions, saveCurrentSessionId } from "./utils/session-storage";
 import { getMostRecentSessionId, sortSessionsByUpdatedAt } from "./utils/session-sort";
 import { nextDefaultSessionName, sessionTitleFromMessage } from "./utils/session-title";
 import { registerPanelBridge, setLastBuildLogText } from "./utils/panel-bridge";
@@ -47,7 +36,7 @@ const DEFAULT_API_CONFIG: ApiConfigState = {
 	endpoint: "https://api.deepseek.com/v1",
 	apiKey: "",
 	model: "deepseek-v4-flash",
-	providerId: "deepseek",
+	providerId: "deepseek"
 };
 
 interface UsageData extends UsageStats {}
@@ -108,7 +97,7 @@ const App: React.FC = () => {
 	const workspaceLayout = useWorkspaceLayout();
 	const [projectVersions, setProjectVersions] = useState<ProjectVersions | null>(null);
 	const [buildDevStatus, setBuildDevStatus] = useState<BuildDevStatus>({ running: false });
-	const [gameDevStatus, setGameDevStatus] = useState<GameDevStatus>({ label: '', variant: 'idle' });
+	const [gameDevStatus, setGameDevStatus] = useState<GameDevStatus>({ label: "", variant: "idle" });
 	const [phaseDevStatus, setPhaseDevStatus] = useState<PhaseDevStatus | null>(null);
 	const mcRuntimeSlot: McRuntimeSlot = pickMcRuntimeSlot(buildDevStatus, gameDevStatus, phaseDevStatus);
 	const [toolchainStatus, setToolchainStatus] = useState<{ jdk: string; gradle: string; deps: string; isPackaged?: boolean }>({ jdk: "missing", gradle: "missing", deps: "missing" });
@@ -122,11 +111,11 @@ const App: React.FC = () => {
 		probe: null
 	});
 	const [projectPreparing, setProjectPreparing] = useState(false);
-	const [appEdition, setAppEdition] = useState<'dev' | 'full' | 'portable'>('dev');
+	const [appEdition, setAppEdition] = useState<"dev" | "full" | "portable">("dev");
 	const [downloadConfirmRequired, setDownloadConfirmRequired] = useState(false);
-	const [runtimeDirSetupRequired, setRuntimeDirSetupRequired] = useState(false);
 	const [envImportDialogRequired, setEnvImportDialogRequired] = useState(false);
-	const [updateBanner, setUpdateBanner] = useState({ visible: false, message: '', percent: 0 });
+	const [runtimePath, setRuntimePath] = useState<string | undefined>(undefined);
+	const [updateBanner, setUpdateBanner] = useState({ visible: false, message: "", percent: 0 });
 	const toolchainReady = toolchainInit.ready && !projectPreparing;
 	const overlayLocked = !toolchainInit.ready || projectPreparing || toolchainInit.phase === "error";
 	const [projectDialog, setProjectDialog] = useState<ProjectDialog>("none");
@@ -148,35 +137,23 @@ const App: React.FC = () => {
 		if (projectPathForSessionsRef.current === path && sessionsHydratedRef.current) return;
 
 		let cancelled = false;
-		const loadToken = Symbol('sessions-load');
+		const loadToken = Symbol("sessions-load");
 		sessionsLoadTokenRef.current = loadToken;
 		sessionsHydratedRef.current = false;
 
 		const run = async () => {
 			const previousPath = projectPathForSessionsRef.current;
 			// Only persist previous project when we actually had hydrated data.
-			if (
-				previousPath !== undefined &&
-				previousPath !== path &&
-				sessionsRef.current.length > 0
-			) {
-				await saveSessions(
-					previousPath,
-					sessionsRef.current,
-					currentSessionIdRef.current,
-					{ projectCost: projectCostRef.current }
-				);
+			if (previousPath !== undefined && previousPath !== path && sessionsRef.current.length > 0) {
+				await saveSessions(previousPath, sessionsRef.current, currentSessionIdRef.current, { projectCost: projectCostRef.current });
 			}
 
 			projectPathForSessionsRef.current = path;
-			const { sessions: loaded, currentSessionId: loadedSessionId, projectCost: loadedProjectCost } =
-				await loadSessionsWithMeta(path);
+			const { sessions: loaded, currentSessionId: loadedSessionId, projectCost: loadedProjectCost } = await loadSessionsWithMeta(path);
 			if (cancelled || sessionsLoadTokenRef.current !== loadToken) return;
 
 			const sorted = sortSessionsByUpdatedAt(loaded);
-			const validSessionId = loadedSessionId && loaded.some((s) => s.id === loadedSessionId)
-				? loadedSessionId
-				: getMostRecentSessionId(sorted);
+			const validSessionId = loadedSessionId && loaded.some((s) => s.id === loadedSessionId) ? loadedSessionId : getMostRecentSessionId(sorted);
 
 			setSessions(sorted);
 			setCurrentSessionId(validSessionId);
@@ -287,7 +264,7 @@ const App: React.FC = () => {
 			...prev,
 			endpoint: config.endpoint,
 			model: config.model,
-			providerId: config.providerId,
+			providerId: config.providerId
 		}));
 		await window.api.saveApiConfig(config);
 
@@ -306,7 +283,7 @@ const App: React.FC = () => {
 			void handleApiSettingsChange({
 				endpoint: selection.endpoint || resolved.endpoint,
 				model: resolved.modelId,
-				providerId: resolved.providerId,
+				providerId: resolved.providerId
 			});
 		},
 		[handleApiSettingsChange]
@@ -333,27 +310,32 @@ const App: React.FC = () => {
 			setDeepseekBalanceLabel(`${symbol}${result.displayTotal}`);
 		};
 		void run();
-		const timer = window.setInterval(() => { void run(); }, 5 * 60_000);
+		const timer = window.setInterval(() => {
+			void run();
+		}, 5 * 60_000);
 		return () => {
 			cancelled = true;
 			window.clearInterval(timer);
 		};
 	}, [apiConfig.providerId, hasSavedApiKey, apiConfig.apiKey]);
 
-	const handleApiKeySave = useCallback(async (key: string) => {
-		const trimmed = key.trim();
-		if (!trimmed) return;
+	const handleApiKeySave = useCallback(
+		async (key: string) => {
+			const trimmed = key.trim();
+			if (!trimmed) return;
 
-		const result = await window.api.saveApiKey(trimmed, apiConfig.providerId);
-		if (!result.success) {
-			alert(result.error || "API Key 保存失败");
-			return;
-		}
-		setApiConfig((prev) => ({ ...prev, apiKey: trimmed }));
-		setHasSavedApiKey(true);
-		const refreshed = await window.api.loadApiConfig();
-		setSavedProviderIds(refreshed.savedProviderIds);
-	}, [apiConfig.providerId]);
+			const result = await window.api.saveApiKey(trimmed, apiConfig.providerId);
+			if (!result.success) {
+				alert(result.error || "API Key 保存失败");
+				return;
+			}
+			setApiConfig((prev) => ({ ...prev, apiKey: trimmed }));
+			setHasSavedApiKey(true);
+			const refreshed = await window.api.loadApiConfig();
+			setSavedProviderIds(refreshed.savedProviderIds);
+		},
+		[apiConfig.providerId]
+	);
 
 	const loadProjectDir = useCallback(
 		async (dir: string) => {
@@ -387,7 +369,7 @@ const App: React.FC = () => {
 			setToolchainStatus(await window.api.getToolchainStatus());
 			void loadProjectVersions(dir).then(setProjectVersions);
 			setBuildDevStatus({ running: false });
-			setGameDevStatus({ label: '', variant: 'idle' });
+			setGameDevStatus({ label: "", variant: "idle" });
 			setPhaseDevStatus(null);
 		},
 		[refreshRecentProjects]
@@ -481,12 +463,12 @@ const App: React.FC = () => {
 				setState((p) => ({ ...p, rightPanelTab: tab }));
 			},
 			runBuild: async () => {
-				const res = await bottomPanelRef.current?.runBuild() ?? { exitCode: 1, failed: true };
+				const res = (await bottomPanelRef.current?.runBuild()) ?? { exitCode: 1, failed: true };
 				setLastBuildLogText(bottomPanelRef.current?.getBuildLogText() ?? "");
 				return { ok: !res.failed, exitCode: res.exitCode, failed: res.failed };
 			},
 			startGameAndWait: async () => {
-				const res = await mcRuntimeRef.current?.startDefaultAndWait() ?? {
+				const res = (await mcRuntimeRef.current?.startDefaultAndWait()) ?? {
 					instanceId: "",
 					ok: false,
 					error: "游戏面板未就绪"
@@ -494,7 +476,7 @@ const App: React.FC = () => {
 				return {
 					ok: res.ok,
 					instanceId: res.instanceId,
-					phase: res.ok ? 'ready' as const : 'error' as const,
+					phase: res.ok ? ("ready" as const) : ("error" as const),
 					error: res.error
 				};
 			}
@@ -528,13 +510,13 @@ const App: React.FC = () => {
 			}
 		});
 		const unsubUpdate = window.api.onUpdateStatus((payload) => {
-			if (payload.phase === 'downloading') {
+			if (payload.phase === "downloading") {
 				setUpdateBanner({
 					visible: true,
-					message: `正在下载更新（${payload.source || 'mirror'}）…`,
+					message: `正在下载更新（${payload.source || "mirror"}）…`,
 					percent: payload.percent || 0
 				});
-			} else if (payload.phase === 'downloaded' || payload.phase === 'error') {
+			} else if (payload.phase === "downloaded" || payload.phase === "error") {
 				setUpdateBanner((prev) => ({ ...prev, visible: false }));
 			}
 		});
@@ -547,53 +529,51 @@ const App: React.FC = () => {
 		};
 	}, []);
 
-	const runToolchainInit = useCallback(async (force: boolean): Promise<void> => {
-		const startedAt = Date.now();
-		const result = await window.api.initToolchain(force);
-		const status = await window.api.getToolchainStatus();
-		setToolchainStatus(status);
-		const ready = result.ok && (await window.api.isToolchainReady());
-		if (ready) {
-			const waitMs = Math.max(0, MIN_OVERLAY_MS - (Date.now() - startedAt));
-			if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
-			setToolchainInit({
-				phase: "ready",
-				percent: 100,
-				message: "构建环境已就绪",
-				error: null,
-				ready: true,
-				probe: null
-			});
-			setToolchainProgress("");
-		} else {
-			setToolchainInit((prev) => ({
-				...prev,
-				phase: "error",
-				error: result.error || "构建环境未完全就绪，请重试",
-				ready: false
-			}));
-		}
-		await refreshRecentProjects();
-	}, [refreshRecentProjects]);
+	const runToolchainInit = useCallback(
+		async (force: boolean): Promise<void> => {
+			const startedAt = Date.now();
+			const result = await window.api.initToolchain(force);
+			const status = await window.api.getToolchainStatus();
+			setToolchainStatus(status);
+			const ready = result.ok && (await window.api.isToolchainReady());
+			if (ready) {
+				const waitMs = Math.max(0, MIN_OVERLAY_MS - (Date.now() - startedAt));
+				if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+				setToolchainInit({
+					phase: "ready",
+					percent: 100,
+					message: "构建环境已就绪",
+					error: null,
+					ready: true,
+					probe: null
+				});
+				setToolchainProgress("");
+			} else {
+				setToolchainInit((prev) => ({
+					...prev,
+					phase: "error",
+					error: result.error || "构建环境未完全就绪，请重试",
+					ready: false
+				}));
+			}
+			await refreshRecentProjects();
+		},
+		[refreshRecentProjects]
+	);
 
 	useEffect(() => {
 		(async () => {
 			const edition = await window.api.getEdition();
 			setAppEdition(edition);
+			// 加载数据目录路径（用于下载确认界面展示与修改）
+			try {
+				const p = await window.api.appConfigGetEffectiveRuntimePath();
+				setRuntimePath(p);
+			} catch {
+				/* ignore */
+			}
 			const needsDownload = await window.api.needsFirstTimeDownload();
 			if (needsDownload) {
-				// 安装版首次启动且未配置自定义 runtime 路径时，先引导选择数据目录
-				if (edition === 'full') {
-					try {
-						const cfg = await window.api.appConfigLoad();
-						if (!cfg.runtimePath) {
-							setRuntimeDirSetupRequired(true);
-							return;
-						}
-					} catch {
-						/* 读取配置失败，回退到下载确认流程 */
-					}
-				}
 				setDownloadConfirmRequired(true);
 				return;
 			}
@@ -611,14 +591,19 @@ const App: React.FC = () => {
 		});
 	}, [runToolchainInit]);
 
-	const handleRuntimeDirConfirm = useCallback(() => {
-		setRuntimeDirSetupRequired(false);
-		setDownloadConfirmRequired(true);
-	}, []);
-
-	const handleRuntimeDirSkip = useCallback(() => {
-		setRuntimeDirSetupRequired(false);
-		setDownloadConfirmRequired(true);
+	const handleSelectRuntimePath = useCallback(async () => {
+		try {
+			const picked = await window.api.appConfigSelectDirectory();
+			if (!picked) return;
+			// 在用户选择的目录下追加 ModCrafting-Data/runtime 子目录
+			const target = `${picked.replace(/[\\/]+$/, "")}\\ModCrafting-Data\\runtime`;
+			const result = await window.api.appConfigSetRuntimePath(target);
+			if (result.success) {
+				setRuntimePath(target);
+			}
+		} catch {
+			/* ignore */
+		}
 	}, []);
 
 	const handleEnvImportSuccess = useCallback(() => {
@@ -655,7 +640,16 @@ const App: React.FC = () => {
 
 	const cancelToolchainInit = useCallback(() => {
 		void window.api.cancelToolchainInit();
-		setToolchainInit((prev) => ({ ...prev, message: "正在取消并保留已下载内容…" }));
+		// 重置到初始界面，让用户重新选择下载或手动导入
+		setToolchainInit({
+			phase: "checking",
+			percent: 0,
+			message: "已取消，可重新选择下载或手动导入环境包",
+			error: null,
+			ready: false,
+			probe: null
+		});
+		setDownloadConfirmRequired(true);
 	}, []);
 
 	const openEnvironmentLogs = useCallback(() => {
@@ -669,41 +663,37 @@ const App: React.FC = () => {
 	}, []);
 
 	const handleRuntimeStatusChange = useCallback((game: GameDevStatus, phase: PhaseDevStatus | null) => {
-		setGameDevStatus((prev) => (
-			prev.label === game.label && prev.variant === game.variant ? prev : game
-		));
+		setGameDevStatus((prev) => (prev.label === game.label && prev.variant === game.variant ? prev : game));
 		setPhaseDevStatus((prev) => {
-			const prevLabel = prev?.label ?? '';
-			const nextLabel = phase?.label ?? '';
+			const prevLabel = prev?.label ?? "";
+			const nextLabel = phase?.label ?? "";
 			if (prevLabel === nextLabel) return prev;
 			return phase;
 		});
 	}, []);
 
 	const handleBuildStatusChange = useCallback((status: BuildDevStatus) => {
-		setBuildDevStatus((prev) => (
-			prev.running === status.running && prev.failed === status.failed ? prev : status
-		));
+		setBuildDevStatus((prev) => (prev.running === status.running && prev.failed === status.failed ? prev : status));
 	}, []);
 
 	const handlePersistSession = useCallback((sessionId: string, messages: PersistedMessage[]) => {
-		setSessions((prev) => sortSessionsByUpdatedAt(
-			prev.map((s) => {
-				if (s.id !== sessionId) return s;
-				// Only bump list order/time when the user sends a new message.
-				// Leave-session flush / turn persistence must not reshuffle the sidebar.
-				const prevUserCount = s.messages.filter((m) => m.role === 'user').length;
-				const nextUserCount = messages.filter((m) => m.role === 'user').length;
-				const updatedAt = nextUserCount > prevUserCount ? Date.now() : s.updatedAt;
-				return { ...s, messages, updatedAt };
-			})
-		));
+		setSessions((prev) =>
+			sortSessionsByUpdatedAt(
+				prev.map((s) => {
+					if (s.id !== sessionId) return s;
+					// Only bump list order/time when the user sends a new message.
+					// Leave-session flush / turn persistence must not reshuffle the sidebar.
+					const prevUserCount = s.messages.filter((m) => m.role === "user").length;
+					const nextUserCount = messages.filter((m) => m.role === "user").length;
+					const updatedAt = nextUserCount > prevUserCount ? Date.now() : s.updatedAt;
+					return { ...s, messages, updatedAt };
+				})
+			)
+		);
 	}, []);
 
-	const handleUpdateSessionMeta = useCallback((sessionId: string, meta: { composerMode?: 'agent' | 'plan' | 'ask'; sessionGoal?: string }) => {
-		setSessions((prev) => prev.map((s) => (
-			s.id === sessionId ? { ...s, ...meta } : s
-		)));
+	const handleUpdateSessionMeta = useCallback((sessionId: string, meta: { composerMode?: "agent" | "plan" | "ask"; sessionGoal?: string }) => {
+		setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, ...meta } : s)));
 	}, []);
 
 	const handleUsageChange = useCallback((nextUsage: UsageStats, meta?: { costDelta?: number }) => {
@@ -713,9 +703,7 @@ const App: React.FC = () => {
 		}
 		const sid = currentSessionIdRef.current;
 		if (!sid) return;
-		setSessions((prev) => prev.map((s) => (
-			s.id === sid ? { ...s, usage: nextUsage } : s
-		)));
+		setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, usage: nextUsage } : s)));
 	}, []);
 
 	const handleOpenSession = useCallback((id: string) => {
@@ -736,9 +724,7 @@ const App: React.FC = () => {
 		setPendingDeleteSessionId(null);
 	}, []);
 
-	const pendingDeleteSession = pendingDeleteSessionId
-		? sessions.find((s) => s.id === pendingDeleteSessionId) ?? null
-		: null;
+	const pendingDeleteSession = pendingDeleteSessionId ? (sessions.find((s) => s.id === pendingDeleteSessionId) ?? null) : null;
 
 	const handleNewSessionFromChat = useCallback((firstMessage?: string, attachments?: PersistedMessage["attachments"]) => {
 		const id = `session-${Date.now()}`;
@@ -747,17 +733,17 @@ const App: React.FC = () => {
 		const atts = attachments?.length ? attachments : undefined;
 		const initialMessages: PersistedMessage[] =
 			msg || atts
-				? [{
-					role: "user",
-					content: msg,
-					timestamp: now,
-					...(atts ? { attachments: atts } : {})
-				}]
+				? [
+						{
+							role: "user",
+							content: msg,
+							timestamp: now,
+							...(atts ? { attachments: atts } : {})
+						}
+					]
 				: [];
 		setSessions((p) => {
-			const sessionName = msg
-				? sessionTitleFromMessage(msg)
-				: (atts ? "（附件）" : nextDefaultSessionName(p.length));
+			const sessionName = msg ? sessionTitleFromMessage(msg) : atts ? "（附件）" : nextDefaultSessionName(p.length);
 			return sortSessionsByUpdatedAt([...p, { id, name: sessionName, messages: initialMessages, createdAt: now, updatedAt: now }]);
 		});
 		setCurrentSessionId(id);
@@ -766,91 +752,92 @@ const App: React.FC = () => {
 	const enqueueContext = useCallback((payload: ContextPayload) => {
 		setState((prev) => ({ ...prev, contextQueue: [...prev.contextQueue, payload] }));
 	}, []);
-	const addToChatContext = useCallback((text: string) => {
-		enqueueContext({ kind: 'text', text, source: 'panel' });
-	}, [enqueueContext]);
+	const addToChatContext = useCallback(
+		(text: string) => {
+			enqueueContext({ kind: "text", text, source: "panel" });
+		},
+		[enqueueContext]
+	);
 	const handleCrashToChat = useCallback((c: string) => {
 		setState((prev) => ({
 			...prev,
-			contextQueue: [...prev.contextQueue, { kind: 'text' as const, text: `--- 崩溃报告 ---\n${c}`, source: 'crash', tag: { type: 'crash' as const, label: '崩溃报告' } }],
+			contextQueue: [...prev.contextQueue, { kind: "text" as const, text: `--- 崩溃报告 ---\n${c}`, source: "crash", tag: { type: "crash" as const, label: "崩溃报告" } }],
 			rightPanelTab: "game"
 		}));
 	}, []);
 	const handleRuntimeErrorToChat = useCallback((c: string) => {
 		setState((prev) => ({
 			...prev,
-			contextQueue: [...prev.contextQueue, { kind: 'text' as const, text: c, source: 'runtime-error', tag: { type: 'runtime-error' as const, label: '运行时错误' } }],
+			contextQueue: [...prev.contextQueue, { kind: "text" as const, text: c, source: "runtime-error", tag: { type: "runtime-error" as const, label: "运行时错误" } }],
 			rightPanelTab: "game"
 		}));
 	}, []);
-	const handleContentClick = useCallback(async (type: string, name: string, className?: string) => {
-		if (!state.projectPath || !className) {
-			enqueueContext({
-				kind: 'text',
-				text: `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`,
-				source: 'code-explain',
-				tag: { type: 'code-explain', label: `代码解释：${name}` }
-			});
-			return;
-		}
-		try {
-			const javaDir = `${state.projectPath}/src/main/java`;
-			const entries = await window.api.listDirectory(javaDir);
-			const findFile = async (dir: string, pkgParts: string[]): Promise<{ code: string; relPath: string } | null> => {
-				const dirEntries = await window.api.listDirectory(dir);
-				for (const entry of dirEntries) {
-					if (entry.isDirectory) {
-						const result = await findFile(entry.path, [...pkgParts, entry.name]);
-						if (result) return result;
-					} else if (entry.name === `${className}.java`) {
-						const res = await window.api.readFile(entry.path);
-						if (!res.success || !res.content) return null;
-						const relPath = entry.path.replace(`${state.projectPath}/`, "").replace(/\\/g, "/");
-						return { code: res.content, relPath };
-					}
-				}
-				return null;
-			};
-			for (const entry of entries) {
-				if (entry.isDirectory) {
-					const found = await findFile(entry.path, [entry.name]);
-					if (found) {
-						enqueueContext({
-							kind: 'text',
-							text: `--- 代码解释 ---\n${name} (${type})\n文件: ${found.relPath}\n\`\`\`java\n${found.code}\n\`\`\``,
-							source: 'code-explain',
-							tag: { type: 'code-explain', label: `代码解释：${name}` }
-						});
-						return;
-					}
-				}
+	const handleContentClick = useCallback(
+		async (type: string, name: string, className?: string) => {
+			if (!state.projectPath || !className) {
+				enqueueContext({
+					kind: "text",
+					text: `--- 代码解释 ---\n${name} (${type})\n请在下方输入框发送消息以解释此代码`,
+					source: "code-explain",
+					tag: { type: "code-explain", label: `代码解释：${name}` }
+				});
+				return;
 			}
-			enqueueContext({
-				kind: 'text',
-				text: `--- 代码解释 ---\n${name} (${type})\n未找到源代码文件`,
-				source: 'code-explain',
-				tag: { type: 'code-explain', label: `代码解释：${name}` }
-			});
-		} catch {
-			enqueueContext({
-				kind: 'text',
-				text: `--- 代码解释 ---\n${name} (${type})\n读取源代码失败`,
-				source: 'code-explain',
-				tag: { type: 'code-explain', label: `代码解释：${name}` }
-			});
-		}
-	}, [state.projectPath, enqueueContext]);
+			try {
+				const javaDir = `${state.projectPath}/src/main/java`;
+				const entries = await window.api.listDirectory(javaDir);
+				const findFile = async (dir: string, pkgParts: string[]): Promise<{ code: string; relPath: string } | null> => {
+					const dirEntries = await window.api.listDirectory(dir);
+					for (const entry of dirEntries) {
+						if (entry.isDirectory) {
+							const result = await findFile(entry.path, [...pkgParts, entry.name]);
+							if (result) return result;
+						} else if (entry.name === `${className}.java`) {
+							const res = await window.api.readFile(entry.path);
+							if (!res.success || !res.content) return null;
+							const relPath = entry.path.replace(`${state.projectPath}/`, "").replace(/\\/g, "/");
+							return { code: res.content, relPath };
+						}
+					}
+					return null;
+				};
+				for (const entry of entries) {
+					if (entry.isDirectory) {
+						const found = await findFile(entry.path, [entry.name]);
+						if (found) {
+							enqueueContext({
+								kind: "text",
+								text: `--- 代码解释 ---\n${name} (${type})\n文件: ${found.relPath}\n\`\`\`java\n${found.code}\n\`\`\``,
+								source: "code-explain",
+								tag: { type: "code-explain", label: `代码解释：${name}` }
+							});
+							return;
+						}
+					}
+				}
+				enqueueContext({
+					kind: "text",
+					text: `--- 代码解释 ---\n${name} (${type})\n未找到源代码文件`,
+					source: "code-explain",
+					tag: { type: "code-explain", label: `代码解释：${name}` }
+				});
+			} catch {
+				enqueueContext({
+					kind: "text",
+					text: `--- 代码解释 ---\n${name} (${type})\n读取源代码失败`,
+					source: "code-explain",
+					tag: { type: "code-explain", label: `代码解释：${name}` }
+				});
+			}
+		},
+		[state.projectPath, enqueueContext]
+	);
 
 	const lastProjectPath = recentProjects[0]?.path ?? null;
 
 	return (
 		<>
-			<AppChrome
-				appView={appView}
-				onViewChange={setAppView}
-				projectName={state.projectName}
-				projectPath={state.projectPath}
-			/>
+			<AppChrome appView={appView} onViewChange={setAppView} projectName={state.projectName} projectPath={state.projectPath} />
 			<div className="app-shell">
 				<div className={`app-shell-view app-shell-view--hub${appView !== "hub" ? " app-shell-view--hidden" : ""}`}>
 					<ProjectHub
@@ -867,164 +854,110 @@ const App: React.FC = () => {
 					className={`app-layout workspace-view app-shell-view${overlayLocked ? " app-layout--locked" : ""}${workspaceLayout.isResizing ? " app-layout--resizing" : ""}${appView !== "workspace" ? " app-shell-view--hidden" : ""}`}
 					style={workspaceLayout.layoutStyle}
 				>
-						<SessionSidebar
-							projectPath={state.projectPath}
-							projectName={state.projectName}
-							sessions={sessions}
-							currentSessionId={currentSessionId}
-							onOpenSession={handleOpenSession}
-							onNewSession={handleNewSession}
-							onDeleteSession={(id) => setPendingDeleteSessionId(id)}
-							onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
-							fileChanges={fileChanges}
-							apiConfig={apiConfig}
-							hasSavedApiKey={hasSavedApiKey}
-							savedProviderIds={savedProviderIds}
-							encryptionAvailable={encryptionAvailable}
-							onApiSettingsChange={handleApiSettingsChange}
-							onApiKeySave={handleApiKeySave}
-							onOpenProject={openProject}
-							onCreateProject={createProject}
-							fileTreeRefreshKey={state.fileTreeRefreshKey}
-							selectedFilePath={state.selectedFile?.path}
-							selectedFile={state.selectedFile}
-							fileContent={state.fileContent}
-							onSelectFile={selectFile}
-							panelCollapsed={workspaceLayout.leftCollapsed}
-							panelDragging={workspaceLayout.isResizing}
-							onTogglePanelCollapse={() => workspaceLayout.toggleLeftCollapsed()}
-						/>
-						<PanelResizeHandle
-							side="left"
-							disabled={workspaceLayout.leftCollapsed}
-							onPointerDown={workspaceLayout.beginLeftResize}
-						/>
-						<div className="main-area">
-							{workspaceLayout.leftCollapsed && (
-								<PanelExpandRail
-									side="left"
-									onExpand={() => workspaceLayout.toggleLeftCollapsed(false)}
-								/>
-							)}
-							{workspaceLayout.rightCollapsed && (
-								<PanelExpandRail
-									side="right"
-									onExpand={() => workspaceLayout.toggleRightCollapsed(false)}
-								/>
-							)}
-							{state.projectPath ? (
-								<ChatPanel
-									ref={chatPanelRef}
+					<SessionSidebar
+						projectPath={state.projectPath}
+						projectName={state.projectName}
+						sessions={sessions}
+						currentSessionId={currentSessionId}
+						onOpenSession={handleOpenSession}
+						onNewSession={handleNewSession}
+						onDeleteSession={(id) => setPendingDeleteSessionId(id)}
+						onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
+						fileChanges={fileChanges}
+						apiConfig={apiConfig}
+						hasSavedApiKey={hasSavedApiKey}
+						savedProviderIds={savedProviderIds}
+						encryptionAvailable={encryptionAvailable}
+						onApiSettingsChange={handleApiSettingsChange}
+						onApiKeySave={handleApiKeySave}
+						onOpenProject={openProject}
+						onCreateProject={createProject}
+						fileTreeRefreshKey={state.fileTreeRefreshKey}
+						selectedFilePath={state.selectedFile?.path}
+						selectedFile={state.selectedFile}
+						fileContent={state.fileContent}
+						onSelectFile={selectFile}
+						panelCollapsed={workspaceLayout.leftCollapsed}
+						panelDragging={workspaceLayout.isResizing}
+						onTogglePanelCollapse={() => workspaceLayout.toggleLeftCollapsed()}
+					/>
+					<PanelResizeHandle side="left" disabled={workspaceLayout.leftCollapsed} onPointerDown={workspaceLayout.beginLeftResize} />
+					<div className="main-area">
+						{workspaceLayout.leftCollapsed && <PanelExpandRail side="left" onExpand={() => workspaceLayout.toggleLeftCollapsed(false)} />}
+						{workspaceLayout.rightCollapsed && <PanelExpandRail side="right" onExpand={() => workspaceLayout.toggleRightCollapsed(false)} />}
+						{state.projectPath ? (
+							<ChatPanel
+								ref={chatPanelRef}
+								projectPath={state.projectPath}
+								contextQueue={state.contextQueue}
+								setContextQueue={(q) => setState((p) => ({ ...p, contextQueue: q }))}
+								selectedFile={state.selectedFile}
+								apiConfig={apiConfig}
+								ensureApiKey={ensureApiKey}
+								toolchainReady={toolchainReady}
+								onUsageChange={handleUsageChange}
+								onRunningChange={(r) => setIsRunning(r)}
+								currentSessionId={currentSessionId}
+								sessions={sessions}
+								onPersistSession={handlePersistSession}
+								onUpdateSessionMeta={handleUpdateSessionMeta}
+								onNewSession={handleNewSessionFromChat}
+								onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
+								onProviderModelChange={handleProviderModelChange}
+								onOpenApiSettings={openApiSettings}
+							/>
+						) : (
+							<WorkspaceEmpty onGoHub={() => setAppView("hub")} onOpenProject={openProject} onNewProject={createProject} />
+						)}
+					</div>
+					<PanelResizeHandle side="right" disabled={workspaceLayout.rightCollapsed} onPointerDown={workspaceLayout.beginRightResize} />
+					<div className={`right-panel${workspaceLayout.rightCollapsed ? " right-panel--collapsed" : ""}${workspaceLayout.isResizing ? " right-panel--dragging" : ""}`}>
+						<div className="right-panel-tabs">
+							<button type="button" className={`mc-tab ${state.rightPanelTab === "preview" ? "active" : ""}`} onClick={() => setState((p) => ({ ...p, rightPanelTab: "preview" }))}>
+								<IconSquare size="sm" /> 预览
+							</button>
+							<button type="button" className={`mc-tab ${state.rightPanelTab === "game" ? "active" : ""}`} onClick={() => setState((p) => ({ ...p, rightPanelTab: "game" }))}>
+								<IconGamepad size="sm" /> 游戏
+							</button>
+							<button type="button" className={`mc-tab ${state.rightPanelTab === "advanced" ? "active" : ""}`} onClick={() => setState((p) => ({ ...p, rightPanelTab: "advanced" }))}>
+								<IconCode size="sm" /> 高级
+							</button>
+							<button type="button" className="right-panel-collapse-btn" onClick={() => workspaceLayout.toggleRightCollapsed()} title="收起右侧面板" aria-label="收起右侧面板">
+								<IconPanelRightClose size="sm" />
+							</button>
+						</div>
+						<div className="right-panel-content">
+							<div className="right-panel-body right-panel-body--preview" hidden={state.rightPanelTab !== "preview"}>
+								<PreviewPanel projectPath={state.projectPath} refreshKey={state.fileTreeRefreshKey} onContentClick={handleContentClick} />
+							</div>
+							<div className="right-panel-body" hidden={state.rightPanelTab !== "game"}>
+								<McRuntimePanel
+									ref={mcRuntimeRef}
 									projectPath={state.projectPath}
-									contextQueue={state.contextQueue}
-									setContextQueue={(q) => setState((p) => ({ ...p, contextQueue: q }))}
-									selectedFile={state.selectedFile}
-									apiConfig={apiConfig}
-									ensureApiKey={ensureApiKey}
+									onAddCrashToChat={handleCrashToChat}
+									onAddRuntimeErrorToChat={handleRuntimeErrorToChat}
 									toolchainReady={toolchainReady}
-									onUsageChange={handleUsageChange}
-									onRunningChange={(r) => setIsRunning(r)}
-									currentSessionId={currentSessionId}
-									sessions={sessions}
-									onPersistSession={handlePersistSession}
-									onUpdateSessionMeta={handleUpdateSessionMeta}
-									onNewSession={handleNewSessionFromChat}
-									onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
-									onProviderModelChange={handleProviderModelChange}
-									onOpenApiSettings={openApiSettings}
+									onRuntimeStatusChange={handleRuntimeStatusChange}
 								/>
-							) : (
-								<WorkspaceEmpty
-									onGoHub={() => setAppView("hub")}
-									onOpenProject={openProject}
-									onNewProject={createProject}
-								/>
-							)}
-						</div>
-						<PanelResizeHandle
-							side="right"
-							disabled={workspaceLayout.rightCollapsed}
-							onPointerDown={workspaceLayout.beginRightResize}
-						/>
-						<div className={`right-panel${workspaceLayout.rightCollapsed ? " right-panel--collapsed" : ""}${workspaceLayout.isResizing ? " right-panel--dragging" : ""}`}>
-							<div className="right-panel-tabs">
-								<button
-									type="button"
-									className={`mc-tab ${state.rightPanelTab === "preview" ? "active" : ""}`}
-									onClick={() => setState((p) => ({ ...p, rightPanelTab: "preview" }))}
-								>
-									<IconSquare size="sm" /> 预览
-								</button>
-								<button
-									type="button"
-									className={`mc-tab ${state.rightPanelTab === "game" ? "active" : ""}`}
-									onClick={() => setState((p) => ({ ...p, rightPanelTab: "game" }))}
-								>
-									<IconGamepad size="sm" /> 游戏
-								</button>
-								<button
-									type="button"
-									className={`mc-tab ${state.rightPanelTab === "advanced" ? "active" : ""}`}
-									onClick={() => setState((p) => ({ ...p, rightPanelTab: "advanced" }))}
-								>
-									<IconCode size="sm" /> 高级
-								</button>
-								<button
-									type="button"
-									className="right-panel-collapse-btn"
-									onClick={() => workspaceLayout.toggleRightCollapsed()}
-									title="收起右侧面板"
-									aria-label="收起右侧面板"
-								>
-									<IconPanelRightClose size="sm" />
-								</button>
 							</div>
-							<div className="right-panel-content">
-								<div
-									className="right-panel-body right-panel-body--preview"
-									hidden={state.rightPanelTab !== "preview"}
-								>
-									<PreviewPanel
-										projectPath={state.projectPath}
-										refreshKey={state.fileTreeRefreshKey}
-										onContentClick={handleContentClick}
-									/>
-								</div>
-								<div className="right-panel-body" hidden={state.rightPanelTab !== "game"}>
-									<McRuntimePanel
-										ref={mcRuntimeRef}
-										projectPath={state.projectPath}
-										onAddCrashToChat={handleCrashToChat}
-										onAddRuntimeErrorToChat={handleRuntimeErrorToChat}
-										toolchainReady={toolchainReady}
-										onRuntimeStatusChange={handleRuntimeStatusChange}
-									/>
-								</div>
-								<div
-									className="right-panel-body right-panel-body--advanced"
-									hidden={state.rightPanelTab !== "advanced"}
-								>
-									<BottomPanel
-										ref={bottomPanelRef}
-										projectPath={state.projectPath}
-										onAddToChatContext={addToChatContext}
-										toolchainReady={toolchainReady}
-										onBuildStatusChange={handleBuildStatusChange}
-									/>
-									<div className="advanced-devlog-wrap">
-										<DevLogPanel />
-									</div>
+							<div className="right-panel-body right-panel-body--advanced" hidden={state.rightPanelTab !== "advanced"}>
+								<BottomPanel
+									ref={bottomPanelRef}
+									projectPath={state.projectPath}
+									onAddToChatContext={addToChatContext}
+									toolchainReady={toolchainReady}
+									onBuildStatusChange={handleBuildStatusChange}
+								/>
+								<div className="advanced-devlog-wrap">
+									<DevLogPanel />
 								</div>
 							</div>
 						</div>
+					</div>
 				</div>
 			</div>
 			{pendingDeleteSession && (
-				<DeleteSessionPanel
-					sessionName={pendingDeleteSession.name}
-					onConfirm={() => handleDeleteSession(pendingDeleteSession.id)}
-					onCancel={() => setPendingDeleteSessionId(null)}
-				/>
+				<DeleteSessionPanel sessionName={pendingDeleteSession.name} onConfirm={() => handleDeleteSession(pendingDeleteSession.id)} onCancel={() => setPendingDeleteSessionId(null)} />
 			)}
 			<NewProjectWizard open={projectDialog === "new"} onClose={() => setProjectDialog("none")} onCreated={(dir) => void loadProjectDir(dir)} />
 			<OpenProjectDialog
@@ -1037,13 +970,21 @@ const App: React.FC = () => {
 				onOpen={(dir) => void handleOpenProjectPath(dir)}
 				onRecentChange={() => void refreshRecentProjects()}
 			/>
-			<ToolchainInitOverlay state={toolchainInit} projectPreparing={projectPreparing} edition={appEdition} onRetry={retryToolchainInit} onCancel={cancelToolchainInit} onOpenLogs={openEnvironmentLogs} onExportDiagnostics={exportEnvironmentDiagnostics} downloadConfirmRequired={downloadConfirmRequired} onConfirmDownload={confirmDownload} onOpenImportDialog={() => setEnvImportDialogRequired(true)} />
-		{runtimeDirSetupRequired && (
-			<RuntimeDirSetup onConfirm={handleRuntimeDirConfirm} onSkip={handleRuntimeDirSkip} />
-		)}
-		{envImportDialogRequired && (
-			<EnvImportDialog onSuccess={handleEnvImportSuccess} onClose={() => setEnvImportDialogRequired(false)} />
-		)}
+			<ToolchainInitOverlay
+				state={toolchainInit}
+				projectPreparing={projectPreparing}
+				edition={appEdition}
+				onRetry={retryToolchainInit}
+				onCancel={cancelToolchainInit}
+				onOpenLogs={openEnvironmentLogs}
+				onExportDiagnostics={exportEnvironmentDiagnostics}
+				downloadConfirmRequired={downloadConfirmRequired}
+				onConfirmDownload={confirmDownload}
+				onOpenImportDialog={() => setEnvImportDialogRequired(true)}
+				runtimePath={runtimePath}
+				onSelectRuntimePath={() => void handleSelectRuntimePath()}
+			/>
+			{envImportDialogRequired && <EnvImportDialog onSuccess={handleEnvImportSuccess} onClose={() => setEnvImportDialogRequired(false)} />}
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />
 			{appView === "workspace" && (
 				<StatusBar
