@@ -74,37 +74,31 @@ function setupPrefetchProject(
   const javaPath = `src/main/java/${groupId.replace(/\./g, '/')}/${pkg}`
   const clientJavaPath = `src/client/java/${groupId.replace(/\./g, '/')}/${pkg}`
 
-  // Gradle 子进程刚退出时，Windows 上文件句柄可能尚未释放，rmSync 会报
-  // ENOTEMPTY/EPERM（warmup 二次调用、杀毒软件实时扫描、daemon 残留都会触发）。
-  // 标准 Windows 文件锁处理：先 rename 到临时目录（原子操作，不受文件锁影响），
-  // 再异步删除旧目录（不阻塞主流程，失败则下次启动时清理）。
-  // rename 失败时 fallback 到带重试的 rmSync。
-  if (fs.existsSync(projectDir)) {
-    const trashDir = `${projectDir}_old_${Date.now()}`
-    try {
-      fs.renameSync(projectDir, trashDir)
-      // 异步删除，不阻塞；fs.promises.rm 在 Node 14+ 可用
-      setImmediate(() => {
-        fs.promises.rm(trashDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 })
-          .catch(() => { /* 旧目录遗留，下次启动时清理 */ })
-      })
-    } catch {
-      // rename 失败（跨盘符/被锁），fallback 到带重试的 rmSync
-      fs.rmSync(projectDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 })
-    }
-  }
-
-  // 清理上次遗留的 _old_ 目录（异步删除失败时积累的垃圾）
+  // projectDir 用唯一时间戳命名（调用方保证），不需要删除。
+  // 这里只清理上次遗留的旧 _prefetch_project* 目录（异步删除失败时积累的垃圾）。
+  // 清理用 rename + 异步删除策略，避免 EPERM 阻塞主流程。
   try {
     const parent = path.dirname(projectDir)
-    const baseName = path.basename(projectDir)
+    const baseName = path.basename(projectDir).replace(/_\d+$/, '')
     for (const entry of fs.readdirSync(parent)) {
-      if (entry.startsWith(`${baseName}_old_`)) {
+      if (entry !== path.basename(projectDir) && entry.startsWith(baseName)) {
         const oldDir = path.join(parent, entry)
-        fs.rmSync(oldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
+        const trashDir = `${oldDir}_trash_${Date.now()}`
+        try {
+          fs.renameSync(oldDir, trashDir)
+          setImmediate(() => {
+            fs.promises.rm(trashDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 })
+              .catch(() => { /* 遗留下次清理 */ })
+          })
+        } catch {
+          // rename 失败，尝试直接 rmSync（带重试）
+          try {
+            fs.rmSync(oldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
+          } catch { /* 清理失败不影响主流程 */ }
+        }
       }
     }
-  } catch { /* 清理失败不影响主流程 */ }
+  } catch { /* 读取目录失败不影响主流程 */ }
 
   fs.mkdirSync(path.join(projectDir, javaPath), { recursive: true })
   fs.mkdirSync(path.join(projectDir, clientJavaPath), { recursive: true })
@@ -326,7 +320,8 @@ export async function ensureGradleHomeOnline(
 
   onProgress({ phase: 'fabric', message: '正在解析 Fabric/Loom 依赖…', percent: 38, source: 'Fabric Maven / 国内 Maven 镜像' })
 
-  const projectDir = path.join(runtimeRoot, '_prefetch_project')
+  // 用唯一目录名避免删除旧目录时的 EPERM（Gradle daemon/杀毒软件锁定文件）
+  const projectDir = path.join(runtimeRoot, `_prefetch_project_${Date.now()}`)
   try {
     setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, true)
     fs.mkdirSync(gradleHomePath, { recursive: true })
