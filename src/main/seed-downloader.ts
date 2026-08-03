@@ -118,7 +118,7 @@ async function fetchJson(url: string): Promise<SeedManifest> {
 async function fetchManifest(
   manifestFilename: string,
   onProgress?: ProgressFn
-): Promise<{ manifest: SeedManifest; baseUrl: string }> {
+): Promise<{ manifest: SeedManifest; baseUrls: string[] }> {
   // Gitee primary，GitHub fallback（manifest 本身小，保持原逻辑）
   let manifest: SeedManifest | null = null
   try {
@@ -128,21 +128,31 @@ async function fetchManifest(
   }
   if (!manifest) {
     manifest = await fetchJson(`${GITHUB_RELEASE_BASE}${manifestFilename}`)
-    return { manifest, baseUrl: GITHUB_RELEASE_BASE }
+    return { manifest, baseUrls: [GITHUB_RELEASE_BASE] }
   }
-  // 双 base 测速选优：不同网络下 Gitee/GitHub 速度差异大（500MB 种子值得 512KB 探测），
-  // 对两个源的首个分片实测速度，选最快的作为下载源（探测失败的按默认 Gitee 兜底）；结果经面板展示
+  // 多源测速选优：Gitee（国内主源）+ GitHub 直连 + GitHub 代理（ghproxy / gh-proxy,国内加速兜底）。
+  // 500MB 种子值得 512KB 探测，对首个分片实测速度，按最快顺序排列下载源；探测失败的排后兜底。
   const firstShard = manifest.shards[0]
   if (firstShard) {
     const ordered = await pickFastestUrls([
       { url: `${GITEE_RELEASE_BASE}${firstShard.filename}`, label: 'Gitee' },
-      { url: `${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'GitHub' }
+      { url: `${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'GitHub' },
+      { url: `https://ghproxy.com/${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'ghproxy' },
+      { url: `https://gh-proxy.com/${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'gh-proxy' }
     ])
-    const chosen = ordered.find((c) => c.speedKBps && c.speedKBps > 0)
-    const baseUrl = chosen?.label === 'GitHub' ? GITHUB_RELEASE_BASE : GITEE_RELEASE_BASE
-    return { manifest, baseUrl }
+    // 按测速结果构建 baseUrls 顺序：每个候选源对应一个 baseUrl（代理源 = 代理前缀 + GITHUB_RELEASE_BASE）
+    const baseUrlByLabel: Record<string, string> = {
+      Gitee: GITEE_RELEASE_BASE,
+      GitHub: GITHUB_RELEASE_BASE,
+      ghproxy: `https://ghproxy.com/${GITHUB_RELEASE_BASE}`,
+      'gh-proxy': `https://gh-proxy.com/${GITHUB_RELEASE_BASE}`
+    }
+    const baseUrls = ordered.map((c) => baseUrlByLabel[c.label]).filter((b): b is string => !!b)
+    // 去重（同一 baseUrl 可能因代理源不同而重复，但 Gitee/GitHub 不会）
+    const uniqueBaseUrls = Array.from(new Set(baseUrls))
+    return { manifest, baseUrls: uniqueBaseUrls }
   }
-  return { manifest, baseUrl: GITEE_RELEASE_BASE }
+  return { manifest, baseUrls: [GITEE_RELEASE_BASE] }
 }
 
 async function downloadFileWithProgress(
@@ -175,7 +185,7 @@ async function downloadFileWithProgress(
 
 async function downloadShard(
   shard: SeedShard,
-  baseUrl: string,
+  baseUrls: string[],
   shardsDir: string,
   onProgress: (received: number, shardIndex: number) => void
 ): Promise<string> {
@@ -195,16 +205,32 @@ async function downloadShard(
     rmSync(shardPath, { force: true })
   }
 
-  const url = `${baseUrl}${shard.filename}`
-  console.log(`[seed-downloader] downloading ${shard.filename} from ${new URL(url).host}`)
-  await downloadFileWithProgress(url, shardPath, shard.size, (received) => {
-    onProgress(received, shard.index)
-  })
+  // 多源回退：按 baseUrls 顺序逐源尝试,失败换下一个源重试（之前单源失败直接抛错）
+  const failures: string[] = []
+  let downloaded = false
+  for (const baseUrl of baseUrls) {
+    const url = `${baseUrl}${shard.filename}`
+    console.log(`[seed-downloader] downloading ${shard.filename} from ${new URL(url).host}`)
+    try {
+      await downloadFileWithProgress(url, shardPath, shard.size, (received) => {
+        onProgress(received, shard.index)
+      })
+      // Verify SHA256
+      const actualSha = await sha256File(shardPath)
+      if (actualSha !== shard.sha256) {
+        throw new Error(`Shard ${shard.filename} SHA256 mismatch: expected ${shard.sha256}, got ${actualSha}`)
+      }
+      downloaded = true
+      break
+    } catch (err) {
+      failures.push(`${new URL(url).host}: ${String(err)}`)
+      // 失败清理,准备换源重试
+      if (existsSync(shardPath)) rmSync(shardPath, { force: true })
+    }
+  }
 
-  // Verify SHA256
-  const actualSha = await sha256File(shardPath)
-  if (actualSha !== shard.sha256) {
-    throw new Error(`Shard ${shard.filename} SHA256 mismatch: expected ${shard.sha256}, got ${actualSha}`)
+  if (!downloaded) {
+    throw new Error(`Shard ${shard.filename} 下载失败: ${failures.join('；')}`)
   }
 
   return shardPath
@@ -212,7 +238,7 @@ async function downloadShard(
 
 async function downloadAllShards(
   manifest: SeedManifest,
-  baseUrl: string,
+  baseUrls: string[],
   shardsDir: string,
   onOverallProgress: (message: string, percent: number) => void,
   progressLabel: string
@@ -263,13 +289,15 @@ async function downloadAllShards(
   const queue = [...manifest.shards]
   const workers: Promise<void>[] = []
   const startAt = Date.now()
+  // 记录首个分片实际下载源（用于诊断日志）
+  let primaryHost = baseUrls[0] ? new URL(baseUrls[0]).host : 'unknown'
 
   for (let i = 0; i < Math.min(DOWNLOAD_CONCURRENCY, queue.length); i++) {
     workers.push((async () => {
       while (queue.length > 0) {
         const shard = queue.shift()
         if (!shard) break
-        const shardPath = await downloadShard(shard, baseUrl, shardsDir, (received) => {
+        const shardPath = await downloadShard(shard, baseUrls, shardsDir, (received) => {
           // 实时记录该分片已下载字节数（每次 chunk 到达即更新）
           progressBytes[shard.index - 1] = received
           reportProgress()
@@ -284,13 +312,13 @@ async function downloadAllShards(
 
   await Promise.all(workers)
 
-  // 下载诊断日志：确认 Gitee/GitHub 对匿名下载（无登录 cookie）是否限速
+  // 下载诊断日志：确认各源对匿名下载（无登录 cookie）是否限速
   const downloadedBytes = progressBytes.reduce((a, b) => a + b, 0)
   const elapsedSec = (Date.now() - startAt) / 1000
   const avgSpeed = downloadedBytes / 1024 / 1024 / (elapsedSec || 1)
   console.log(
     `[seed-downloader] 分片下载完成: ${downloadedBytes} bytes in ${elapsedSec.toFixed(1)}s = ` +
-      `${avgSpeed.toFixed(2)} MB/s (from ${new URL(baseUrl).host}, UA=${DOWNLOAD_USER_AGENT.slice(0, 24)}…)`
+      `${avgSpeed.toFixed(2)} MB/s (primary ${primaryHost}, UA=${DOWNLOAD_USER_AGENT.slice(0, 24)}…)`
   )
 
   return shardPaths
@@ -345,9 +373,9 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
   onProgress(`正在获取${label}清单…`, 5)
 
   let manifest: SeedManifest
-  let baseUrl: string
+  let baseUrls: string[]
   try {
-    ({ manifest, baseUrl } = await fetchManifest(manifestFilename, onProgress))
+    ({ manifest, baseUrls } = await fetchManifest(manifestFilename, onProgress))
   } catch (err) {
     return { ok: false, error: `无法获取${label}清单: ${String(err)}` }
   }
@@ -370,11 +398,16 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
   mkdirSync(staging, { recursive: true })
 
   try {
-    // 1. Download all shards（进度消息带实际下载源名，用户可见走了哪个源）
-    const sourceName = baseUrl === GITHUB_RELEASE_BASE ? 'GitHub' : 'Gitee'
+    // 1. Download all shards（进度消息带主源名,失败自动回退到备源）
+    const primaryBaseUrl = baseUrls[0] || GITEE_RELEASE_BASE
+    const sourceName = primaryBaseUrl === GITHUB_RELEASE_BASE
+      ? 'GitHub'
+      : primaryBaseUrl.includes('ghproxy.com') || primaryBaseUrl.includes('gh-proxy.com')
+        ? 'GitHub代理'
+        : 'Gitee'
     const shardPaths = await downloadAllShards(
       manifest,
-      baseUrl,
+      baseUrls,
       shardsDir,
       onProgress,
       `下载${label}分片（${sourceName}）…`

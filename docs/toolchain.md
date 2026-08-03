@@ -14,9 +14,9 @@ Setup 升级和卸载不会删除 `%LOCALAPPDATA%` 中的运行时。旧版位�
 
 ## 下载和校验
 
-- JDK 固定为 Temurin `21.0.11+10` Windows x64。必须同时包含 `java.exe`、`javac.exe`、`jar.exe` 和匹配版本的 `release` 文件。
+- JDK 固定为 Temurin `21.0.12+8` Windows x64。必须同时包含 `java.exe`、`javac.exe`、`jar.exe` 和匹配版本的 `release` 文件。
 - Gradle 固定为 `9.5.0`。JDK、Gradle 下载支持 `.part`、Range 续传、空闲超时、重试、SHA-256 校验和原子替换。
-- JDK 优先南京大学 Adoptium 镜像，官方 Adoptium 回退；Gradle 优先腾讯云/华为云，官方回退。
+- JDK 优先 GitHub 代理源（ghproxy.com / gh-proxy.com 代理 Adoptium GitHub release，国内加速），Adoptium API + GitHub 直连作为官方兜底；Gradle 优先腾讯云/华为云，官方回退。
 - Minecraft libraries、版本清单和 assets 优先 BMCLAPI，Mojang 官方回退；文件由 Mojang 清单的大小和 SHA-1 校验。
 - `net.fabricmc` 坐标始终路由到 `maven.fabricmc.net`，不会先访问已知返回 404 的公共国内 Maven。
 

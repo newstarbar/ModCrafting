@@ -11,9 +11,9 @@ export const GRADLE_VERSION = '9.5.0'
 export const GRADLE_DIST_NAME = `gradle-${GRADLE_VERSION}-bin`
 export const GRADLE_RUNTIME_FOLDER = 'gradle-9.5'
 export const GRADLE_LAUNCHER_JAR = `gradle-launcher-${GRADLE_VERSION}.jar`
-export const JDK_VERSION = '21.0.11+10'
-export const JDK_ARCHIVE_NAME = 'OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip'
-const JDK_SHA256 = 'd3625e7cadf23787ea540229544b6e2ab494b3b54da1801879e583e1dfee0a64'
+export const JDK_VERSION = '21.0.12+8'
+export const JDK_ARCHIVE_NAME = 'OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip'
+const JDK_SHA256 = '9ba963ee2371874a74185d18bc7bb2ab9407df7683300855ed7606e0662321d0'
 const GRADLE_SHA256 = '553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746'
 
 // Gradle 发行版候选源（下载前会实测各源速度并优先用最快的；默认顺序仅作测速失败时的兜底）
@@ -23,12 +23,17 @@ export const GRADLE_MIRROR_URLS = [
   `https://services.gradle.org/distributions/${GRADLE_DIST_NAME}.zip`
 ]
 
+// JDK 21 GitHub release 地址（Adoptium Temurin 21.0.12+8，作为代理源与官方兜底的基础）
+const GITHUB_JDK_URL = `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/${JDK_ARCHIVE_NAME}`
+
 // 国内 JDK 镜像（Windows x64，按优先级排序）
-// 优先于 Adoptium API 使用，显著提升国内下载速度
+// 国内无 Temurin zip 直镜像（南大仅同步 msi、清华/腾讯/华为均无），改用 GitHub 代理源作为国内加速主源；
+// Adoptium API + GitHub 直连作为官方兜底。下载后由 downloadFileResumable 的 SHA256 校验保证完整性。
 const JDK_MIRROR_URLS_WIN_X64 = [
-  `https://mirror.nju.edu.cn/adoptium/21/jdk/x64/windows/${JDK_ARCHIVE_NAME}`,
-  `https://api.adoptium.net/v3/binary/version/jdk-21.0.11%2B10/windows/x64/jdk/hotspot/normal/eclipse`,
-  `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/${JDK_ARCHIVE_NAME}`
+  `https://ghproxy.com/${GITHUB_JDK_URL}`,      // GitHub 代理（国内加速主源）
+  `https://gh-proxy.com/${GITHUB_JDK_URL}`,     // GitHub 代理备选
+  `https://api.adoptium.net/v3/binary/version/jdk-21.0.12%2B8/windows/x64/jdk/hotspot/normal/eclipse`,
+  GITHUB_JDK_URL                                 // GitHub 直连（官方兜底）
 ]
 
 function adoptiumOs(): string {
@@ -299,7 +304,7 @@ export async function downloadFileResumable(
   onProgress?.(statSync(destination).size, statSync(destination).size)
 }
 
-async function resolveJdkDownloadUrls(onLog?: (msg: string) => void): Promise<string[]> {
+export async function resolveJdkDownloadUrls(onLog?: (msg: string) => void): Promise<string[]> {
   const log = onLog || (() => {})
   const candidates: Array<{ url: string; label: string }> = []
 
@@ -308,6 +313,26 @@ async function resolveJdkDownloadUrls(onLog?: (msg: string) => void): Promise<st
     for (const url of JDK_MIRROR_URLS_WIN_X64) {
       candidates.push({ url, label: new URL(url).host })
     }
+  }
+
+  // Adoptium API 动态查询：硬编码版本过期时自动拉最新 LTS GA，作为版本漂移兜底
+  // 与 scripts/toolchain/toolchain-download.mjs 的 resolveJdkDownloadUrls 逻辑保持同步
+  const os = adoptiumOs()
+  const arch = adoptiumArch()
+  const api =
+    `https://api.adoptium.net/v3/assets/latest/21/hotspot` +
+    `?os=${os}&architecture=${arch}&image_type=jdk&release_type=ga`
+  try {
+    const res = await getDownloadFetch()(api, {
+      headers: { Accept: 'application/json', 'User-Agent': DOWNLOAD_USER_AGENT },
+      signal: AbortSignal.timeout(8000)
+    })
+    if (!res.ok) throw new Error(`Adoptium API HTTP ${res.status}`)
+    const assets = await res.json()
+    const link = assets?.[0]?.binary?.package?.link
+    if (link) candidates.push({ url: link, label: 'Adoptium' })
+  } catch (err) {
+    log(`Adoptium API 动态查询失败: ${String(err)}`)
   }
 
   if (candidates.length === 0) return []

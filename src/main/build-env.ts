@@ -10,7 +10,8 @@ import {
   downloadAndExtractGradle,
   downloadAndExtractJdk,
   downloadFile,
-  isValidJdkDir
+  isValidJdkDir,
+  resolveJdkDownloadUrls
 } from './toolchain-download'
 import { cancelFabricPrefetch, ensureGradleHomeOnline } from './portable-prefetch'
 import { ensureKnowledgeBase, isKnowledgeBaseReady } from './knowledge-downloader'
@@ -1533,15 +1534,45 @@ export async function downloadJdk(onProgress: ProgressSender = defaultProgress):
 
   const jdkDir = getRuntimeJdkPath()
   const zipPath = path.join(getRuntimeRoot(), 'jdk-21.zip')
-  const jdkUrl = 'https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip'
 
   onProgress('正在下载 JDK 21...')
   try {
     fs.mkdirSync(getRuntimeRoot(), { recursive: true })
-    await downloadFile(jdkUrl, zipPath, (received, total) => {
-      const pct = total > 0 ? Math.floor((received / total) * 100) : 0
-      onProgress(`正在下载 JDK 21... ${pct}%`)
-    })
+
+    // 多源测速下载：复用 toolchain-download.ts 的 resolveJdkDownloadUrls()（与便携版首启下载逻辑一致）
+    // 取代原 aka.ms 单源（21.0.6 已 404），逐源 downloadFile,失败自动换源
+    const urls = await resolveJdkDownloadUrls((msg) => onProgress(msg))
+    if (urls.length === 0) {
+      return { success: false, error: '无可用 JDK 下载源' }
+    }
+
+    let downloaded = false
+    const failures: string[] = []
+    const seen = new Set<string>()
+    for (const url of urls) {
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      const host = new URL(url).host
+      onProgress(`正在下载 JDK 21...（源：${host}）`)
+      try {
+        await downloadFile(url, zipPath, (received, total) => {
+          const pct = total > 0 ? Math.floor((received / total) * 100) : 0
+          onProgress(`正在下载 JDK 21... ${pct}%`)
+        })
+        // 大小校验（JDK 21 zip 通常 ~190MB,阈值 40MB 与 toolchain-download.ts 一致）
+        if (fs.existsSync(zipPath) && fs.statSync(zipPath).size > 40_000_000) {
+          downloaded = true
+          break
+        }
+        failures.push(`${host}: 下载文件大小异常`)
+      } catch (err) {
+        failures.push(`${host}: ${String(err)}`)
+      }
+    }
+
+    if (!downloaded) {
+      return { success: false, error: `JDK 下载失败: ${failures.join('；') || '无可用下载源'}` }
+    }
 
     onProgress('正在解压 JDK 21...')
     const extractDir = path.join(getRuntimeRoot(), '_jdk_extract')

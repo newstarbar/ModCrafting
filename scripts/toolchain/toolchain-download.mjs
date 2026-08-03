@@ -27,11 +27,18 @@ export const GRADLE_MIRROR_URLS = [
   `https://services.gradle.org/distributions/${GRADLE_DIST_NAME}.zip`
 ]
 
+// JDK 21 GitHub release 地址（Adoptium Temurin 21.0.12+8，作为代理源与官方兜底的基础）
+const GITHUB_JDK_URL = 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip'
+
 // 国内 JDK 镜像（Windows x64，按优先级排序）
-// 优先于 Adoptium API 使用，显著提升国内下载速度
+// 国内无 Temurin zip 直镜像（南大仅同步 msi、清华/腾讯/华为均无），改用 GitHub 代理源作为国内加速主源；
+// Adoptium API + GitHub 直连作为官方兜底。
+// 与 src/main/toolchain-download.ts 的 JDK_MIRROR_URLS_WIN_X64 保持完全一致（AGENTS.md 维护红线）。
 const JDK_MIRROR_URLS_WIN_X64 = [
-  'https://api.adoptium.net/v3/binary/version/jdk-21.0.11%2B10/windows/x64/jdk/hotspot/normal/eclipse',
-  'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip'
+  `https://ghproxy.com/${GITHUB_JDK_URL}`,      // GitHub 代理（国内加速主源）
+  `https://gh-proxy.com/${GITHUB_JDK_URL}`,     // GitHub 代理备选
+  'https://api.adoptium.net/v3/binary/version/jdk-21.0.12%2B8/windows/x64/jdk/hotspot/normal/eclipse',
+  GITHUB_JDK_URL                                 // GitHub 直连（官方兜底）
 ]
 
 export function adoptiumOs() {
@@ -244,7 +251,7 @@ export async function downloadFile(url, dest, onProgress) {
 export async function resolveJdkDownloadUrls() {
   const candidates = []
 
-  // 候选源：国内镜像 + Adoptium API + Microsoft（测速选优，最快者优先）
+  // 候选源：GitHub 代理 + Adoptium API + GitHub 直连 + API 动态查询（测速选优，最快者优先）
   if (process.platform === 'win32' && adoptiumArch() === 'x64') {
     for (const url of JDK_MIRROR_URLS_WIN_X64) {
       candidates.push({ url, label: new URL(url).host })
@@ -270,9 +277,6 @@ export async function resolveJdkDownloadUrls() {
     console.warn(`Adoptium API failed: ${err.message || err}`)
   }
 
-  if (process.platform === 'win32' && arch === 'x64') {
-    candidates.push({ url: 'https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip', label: 'Microsoft' })
-  }
   if (candidates.length === 0) return []
 
   const ordered = await pickFastestUrls(candidates, (msg) => console.log(`[jdk-download] ${msg}`))
@@ -338,9 +342,6 @@ export async function downloadAndExtractJdk(targetDir, workDir, onLog = console.
   if (isValidJdkDir(targetDir)) return
 
   const urls = await resolveJdkDownloadUrls()
-  if (process.platform === 'win32' && adoptiumArch() === 'x64') {
-    urls.push('https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip')
-  }
 
   const seen = new Set()
   const failures = []

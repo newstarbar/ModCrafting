@@ -15,7 +15,7 @@ test('packaging keeps Electron runtime files and uses canonical artifact names',
 })
 
 test('toolchain requires a full pinned JDK and no Gitee shard bootstrap', () => {
-  assert.match(toolchain, /JDK_VERSION = '21\.0\.11\+10'/)
+  assert.match(toolchain, /JDK_VERSION = '21\.0\.12\+8'/)
   assert.match(toolchain, /javac/)
   assert.match(toolchain, /downloadFileResumable/)
   assert.doesNotMatch(buildEnv, /downloadAndExtractSeedShards/)

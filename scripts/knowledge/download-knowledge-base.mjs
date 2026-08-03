@@ -246,16 +246,19 @@ async function main () {
   // 获取资产下载链接
   let assets
   if (downloadSource === 'gitee') {
-    // Gitee Release 资产
+    // Gitee Release 资产（国内主源,直连）
     assets = (release.assets || []).map((a) => ({
       name: a.name,
       url: a.browser_download_url
     }))
   } else {
-    // GitHub Release 资产
+    // GitHub Release 资产：国内直连慢易失败,加 ghproxy.com 代理前缀加速
+    // Gitee 已有镜像作主源,此处仅 GitHub fallback 时生效；SHA256 校验保证代理中转完整性
     assets = (release.assets || []).map((a) => ({
       name: a.name,
       url: a.browser_download_url
+        ? `https://ghproxy.com/${a.browser_download_url}`
+        : a.browser_download_url
     }))
   }
 

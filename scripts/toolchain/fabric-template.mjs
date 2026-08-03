@@ -11,7 +11,13 @@ export function generateBuildGradle(projectName, groupId) {
   return `plugins { id 'fabric-loom' version '${FABRIC_VERSIONS.loom_version}'; id 'maven-publish' }
 version = project.mod_version; group = "${groupId}"
 base { archivesName = "${projectName}" }
-repositories { mavenCentral() }
+// 阿里云 maven 镜像（国内加速 central）+ Fabric 官方源（fabric-loom 等专用包）+ central 兜底
+repositories {
+  maven { url 'https://maven.aliyun.com/repository/public' }
+  maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+  maven { url 'https://maven.fabricmc.net' }
+  mavenCentral()
+}
 loom { splitEnvironmentSourceSets()
   runs {
     client { vmArgs "-Dfile.encoding=UTF-8" }
@@ -57,6 +63,9 @@ tasks.named("runClient").configure {
 export function generateSettingsGradle(projectName) {
   return `pluginManagement {
     repositories {
+        // 阿里云 maven 镜像（国内加速 gradle 插件 + central）
+        maven { url = uri('https://maven.aliyun.com/repository/public') }
+        maven { url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
         maven {
             name = 'Fabric'
             url = uri('https://maven.fabricmc.net/')

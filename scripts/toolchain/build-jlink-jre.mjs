@@ -239,7 +239,7 @@ function buildJreManually() {
   }
 
   // 6. 创建 release 文件
-  const releaseContent = `JAVA_VERSION="21.0.11"\nOS_NAME="Windows"\nOS_ARCH="x86_64"\nSOURCE="jdk-21-minimal-fallback"\n`
+  const releaseContent = `JAVA_VERSION="21.0.12"\nOS_NAME="Windows"\nOS_ARCH="x86_64"\nSOURCE="jdk-21-minimal-fallback"\n`
   writeFileSync(path.join(outputDir, 'release'), releaseContent)
 
   console.log(`[jlink-fallback] JRE built successfully`)
