@@ -9,8 +9,21 @@ function isHttpUrl(url: string): boolean {
   }
 }
 
+// 允许通过 shell.openExternal 打开的非 http 协议白名单
+const ALLOWED_SCHEMES = ['tencent:', 'mailto:', 'tel:']
+
+function isAllowedScheme(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return ALLOWED_SCHEMES.includes(parsed.protocol)
+  } catch {
+    return false
+  }
+}
+
 /**
  * Open URL in the system default browser; fall back to an in-app window if that fails.
+ * 支持 http/https 链接以及白名单协议（tencent/mailto/tel）。
  */
 export async function openExternalWithFallback(
   url: string
@@ -19,7 +32,9 @@ export async function openExternalWithFallback(
   if (!trimmed) {
     return { success: false, error: '链接为空' }
   }
-  if (!isHttpUrl(trimmed)) {
+  const isHttp = isHttpUrl(trimmed)
+  const isAllowed = isAllowedScheme(trimmed)
+  if (!isHttp && !isAllowed) {
     return { success: false, error: '不支持的链接协议' }
   }
 
@@ -27,6 +42,10 @@ export async function openExternalWithFallback(
     await shell.openExternal(trimmed)
     return { success: true }
   } catch (err) {
+    // 非 http 协议无法用内置窗口回退，直接返回错误
+    if (!isHttp) {
+      return { success: false, error: String(err) }
+    }
     try {
       const win = new BrowserWindow({
         width: 1100,
