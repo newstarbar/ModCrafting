@@ -30,8 +30,8 @@ export const GRADLE_MIRROR_URLS = [
 // 国内 JDK 镜像（Windows x64，按优先级排序）
 // 优先于 Adoptium API 使用，显著提升国内下载速度
 const JDK_MIRROR_URLS_WIN_X64 = [
-  'https://mirrors.huaweicloud.com/adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip',
-  'https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip'
+  'https://api.adoptium.net/v3/binary/version/jdk-21.0.11%2B10/windows/x64/jdk/hotspot/normal/eclipse',
+  'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip'
 ]
 
 export function adoptiumOs() {
@@ -241,7 +241,7 @@ export async function downloadFile(url, dest, onProgress) {
   }
 }
 
-export async function resolveJdkDownloadUrl() {
+export async function resolveJdkDownloadUrls() {
   const candidates = []
 
   // 候选源：国内镜像 + Adoptium API + Microsoft（测速选优，最快者优先）
@@ -273,10 +273,10 @@ export async function resolveJdkDownloadUrl() {
   if (process.platform === 'win32' && arch === 'x64') {
     candidates.push({ url: 'https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip', label: 'Microsoft' })
   }
-  if (candidates.length === 0) return null
+  if (candidates.length === 0) return []
 
   const ordered = await pickFastestUrls(candidates, (msg) => console.log(`[jdk-download] ${msg}`))
-  return ordered[0].url
+  return ordered.map((candidate) => candidate.url)
 }
 
 export function findJdkRootInDir(dir) {
@@ -337,9 +337,7 @@ export async function downloadAndExtractJdk(targetDir, workDir, onLog = console.
 
   if (isValidJdkDir(targetDir)) return
 
-  const urls = []
-  const adoptium = await resolveJdkDownloadUrl()
-  if (adoptium) urls.push(adoptium)
+  const urls = await resolveJdkDownloadUrls()
   if (process.platform === 'win32' && adoptiumArch() === 'x64') {
     urls.push('https://aka.ms/download-jdk/microsoft-jdk-21.0.6-windows-x64.zip')
   }

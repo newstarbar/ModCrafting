@@ -28,7 +28,7 @@ const asarPath = path.join(unpacked, 'resources', 'app.asar')
 if (existsSync(asarPath)) {
   try {
     const listed = execFileSync(process.execPath, [path.join(root, 'node_modules', '@electron', 'asar', 'bin', 'asar.js'), 'list', asarPath], { encoding: 'utf8' })
-    for (const dependency of ['node_modules/electron-updater/', 'node_modules/js-yaml/']) {
+    for (const dependency of ['node_modules\\electron-updater', 'node_modules\\js-yaml']) {
       if (!listed.includes(dependency)) fail(`Required main-process dependency missing from app.asar: ${dependency}`)
     }
   } catch (error) {

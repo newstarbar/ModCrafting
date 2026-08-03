@@ -188,6 +188,8 @@ app.whenReady().then(async () => {
     // Keep packaged smoke checks independent from network setup, updater and
     // optional services while using the actual preload bridge and IPC layer.
     setupIpcHandlers()
+    setupTerminalHandlers()
+    setupMcRuntimeHandlers()
     createWindow()
     return
   }

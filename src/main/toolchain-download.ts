@@ -27,6 +27,7 @@ export const GRADLE_MIRROR_URLS = [
 // 优先于 Adoptium API 使用，显著提升国内下载速度
 const JDK_MIRROR_URLS_WIN_X64 = [
   `https://mirror.nju.edu.cn/adoptium/21/jdk/x64/windows/${JDK_ARCHIVE_NAME}`,
+  `https://api.adoptium.net/v3/binary/version/jdk-21.0.11%2B10/windows/x64/jdk/hotspot/normal/eclipse`,
   `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/${JDK_ARCHIVE_NAME}`
 ]
 
@@ -298,7 +299,7 @@ export async function downloadFileResumable(
   onProgress?.(statSync(destination).size, statSync(destination).size)
 }
 
-async function resolveJdkDownloadUrl(onLog?: (msg: string) => void): Promise<string | null> {
+async function resolveJdkDownloadUrls(onLog?: (msg: string) => void): Promise<string[]> {
   const log = onLog || (() => {})
   const candidates: Array<{ url: string; label: string }> = []
 
@@ -309,11 +310,11 @@ async function resolveJdkDownloadUrl(onLog?: (msg: string) => void): Promise<str
     }
   }
 
-  if (candidates.length === 0) return null
+  if (candidates.length === 0) return []
 
   // 测速选优：不同网络下各源速度差异大，实测最快者优先（探测失败的排最后兜底）；结果经面板展示
   const ordered = await pickFastestUrls(candidates)
-  return ordered[0].url
+  return ordered.map((candidate) => candidate.url)
 }
 
 function findJdkRootInDir(dir: string): string | null {
@@ -378,9 +379,9 @@ export async function downloadAndExtractJdk(
 
   if (isValidJdkDir(targetDir)) return
 
-  const urls: string[] = []
-  const adoptium = await resolveJdkDownloadUrl(log)
-  if (adoptium) urls.push(adoptium)
+  // Keep every validated candidate, not only the speed-test winner. A mirror
+  // may answer the probe while the pinned archive is missing (HTTP 404).
+  const urls = await resolveJdkDownloadUrls(log)
 
   const seen = new Set<string>()
   const failures: string[] = []
