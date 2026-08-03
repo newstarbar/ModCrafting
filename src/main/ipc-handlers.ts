@@ -366,6 +366,10 @@ export function setupIpcHandlers(): void {
 
   const ipcProgress = (event: IpcMainInvokeEvent) =>
     createWindowProgressSender((channel, payload) => {
+      // 渲染窗口被关闭/重建后，event.sender 会被销毁；继续 send 会抛
+      // "Object has been destroyed"，被上层 failToolchain 当成当前阶段失败
+      // 记录到 environment.log（典型现象：JDK 下载被错误中断后用户重试触发二次下载）。
+      if (event.sender.isDestroyed()) return
       if (channel === 'env:toolchainProgress') {
         event.sender.send(channel, payload)
       } else {

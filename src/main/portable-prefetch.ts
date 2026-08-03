@@ -74,7 +74,12 @@ function setupPrefetchProject(
   const javaPath = `src/main/java/${groupId.replace(/\./g, '/')}/${pkg}`
   const clientJavaPath = `src/client/java/${groupId.replace(/\./g, '/')}/${pkg}`
 
-  if (fs.existsSync(projectDir)) fs.rmSync(projectDir, { recursive: true, force: true })
+  // Gradle 子进程刚退出时，Windows 上文件句柄可能尚未释放，立即 rmSync 会
+  // 报 ENOTEMPTY（warmup 二次调用 setupPrefetchProject 时尤其常见）。加 maxRetries
+  // 让 fs 在 300ms × 8 次内重试，与 build-env.ts 的 RM_OPTS 一致。
+  if (fs.existsSync(projectDir)) {
+    fs.rmSync(projectDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 })
+  }
 
   fs.mkdirSync(path.join(projectDir, javaPath), { recursive: true })
   fs.mkdirSync(path.join(projectDir, clientJavaPath), { recursive: true })
