@@ -119,7 +119,7 @@ java { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaV
   repositories {
     exclusiveContent {
       forRepository { maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net/') } }
-      filter { includeGroupByRegex("net\\.fabricmc(\\..*)?|fabric-loom") }
+      filter { includeGroupByRegex("net\\\\.fabricmc(\\\\..*)?|fabric-loom") }
     }
     maven { name = 'AliyunGradlePlugin'; url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
     maven { name = 'AliyunCentral'; url = uri('https://maven.aliyun.com/repository/public') }
@@ -317,10 +317,10 @@ export async function ensureGradleHomeOnline(
       setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, domestic)
       const source = domestic ? 'BMCLAPI 国内镜像' : 'Mojang 官方源'
       onProgress({ phase: 'fabric', message: '正在下载 Fabric Loader、Yarn 与 Fabric API…', percent: 46, source })
-      await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon', '--console=plain'], 30 * 60 * 1000, forward('fabric', 52))
+      await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))
       onProgress({ phase: 'minecraft', message: '正在处理 Minecraft 与映射…', percent: 58, source })
       onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent: 64, source })
-      await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon', '--console=plain'], 30 * 60 * 1000, forward('assets', 76))
+      await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
     }
 
     try {
@@ -331,7 +331,7 @@ export async function ensureGradleHomeOnline(
     }
 
     onProgress({ phase: 'verify', message: '正在验证离线 Fabric 构建…', percent: 88 })
-    await runGradle(projectDir, runtimeRoot, ['build', '--offline', '--no-daemon', '--console=plain'], 20 * 60 * 1000)
+    await runGradle(projectDir, runtimeRoot, ['build', '--offline', '--no-daemon',], 20 * 60 * 1000)
     if (!isReady()) return { ok: false, error: 'Fabric 离线构建虽完成，但缓存校验未通过' }
     writeSeedMarker()
     onProgress({ phase: 'verify', message: '离线构建验证通过', percent: 96 })
