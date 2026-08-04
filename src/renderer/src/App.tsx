@@ -982,7 +982,7 @@ const App: React.FC = () => {
 				onConfirmDownload={confirmDownload}
 				onOpenImportDialog={() => setEnvImportDialogRequired(true)}
 				runtimePath={runtimePath}
-				onSelectRuntimePath={() => void handleSelectRuntimePath()}
+				onSelectRuntimePath={appEdition === 'portable' ? undefined : () => void handleSelectRuntimePath()}
 			/>
 			{envImportDialogRequired && <EnvImportDialog onSuccess={handleEnvImportSuccess} onClose={() => setEnvImportDialogRequired(false)} />}
 			<UpdateBanner visible={updateBanner.visible} message={updateBanner.message} percent={updateBanner.percent} />

@@ -14,14 +14,11 @@ export interface RuntimeLayout {
 }
 
 function setupRuntimeRoot(): string {
-  // NSIS updates and uninstalls own the installation directory. Runtime data must
-  // live outside it so that an update never removes an already downloaded JDK.
   // 优先读 config.json 的 runtimePath 覆盖（用户自定义数据目录）；
-  // 未配置时回退到默认 LocalAppData 位置（保持向后兼容）。
+  // 未配置时默认放在安装目录下的 runtime 子目录（与便携版一致）。
   const override = getRuntimePathOverride()
   if (override) return override
-  const localAppData = process.env.LOCALAPPDATA || path.dirname(app.getPath('userData'))
-  return path.join(localAppData, 'ModCrafting', 'runtime')
+  return path.join(path.dirname(app.getPath('exe')), 'runtime')
 }
 
 export function getRuntimeLayout(): RuntimeLayout {

@@ -99,6 +99,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const [runtimePathLoading, setRuntimePathLoading] = useState(false)
   const [runtimeMigrating, setRuntimeMigrating] = useState(false)
   const [runtimeMessage, setRuntimeMessage] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null)
+  const [isPortable, setIsPortable] = useState(false)
   const activeSessionItemRef = useRef<HTMLDivElement | null>(null)
 
   const sortedSessions = sortSessionsByUpdatedAt(sessions)
@@ -138,6 +139,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
 
   useEffect(() => {
     void refreshRuntimePath()
+    window.api.getEdition().then((ed) => setIsPortable(ed === 'portable')).catch(() => {})
   }, [refreshRuntimePath])
 
   const handleChangeRuntimeDir = useCallback(async () => {
@@ -650,7 +652,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               marginBottom: '8px'
             }}>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                当前位置（JDK / Gradle / 依赖缓存，约 1-2 GB）
+                {isPortable ? '便携版数据目录（跟随 exe 位置）' : '当前位置（JDK / Gradle / 依赖缓存，约 1-2 GB）'}
               </div>
               <div style={{
                 fontSize: '11px',
@@ -662,15 +664,17 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               }}>
                 {runtimePathLoading ? '加载中…' : (runtimePath || '—')}
               </div>
-              <button
-                type="button"
-                className="mc-btn"
-                style={{ padding: '3px 8px', fontSize: '10px' }}
-                disabled={runtimeMigrating}
-                onClick={() => void handleChangeRuntimeDir()}
-              >
-                {runtimeMigrating ? '迁移中…' : '修改数据目录'}
-              </button>
+              {!isPortable && (
+                <button
+                  type="button"
+                  className="mc-btn"
+                  style={{ padding: '3px 8px', fontSize: '10px' }}
+                  disabled={runtimeMigrating}
+                  onClick={() => void handleChangeRuntimeDir()}
+                >
+                  {runtimeMigrating ? '迁移中…' : '修改数据目录'}
+                </button>
+              )}
               {runtimeMessage && (
                 <div style={{
                   marginTop: '6px',

@@ -85,14 +85,20 @@ const ToolchainInitOverlay: React.FC<Props> = ({ state, projectPreparing, editio
             <li><span className="toolchain-init-download-name">Gradle 9.5</span><span className="toolchain-init-download-size">国内镜像测速选优</span></li>
             <li><span className="toolchain-init-download-name">Fabric 与游戏资源</span><span className="toolchain-init-download-size">BMCLAPI 优先，Mojang 官方源回退</span></li>
           </ul>
-          {runtimePath !== undefined && onSelectRuntimePath && (
+          {runtimePath !== undefined && (
             <div className="toolchain-init-path-section">
               <div className="toolchain-init-path-label">数据存放位置</div>
               <div className="toolchain-init-path-row">
                 <span className="toolchain-init-path-value">{runtimePath || '加载中…'}</span>
-                <button type="button" className="toolchain-init-secondary-btn toolchain-init-path-btn" onClick={onSelectRuntimePath}>浏览…</button>
+                {onSelectRuntimePath && (
+                  <button type="button" className="toolchain-init-secondary-btn toolchain-init-path-btn" onClick={onSelectRuntimePath}>浏览…</button>
+                )}
               </div>
-              <p className="toolchain-init-path-hint">JDK、Gradle、依赖缓存与游戏资源（约 1-2 GB）将存放于此目录。建议选择非 C 盘位置。</p>
+              <p className="toolchain-init-path-hint">
+                {onSelectRuntimePath
+                  ? 'JDK、Gradle、依赖缓存与游戏资源（约 1-2 GB）将存放于此目录。建议选择非 C 盘位置。'
+                  : 'JDK、Gradle、依赖缓存与游戏资源将存放于便携版所在目录的 runtime 文件夹中。'}
+              </p>
             </div>
           )}
           <p className="toolchain-init-download-hint">下载量按实际版本清单计算；界面会显示当前步骤、来源、文件和速度。</p>

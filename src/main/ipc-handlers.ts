@@ -462,7 +462,9 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('appConfig:suggestRuntimePath', async () => suggestDefaultRuntimePath())
 
   // 读取当前生效的 runtime 路径（含覆盖与默认逻辑）
+  // 便携版固定使用 exe 旁的 runtime 目录，不读 config.json 覆盖
   ipcMain.handle('appConfig:getEffectiveRuntimePath', async () => {
+    if (getAppEdition() === 'portable') return getRuntimeRoot()
     const override = getRuntimePathOverride()
     return override || getRuntimeRoot()
   })
