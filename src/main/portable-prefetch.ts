@@ -68,15 +68,16 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-function writeGradlewBat(projectDir: string, runtimeRoot: string): void {
+function writeGradlewBat(projectDir: string, runtimeRoot: string, jdkPath: string): void {
   // .bat 文件中路径使用单反斜杠，不需要转义
   // chcp 65001 切换控制台编码为 UTF-8，避免中文路径/错误信息乱码
+  // jdkPath 可能为 marker 指向的本地 JDK 路径（非 runtimeRoot\jdk-21），需用绝对值
   const content = `@echo off
 chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 set DIRNAME=%~dp0
 set "MODCRAFTING_RUNTIME=${runtimeRoot}"
-set "JAVA_HOME=%MODCRAFTING_RUNTIME%\\jdk-21"
+set "JAVA_HOME=${jdkPath}"
 set "PATH=%JAVA_HOME%\\bin;%PATH%"
 set "GRADLE_USER_HOME=%MODCRAFTING_RUNTIME%\\gradle-home"
 set "MC_BUNDLED_GRADLE=%DIRNAME%.modcrafting\\${GRADLE_RUNTIME_FOLDER}"
@@ -98,6 +99,7 @@ exit /b !ERRORLEVEL!
 function setupPrefetchProject(
   projectDir: string,
   runtimeRoot: string,
+  jdkPath: string,
   gradleSrc: string,
   wrapperJar: string,
   v: FabricVersions,
@@ -245,7 +247,7 @@ zipStorePath=wrapper/dists
   fs.writeFileSync(path.join(projectDir, `${clientJavaPath}/${capitalize(pkg)}Client.java`), clientJava, 'utf-8')
   fs.writeFileSync(path.join(projectDir, 'gradle/wrapper/gradle-wrapper.properties'), wrapperProps, 'utf-8')
 
-  writeGradlewBat(projectDir, runtimeRoot)
+  writeGradlewBat(projectDir, runtimeRoot, jdkPath)
 
   if (fs.existsSync(wrapperJar)) {
     fs.cpSync(wrapperJar, path.join(projectDir, 'gradle/wrapper/gradle-wrapper.jar'))
@@ -258,6 +260,7 @@ zipStorePath=wrapper/dists
 function runGradle(
   cwd: string,
   runtimeRoot: string,
+  jdkPath: string,
   args: string[],
   timeoutMs: number,
   onOutput?: (line: string) => void
@@ -273,9 +276,9 @@ function runGradle(
       env: {
         ...process.env,
         MODCRAFTING_RUNTIME: runtimeRoot,
-        JAVA_HOME: path.join(runtimeRoot, 'jdk-21'),
+        JAVA_HOME: jdkPath,
         GRADLE_USER_HOME: path.join(runtimeRoot, 'gradle-home'),
-        PATH: `${path.join(runtimeRoot, 'jdk-21', 'bin')};${process.env.PATH || ''}`
+        PATH: `${path.join(jdkPath, 'bin')};${process.env.PATH || ''}`
       }
     })
     activeGradlePid = child.pid
@@ -340,6 +343,7 @@ function runGradle(
 
 export async function ensureGradleHomeOnline(
   runtimeRoot: string,
+  jdkPath: string,
   gradleRuntimePath: string,
   wrapperJarPath: string,
   gradleHomePath: string,
@@ -359,7 +363,7 @@ export async function ensureGradleHomeOnline(
   // 用唯一目录名避免删除旧目录时的 EPERM（Gradle daemon/杀毒软件锁定文件）
   const projectDir = path.join(runtimeRoot, `_prefetch_project_${Date.now()}`)
   try {
-    setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, true)
+    setupPrefetchProject(projectDir, runtimeRoot, jdkPath, gradleRuntimePath, wrapperJarPath, fabricVersions, true)
     fs.mkdirSync(gradleHomePath, { recursive: true })
 
     const forward = (phase: PrefetchProgressPayload['phase'], basePercent: number) => (line: string): void => {
@@ -370,7 +374,7 @@ export async function ensureGradleHomeOnline(
     }
 
     const warmup = async (domestic: boolean): Promise<void> => {
-      setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, domestic)
+      setupPrefetchProject(projectDir, runtimeRoot, jdkPath, gradleRuntimePath, wrapperJarPath, fabricVersions, domestic)
       const source = domestic ? 'BMCLAPI 国内镜像' : 'Mojang 官方源'
 
       // 步骤 1：build（下载 Fabric Loader、Yarn、Fabric API 并编译）
@@ -379,7 +383,7 @@ export async function ensureGradleHomeOnline(
         onProgress({ phase: 'fabric', message: 'Fabric 依赖已下载，跳过 build 步骤', percent: 52, source })
       } else {
         onProgress({ phase: 'fabric', message: '正在下载 Fabric Loader、Yarn 与 Fabric API…', percent: 46, source })
-        await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))
+        await runGradle(projectDir, runtimeRoot, jdkPath, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))
         writePrefetchStepDone(gradleHomePath, PREFETCH_BUILD_MARKER, fabricVersions)
       }
 
@@ -406,7 +410,7 @@ export async function ensureGradleHomeOnline(
           onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent, source })
         }, 2000)
         try {
-          await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
+          await runGradle(projectDir, runtimeRoot, jdkPath, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
         } finally {
           clearInterval(assetsTimer)
         }
@@ -426,7 +430,7 @@ export async function ensureGradleHomeOnline(
     }
 
     onProgress({ phase: 'verify', message: '正在验证离线 Fabric 构建…', percent: 88 })
-    await runGradle(projectDir, runtimeRoot, ['build', '--offline', '--no-daemon',], 20 * 60 * 1000)
+    await runGradle(projectDir, runtimeRoot, jdkPath, ['build', '--offline', '--no-daemon',], 20 * 60 * 1000)
     // 离线 build 成功说明缓存足够支持离线构建，先写 seed marker，
     // 再由 isReady() 验证 marker + 缓存目录完整性。
     // 注意：writeSeedMarker 必须在 isReady 之前调用，否则首次运行时

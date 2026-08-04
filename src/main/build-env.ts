@@ -540,6 +540,9 @@ function writeRuntimeSeedMarker(gradleHome: string): void {
 
 async function ensurePortableGradleHome(onProgress: ProgressSender): Promise<{ ok: boolean; error?: string }> {
   const runtimeRoot = getRuntimeRoot()
+  // 解析实际 JDK 路径（优先读 .local-jdk-path marker，回落到 runtimeRoot\jdk-21）
+  // 避免 detectLocalJdk 命中本地系统 JDK 后，runGradle 仍用 runtimeRoot\jdk-21 找不到 JDK
+  const jdkPath = getRuntimeJdkPath()
   const gradleHome = runtimeGradleHomePath()
   const expected = loadFabricVersions()
 
@@ -552,6 +555,7 @@ async function ensurePortableGradleHome(onProgress: ProgressSender): Promise<{ o
 
   return ensureGradleHomeOnline(
     runtimeRoot,
+    jdkPath,
     getRuntimeGradlePath(),
     wrapperJar,
     gradleHome,
