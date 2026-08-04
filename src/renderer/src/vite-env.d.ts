@@ -221,6 +221,8 @@ interface ModCraftingApi {
     error?: string
   }>
   openExternalUrl: (url: string) => Promise<{ success: boolean; usedFallback?: boolean; error?: string }>
+  // 拖拽文件路径获取（Electron 32+ 替代 File.path）
+  getPathForFile: (file: File) => string
   showItemInFolder: (targetPath: string) => Promise<{ success: boolean; error?: string }>
   findExportJar: (
     projectPath: string

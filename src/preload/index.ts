@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export interface FileEntry {
   name: string
@@ -675,7 +675,9 @@ const api = {
     ): void => callback(payload)
     ipcRenderer.on('context:push', handler)
     return () => ipcRenderer.removeListener('context:push', handler)
-  }
+  },
+  // 拖拽文件路径获取（Electron 32+ File.path 已废弃，需用 webUtils）
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 }
 
 contextBridge.exposeInMainWorld('api', api)

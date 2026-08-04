@@ -136,19 +136,19 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 			if (importing) return;
 			const files = e.dataTransfer?.files;
 			if (files && files.length > 0) {
-				const file = files[0];
-				// Electron 拖拽文件时，file.path 包含绝对路径
-				const filePath = (file as File & { path?: string }).path;
-				if (filePath) {
-					if (!/\.(zip|tar\.xz|tar\.gz|tar)$/i.test(filePath)) {
-						setError("请选择 .zip / .tar.xz / .tar.gz 格式的压缩包");
-						return;
-					}
-					void handleImport(filePath);
-				} else {
-					setError('无法获取文件路径，请使用"选择文件"按钮');
+			const file = files[0];
+			// Electron 32+ 需使用 webUtils.getPathForFile 获取拖拽文件路径
+			const filePath = window.api?.getPathForFile?.(file) ?? (file as File & { path?: string }).path;
+			if (filePath) {
+				if (!/\.(zip|tar\.xz|tar\.gz|tar)$/i.test(filePath)) {
+					setError("请选择 .zip / .tar.xz / .tar.gz 格式的压缩包");
+					return;
 				}
+				void handleImport(filePath);
+			} else {
+				setError('无法获取文件路径，请使用"选择文件"按钮');
 			}
+		}
 		},
 		[importing, handleImport]
 	);
