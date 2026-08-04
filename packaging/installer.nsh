@@ -6,6 +6,11 @@
   !ifndef MODCRAFTING_HEADER_DONE
     !define MODCRAFTING_HEADER_DONE
 
+    ; 安装与卸载共用：标记是否在卸载时清除 runtime（环境配置）
+    ; 默认 "0"（保留）；仅在普通卸载时由询问对话框置 "1"
+    ; 更新重装（isUpdated）场景始终保留 runtime
+    Var ModCraftingPurgeRuntime
+
     !ifndef BUILD_UNINSTALLER
       !define MODCRAFTING_SETUP_PROGRESS
 
@@ -72,6 +77,34 @@
         Goto +2
         StrCpy $ModCraftingCreateStartMenuShortcut "0"
       FunctionEnd
+    !else
+      ; 卸载程序：询问是否同时删除环境配置（JDK / Gradle / Fabric 依赖）
+      ; 默认"否"（保留），对应复选框"默认不选中删除环境配置"
+      Function un.ModCraftingAskPurgeRuntime
+        StrCpy $ModCraftingPurgeRuntime "0"
+        ; 更新重装场景：无条件保留 runtime，不弹询问
+        ${if} ${isUpdated}
+          Return
+        ${endif}
+        ; 静默卸载场景：默认保留
+        ${if} ${Silent}
+          Return
+        ${endif}
+        MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
+          "是否同时删除环境配置？$\r$\n$\r$\n\
+          环境配置包括 JDK 21、Gradle 9.5 与离线 Fabric / Minecraft 依赖（约 500 MB），$\r$\n\
+          位于安装目录下的 runtime 子目录。$\r$\n$\r$\n\
+          选择「否」（默认）将保留环境配置，下次安装或更新 ModCrafting 时可直接复用，$\r$\n\
+          无需重新下载。$\r$\n$\r$\n\
+          是否删除环境配置？" \
+          /SD IDNO IDYES mc_purge_yes IDNO mc_purge_no
+        mc_purge_yes:
+          StrCpy $ModCraftingPurgeRuntime "1"
+          Goto mc_purge_done
+        mc_purge_no:
+          StrCpy $ModCraftingPurgeRuntime "0"
+        mc_purge_done:
+      FunctionEnd
     !endif
   !endif
 
@@ -123,8 +156,9 @@
     !define MUI_UNWELCOMEPAGE_TITLE "卸载 ModCrafting"
     !define MUI_UNWELCOMEPAGE_TEXT \
       "此向导将从您的计算机中卸载 ModCrafting。$\r$\n$\r$\n\
-      卸载不会删除您的工作区项目；$\r$\n\
-      用户数据与 runtime 缓存可能需要手动清理。$\r$\n$\r$\n\
+      卸载不会删除您的工作区项目。$\r$\n\
+      环境配置（JDK / Gradle / Fabric 依赖）默认保留，$\r$\n\
+      下一步将询问您是否一并删除。$\r$\n$\r$\n\
       单击「下一步」继续。"
   !endif
 !macroend
@@ -220,6 +254,20 @@
 
   DetailPrint "旧版卸载程序返回代码 $R0，正在清理安装目录…"
 
+  ; 备份 runtime（环境配置），避免清理安装目录时一并删除
+  StrCpy $R8 0
+  IfFileExists "$INSTDIR\runtime\*.*" 0 mc_uic_no_runtime_backup
+    RMDir /r "$PLUGINSDIR\mc-runtime-backup"
+    ClearErrors
+    CreateDirectory "$PLUGINSDIR\mc-runtime-backup"
+    Rename "$INSTDIR\runtime" "$PLUGINSDIR\mc-runtime-backup\runtime"
+    IfErrors 0 mc_uic_runtime_backed_up
+      StrCpy $R8 0
+      Goto mc_uic_no_runtime_backup
+    mc_uic_runtime_backed_up:
+    StrCpy $R8 1
+  mc_uic_no_runtime_backup:
+
   StrCpy $R5 0
   mc_uninstall_cleanup_loop:
     IntOp $R5 $R5 + 1
@@ -242,6 +290,19 @@
       Goto mc_uninstall_cleanup_loop
   mc_uninstall_cleanup_ok:
   ClearErrors
+
+  ; 恢复 runtime，让新版安装后可直接复用环境配置
+  ${if} $R8 == 1
+    CreateDirectory "$INSTDIR"
+    ClearErrors
+    Rename "$PLUGINSDIR\mc-runtime-backup\runtime" "$INSTDIR\runtime"
+    IfErrors 0 mc_uic_runtime_restored
+      DetailPrint "警告：无法将 runtime 恢复到 $INSTDIR"
+      Goto mc_uic_restore_done
+    mc_uic_runtime_restored:
+      DetailPrint "已保留环境配置（runtime 目录）。"
+    mc_uic_restore_done:
+  ${endif}
 !macroend
 
 !macro preInit
@@ -249,7 +310,32 @@
 !macroend
 !endif
 
+; 卸载初始化：询问是否同时删除环境配置（runtime）
+; 更新重装场景不询问，静默保留 runtime
+!macro customUnInit
+  Call un.ModCraftingAskPurgeRuntime
+!macroend
+
+; 删除文件时保护 runtime 目录（环境配置：JDK / Gradle / Fabric 依赖）
+; 策略：先把 runtime 移到 $PLUGINSDIR 临时备份，RMDir /r $INSTDIR 后再决定是否恢复
+;   - 更新重装（isUpdated）：无条件恢复，避免重装后环境配置丢失
+;   - 普通卸载：根据用户在询问对话框的选择决定（默认保留）
 !macro customRemoveFiles
+  ; $R8 = runtime 是否已备份（1=已备份，0=未备份）
+  StrCpy $R8 0
+  IfFileExists "$INSTDIR\runtime\*.*" 0 mc_no_runtime_backup
+    RMDir /r "$PLUGINSDIR\mc-runtime-backup"
+    ClearErrors
+    CreateDirectory "$PLUGINSDIR\mc-runtime-backup"
+    Rename "$INSTDIR\runtime" "$PLUGINSDIR\mc-runtime-backup\runtime"
+    IfErrors 0 mc_runtime_backed_up
+      DetailPrint "提示：无法临时备份 runtime 目录，环境配置可能被一并删除。"
+      StrCpy $R8 0
+      Goto mc_no_runtime_backup
+    mc_runtime_backed_up:
+    StrCpy $R8 1
+  mc_no_runtime_backup:
+
   ${if} ${isUpdated}
     CreateDirectory "$PLUGINSDIR\old-install"
 
@@ -270,4 +356,26 @@
 
   SetOutPath $TEMP
   RMDir /r $INSTDIR
+
+  ; 决定是否恢复 runtime
+  ${if} $R8 == 1
+    ${if} ${isUpdated}
+      Goto mc_restore_runtime
+    ${elseif} $ModCraftingPurgeRuntime == "0"
+      Goto mc_restore_runtime
+    ${else}
+      DetailPrint "已按要求删除环境配置（runtime 目录）。"
+      Goto mc_skip_restore
+    ${endif}
+    mc_restore_runtime:
+      CreateDirectory "$INSTDIR"
+      ClearErrors
+      Rename "$PLUGINSDIR\mc-runtime-backup\runtime" "$INSTDIR\runtime"
+      IfErrors 0 mc_runtime_restored
+        DetailPrint "警告：无法将 runtime 恢复到 $INSTDIR，环境配置保留在临时目录 $PLUGINSDIR\mc-runtime-backup\runtime"
+        Goto mc_skip_restore
+      mc_runtime_restored:
+        DetailPrint "已保留环境配置（runtime 目录）。"
+    mc_skip_restore:
+  ${endif}
 !macroend

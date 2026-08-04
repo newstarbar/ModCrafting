@@ -16,6 +16,7 @@ export interface RuntimeLayout {
 function setupRuntimeRoot(): string {
   // 优先读 config.json 的 runtimePath 覆盖（用户自定义数据目录）；
   // 未配置时默认放在安装目录下的 runtime 子目录（与便携版一致）。
+  // 重装/卸载时由 NSIS 脚本（installer.nsh）负责跳过/询问是否删除 runtime。
   const override = getRuntimePathOverride()
   if (override) return override
   return path.join(path.dirname(app.getPath('exe')), 'runtime')
