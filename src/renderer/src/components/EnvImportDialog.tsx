@@ -181,7 +181,7 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 									</button>
 									<span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 4 }}>（点击复制群号，在 QQ 中搜索加入）</span>
 								</li>
-								<li>打开群文件，下载「ModCrafting-runtime-env.tar.xz」</li>
+								<li>打开群文件，下载「ModCrafting-runtime-env.zip」</li>
 							<li>将下载的压缩包拖拽到下方区域，或点击「选择文件」按钮</li>
 								<li>等待解压和验证完成即可使用</li>
 							</ol>

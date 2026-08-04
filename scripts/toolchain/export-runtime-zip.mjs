@@ -310,7 +310,7 @@ async function main() {
 	}
 	console.log("");
 
-	const outputPath = process.argv[2] || path.join(process.env.USERPROFILE || projectRoot, "Desktop", "ModCrafting-runtime-env.tar.xz");
+	const outputPath = process.argv[2] || path.join(process.env.USERPROFILE || projectRoot, "Desktop", "ModCrafting-runtime-env.zip");
 
 	const { totalBytes, fileCount } = getDirSize(runtimeRoot);
 	console.log(`总大小：${formatBytes(totalBytes)}（${fileCount} 个文件）`);
@@ -339,7 +339,7 @@ async function main() {
 	const excludeLines = ["logs", "log", "_prefetch_project_*", "*.migration-*", ".modcrafting-probe-*", "caches/mk-*/daemon", "gradle-home/wrapper/dists"];
 	fs.writeFileSync(excludeFile, excludeLines.join("\n"), "utf-8");
 
-	console.log(`正在压缩为 tar.xz（LZMA2 算法，压缩率高于 zip）…`);
+	console.log(`正在压缩为 zip（使用 tar.exe）…`);
 	console.log(`输出路径：${outputPath}`);
 
 	// 使用 tar.exe 创建 zip 压缩包，异步运行以便显示进度
@@ -366,8 +366,8 @@ async function main() {
 			const intervalSec = (now - lastTime) / 1000;
 			const intervalBytes = currentSize - lastSize;
 			const speedMBps = intervalSec > 0 ? intervalBytes / 1024 / 1024 / intervalSec : 0;
-			// xz 对已压缩内容（jar/png/ogg）压缩率约 0.8，对文本/json 约 0.3，整体约 0.75
-			const estimatedFinal = totalBytes * 0.75;
+			// zip 对已压缩内容（jar/png/ogg）几乎无效，整体压缩率约 0.95
+			const estimatedFinal = totalBytes * 0.95;
 			const percent = Math.min(Math.round((currentSize / estimatedFinal) * 100), 99);
 			const barLen = 30;
 			const filled = Math.round((percent / 100) * barLen);
