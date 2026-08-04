@@ -16,6 +16,12 @@ interface ImportProgress {
 const QQ_GROUP = "203657694";
 // QQ 群官方加群页面（浏览器打开）
 const QQ_GROUP_URL = "https://qm.qq.com/q/jGxqZBzh9m";
+// 离线环境包下载源
+const DOWNLOAD_SOURCES = [
+	{ id: "qq", name: "QQ 群文件", desc: "加入 QQ 群，从群文件下载" },
+	{ id: "123pan", name: "123 云盘", url: "https://1840910710.share.123pan.cn/123pan/4VpOTd-VzbBd", pwd: "H8my", desc: "免登录直链，速度较快" },
+	{ id: "baidu", name: "百度网盘", url: "https://pan.baidu.com/s/1CWTMEDhGZqwu6heixoK_PQ", pwd: "tbrs", desc: "需登录百度账号" }
+] as const;
 
 /**
  * 环境配置手动导入对话框。
@@ -28,6 +34,7 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 	const [success, setSuccess] = useState(false);
 	const [dragOver, setDragOver] = useState(false);
 	const [copied, setCopied] = useState(false);
+	const [copiedPwd, setCopiedPwd] = useState<string | null>(null);
 	const dropRef = useRef<HTMLDivElement>(null);
 
 	// 监听导入进度
@@ -76,6 +83,20 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 		} catch {
 			/* ignore */
 		}
+	}, []);
+
+	const handleCopyPwd = useCallback(async (pwd: string, id: string) => {
+		try {
+			await navigator.clipboard.writeText(pwd);
+			setCopiedPwd(id);
+			setTimeout(() => setCopiedPwd(null), 2000);
+		} catch {
+			/* ignore */
+		}
+	}, []);
+
+	const handleOpenUrl = useCallback((url: string) => {
+		void window.api.openExternalUrl(url);
 	}, []);
 
 	const handleSelectFile = useCallback(async () => {
@@ -141,7 +162,7 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 				<div className="toolchain-init-brand">
 					<div>
 						<h1 id="env-import-title">手动导入环境包</h1>
-						<p className="toolchain-init-subtitle">网络慢？从 QQ 群下载环境压缩包</p>
+						<p className="toolchain-init-subtitle">网络慢？从网盘或 QQ 群下载环境压缩包</p>
 					</div>
 				</div>
 
@@ -157,34 +178,97 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 								border: "1px solid var(--border-light)"
 							}}
 						>
-							<div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>使用步骤</div>
-							<ol style={{ margin: 0, paddingLeft: 20, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
-								<li>
-									加入 QQ 群：
-									<button
-										type="button"
-										onClick={() => void handleCopyQQGroup()}
-										style={{
-											display: "inline",
-											background: "none",
-											border: "none",
-											padding: 0,
-											font: "inherit",
-											fontWeight: 600,
-											color: copied ? "var(--success)" : "var(--accent)",
-											cursor: "pointer",
-											textDecoration: "underline"
-										}}
-										title="点击复制群号"
-									>
-										{copied ? "已复制 ✓" : QQ_GROUP}
-									</button>
-									<span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 4 }}>（点击复制群号，在 QQ 中搜索加入）</span>
-								</li>
-								<li>打开群文件，下载「ModCrafting-runtime-env.zip」</li>
-							<li>将下载的压缩包拖拽到下方区域，或点击「选择文件」按钮</li>
-								<li>等待解压和验证完成即可使用</li>
-							</ol>
+							<div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>下载环境包（任选一种）</div>
+							{DOWNLOAD_SOURCES.map((src, idx) => (
+								<div
+									key={src.id}
+									style={{
+										padding: "8px 10px",
+										marginBottom: idx < DOWNLOAD_SOURCES.length - 1 ? 8 : 0,
+										borderRadius: 6,
+										background: "var(--bg-surface)",
+										border: "1px solid var(--border-color)"
+									}}
+								>
+									<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+										<span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>
+											{idx + 1}. {src.name}
+											<span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 400, marginLeft: 6 }}>{src.desc}</span>
+										</span>
+										{src.id === "qq" ? (
+											<button
+												type="button"
+												onClick={() => void handleCopyQQGroup()}
+												style={{
+													background: "none",
+													border: "1px solid var(--border-color)",
+													borderRadius: 4,
+													padding: "2px 8px",
+													fontSize: 11,
+													color: copied ? "var(--success)" : "var(--accent)",
+													cursor: "pointer",
+													whiteSpace: "nowrap"
+												}}
+												title="点击复制群号并打开加群页面"
+											>
+												{copied ? "已复制 ✓" : "复制群号"}
+											</button>
+										) : (
+											<button
+												type="button"
+												onClick={() => src.url && handleOpenUrl(src.url)}
+												style={{
+													background: "none",
+													border: "1px solid var(--border-color)",
+													borderRadius: 4,
+													padding: "2px 8px",
+													fontSize: 11,
+													color: "var(--accent)",
+													cursor: "pointer",
+													whiteSpace: "nowrap"
+												}}
+											>
+												打开链接
+											</button>
+										)}
+									</div>
+									{src.id === "qq" ? (
+										<div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
+											群号：<span style={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>{QQ_GROUP}</span>，入群后从群文件下载「ModCrafting-runtime-env.zip」
+										</div>
+									) : (
+										<div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, display: "flex", alignItems: "center", gap: 8 }}>
+											<span>提取码：</span>
+											<button
+												type="button"
+												onClick={() => src.pwd && void handleCopyPwd(src.pwd, src.id)}
+												style={{
+													background: "none",
+													border: "none",
+													padding: 0,
+													font: "inherit",
+													fontSize: 11,
+													fontFamily: "monospace",
+													fontWeight: 600,
+													color: copiedPwd === src.id ? "var(--success)" : "var(--text-secondary)",
+													cursor: "pointer"
+												}}
+												title="点击复制提取码"
+											>
+												{copiedPwd === src.id ? "已复制 ✓" : src.pwd}
+											</button>
+										</div>
+									)}
+								</div>
+							))}
+							<div style={{ marginTop: 10, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
+								<div style={{ fontWeight: 600, marginBottom: 4 }}>导入步骤</div>
+								<ol style={{ margin: 0, paddingLeft: 20 }}>
+									<li>下载完成后，将压缩包拖拽到下方区域</li>
+									<li>或点击下方区域选择文件</li>
+									<li>等待解压和验证完成即可使用</li>
+								</ol>
+							</div>
 						</div>
 
 						{/* 拖拽区域 */}

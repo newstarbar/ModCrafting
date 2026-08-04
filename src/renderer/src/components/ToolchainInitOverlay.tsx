@@ -106,7 +106,7 @@ const ToolchainInitOverlay: React.FC<Props> = ({ state, projectPreparing, editio
         <button type="button" className="toolchain-init-confirm-btn" onClick={onConfirmDownload}>立即下载并验证</button>
         {onOpenImportDialog && (
           <button type="button" className="toolchain-init-secondary-btn" onClick={onOpenImportDialog}>
-            网络慢？从 QQ 群手动导入环境包
+            网络慢？手动导入环境包
           </button>
         )}
       </div>
