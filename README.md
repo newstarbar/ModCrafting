@@ -277,7 +277,7 @@ npm run build:win:portable
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | API Endpoint | `https://api.deepseek.com/v1` | OpenAI 兼容接口地址 |
-| Model | `opencode/deepseek-v4-flash-free` | 可按提供商文档更换 |
+| Model | `deepseek-chat` | 可按提供商文档更换 |
 | API Key | （用户填写） | 本地加密存储，**切勿提交到 Git** |
 
 Agent 每轮独立分类用户消息，自动分流至三种模式：

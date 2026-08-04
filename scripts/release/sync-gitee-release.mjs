@@ -432,7 +432,7 @@ function collectJreShards() {
 /**
  * 收集瘦包二期/三期按需下载的辅助资源（zip + tar.xz）。
  * - zip：agent-knowledge / fabric-symbol-index / base-mods（瘦包二期）
- * - tar.xz：opencode-windows-x64.tar.xz（瘦包三期）
+ * - tar.xz：JRE shards（瘦包三期）
  * NSIS 瘦包首次启动时从 Gitee 下载这些文件解压到 runtime/。
  */
 function collectExtraResources() {

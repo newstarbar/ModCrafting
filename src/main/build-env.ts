@@ -15,7 +15,6 @@ import {
 } from './toolchain-download'
 import { cancelFabricPrefetch, ensureGradleHomeOnline } from './portable-prefetch'
 import { ensureKnowledgeBase, isKnowledgeBaseReady } from './knowledge-downloader'
-import { ensureOpencode, isOpencodeReady } from './opencode-downloader'
 import {
   collectParamNames,
   formatYarnField,
@@ -346,8 +345,6 @@ async function initPortableToolchainImpl(
   const optionalErrors: string[] = []
   const kbDl = await ensureKnowledgeBase((msg, pct) => onProgress({ phase: 'optional', message: msg, percent: lerpPercent(97, 99, pct) }))
   if (!kbDl.ok || kbDl.error) optionalErrors.push(kbDl.error || '知识库未完全就绪')
-  const ocDl = await ensureOpencode((msg, pct) => onProgress({ phase: 'optional', message: msg, percent: lerpPercent(98, 99, pct) }))
-  if (!ocDl.ok || ocDl.error) optionalErrors.push(ocDl.error || 'opencode 未完全就绪')
   if (optionalErrors.length) {
     writeDiagnostic('optional-runtime-degraded', optionalErrors)
     onProgress({ phase: 'degraded', message: `构建环境已完成；${optionalErrors.length} 个可选功能待重试`, percent: 99 })
@@ -628,15 +625,6 @@ async function initFullToolchainImpl(
   } else if (kbDl.error) {
     // 部分失败也警告，但不阻塞
     console.warn('[toolchain] knowledge base partial:', kbDl.error)
-  }
-
-  // 瘦包三期：下载 opencode 引擎（约 70MB，失败仅 warning 不阻塞）
-  onProgress({ phase: 'deps', message: '准备 opencode 引擎（约 70MB）…', percent: 98 })
-  const ocDl = await ensureOpencode((msg, pct) => {
-    onProgress({ phase: 'deps', message: msg, percent: lerpPercent(98, 99, pct) })
-  })
-  if (!ocDl.ok) {
-    console.warn('[toolchain] opencode degraded:', ocDl.error)
   }
 
   onProgress({ phase: 'ready', message: '构建环境已就绪，可以开始开发', percent: 100 })

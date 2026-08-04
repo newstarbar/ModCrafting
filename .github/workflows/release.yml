@@ -105,9 +105,6 @@ jobs:
       - name: Archive extra resources (knowledge base + symbol index + base mods)
         run: node scripts/release/archive-extra-resources.mjs
 
-      - name: Archive opencode binary (tar.xz)
-        run: node scripts/release/archive-opencode.mjs
-
       - name: Prepare installer assets
         run: |
           npm run assets:icon
@@ -200,7 +197,7 @@ jobs:
             echo "Extra resources dir not found: $EXTRA_DIR"
             exit 1
           fi
-          echo "Uploading extra resources (agent-knowledge / fabric-symbol-index / base-mods / opencode)..."
+          echo "Uploading extra resources (agent-knowledge / fabric-symbol-index / base-mods)..."
           shopt -s nullglob
           for f in "$EXTRA_DIR"/*.zip "$EXTRA_DIR"/*.tar.xz "$EXTRA_DIR"/*.xz; do
             if [ -f "$f" ]; then

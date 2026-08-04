@@ -15,7 +15,7 @@ const removable = [
 ]
 
 if (all) {
-  removable.push('temp/minecraft-assets-26.1.2', 'temp/logs', 'temp/opencode-eval', 'temp/docx')
+  removable.push('temp/minecraft-assets-26.1.2', 'temp/logs', 'temp/docx')
 }
 
 for (const rel of removable) {

@@ -535,7 +535,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     void reloadAgentToolRegistry(ctrl)
     const onConfigSaved = (): void => {
       void reloadAgentToolRegistry(controllerRef.current)
-      void controllerRef.current?.refreshOpenCodeSettings()
     }
     window.addEventListener('agent-config-saved', onConfigSaved)
     return () => {

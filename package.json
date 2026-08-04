@@ -84,10 +84,6 @@
 		"typescript": "^5.8.3",
 		"vite": "^8.0.16"
 	},
-	"optionalDependencies": {
-		"@opencode-ai/sdk": "^1.17.18",
-		"opencode-ai": "^1.17.18"
-	},
 	"build": {
 		"extends": "./electron-builder.base.json",
 		"afterPack": "./scripts/packaging/afterpack-clean-runtime.mjs",
@@ -109,8 +105,7 @@
 			"!node_modules/remark-gfm/**",
 			"!node_modules/@fontsource/**",
 			"!node_modules/ajv/**",
-			"!node_modules/@opencode-ai/**",
-			"!node_modules/protobufjs/**",
+		"!node_modules/protobufjs/**",
 			"!node_modules/bare-*/**",
 			"!node_modules/@huggingface/**",
 			"!node_modules/onnx-proto/**",
@@ -133,10 +128,7 @@
 			"!node_modules/node-pty/prebuilds/darwin-*/**",
 			"!node_modules/node-pty/prebuilds/win32-arm64/**",
 			"!node_modules/node-pty/**/*.pdb",
-			"!node_modules/opencode-windows-x64/**",
-			"!node_modules/opencode-windows-x64-baseline/**",
-			"!node_modules/opencode-ai/bin/opencode.exe",
-			"!node_modules/@xenova/**",
+		"!node_modules/@xenova/**",
 			"!node_modules/onnxruntime-node/**",
 			"!node_modules/onnxruntime-web/**",
 			"!node_modules/onnxruntime-common/**",

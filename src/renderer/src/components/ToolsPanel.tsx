@@ -31,8 +31,6 @@ interface AgentConfigState {
   knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
   disabledTools: string[]
   mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
-  useOpenCodeDelegate?: boolean
-  openCodeModel?: string
 }
 
 function uid(): string {
@@ -50,9 +48,6 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
   const [activity, setActivity] = useState<ToolActivityEntry[]>([])
   const [saveHint, setSaveHint] = useState('')
   const [loading, setLoading] = useState(true)
-  const [useOpenCodeDelegate, setUseOpenCodeDelegate] = useState(false)
-  const [openCodeModel, setOpenCodeModel] = useState('opencode/deepseek-v4-flash-free')
-  const [openCodeInstalled, setOpenCodeInstalled] = useState(false)
 
   const builtinTools = useMemo(() => {
     const registry = new Registry()
@@ -68,8 +63,6 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
         window.api.listKnowledgeFiles()
       ])
       setDisabledTools(new Set(cfg.disabledTools || []))
-      setUseOpenCodeDelegate(cfg.useOpenCodeDelegate === true)
-      setOpenCodeModel(cfg.openCodeModel || 'opencode/deepseek-v4-flash-free')
       const overrideMap = new Map((cfg.knowledgeSourceOverrides || []).map((o) => [o.id, o]))
       setSources(FABRIC_KNOWLEDGE_SOURCES.map((source) => {
         const override = overrideMap.get(source.id)
@@ -98,7 +91,6 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
 
   useEffect(() => {
     void loadAll()
-    void window.api.opencodeDetect().then((res) => setOpenCodeInstalled(res.installed))
     return subscribeToolActivity(setActivity)
   }, [loadAll])
 
@@ -120,8 +112,6 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
         enabled: s.enabled
       })),
       disabledTools: [...disabledTools],
-      useOpenCodeDelegate,
-      openCodeModel: openCodeModel.trim() || 'opencode/deepseek-v4-flash-free',
       mcpServers: mcpServers.map((s) => ({
         id: s.id,
         name: s.name,
@@ -142,7 +132,7 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
     } else {
       setSaveHint(res.error || '保存失败')
     }
-  }, [sources, disabledTools, mcpServers, useOpenCodeDelegate, openCodeModel, onConfigSaved])
+  }, [sources, disabledTools, mcpServers, onConfigSaved])
 
   const saveKnowledgeFile = useCallback(async () => {
     if (!selectedKnowledgeFile) return
@@ -223,28 +213,6 @@ const ToolsPanel: React.FC<{ onConfigSaved?: () => void }> = ({ onConfigSaved })
 
       {section === 'tools' && (
         <div className="tools-panel-section">
-          <div className="tools-panel-card">
-            <label className="tools-panel-row">
-              <input
-                type="checkbox"
-                checked={useOpenCodeDelegate}
-                onChange={(e) => setUseOpenCodeDelegate(e.target.checked)}
-              />
-              <strong>用 OpenCode 写码（显式开启后生效）</strong>
-            </label>
-            <div className="mc-dim" style={{ fontSize: 12, marginTop: 4 }}>
-              {openCodeInstalled
-                ? '已检测到本机 OpenCode。开启后，执行阶段 write 步骤优先委托 OpenCode；Fabric 工具与计划审批仍走自研。'
-                : '未检测到 OpenCode CLI。开启后也不会委托，直至安装（npm i -g opencode-ai@latest）并重启。'}
-            </div>
-            <label className="mc-dim" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>OpenCode 模型</label>
-            <input
-              className="tools-panel-input"
-              value={openCodeModel}
-              onChange={(e) => setOpenCodeModel(e.target.value)}
-              placeholder="opencode/deepseek-v4-flash-free"
-            />
-          </div>
           {builtinTools.map((tool) => (
             <div key={tool.name} className="tools-panel-card">
               <label className="tools-panel-row">

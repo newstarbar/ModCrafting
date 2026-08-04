@@ -115,7 +115,7 @@ AI 规划并修改项目文件（Plan → Execute）
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | API Endpoint | `https://api.deepseek.com/v1` | OpenAI 兼容接口地址 |
-| Model | `opencode/deepseek-v4-flash-free` | 可按提供商文档更换 |
+| Model | `deepseek-chat` | 可按提供商文档更换 |
 | API Key | （用户填写） | 本地加密存储，**切勿提交到 Git** |
 
 支持 DeepSeek 等 OpenAI 兼容端点；密钥仅存本机，不进仓库。

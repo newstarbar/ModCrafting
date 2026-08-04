@@ -15,7 +15,6 @@ import { isRetryableFetchError } from "./fetch-retry";
 import { type ComposerMode, buildSessionGoalBlock, isNarrowResumeInput, isStructuralErrorReport, buildUserSymptomBlock, buildCrossTurnDiagnosisRetain } from "./turn-intent";
 import { classifyUserTurn, type ClassifyUserTurnResult } from "./turn-classifier.ts";
 import { isQuickCreateGeneratedMessage } from "../project/template-params.ts";
-import { OpenCodeAdapter } from "./opencode-adapter.ts";
 import type { WorkflowStep } from "./workflow-types.ts";
 import { TOOL_LABELS_ZH } from "./tool-labels";
 import { defaultVerifyTarget, formatVerifyTargetBlock, verifyTargetFromClassification, type VerifyTarget } from "./verify-target.ts";
@@ -64,9 +63,6 @@ export class Controller {
 	private lastTurnMode: "chat" | "develop" | "plan_only" | "resume" = "chat";
 	/** Last mode written into messages[0]; skip rewrite when unchanged (prompt-cache). */
 	private lastSystemMode: "chat" | "plan" | "execute" | null = null;
-	private useOpenCodeDelegate = false;
-	private openCodeModel = "opencode/deepseek-v4-flash-free";
-	private openCodeAdapter: OpenCodeAdapter | null = null;
 	private taskId = `task_${Date.now().toString(36)}`;
 	/** GUI 布局预览：pending 的 Promise resolver（id → resolve）。同一时刻只允许一个 pending。 */
 	private pendingGuiLayoutResolvers = new Map<string, (json: string) => void>();
@@ -105,47 +101,6 @@ export class Controller {
 			onGuiLayoutPreview: (payload) => this.handleGuiLayoutPreview(payload),
 			onCancelPendingGuiLayouts: () => this.cancelAllPendingGuiLayouts()
 		});
-
-		this.openCodeAdapter = new OpenCodeAdapter({
-			sink: this.sink,
-			onStatus: (status) => this.onAgentStatus?.(status),
-			getModel: () => this.openCodeModel
-		});
-
-		void this.refreshOpenCodeSettings();
-	}
-
-	async refreshOpenCodeSettings(): Promise<void> {
-		try {
-			const cfg = await window.api.loadAgentConfig();
-			const prefer = cfg.useOpenCodeDelegate === true;
-			this.openCodeModel = cfg.openCodeModel || "opencode/deepseek-v4-flash-free";
-			if (!prefer) {
-				this.useOpenCodeDelegate = false;
-				return;
-			}
-			const detect = await window.api.opencodeDetect();
-			this.useOpenCodeDelegate = detect.installed === true;
-		} catch {
-			this.useOpenCodeDelegate = false;
-		}
-	}
-
-	private buildOpenCodeDelegate():
-		| ((
-				step: WorkflowStep,
-				instruction: string
-		  ) => Promise<{
-				ok: boolean;
-				output?: string;
-				error?: string;
-				evidenceOk?: boolean;
-				changedPaths?: string[];
-		  }>)
-		| undefined {
-		if (!this.useOpenCodeDelegate || !this.openCodeAdapter || !this._projectPath) return undefined;
-		return async (step, instruction) =>
-			this.openCodeAdapter!.delegateWriteTask(this._projectPath!, instruction, step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : undefined);
 	}
 
 	private emitPlanValidationNotice(planText: string): void {
@@ -748,7 +703,6 @@ ${projectInfo}`;
 	}
 
 	private async runExecutePhase(streamCb: (text: string, reasoning?: string) => void, options?: { forceFeatureGuiVerify?: boolean }): Promise<string> {
-		await this.refreshOpenCodeSettings();
 		await this.updateSystemPrompt("execute");
 		this._phase = "execute";
 		this.planReadyAwaitingExecute = false;
@@ -771,8 +725,7 @@ ${projectInfo}`;
 			opsOnlyPlan: this.planTracker?.isOpsOnly() ?? false,
 			requireInGameVerify: Boolean(this.activeUserSymptom) || Boolean(options?.forceFeatureGuiVerify),
 			requireFeatureGuiVerify,
-			verifyTarget: this.activeVerifyTarget,
-			openCodeDelegate: this.buildOpenCodeDelegate()
+			verifyTarget: this.activeVerifyTarget
 		});
 		this.maybeEmitSymptomConfirmNotice();
 		// 任务完成且收集到截图时，发送任务总结截图事件
@@ -1301,7 +1254,6 @@ ${projectInfo}`;
 		} finally {
 			this._running = false;
 			this.abortController = null;
-			void this.openCodeAdapter?.stopServer();
 		}
 	}
 
@@ -1333,7 +1285,6 @@ ${projectInfo}`;
 		} finally {
 			this._running = false;
 			this.abortController = null;
-			void this.openCodeAdapter?.stopServer();
 		}
 	}
 
@@ -1498,7 +1449,6 @@ ${projectInfo}`;
 		} finally {
 			this._running = false;
 			this.abortController = null;
-			void this.openCodeAdapter?.stopServer();
 		}
 	}
 
@@ -1509,7 +1459,6 @@ ${projectInfo}`;
 			this.agent.clarificationPending = false;
 			logger.agent("Turn cancelled");
 		}
-		void this.openCodeAdapter?.abort();
 	}
 
 	approve(id: string, allow: boolean): void {

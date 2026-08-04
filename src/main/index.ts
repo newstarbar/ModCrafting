@@ -4,7 +4,6 @@ import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { setupMenu } from './menu'
 import { setupIpcHandlers } from './ipc-handlers'
-import { setupOpenCodeHandlers, shutdownOpenCode } from './opencode-handlers'
 import { openExternalWithFallback } from './external-url'
 import { setupTerminalHandlers, stopAllTerminalSessions } from './terminal-handler'
 import { setupMcRuntimeHandlers, stopAllMcInstances } from './mc-runtime'
@@ -47,7 +46,6 @@ async function runShutdownCleanup(): Promise<void> {
   stopAllTerminalSessions()
   stopAllMcInstances()
   stopContextIngressServer()
-  await shutdownOpenCode()
   await stopGradleDaemonsOnExit()
 }
 
@@ -194,7 +192,7 @@ app.whenReady().then(async () => {
     return
   }
   // Gitee 等下载源按客户端 TLS/请求指纹限速（undici 60KB/s vs Chromium 44MB/s），
-  // 应用内所有下载（JRE/Gradle/Fabric 种子/知识库/opencode）切换到 Chromium 网络栈
+  // 应用内所有下载（JRE/Gradle/Fabric 种子/知识库）切换到 Chromium 网络栈
   await enableElectronNetFetch()
 
   // 测速选优结构化事件 → 渲染层专门测速面板（env:sourceProbe）
@@ -208,7 +206,6 @@ app.whenReady().then(async () => {
   setupIpcHandlers()
   setupContextIngressHandlers()
   startContextIngressServer()
-  setupOpenCodeHandlers(() => mainWindow)
   setupTerminalHandlers()
   setupMcRuntimeHandlers()
   createWindow()

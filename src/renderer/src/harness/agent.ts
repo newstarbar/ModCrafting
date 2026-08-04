@@ -56,16 +56,6 @@ export interface RunOptions {
 	requireFeatureGuiVerify?: boolean;
 	/** Explicit screen match target for in-game verification. */
 	verifyTarget?: VerifyTarget | null;
-	openCodeDelegate?: (
-		step: import("./workflow-types.ts").WorkflowStep,
-		instruction: string
-	) => Promise<{
-		ok: boolean;
-		output?: string;
-		error?: string;
-		evidenceOk?: boolean;
-		changedPaths?: string[];
-	}>;
 }
 
 const REPEAT_SUCCESS_THRESHOLD = 2;
@@ -279,7 +269,6 @@ export class Agent {
 		emitLifecycle: boolean,
 		abortSignal?: AbortSignal,
 		onStream?: (text: string, reasoning?: string) => void,
-		openCodeDelegate?: RunOptions["openCodeDelegate"],
 		requireInGameVerify = false,
 		requireFeatureGuiVerify = false,
 		verifyTarget: VerifyTarget | null = null
@@ -296,7 +285,6 @@ export class Agent {
 			onToolResult: this.onToolResult,
 			onGuiLayoutPreview: this.onGuiLayoutPreview,
 			onCancelPendingGuiLayouts: this.onCancelPendingGuiLayouts,
-			openCodeDelegate,
 			fileSession: this.fileSession,
 			clarificationGate,
 			visionModel: isVisionCapableModel(apiModel),
@@ -461,7 +449,6 @@ export class Agent {
 				emitLifecycle,
 				abortSignal,
 				onStream,
-				options.openCodeDelegate,
 				Boolean(options.requireInGameVerify),
 				Boolean(options.requireFeatureGuiVerify),
 				options.verifyTarget ?? null

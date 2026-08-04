@@ -57,7 +57,6 @@ export interface WorkflowEngineOptions {
 	/** 步骤切换/修复模式进入时清理未确认的 GUI 布局预览（避免残留面板阻塞流程） */
 	onCancelPendingGuiLayouts?: () => void;
 	modelCall: WorkflowModelCall;
-	openCodeDelegate?: (step: WorkflowStep, instruction: string) => Promise<{ ok: boolean; output?: string; error?: string }>;
 	/** Shared ACI read session for this run; created if omitted */
 	fileSession?: FileSession;
 	/** Shared with Agent — execute-phase ask_clarification cap. */
@@ -826,7 +825,6 @@ export class WorkflowEngine {
 	private onGuiLayoutPreview?: WorkflowEngineOptions["onGuiLayoutPreview"];
 	private onCancelPendingGuiLayouts?: WorkflowEngineOptions["onCancelPendingGuiLayouts"];
 	private modelCall: WorkflowModelCall;
-	private openCodeDelegate?: WorkflowEngineOptions["openCodeDelegate"];
 	private fileSession: FileSession;
 	private clarificationGate?: { count: number };
 	private visionModel: boolean;
@@ -857,7 +855,6 @@ export class WorkflowEngine {
 		this.onGuiLayoutPreview = options.onGuiLayoutPreview;
 		this.onCancelPendingGuiLayouts = options.onCancelPendingGuiLayouts;
 		this.modelCall = options.modelCall;
-		this.openCodeDelegate = options.openCodeDelegate;
 		this.fileSession = options.fileSession || new FileSession();
 		this.clarificationGate = options.clarificationGate;
 		this.visionModel = Boolean(options.visionModel);
@@ -1095,51 +1092,6 @@ export class WorkflowEngine {
 			}
 			this.prevStepWasRun = step.kind === "run";
 			this.emitPlanState();
-			const delegatedEvidence: ToolResult[] = [];
-
-			if (this.openCodeDelegate && step.kind === "write" && this.projectPath && !this.abortSignal?.aborted) {
-				const targets = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
-				const instruction =
-					`完成 Fabric 模组写码步骤：${step.title}\n` +
-					`目标路径：${targets.join(", ") || "由当前步骤确定"}\n` +
-					`验收标准：${step.evidence || "目标文件产生最小、正确的变更"}\n` +
-					`当前计划：\n${this.planTracker.toContextBlock()}`;
-				const delegated = await this.openCodeDelegate(step, instruction);
-				if (delegated.ok) {
-					if (delegated.output?.trim()) {
-						finalContent = delegated.output;
-					}
-					const changedPaths = delegated.changedPaths || [];
-					delegatedEvidence.push({
-						output: `OpenCode 已验证变更：${changedPaths.join(", ")}`,
-						durationMs: 0,
-						ok: true,
-						toolName: "write_file",
-						args: { path: changedPaths[0] || step.targetPath || "" },
-						artifactPath: changedPaths[0],
-						artifactPaths: changedPaths,
-						exitCode: 0
-					});
-					baseMessages.push({
-						role: "system",
-						content: `【OpenCode 委托证据】已修改并验证：${changedPaths.join(", ")}。` + `请核对验收标准后调用 complete_step 完成当前步骤；不要重复写入。`
-					});
-					this.emit({
-						kind: EventKind.Notice,
-						notice: {
-							level: "info",
-							text: "OpenCode 已产生经过目标校验的文件变更，等待 Harness 验收步骤"
-						}
-					});
-				} else
-					this.emit({
-						kind: EventKind.Notice,
-						notice: {
-							level: "warn",
-							text: `OpenCode 委托失败，回退自研 Agent：${delegated.error || "unknown"}`
-						}
-					});
-			}
 
 			if (step.kind === "write" && this.projectPath && wasResumedRun) {
 				try {
@@ -1176,7 +1128,7 @@ export class WorkflowEngine {
 			let pendingEphemeralInstruction: string | undefined;
 			let pendingReasoningKick = false;
 			let repairDiagRounds = 0;
-			const evidenceResults: ToolResult[] = [...delegatedEvidence];
+			const evidenceResults: ToolResult[] = [];
 			let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
 			let evidenceIdleRounds = 0;
 			let exploreRounds = 0;
