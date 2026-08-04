@@ -119,36 +119,54 @@ jobs:
       - name: Build Setup (NSIS) and publish GitHub Release
         run: node scripts/packaging/run-electron-builder.mjs --win nsis --publish always
 
-      - name: Verify unique Release for tag
+      - name: Ensure unique Release for tag (auto-converge)
         shell: bash
         run: |
-          # cleanup 已删除所有同 tag Release，electron-builder 刚创建唯一的 draft Release。
-          # 此处做断言：同 tag 下必须恰好 1 个 Release。若违反，直接 fail —— 避免后续
-          # gh release upload/edit 遇到同 tag 多 Release 时行为不确定（有的步骤操作
-          # 旧 published，有的操作新 draft，导致 draft 残留和 assets 分裂）。
+          # cleanup 已删除所有同 tag Release，electron-builder 刚创建了 draft Release。
+          # 但若 CI 被并发触发（重复推送 tag / 手动重试），可能出现多个 draft。
+          # 此处自愈：按创建时间保留最新一个，删除其余的，使后续步骤无歧义。
           TAG="${{ github.ref_name }}"
-          # 列全部 Release（默认 limit 可能仅列部分，给 --limit 100 避免漏掉）
-          # 注意：gh release list --json 不支持 id 字段（仅支持 createdAt/isDraft/name/publishedAt/tagName 等）
-          JSON=$(gh release list --limit 100 --json tagName,isDraft,name,isLatest \
-            | jq --arg tag "$TAG" '[.[] | select(.tagName == $tag)]')
-          COUNT=$(echo "$JSON" | jq 'length')
+          # gh release list --json 支持：createdAt, isDraft, name, publishedAt, tagName, isLatest 等
+          # 不支持 id 字段；删除时用 gh release delete <tag> --cleanup-tag 或通过 API 用 release id。
+          # 这里用 GitHub API 按 createdAt 排序找多余的并删除。
+          REPO="${{ github.repository }}"
+          # 用 API 列出同 tag 的全部 Release（含 draft），按创建时间降序
+          ALL_JSON=$(gh api "/repos/$REPO/releases?per_page=100" --jq \
+            "[.[] | select(.tag_name == \"$TAG\")] | sort_by(.created_at) | reverse")
+          COUNT=$(echo "$ALL_JSON" | jq 'length')
           echo "Found $COUNT release(s) for tag $TAG"
-          echo "$JSON" | jq -c '.[]' | while read -r r; do
-            DRAFT=$(echo "$r" | jq -r '.isDraft')
+          echo "$ALL_JSON" | jq -c '.[]' | while read -r r; do
+            RID=$(echo "$r" | jq -r '.id')
+            DRAFT=$(echo "$r" | jq -r '.draft')
             NAME=$(echo "$r" | jq -r '.name')
-            echo "  - draft=$DRAFT name=$NAME"
+            CREATED=$(echo "$r" | jq -r '.created_at')
+            echo "  - id=$RID draft=$DRAFT name=$NAME created=$CREATED"
           done
-          if [ "$COUNT" -ne 1 ]; then
-            echo "ERROR: expected exactly 1 release for tag $TAG, got $COUNT"
-            echo "Cleanup or electron-builder may have misbehaved — inspect the list above and retry."
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: no release found for tag $TAG — electron-builder --publish always 可能失败了"
             exit 1
           fi
-          DRAFT=$(echo "$JSON" | jq -r '.[0].isDraft')
-          if [ "$DRAFT" != "true" ]; then
-            # 不是 draft 但只有一个，可能是重新发布。给 warning 但不 fail。
-            echo "WARNING: the only release for $TAG is not a draft (isDraft=$DRAFT)"
+          if [ "$COUNT" -gt 1 ]; then
+            echo "Multiple releases detected (likely concurrent CI runs). Keeping the newest, deleting the rest."
+            # 第一个（index 0）是最新的，删除 index 1 及以后
+            KEEP_ID=$(echo "$ALL_JSON" | jq -r '.[0].id')
+            echo "$ALL_JSON" | jq -c '.[1:][]' | while read -r r; do
+              RID=$(echo "$r" | jq -r '.id')
+              echo "  deleting duplicate release id=$RID"
+              gh api -X DELETE "/repos/$REPO/releases/$RID"
+            done
+            echo "Kept release id=$KEEP_ID (newest), deleted $((COUNT - 1)) duplicate(s)."
           fi
-          echo "OK — verified unique release for tag=$TAG (draft=$DRAFT)"
+          # 重新查询确认只剩 1 个
+          FINAL_JSON=$(gh api "/repos/$REPO/releases?per_page=100" --jq \
+            "[.[] | select(.tag_name == \"$TAG\")] | sort_by(.created_at) | reverse")
+          FINAL_COUNT=$(echo "$FINAL_JSON" | jq 'length')
+          if [ "$FINAL_COUNT" -ne 1 ]; then
+            echo "ERROR: convergence failed, still $FINAL_COUNT releases for tag $TAG"
+            exit 1
+          fi
+          DRAFT=$(echo "$FINAL_JSON" | jq -r '.[0].draft')
+          echo "OK — unique release for tag=$TAG (draft=$DRAFT)"
 
       - name: Build Portable
         run: node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable --publish never
