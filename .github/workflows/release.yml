@@ -119,6 +119,41 @@ jobs:
       - name: Build Setup (NSIS) and publish GitHub Release
         run: node scripts/packaging/run-electron-builder.mjs --win nsis --publish always
 
+      - name: Resolve unique Release ID (fail if same-tag releases > 1)
+        id: resolve-release
+        shell: bash
+        run: |
+          # cleanup 已删除所有同 tag Release，electron-builder 刚创建唯一的 draft Release。
+          # 此处做断言：同 tag 下必须恰好 1 个 Release。若违反，直接 fail —— 避免后续
+          # gh release upload/edit 遇到同 tag 多 Release 时行为不确定（有的步骤操作
+          # 旧 published，有的操作新 draft，导致 draft 残留和 assets 分裂）。
+          TAG="${{ github.ref_name }}"
+          # 列全部 Release（默认 limit 可能仅列部分，给 --limit 100 避免漏掉）
+          JSON=$(gh release list --limit 100 --json id,tagName,isDraft,name \
+            | jq --arg tag "$TAG" '[.[] | select(.tagName == $tag)]')
+          COUNT=$(echo "$JSON" | jq 'length')
+          echo "Found $COUNT release(s) for tag $TAG"
+          echo "$JSON" | jq -c '.[]' | while read -r r; do
+            ID=$(echo "$r" | jq -r '.id')
+            DRAFT=$(echo "$r" | jq -r '.isDraft')
+            NAME=$(echo "$r" | jq -r '.name')
+            echo "  - id=$ID draft=$DRAFT name=$NAME"
+          done
+          if [ "$COUNT" -ne 1 ]; then
+            echo "ERROR: expected exactly 1 release for tag $TAG, got $COUNT"
+            echo "Cleanup or electron-builder may have misbehaved — inspect the list above and retry."
+            exit 1
+          fi
+          RELEASE_ID=$(echo "$JSON" | jq -r '.[0].id')
+          DRAFT=$(echo "$JSON" | jq -r '.[0].isDraft')
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_ENV"
+          if [ "$DRAFT" != "true" ]; then
+            # 不是 draft 但只有一个，可能是重新发布。给 warning 但不 fail。
+            echo "WARNING: the only release for $TAG is not a draft (isDraft=$DRAFT)"
+          fi
+          echo "OK — resolved unique release id=$RELEASE_ID (draft=$DRAFT)"
+
       - name: Build Portable
         run: node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable --publish never
 
@@ -126,10 +161,10 @@ jobs:
         shell: bash
         run: |
           VER=$(node -p "require('./package.json').version")
-          # 文件名必须与 electron-builder.portable.json artifactName 一致：连字符分隔
           PORTABLE="release/ModCrafting-${VER}-Portable.exe"
           if [ -f "$PORTABLE" ]; then
-            gh release upload "${GITHUB_REF_NAME}" "$PORTABLE" --clobber
+            # 使用 tag 操作，但前面 Resolve 步骤已保证同 tag 只有 1 个 Release，不会歧义
+            gh release upload "${{ github.ref_name }}" "$PORTABLE" --clobber
           else
             echo "Portable not found: $PORTABLE"
             echo "Contents of release/ dir:"
@@ -150,7 +185,7 @@ jobs:
           for f in "$EXTRA_DIR"/*.zip "$EXTRA_DIR"/*.tar.xz "$EXTRA_DIR"/*.xz; do
             if [ -f "$f" ]; then
               echo "  uploading $(basename "$f")"
-              gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+              gh release upload "${{ github.ref_name }}" "$f" --clobber
             fi
           done
           echo "Extra resources uploaded."
@@ -158,8 +193,9 @@ jobs:
       - name: Apply release notes to GitHub Release
         shell: bash
         run: |
-          gh release edit "${GITHUB_REF_NAME}" \
-            --title "ModCrafting ${GITHUB_REF_NAME}" \
+          # Resolve 步骤已保证同 tag 只有 1 个 Release，gh release edit 不会歧义
+          gh release edit "${{ github.ref_name }}" \
+            --title "ModCrafting ${{ github.ref_name }}" \
             --notes-file packaging/release-body.md \
             --draft=false
 

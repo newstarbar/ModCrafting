@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 /**
- * 发布前清理 GitHub Release：删除同 tag 的重复 Release（保留最新一条）。
- * Draft 状态保留，由 electron-builder / gh release edit 覆盖。
+ * 发布前清理 GitHub Release：同 tag 下的 Release 全部删除。
+ *
+ * 为什么一律删除而不是"保留最新 published"？
+ *  1. cleanup 在发布流程最开头执行，紧接其后 electron-builder --publish always
+ *     一定会创建全新的 draft Release，删除的内容会被重建。
+ *  2. 如果保留了旧 published Release（比如 force-push tag 到新 commit 后重发），
+ *     会出现同 tag 下同时存在「旧 published + 新 draft」两个 Release 的场景，
+ *     导致后续 `gh release upload <tag>` / `gh release edit <tag>` 产生歧义：
+ *     gh 命令只会操作其中一个，另一个 draft 永远无人处理并残留。
+ *  3. 本次发布的 Setup.exe / Portable.exe / extra-zips 等所有资产都会由后续步骤
+ *     重新上传到新 Release 对象，旧 Release 上的旧资产不应当保留。
+ *
  * Usage: node scripts/cleanup-github-release.mjs <tag>
  */
 const tag = process.argv[2]
@@ -63,36 +73,15 @@ async function main() {
     return
   }
 
-  // 按创建时间降序排序（最新在前）
-  sameTag.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-
-  // 策略：删除所有 draft Release（无论单个还是多个），保留已发布的 Release。
-  // 背景：electron-builder --publish always 每次都会创建新的 draft Release，
-  // 如果 CI 在 gh release edit --draft=false 之前失败，draft 会残留。
-  // 旧逻辑只删除"重复"的 Release（同 tag 多个），保留单个 draft，
-  // 导致每次重试 CI 都会多一个草稿（cleanup 保留单个 draft → electron-builder
-  // 又创建新的 draft → 下次 cleanup 发现 2 个删除 1 个 → 又创建新的 → 循环）。
-  const published = sameTag.filter((r) => !r.draft)
-  const drafts = sameTag.filter((r) => r.draft)
-
-  if (published.length > 0) {
-    // 有已发布的 Release：保留最新的已发布 Release，删除其余所有（包括 draft 和重复的 published）
-    const keep = published[0]
-    for (const r of sameTag) {
-      if (r.id === keep.id) continue
-      const state = r.draft ? 'draft' : 'published'
-      console.log(`[github] Deleting ${state} release #${r.id} (${normalizedTag})`)
-      await githubApi(`/repos/${repo}/releases/${r.id}`, 'DELETE')
-    }
-    console.log(`[github] Kept published release #${keep.id}`)
-  } else {
-    // 没有已发布的 Release，全部是 draft：删除所有，让 electron-builder 创建全新的
-    for (const r of drafts) {
-      console.log(`[github] Deleting draft release #${r.id} (${normalizedTag})`)
-      await githubApi(`/repos/${repo}/releases/${r.id}`, 'DELETE')
-    }
-    console.log(`[github] Deleted all ${drafts.length} draft release(s) for ${normalizedTag}`)
+  // 强制同 tag 下只有 0 个 Release：全删。
+  // electron-builder --publish always 会创建唯一的新 draft，后续 gh 操作不会歧义。
+  console.log(`[github] Found ${sameTag.length} existing release(s) for ${normalizedTag} — deleting all`)
+  for (const r of sameTag) {
+    const state = r.draft ? 'draft' : 'published'
+    console.log(`[github]   Deleting ${state} release #${r.id} (${r.name || '<no name>'})`)
+    await githubApi(`/repos/${repo}/releases/${r.id}`, 'DELETE')
   }
+  console.log(`[github] Cleanup done — same-tag Release cleared, ready for fresh publish`)
 }
 
 main().catch((err) => {
