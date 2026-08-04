@@ -331,7 +331,7 @@ async function initPortableToolchainImpl(
   }
 
   onProgress({ phase: 'fabric', message: '准备 Fabric 开发环境（联网下载）…', percent: 35 })
-  const deps = await ensurePortableGradleHome(onProgress)
+  const deps = await ensurePortableGradleHome(onProgress, jdk.path)
   if (!deps.ok) {
     return failToolchain(onProgress, 'fabric', deps.error || 'Fabric 依赖准备失败')
   }
@@ -538,11 +538,16 @@ function writeRuntimeSeedMarker(gradleHome: string): void {
   fs.writeFileSync(path.join(gradleHome, SEED_MARKER), JSON.stringify(marker, null, 2), 'utf-8')
 }
 
-async function ensurePortableGradleHome(onProgress: ProgressSender): Promise<{ ok: boolean; error?: string }> {
+async function ensurePortableGradleHome(
+  onProgress: ProgressSender,
+  resolvedJdkPath?: string
+): Promise<{ ok: boolean; error?: string }> {
   const runtimeRoot = getRuntimeRoot()
-  // 解析实际 JDK 路径（优先读 .local-jdk-path marker，回落到 runtimeRoot\jdk-21）
-  // 避免 detectLocalJdk 命中本地系统 JDK 后，runGradle 仍用 runtimeRoot\jdk-21 找不到 JDK
-  const jdkPath = getRuntimeJdkPath()
+  // 优先使用调用方已解析的 JDK 路径（ensurePortableJdk 返回的 path），
+  // 避免 marker 写入失败或失效时 getRuntimeJdkPath() 回退到 runtimeRoot\jdk-21
+  // 导致 gradlew.bat 找不到 JDK（JAVA_HOME not found）。
+  // 回退到 getRuntimeJdkPath() 读 marker，再回落到 runtimeRoot\jdk-21。
+  const jdkPath = resolvedJdkPath || getRuntimeJdkPath()
   const gradleHome = runtimeGradleHomePath()
   const expected = loadFabricVersions()
 
@@ -2257,7 +2262,7 @@ export async function prepareBuild(projectPath: string): Promise<{
   await prefetchGradleDistribution()
   if (!isGradleHomeSeedReady()) {
     if (isPortableEdition()) {
-      await ensurePortableGradleHome(defaultProgress)
+      await ensurePortableGradleHome(defaultProgress, jdkResult.path)
     } else {
       await ensureGradleHomeFromSeed()
     }

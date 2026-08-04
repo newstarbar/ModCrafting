@@ -63,18 +63,35 @@ async function main() {
     return
   }
 
-  if (sameTag.length > 1) {
-    sameTag.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    const keep = sameTag[0]
-    for (const dup of sameTag.slice(1)) {
-      console.log(`[github] Deleting duplicate release #${dup.id} (${normalizedTag})`)
-      await githubApi(`/repos/${repo}/releases/${dup.id}`, 'DELETE')
+  // 按创建时间降序排序（最新在前）
+  sameTag.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+
+  // 策略：删除所有 draft Release（无论单个还是多个），保留已发布的 Release。
+  // 背景：electron-builder --publish always 每次都会创建新的 draft Release，
+  // 如果 CI 在 gh release edit --draft=false 之前失败，draft 会残留。
+  // 旧逻辑只删除"重复"的 Release（同 tag 多个），保留单个 draft，
+  // 导致每次重试 CI 都会多一个草稿（cleanup 保留单个 draft → electron-builder
+  // 又创建新的 draft → 下次 cleanup 发现 2 个删除 1 个 → 又创建新的 → 循环）。
+  const published = sameTag.filter((r) => !r.draft)
+  const drafts = sameTag.filter((r) => r.draft)
+
+  if (published.length > 0) {
+    // 有已发布的 Release：保留最新的已发布 Release，删除其余所有（包括 draft 和重复的 published）
+    const keep = published[0]
+    for (const r of sameTag) {
+      if (r.id === keep.id) continue
+      const state = r.draft ? 'draft' : 'published'
+      console.log(`[github] Deleting ${state} release #${r.id} (${normalizedTag})`)
+      await githubApi(`/repos/${repo}/releases/${r.id}`, 'DELETE')
     }
-    console.log(`[github] Kept release #${keep.id}`)
+    console.log(`[github] Kept published release #${keep.id}`)
   } else {
-    const only = sameTag[0]
-    const state = only.draft ? 'draft' : 'published'
-    console.log(`[github] Existing release #${only.id} (${state}) for ${normalizedTag}`)
+    // 没有已发布的 Release，全部是 draft：删除所有，让 electron-builder 创建全新的
+    for (const r of drafts) {
+      console.log(`[github] Deleting draft release #${r.id} (${normalizedTag})`)
+      await githubApi(`/repos/${repo}/releases/${r.id}`, 'DELETE')
+    }
+    console.log(`[github] Deleted all ${drafts.length} draft release(s) for ${normalizedTag}`)
   }
 }
 

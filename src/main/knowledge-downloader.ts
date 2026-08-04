@@ -156,6 +156,18 @@ async function downloadFile(
     }
     throw err
   }
+  // net.fetch（Chromium 栈）对 GitHub Release 302 重定向到 objects.githubusercontent.com
+  // 可能异常返回 404（不抛异常，不触发 enableElectronNetFetch 的回退逻辑）。
+  // 404 时用 Node fetch（undici）重试一次，覆盖 Chromium 栈重定向处理异常的场景。
+  if (res.status === 404) {
+    try {
+      res = await globalThis.fetch(url, {
+        redirect: 'follow',
+        headers: { 'User-Agent': DOWNLOAD_USER_AGENT },
+        signal: controller.signal
+      })
+    } catch { /* Node fetch 也失败，保留原 404 响应进入下面的错误抛出 */ }
+  }
   if (!res.ok || !res.body) {
     clearTimers()
     throw new Error(`HTTP ${res.status} for ${url}`)

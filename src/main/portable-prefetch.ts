@@ -440,6 +440,14 @@ export async function ensureGradleHomeOnline(
     onProgress({ phase: 'verify', message: '离线构建验证通过', percent: 96 })
     return { ok: true }
   } catch (err) {
-    return { ok: false, error: `联网下载 Fabric 依赖失败: ${String(err)}` }
+    const errStr = String(err)
+    // downloadAssets 失败通常是网络/镜像源问题，添加针对性提示帮助用户自助解决
+    if (errStr.includes('downloadAssets') && errStr.includes('DownloadException')) {
+      return {
+        ok: false,
+        error: `联网下载 Fabric 依赖失败: ${errStr}\n\n提示：Minecraft 游戏资源（约 480MB）下载失败。已尝试 BMCLAPI 国内镜像与 Mojang 官方源，均未成功。可能原因：网络不稳定/被防火墙拦截/镜像临时故障。请检查网络连接或尝试配置系统代理后重试，已下载的部分会自动复用。`
+      }
+    }
+    return { ok: false, error: `联网下载 Fabric 依赖失败: ${errStr}` }
   }
 }
