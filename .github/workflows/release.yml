@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# 防止同 tag 重复推送时并发运行（delete + recreate tag 会触发两次）。
+# 取消旧 run，让新 run 基于 latest code 独占执行，cleanup 步骤会清理旧 draft。
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: windows-latest
@@ -121,17 +127,18 @@ jobs:
 
       - name: Ensure unique Release for tag (auto-converge)
         shell: bash
+        env:
+          MSYS_NO_PATHCONV: '1'
         run: |
           # cleanup 已删除所有同 tag Release，electron-builder 刚创建了 draft Release。
           # 但若 CI 被并发触发（重复推送 tag / 手动重试），可能出现多个 draft。
           # 此处自愈：按创建时间保留最新一个，删除其余的，使后续步骤无歧义。
+          # 注意：Windows Git Bash 会把 /repos/... 转换为文件系统路径，设置
+          # MSYS_NO_PATHCONV=1 禁用路径转换，确保 gh api 路径正确传递。
           TAG="${{ github.ref_name }}"
-          # gh release list --json 支持：createdAt, isDraft, name, publishedAt, tagName, isLatest 等
-          # 不支持 id 字段；删除时用 gh release delete <tag> --cleanup-tag 或通过 API 用 release id。
-          # 这里用 GitHub API 按 createdAt 排序找多余的并删除。
           REPO="${{ github.repository }}"
           # 用 API 列出同 tag 的全部 Release（含 draft），按创建时间降序
-          ALL_JSON=$(gh api "/repos/$REPO/releases?per_page=100" --jq \
+          ALL_JSON=$(gh api "repos/$REPO/releases?per_page=100" --jq \
             "[.[] | select(.tag_name == \"$TAG\")] | sort_by(.created_at) | reverse")
           COUNT=$(echo "$ALL_JSON" | jq 'length')
           echo "Found $COUNT release(s) for tag $TAG"
@@ -153,12 +160,12 @@ jobs:
             echo "$ALL_JSON" | jq -c '.[1:][]' | while read -r r; do
               RID=$(echo "$r" | jq -r '.id')
               echo "  deleting duplicate release id=$RID"
-              gh api -X DELETE "/repos/$REPO/releases/$RID"
+              gh api -X DELETE "repos/$REPO/releases/$RID"
             done
             echo "Kept release id=$KEEP_ID (newest), deleted $((COUNT - 1)) duplicate(s)."
           fi
           # 重新查询确认只剩 1 个
-          FINAL_JSON=$(gh api "/repos/$REPO/releases?per_page=100" --jq \
+          FINAL_JSON=$(gh api "repos/$REPO/releases?per_page=100" --jq \
             "[.[] | select(.tag_name == \"$TAG\")] | sort_by(.created_at) | reverse")
           FINAL_COUNT=$(echo "$FINAL_JSON" | jq 'length')
           if [ "$FINAL_COUNT" -ne 1 ]; then
