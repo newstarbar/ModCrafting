@@ -5,9 +5,9 @@
  * 用法：
  *   node scripts/knowledge/download-knowledge-base.mjs [--force] [--repo=owner/repo]
  *
- * 数据源优先级：
- *   1. Gitee Release（国内网络优化）
- *   2. GitHub Release（fallback）
+ * 数据源（2026-08 重构后移除 Gitee 依赖）：
+ *   仅查询 GitHub API；每个 asset 提供「gh.xmly.dev 代理」与「GitHub 直连」两个 URL，
+ *   下载时优先代理（国内加速），失败自动回退直连。SHA256 校验保证中转完整性。
  *
  * 版本管理：
  *   - resources/.knowledge-version 记录当前已下载版本
@@ -25,8 +25,9 @@ const __dirname = path.dirname(__filename)
 const ROOT = path.resolve(__dirname, '..', '..')
 
 const DEFAULT_REPO = 'newstarbar/ModCrafting-knowledge-base'
-const GITEE_OWNER = 'chenmo-starry-sky'
-const GITEE_REPO = 'mod-crafting-knowledge-base'
+
+// GitHub 代理前缀（与 src/main/github-mirror.ts 保持一致）
+const GITHUB_PROXY_PREFIX = 'https://gh.xmly.dev/'
 
 const RESOURCES_DIR = path.join(ROOT, 'resources')
 const VERSION_FILE = path.join(RESOURCES_DIR, '.knowledge-version')
@@ -96,36 +97,22 @@ async function queryGitHubRelease (repo, mcVersion) {
 }
 
 /**
- * 查询 Gitee API 获取最新知识库 Release
+ * 包裹 GitHub URL：仅对 github.com / raw.githubusercontent.com 加 gh.xmly.dev 代理前缀
  */
-async function queryGiteeRelease (mcVersion) {
-  const url = `https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases`
-  console.log(`[knowledge] 查询 Gitee Release: ${url}`)
-
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'ModCrafting/1.0' }
-  })
-  if (!res.ok) {
-    throw new Error(`Gitee API 返回 ${res.status}`)
+function wrapGithubProxy (url) {
+  if (!url) return url
+  if (url.startsWith('https://github.com/') || url.startsWith('https://raw.githubusercontent.com/')) {
+    return `${GITHUB_PROXY_PREFIX}${url}`
   }
-  const releases = await res.json()
-
-  const prefix = `knowledge-${mcVersion}-`
-  const matched = releases
-    .filter((r) => r.tag_name && r.tag_name.startsWith(prefix))
-    .sort((a, b) => b.tag_name.localeCompare(a.tag_name))
-
-  if (matched.length === 0) {
-    throw new Error(`Gitee 未找到匹配 MC ${mcVersion} 的知识库 Release`)
-  }
-  return matched[0]
+  return url
 }
 
 /**
- * 下载文件到指定路径
+ * 下载单个 URL 到 destPath（带进度显示）
  */
-async function downloadFile (url, destPath, label) {
+async function downloadFromUrl (url, destPath, label) {
   console.log(`[knowledge]   下载 ${label} ...`)
+  console.log(`[knowledge]   URL: ${url}`)
   const res = await fetch(url, { headers: { 'User-Agent': 'ModCrafting/1.0' } })
   if (!res.ok) {
     throw new Error(`下载失败: HTTP ${res.status} - ${url}`)
@@ -155,6 +142,19 @@ async function downloadFile (url, destPath, label) {
       await new Promise((resolve) => fileStream.on('finish', resolve))
     }
   )
+}
+
+/**
+ * 下载文件到指定路径：先试 gh.xmly.dev 代理，失败回退 GitHub 直连
+ */
+async function downloadFile (proxiedUrl, directUrl, destPath, label) {
+  try {
+    await downloadFromUrl(proxiedUrl, destPath, label)
+  } catch (err) {
+    console.log(`[knowledge]   代理下载失败: ${err.message}，回退 GitHub 直连 ...`)
+    if (existsSync(destPath)) rmSync(destPath, { force: true })
+    await downloadFromUrl(directUrl, destPath, label)
+  }
 }
 
 function sha256 (filePath) {
@@ -199,32 +199,17 @@ async function main () {
     console.log(`[knowledge] 本地版本: ${localVersion}`)
   }
 
-  // 查询最新 Release（Gitee 优先，GitHub fallback）
-  let release = null
-  let downloadSource = null
-
-  // 尝试 Gitee
+  // 查询最新 Release（仅 GitHub API；assets 走 gh.xmly.dev 代理 + GitHub 直连双源）
+  let release
   try {
-    release = await queryGiteeRelease(mcVersion)
-    downloadSource = 'gitee'
-    console.log(`[knowledge] 找到 Gitee Release: ${release.tag_name}`)
+    release = await queryGitHubRelease(args.repo, mcVersion)
+    console.log(`[knowledge] 找到 GitHub Release: ${release.tag_name}`)
   } catch (err) {
-    console.log(`[knowledge] Gitee 查询失败: ${err.message}`)
-  }
-
-  // Gitee 失败则尝试 GitHub
-  if (!release) {
-    try {
-      release = await queryGitHubRelease(args.repo, mcVersion)
-      downloadSource = 'github'
-      console.log(`[knowledge] 找到 GitHub Release: ${release.tag_name}`)
-    } catch (err) {
-      console.error(`[knowledge][fatal] GitHub 查询也失败: ${err.message}`)
-      console.error('')
-      console.error('[knowledge] 无法下载知识库。请检查网络连接或手动构建：')
-      console.error('  https://github.com/newstarbar/ModCrafting-knowledge-base')
-      process.exit(1)
-    }
+    console.error(`[knowledge][fatal] GitHub 查询失败: ${err.message}`)
+    console.error('')
+    console.error('[knowledge] 无法下载知识库。请检查网络连接或手动构建：')
+    console.error('  https://github.com/newstarbar/ModCrafting-knowledge-base')
+    process.exit(1)
   }
 
   // 版本对比
@@ -234,7 +219,6 @@ async function main () {
     return
   }
 
-  console.log(`[knowledge] 下载源: ${downloadSource}`)
   console.log(`[knowledge] 远程版本: ${remoteTag}`)
 
   // 准备临时目录
@@ -243,31 +227,19 @@ async function main () {
   }
   mkdirSync(TMP_DIR, { recursive: true })
 
-  // 获取资产下载链接
-  let assets
-  if (downloadSource === 'gitee') {
-    // Gitee Release 资产（国内主源,直连）
-    assets = (release.assets || []).map((a) => ({
-      name: a.name,
-      url: a.browser_download_url
-    }))
-  } else {
-    // GitHub Release 资产：国内直连慢易失败,加 ghproxy.com 代理前缀加速
-    // Gitee 已有镜像作主源,此处仅 GitHub fallback 时生效；SHA256 校验保证代理中转完整性
-    assets = (release.assets || []).map((a) => ({
-      name: a.name,
-      url: a.browser_download_url
-        ? `https://ghproxy.com/${a.browser_download_url}`
-        : a.browser_download_url
-    }))
-  }
+  // 获取资产下载链接（每项提供 proxied + direct 两版本，downloadFile 自动选优）
+  const assets = (release.assets || []).map((a) => ({
+    name: a.name,
+    proxied: wrapGithubProxy(a.browser_download_url),
+    direct: a.browser_download_url
+  }))
 
   // 下载 manifest.json
   const manifestAsset = assets.find((a) => a.name === 'manifest.json')
   let manifest = null
   if (manifestAsset) {
     const manifestPath = path.join(TMP_DIR, 'manifest.json')
-    await downloadFile(manifestAsset.url, manifestPath, 'manifest.json')
+    await downloadFile(manifestAsset.proxied, manifestAsset.direct, manifestPath, 'manifest.json')
     manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
     console.log(`[knowledge] manifest.json 已下载，包含 ${manifest.files?.length || 0} 个文件`)
   }
@@ -281,7 +253,7 @@ async function main () {
     }
 
     const zipPath = path.join(TMP_DIR, artifact.zip)
-    await downloadFile(asset.url, zipPath, artifact.zip)
+    await downloadFile(asset.proxied, asset.direct, zipPath, artifact.zip)
 
     // SHA256 验证
     if (manifest) {
@@ -308,7 +280,7 @@ async function main () {
   const versionData = {
     tag: remoteTag,
     mcVersion,
-    source: downloadSource,
+    source: 'github',
     downloadedAt: new Date().toISOString()
   }
   writeFileSync(VERSION_FILE, JSON.stringify(versionData, null, 2), 'utf-8')

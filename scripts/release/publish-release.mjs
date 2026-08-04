@@ -2,16 +2,20 @@
 /**
  * 本地一键发布脚本:同时更新 GitHub 与 Gitee。
  *
+ * 2026-08 重构：Gitee 仅上传 Setup/Portable/latest.yml/blockmap 等发布二进制。
+ * 环境产物（seed/jre shards、extra-zips）全部由 GitHub Release 承载，
+ * 应用内下载器走 gh.xmly.dev 代理加速，不再上传 Gitee。
+ *
  * 流程:
  *   1. 读取 package.json version → 构造 tag
  *   2. 加载 .env(GITEE_TOKEN)
  *   3. 生成 release-body.md(render-release-notes.mjs)
  *   4. 归档 docs/releases/vX.Y.Z.md
- *   5. 检查本地构建产物(用于 Gitee Release 上传)
+ *   5. 检查本地构建产物(用于 Gitee Release 上传 Setup/Portable)
  *   6. 创建 git tag(若不存在)并推送到 GitHub origin → 触发 CI 发布 GitHub Release
  *   7. 查询 Gitee 是否已存在该版本 Release(幂等,存在则跳过 Gitee 部分)
  *   8. 推送 git + tag 到 Gitee(push-gitee-git.mjs)
- *   9. 上传 Gitee Release 附件(sync-gitee-release.mjs)
+ *   9. 上传 Gitee Release 附件(sync-gitee-release.mjs,仅 Setup/Portable)
  *
  * Usage: node scripts/release/publish-release.mjs
  *

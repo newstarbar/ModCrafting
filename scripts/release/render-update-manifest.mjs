@@ -2,6 +2,10 @@
 /**
  * Render packaging/update-manifest.json for a release version.
  * Usage: node scripts/render-update-manifest.mjs 1.0.1 "Release notes"
+ *
+ * 2026-08 重构：feeds.github 的 manifest/setup/portable 资产 URL 用
+ * gh.xmly.dev 代理包裹（与 src/main/github-mirror.ts wrapGithubProxy 一致），
+ * releasesPage 保持 GitHub 直链（浏览器页面无需代理）。
  */
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import path from 'path'
@@ -11,6 +15,17 @@ import { giteeUrls, resolveGiteeRepo } from './gitee-config.mjs'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..', '..')
 const manifestPath = path.join(root, 'packaging', 'update-manifest.json')
+
+const GITHUB_PROXY_PREFIX = 'https://gh.xmly.dev/'
+
+/** 仅包裹 github.com / raw.githubusercontent.com 的 URL，其余原样返回 */
+function wrapGithubProxy(url) {
+  if (!url) return url
+  if (url.startsWith('https://github.com/') || url.startsWith('https://raw.githubusercontent.com/')) {
+    return `${GITHUB_PROXY_PREFIX}${url}`
+  }
+  return url
+}
 
 const rawVersion = process.argv[2]
 const notesArg = process.argv[3]
@@ -40,6 +55,10 @@ if (!notes && existsSync(releaseBodyPath)) {
   notes = `ModCrafting ${tag}`
 }
 
+const githubManifest = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/latest.yml`
+const githubSetup = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`
+const githubPortable = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting-${ver}-Portable.exe`
+
 const manifest = {
   version: ver,
   releaseDate: new Date().toISOString().slice(0, 10),
@@ -52,9 +71,10 @@ const manifest = {
       releasesPage: gitee.releasesPage
     },
     github: {
-      manifest: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/latest.yml`,
-      setup: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`,
-      portable: `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting-${ver}-Portable.exe`,
+      // 资产 URL 走 gh.xmly.dev 代理加速；releasesPage 为浏览器页面保持直链
+      manifest: wrapGithubProxy(githubManifest),
+      setup: wrapGithubProxy(githubSetup),
+      portable: wrapGithubProxy(githubPortable),
       releasesPage: 'https://github.com/newstarbar/ModCrafting/releases'
     }
   },

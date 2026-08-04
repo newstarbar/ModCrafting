@@ -3,6 +3,7 @@ import electronUpdater from 'electron-updater'
 import * as fs from 'fs'
 import * as path from 'path'
 import { getDownloadFetch } from './download-shared'
+import { wrapGithubProxy } from './github-mirror'
 
 const { autoUpdater } = electronUpdater
 import { is } from '@electron-toolkit/utils'
@@ -10,6 +11,12 @@ import { isFullEdition, isPortableEdition } from './edition'
 
 const MANIFEST_TIMEOUT_MS = 8000
 
+/**
+ * 读取 Gitee 主仓 owner/repo（仅用于打开浏览器 Release 页让用户手动下载安装包）。
+ *
+ * Gitee Release 不再承载环境分片 / 知识库 / 辅助资源 —— 这些已迁移到 GitHub + gh.xmly.dev 代理。
+ * 仅保留 Setup/Portable 两条浏览器下载入口（Gitee 浏览器下载不限速）。
+ */
 function loadGiteeRepo(): { owner: string; repo: string } {
   const candidates = [
     path.join(process.resourcesPath || '', 'gitee-config.json'),
@@ -29,8 +36,8 @@ function loadGiteeRepo(): { owner: string; repo: string } {
 
 const giteeRepo = loadGiteeRepo()
 
+// Manifest 仅从 GitHub 拉取（含 gh.xmly.dev 代理加速）。Gitee 不再承载 manifest。
 const MANIFEST_URLS = {
-  gitee: `https://gitee.com/${giteeRepo.owner}/${giteeRepo.repo}/raw/main/packaging/update-manifest.json`,
   github: 'https://raw.githubusercontent.com/newstarbar/ModCrafting/main/packaging/update-manifest.json'
 }
 
@@ -51,7 +58,9 @@ export type UpdateManifest = {
   releaseDate?: string
   notes?: string
   feeds: {
+    // gitee 仅保留浏览器下载入口（Setup/Portable），不再承载 manifest
     gitee: UpdateFeedInfo
+    // github 的 manifest/setup/portable URL 在打包时已包裹 gh.xmly.dev 代理前缀
     github: UpdateFeedInfo
   }
 }
@@ -62,18 +71,18 @@ export type UpdateCheckResult = {
   latestVersion?: string
   hasUpdate?: boolean
   manifest?: UpdateManifest
-  source?: 'gitee' | 'github'
+  source?: 'github' | 'github-proxy'
   error?: string
 }
 
 let pendingManifest: UpdateManifest | null = null
-let pendingSource: 'gitee' | 'github' | null = null
+let pendingSource: 'github' | 'github-proxy' | null = null
 let updateInstallRequested = false
 
 export function isUpdateInstallRequested(): boolean {
   return updateInstallRequested
 }
-let downloadSource: 'gitee' | 'github' | null = null
+let downloadSource: 'github' | 'github-proxy' | null = null
 let checking = false
 
 function compareVersions(remote: string, current: string): boolean {
@@ -90,12 +99,6 @@ function compareVersions(remote: string, current: string): boolean {
   return false
 }
 
-function preferredMirror(): 'gitee' | 'github' {
-  const forced = process.env.MODCRAFTING_UPDATE_MIRROR?.toLowerCase()
-  if (forced === 'github' || forced === 'gitee') return forced
-  return 'gitee'
-}
-
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -106,23 +109,26 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   }
 }
 
-async function fetchManifestFrom(source: 'gitee' | 'github'): Promise<UpdateManifest | null> {
-  const res = await fetchWithTimeout(MANIFEST_URLS[source], MANIFEST_TIMEOUT_MS)
+async function fetchManifestFrom(source: 'github' | 'github-proxy'): Promise<UpdateManifest | null> {
+  const url = source === 'github-proxy' ? wrapGithubProxy(MANIFEST_URLS.github) : MANIFEST_URLS.github
+  const res = await fetchWithTimeout(url, MANIFEST_TIMEOUT_MS)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = (await res.json()) as UpdateManifest
-  if (!data?.version || !data?.feeds?.gitee || !data?.feeds?.github) {
+  if (!data?.version || !data?.feeds?.github) {
     throw new Error('Invalid manifest')
   }
   return data
 }
 
+/**
+ * 依次尝试 GitHub 代理（gh.xmly.dev 包裹 raw URL）→ GitHub 直连。
+ * 不再查 Gitee：Gitee 已不承载 manifest。
+ */
 export async function fetchManifestWithFallback(): Promise<{
   manifest: UpdateManifest
-  source: 'gitee' | 'github'
+  source: 'github' | 'github-proxy'
 } | null> {
-  const order: Array<'gitee' | 'github'> =
-    preferredMirror() === 'gitee' ? ['gitee', 'github'] : ['github', 'gitee']
-
+  const order: Array<'github-proxy' | 'github'> = ['github-proxy', 'github']
   const results = await Promise.allSettled(order.map((src) => fetchManifestFrom(src)))
 
   for (let i = 0; i < order.length; i++) {
@@ -152,7 +158,7 @@ export async function checkForUpdates(manual = false): Promise<UpdateCheckResult
       return {
         ok: false,
         currentVersion,
-        error: '无法连接更新服务器（Gitee / GitHub 均超时或不可用）'
+        error: '无法连接更新服务器（GitHub / 加速代理均不可用）'
       }
     }
 
@@ -172,8 +178,9 @@ export async function checkForUpdates(manual = false): Promise<UpdateCheckResult
   }
 }
 
-function feedBaseUrl(manifest: UpdateManifest, source: 'gitee' | 'github'): string {
-  const manifestUrl = manifest.feeds[source].manifest
+function feedBaseUrl(manifest: UpdateManifest): string {
+  // feeds.github.manifest 在打包时已包裹 gh.xmly.dev 代理前缀，直接作为 autoUpdater feed URL。
+  const manifestUrl = manifest.feeds.github.manifest
   return manifestUrl.slice(0, manifestUrl.lastIndexOf('/') + 1)
 }
 
@@ -189,27 +196,32 @@ function sendUpdateStatus(payload: object): void {
   })
 }
 
-async function downloadFromSource(source: 'gitee' | 'github', manifest: UpdateManifest): Promise<boolean> {
-  const base = feedBaseUrl(manifest, source)
+/**
+ * 使用 GitHub 源（含 gh.xmly.dev 代理）下载更新。
+ * electron-updater setFeedURL 单 URL 限制：直接用 manifest 中的代理 URL（已包裹），
+ * 失败时调用方引导用户打开浏览器手动下载。
+ */
+async function downloadFromSource(manifest: UpdateManifest): Promise<boolean> {
+  const base = feedBaseUrl(manifest)
   autoUpdater.setFeedURL({ provider: 'generic', url: base })
-  downloadSource = source
-  sendUpdateStatus({ phase: 'downloading', source, percent: 0 })
+  downloadSource = 'github-proxy'
+  sendUpdateStatus({ phase: 'downloading', source: downloadSource, percent: 0 })
   try {
     await autoUpdater.downloadUpdate()
     return true
   } catch (err) {
-    console.error(`Update download failed (${source}):`, err)
+    console.error(`Update download failed (github-proxy):`, err)
     return false
   }
 }
 
-export async function promptAndDownloadUpdate(manifest: UpdateManifest, source: 'gitee' | 'github'): Promise<void> {
+export async function promptAndDownloadUpdate(manifest: UpdateManifest): Promise<void> {
   const notes = manifest.notes || `ModCrafting ${manifest.version}`
   const confirm = await dialog.showMessageBox({
     type: 'info',
     title: '发现新版本',
     message: `发现新版本 v${manifest.version}（当前 v${app.getVersion()}）`,
-    detail: `${notes}\n\n更新源：${source === 'gitee' ? 'Gitee（国内优先）' : 'GitHub'}\n是否下载并安装？`,
+    detail: `${notes}\n\n更新源：GitHub 加速代理\n是否下载并安装？`,
     buttons: ['下载更新', '稍后'],
     defaultId: 0,
     cancelId: 1
@@ -217,31 +229,12 @@ export async function promptAndDownloadUpdate(manifest: UpdateManifest, source: 
 
   if (confirm.response !== 0) return
 
-  let ok = await downloadFromSource(source, manifest)
-  if (!ok) {
-    const fallback: 'gitee' | 'github' = source === 'gitee' ? 'github' : 'gitee'
-    const retry = await dialog.showMessageBox({
-      type: 'warning',
-      title: '下载失败',
-      message: `${source === 'gitee' ? 'Gitee' : 'GitHub'} 源下载失败`,
-      detail: `是否尝试从 ${fallback === 'gitee' ? 'Gitee' : 'GitHub'} 重新下载？`,
-      buttons: ['重试', '手动下载', '取消'],
-      defaultId: 0,
-      cancelId: 2
-    })
-    if (retry.response === 0) {
-      ok = await downloadFromSource(fallback, manifest)
-    } else if (retry.response === 1) {
-      await openReleasePages(manifest)
-      return
-    }
-  }
-
+  const ok = await downloadFromSource(manifest)
   if (!ok) {
     await dialog.showMessageBox({
       type: 'error',
       title: '更新下载失败',
-      message: '无法完成自动下载',
+      message: 'GitHub 加速代理下载失败',
       detail: '请通过浏览器从 Gitee 或 GitHub 发布页手动下载安装包。',
       buttons: ['打开发布页', '关闭']
     }).then((r) => {
@@ -250,6 +243,11 @@ export async function promptAndDownloadUpdate(manifest: UpdateManifest, source: 
   }
 }
 
+/**
+ * 打开浏览器 Release 页：
+ * - 便携版 / 安装包失败兜底：同时打开 Gitee + GitHub Release 页（Gitee 浏览器下载不限速）。
+ * - Gitee Release 仅承载 Setup/Portable，环境产物请见 GitHub Release。
+ */
 export async function openReleasePages(manifest?: UpdateManifest | null): Promise<void> {
   const gitee = manifest?.feeds?.gitee?.releasesPage || DEFAULT_RELEASE_PAGES.gitee
   const github = manifest?.feeds?.github?.releasesPage || DEFAULT_RELEASE_PAGES.github
@@ -304,7 +302,7 @@ export async function runUpdateCheckFlow(manual: boolean): Promise<void> {
       type: 'info',
       title: '发现新版本',
       message: `便携版最新版本 v${result.latestVersion}`,
-      detail: '便携版不支持应用内自动升级，请从发布页下载新版 Portable 并替换旧文件。',
+      detail: '便携版不支持应用内自动升级，请从发布页下载新版 Portable 并替换旧文件。\n（Gitee / GitHub 均可浏览器下载）',
       buttons: ['打开发布页', '稍后']
     }).then((r) => {
       if (r.response === 0) void openReleasePages(result.manifest)
@@ -321,7 +319,7 @@ export async function runUpdateCheckFlow(manual: boolean): Promise<void> {
         type: 'warning',
         title: '检查更新',
         message: result.error || '无法连接更新服务器',
-        detail: '国内用户可优先访问 Gitee 发布页手动下载。',
+        detail: '请稍后重试，或访问 GitHub 发布页手动下载。',
         buttons: ['打开发布页', '关闭']
       }).then((r) => {
         if (r.response === 0) void openReleasePages()
@@ -342,8 +340,8 @@ export async function runUpdateCheckFlow(manual: boolean): Promise<void> {
     return
   }
 
-  if (result.manifest && result.source) {
-    await promptAndDownloadUpdate(result.manifest, result.source)
+  if (result.manifest) {
+    await promptAndDownloadUpdate(result.manifest)
   }
 }
 
@@ -375,6 +373,6 @@ export function initUpdater(): void {
   }, 5000)
 }
 
-export function getPendingUpdateInfo(): { manifest: UpdateManifest | null; source: 'gitee' | 'github' | null } {
+export function getPendingUpdateInfo(): { manifest: UpdateManifest | null; source: 'github' | 'github-proxy' | null } {
   return { manifest: pendingManifest, source: pendingSource }
 }

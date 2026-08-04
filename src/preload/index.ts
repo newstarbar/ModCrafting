@@ -474,7 +474,7 @@ const api = {
     currentVersion: string
     latestVersion?: string
     hasUpdate?: boolean
-    source?: 'gitee' | 'github'
+    source?: 'github' | 'github-proxy'
     error?: string
   }> => ipcRenderer.invoke('updater:check'),
 

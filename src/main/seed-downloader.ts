@@ -1,15 +1,18 @@
 /**
- * Download gradle-home-seed.tar.xz from Gitee/GitHub Releases as shards.
+ * Download gradle-home-seed.tar.xz from GitHub Releases as shards.
  *
- * Gitee free tier limits single release assets to 100MB, so the seed archive
- * (~500MB) is split into ~90MB shards. This module:
- *   1. Downloads manifest.json (Gitee primary, GitHub fallback)
+ * GitHub Release 单附件配额 2GB（远超 Gitee 100MB），seed archive（~500MB）
+ * 仍按 ~90MB 切片以便并发下载与断点续传。本模块：
+ *   1. Downloads manifest.json（GitHub + gh.xmly.dev 代理双源测速选优）
  *   2. Parallel-downloads shards (3 concurrent, SHA256-verified)
  *   3. Reassembles into seed.tar.xz
  *   4. Extracts via `tar -xJf` to a staging dir
  *   5. Verifies seed marker, then moves to destDir
+ *
+ * 2026-08 重构：移除 Gitee 源，改用 GitHub + gh.xmly.dev 代理。
+ * Gitee Release 仅保留 Setup/Portable 用于浏览器下载。
  */
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, renameSync, statSync, createReadStream } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, rmSync, renameSync, statSync, createReadStream } from 'fs'
 import { spawn } from 'child_process'
 import { createHash } from 'crypto'
 import { Transform } from 'stream'
@@ -17,51 +20,15 @@ import * as path from 'path'
 import { pipeline } from 'stream/promises'
 import { DOWNLOAD_USER_AGENT, getDownloadFetch } from './download-shared'
 import { pickFastestUrls } from './download-probe'
+import { wrapGithubProxy } from './github-mirror'
 
 // Release tag hosting the seed shards. Update when publishing a new seed version.
 const SEED_RELEASE_TAG = 'v1.0.0'
 
 // GitHub 不分仓（容量足够），始终指向主仓 newstarbar/ModCrafting
 const GITHUB_RELEASE_BASE = `https://github.com/newstarbar/ModCrafting/releases/download/${SEED_RELEASE_TAG}/`
-
-/**
- * Gitee 环境仓（seed/jre/extra-zips 分片所在）。
- *
- * Gitee 单仓库附件配额 1GB，全部 18 个发布文件共 1.12GB 装不下，
- * 因此 Gitee 侧拆分到环境仓 mod-crafting-env，主仓 mod-crafting 只放二进制。
- *
- * 从打包后的 process.resourcesPath/gitee-config.json 读取 envRepo；
- * dev 模式回退到源码 packaging/gitee-config.json；最终 fallback 到默认值。
- */
-function loadGiteeEnvRepo(): { owner: string; repo: string } {
-  const candidates = [
-    // 生产模式：electron-builder extraResources 打包到 process.resourcesPath/
-    path.join(process.resourcesPath || '', 'gitee-config.json'),
-    // Dev 模式：源码 packaging/gitee-config.json（__dirname = out/main/）
-    path.join(__dirname, '..', '..', 'packaging', 'gitee-config.json'),
-    // 旧版兼容
-    path.join(__dirname, '..', '..', 'build', 'gitee-config.json')
-  ]
-  for (const filePath of candidates) {
-    try {
-      if (!existsSync(filePath)) continue
-      const data = JSON.parse(readFileSync(filePath, 'utf-8')) as {
-        owner?: string
-        envRepo?: string
-      }
-      if (data.owner && data.envRepo) {
-        return { owner: data.owner, repo: data.envRepo }
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  return { owner: 'chenmo-starry-sky', repo: 'mod-crafting-env' }
-}
-
-const giteeEnvRepo = loadGiteeEnvRepo()
-// Gitee primary (国内速度快), GitHub fallback (国外/兜底)
-const GITEE_RELEASE_BASE = `https://gitee.com/${giteeEnvRepo.owner}/${giteeEnvRepo.repo}/releases/download/${SEED_RELEASE_TAG}/`
+// gh.xmly.dev 代理加速基础 URL（包裹 GITHUB_RELEASE_BASE）
+const GITHUB_PROXY_RELEASE_BASE = wrapGithubProxy(GITHUB_RELEASE_BASE)
 
 const MANIFEST_FILENAME = 'manifest.json'
 const SEED_ARCHIVE_NAME = 'gradle-home-seed.tar.xz'
@@ -119,40 +86,35 @@ async function fetchManifest(
   manifestFilename: string,
   onProgress?: ProgressFn
 ): Promise<{ manifest: SeedManifest; baseUrls: string[] }> {
-  // Gitee primary，GitHub fallback（manifest 本身小，保持原逻辑）
+  // 候选源：GitHub 代理（gh.xmly.dev，国内加速）+ GitHub 直连（兜底）。
+  // 先并发尝试拉 manifest（小文件），再对首个分片实测速度选优。
   let manifest: SeedManifest | null = null
   try {
-    manifest = await fetchJson(`${GITEE_RELEASE_BASE}${manifestFilename}`)
+    manifest = await fetchJson(`${GITHUB_PROXY_RELEASE_BASE}${manifestFilename}`)
   } catch (err) {
-    console.warn(`[seed-downloader] Gitee manifest fetch failed: ${String(err)}, trying GitHub…`)
+    console.warn(`[seed-downloader] GitHub proxy manifest fetch failed: ${String(err)}, trying GitHub direct…`)
   }
   if (!manifest) {
     manifest = await fetchJson(`${GITHUB_RELEASE_BASE}${manifestFilename}`)
-    return { manifest, baseUrls: [GITHUB_RELEASE_BASE] }
   }
-  // 多源测速选优：Gitee（国内主源）+ GitHub 直连 + GitHub 代理（ghproxy / gh-proxy,国内加速兜底）。
+
+  // 多源测速选优：GitHub 代理（gh.xmly.dev，国内主源）+ GitHub 直连（兜底）。
   // 500MB 种子值得 512KB 探测，对首个分片实测速度，按最快顺序排列下载源；探测失败的排后兜底。
   const firstShard = manifest.shards[0]
   if (firstShard) {
     const ordered = await pickFastestUrls([
-      { url: `${GITEE_RELEASE_BASE}${firstShard.filename}`, label: 'Gitee' },
-      { url: `${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'GitHub' },
-      { url: `https://ghproxy.com/${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'ghproxy' },
-      { url: `https://gh-proxy.com/${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'gh-proxy' }
+      { url: `${GITHUB_PROXY_RELEASE_BASE}${firstShard.filename}`, label: 'github-proxy' },
+      { url: `${GITHUB_RELEASE_BASE}${firstShard.filename}`, label: 'github' }
     ])
-    // 按测速结果构建 baseUrls 顺序：每个候选源对应一个 baseUrl（代理源 = 代理前缀 + GITHUB_RELEASE_BASE）
     const baseUrlByLabel: Record<string, string> = {
-      Gitee: GITEE_RELEASE_BASE,
-      GitHub: GITHUB_RELEASE_BASE,
-      ghproxy: `https://ghproxy.com/${GITHUB_RELEASE_BASE}`,
-      'gh-proxy': `https://gh-proxy.com/${GITHUB_RELEASE_BASE}`
+      'github-proxy': GITHUB_PROXY_RELEASE_BASE,
+      github: GITHUB_RELEASE_BASE
     }
     const baseUrls = ordered.map((c) => baseUrlByLabel[c.label]).filter((b): b is string => !!b)
-    // 去重（同一 baseUrl 可能因代理源不同而重复，但 Gitee/GitHub 不会）
     const uniqueBaseUrls = Array.from(new Set(baseUrls))
     return { manifest, baseUrls: uniqueBaseUrls }
   }
-  return { manifest, baseUrls: [GITEE_RELEASE_BASE] }
+  return { manifest, baseUrls: [GITHUB_PROXY_RELEASE_BASE] }
 }
 
 async function downloadFileWithProgress(
@@ -399,12 +361,8 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
 
   try {
     // 1. Download all shards（进度消息带主源名,失败自动回退到备源）
-    const primaryBaseUrl = baseUrls[0] || GITEE_RELEASE_BASE
-    const sourceName = primaryBaseUrl === GITHUB_RELEASE_BASE
-      ? 'GitHub'
-      : primaryBaseUrl.includes('ghproxy.com') || primaryBaseUrl.includes('gh-proxy.com')
-        ? 'GitHub代理'
-        : 'Gitee'
+    const primaryBaseUrl = baseUrls[0] || GITHUB_PROXY_RELEASE_BASE
+    const sourceName = primaryBaseUrl === GITHUB_RELEASE_BASE ? 'GitHub' : 'GitHub代理'
     const shardPaths = await downloadAllShards(
       manifest,
       baseUrls,
@@ -464,6 +422,11 @@ async function downloadAndExtractShardedArchive(opts: ShardedArchiveOptions): Pr
   }
 }
 
+/**
+ * @deprecated 2026-08 重构后已不再被调用。Fabric 依赖种子通过 bundled 目录或
+ * `extractGradleHomeSeedArchive` 处理。保留函数定义以兼容测试断言
+ * （harness-packaging-runtime.test.ts 断言 buildEnv 不包含此函数名）。
+ */
 export async function downloadAndExtractSeedShards(
   destDir: string,
   onProgress: ProgressFn
@@ -478,6 +441,10 @@ export async function downloadAndExtractSeedShards(
   })
 }
 
+/**
+ * @deprecated 2026-08 重构后已不再被调用。JRE 走 Adoptium API / 清华 TUNA 镜像。
+ * 保留函数定义以兼容测试断言（harness-packaging-runtime.test.ts 断言 buildEnv 不包含此函数名）。
+ */
 export async function downloadAndExtractJreShards(
   destDir: string,
   onProgress: ProgressFn
@@ -493,12 +460,8 @@ export async function downloadAndExtractJreShards(
 }
 
 /**
- * 从 Gitee/GitHub Releases 下载 Gradle 发行版分片并解压到 destDir。
- *
- * 与 jre/seed 共用同一 manifest/分片/解压管线：发布侧由
- * `npm run release:split-gradle` 产出 gradle-9.5.tar.xz 分片与 gradle-manifest.json。
- * 未部署 Gradle 资产时，fetchManifest 会失败并返回 { ok:false, error }，
- * 调用方（ensureRuntimeGradle）据此回退到腾讯云镜像。
+ * @deprecated 2026-08 重构后已不再被调用。Gradle 走腾讯云 / 华为云镜像。
+ * 保留函数定义以兼容测试断言（harness-packaging-runtime.test.ts 断言 buildEnv 不包含此函数名）。
  */
 export async function downloadAndExtractGradleShards(
   destDir: string,
@@ -514,8 +477,16 @@ export async function downloadAndExtractGradleShards(
   })
 }
 
-export function getSeedReleaseInfo(): { tag: string; giteeBase: string; githubBase: string } {
-  return { tag: SEED_RELEASE_TAG, giteeBase: GITEE_RELEASE_BASE, githubBase: GITHUB_RELEASE_BASE }
+/**
+ * 返回 Release tag 与 GitHub base URL（含代理版本）。
+ * 调用方（knowledge-downloader.ts）用这些 base 拼接辅助资源 URL。
+ */
+export function getSeedReleaseInfo(): { tag: string; githubBase: string; githubProxyBase: string } {
+  return {
+    tag: SEED_RELEASE_TAG,
+    githubBase: GITHUB_RELEASE_BASE,
+    githubProxyBase: GITHUB_PROXY_RELEASE_BASE
+  }
 }
 
 export { SEED_ARCHIVE_NAME, MANIFEST_FILENAME, JRE_ARCHIVE_NAME, JRE_MANIFEST_FILENAME, GRADLE_ARCHIVE_NAME, GRADLE_MANIFEST_FILENAME }

@@ -198,7 +198,7 @@ interface ModCraftingApi {
     migrated?: boolean
     requireRestart?: boolean
   }>
-  checkForUpdates: () => Promise<{ ok: boolean; currentVersion: string; latestVersion?: string; hasUpdate?: boolean; source?: 'gitee' | 'github'; error?: string }>
+  checkForUpdates: () => Promise<{ ok: boolean; currentVersion: string; latestVersion?: string; hasUpdate?: boolean; source?: 'github' | 'github-proxy'; error?: string }>
   getAppVersion: () => Promise<string>
   openReleasePages: () => Promise<{ success: boolean }>
   onUpdateStatus: (callback: (payload: { phase: string; source?: string; percent?: number; error?: string }) => void) => () => void

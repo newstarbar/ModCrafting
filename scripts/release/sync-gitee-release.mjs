@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 /**
- * Sync release assets to Gitee Releases (split across main + env repos).
+ * Sync release assets to Gitee Release (主仓，仅发布二进制)。
  *
- * Gitee 单仓库附件配额 1GB，全部 18 个发布文件共 1.12GB 装不下。
- * 拆分策略：
+ * 2026-08 重构：移除 Gitee 环境仓（envRepo）依赖。
  *   - 主仓 <owner>/<repo>：发布二进制（Setup/Portable/latest.yml/blockmap）≈176MB
- *   - 环境仓 <owner>/<envRepo>：seed-shards + jre-shards + extra-zips ≈943MB
- *
- * 两仓各自创建同 tag 的 Release。GitHub 不分仓（容量足够）。
+ *   - 环境产物（seed-shards / jre-shards / extra-zips）：从 GitHub Release 下载，
+ *     下载器走 gh.xmly.dev 代理加速，不再上传 Gitee。
  *
  * Requires env GITEE_TOKEN. Usage: node scripts/release/sync-gitee-release.mjs <version> [release_dir]
  */
@@ -15,7 +13,7 @@ import { readFileSync, existsSync, statSync, readdirSync } from 'fs'
 import { spawn } from 'node:child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { resolveGiteeRepo, resolveGiteeEnvRepo } from './gitee-config.mjs'
+import { resolveGiteeRepo } from './gitee-config.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..', '..')
@@ -35,7 +33,6 @@ if (!token) {
 }
 
 const mainRepo = resolveGiteeRepo()
-const envRepo = resolveGiteeEnvRepo()
 const tag = version.startsWith('v') ? version : `v${version}`
 const ver = tag.replace(/^v/, '')
 const apiBase = 'https://gitee.com/api/v5'
@@ -368,91 +365,6 @@ function collectReleaseAssets(dir) {
     for (const name of readdirSync(dir)) {
       console.warn(`  - ${name}`)
     }
-  }
-
-  return files
-}
-
-/**
- * 收集 seed 分片文件（manifest.json + seed.part.001 ~ seed.part.00N）。
- * NSIS 瘦包首次启动时从 Gitee 下载这些分片来恢复 Fabric 依赖种子。
- */
-function collectSeedShards() {
-  const shardsDir = path.join(root, 'resources', 'seed-shards')
-  if (!existsSync(shardsDir)) {
-    console.warn(`[gitee] seed shards dir not found: ${shardsDir}`)
-    return []
-  }
-
-  const files = []
-  for (const name of readdirSync(shardsDir)) {
-    const full = path.join(shardsDir, name)
-    if (!statSync(full).isFile()) continue
-    // manifest.json + seed.part.NNN
-    if (name === 'manifest.json' || /^seed\.part\.\d{3}$/.test(name)) {
-      files.push(full)
-    }
-  }
-
-  if (files.length === 0) {
-    console.warn('[gitee] no seed shards found in resources/seed-shards/')
-  }
-
-  return files
-}
-
-/**
- * 收集 JRE 分片文件（jre-manifest.json + jre.part.001 ~ jre.part.00N）。
- * NSIS 瘦包首次启动时从 Gitee 下载这些分片来恢复 JRE 21。
- */
-function collectJreShards() {
-  const shardsDir = path.join(root, 'resources', 'jre-shards')
-  if (!existsSync(shardsDir)) {
-    console.warn(`[gitee] jre shards dir not found: ${shardsDir}`)
-    return []
-  }
-
-  const files = []
-  for (const name of readdirSync(shardsDir)) {
-    const full = path.join(shardsDir, name)
-    if (!statSync(full).isFile()) continue
-    // jre-manifest.json + jre.part.NNN
-    if (name === 'jre-manifest.json' || /^jre\.part\.\d{3}$/.test(name)) {
-      files.push(full)
-    }
-  }
-
-  if (files.length === 0) {
-    console.warn('[gitee] no jre shards found in resources/jre-shards/')
-  }
-
-  return files
-}
-
-/**
- * 收集瘦包二期/三期按需下载的辅助资源（zip + tar.xz）。
- * - zip：agent-knowledge / fabric-symbol-index / base-mods（瘦包二期）
- * - tar.xz：JRE shards（瘦包三期）
- * NSIS 瘦包首次启动时从 Gitee 下载这些文件解压到 runtime/。
- */
-function collectExtraResources() {
-  const extraDir = path.join(root, 'resources', 'extra-zips')
-  if (!existsSync(extraDir)) {
-    console.warn(`[gitee] extra-zips dir not found: ${extraDir}`)
-    return []
-  }
-
-  const files = []
-  for (const name of readdirSync(extraDir)) {
-    const full = path.join(extraDir, name)
-    if (!statSync(full).isFile()) continue
-    if (name.endsWith('.zip') || name.endsWith('.tar.xz') || name.endsWith('.xz')) {
-      files.push(full)
-    }
-  }
-
-  if (files.length === 0) {
-    console.warn('[gitee] no extra resource archives found in resources/extra-zips/')
   }
 
   return files

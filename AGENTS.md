@@ -61,6 +61,8 @@ npm run knowledge:download    # 下载所有离线知识库
 ## 维护红线
 
 - **工具链下载逻辑双份**：`scripts/toolchain/toolchain-download.mjs` 与 `src/main/toolchain-download.ts` 需同步修改
+- **GitHub + gh.xmly.dev 代理**：所有 GitHub 资产（Release 直链 / raw.githubusercontent.com）下载均通过 `https://gh.xmly.dev/` 反代加速，常量集中在 [src/main/github-mirror.ts](./src/main/github-mirror.ts) 的 `wrapGithubProxy` / `githubDirectAndProxy`；新增下载源时一律提供「代理 + 直连」双 URL，主进程用 `pickFastestUrls` 实测选优，禁止再用 ghproxy.com / gh-proxy.com（已失效）
+- **Gitee 仅承载发布二进制**：Setup / Portable / latest.yml / blockmap 上传 Gitee 主仓；环境产物（seed / jre shards、extra-zips）一律走 GitHub Release + gh.xmly.dev 代理
 - **MC 版本升级**：升级 `resources/fabric-versions.json` 后必须重新运行 `npm run knowledge:download`
 - **AGENTS.md / CLAUDE.md ≤ 150 行**：只保留摘要与索引，详细内容写到 `docs/`
 - **提交前确认**：未包含 API Key、`.env`、个人路径；未提交 `node_modules/`、`release/`、`runtime/`、`resources/jdk-21/`

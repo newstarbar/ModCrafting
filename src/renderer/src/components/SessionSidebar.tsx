@@ -100,6 +100,21 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const [runtimeMigrating, setRuntimeMigrating] = useState(false)
   const [runtimeMessage, setRuntimeMessage] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null)
   const [isPortable, setIsPortable] = useState(false)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updateResult, setUpdateResult] = useState<{
+    ok: boolean
+    currentVersion: string
+    latestVersion?: string
+    hasUpdate?: boolean
+    source?: 'github' | 'github-proxy'
+    error?: string
+  } | null>(null)
+  const [updateStatus, setUpdateStatus] = useState<{
+    phase: string
+    source?: string
+    percent?: number
+    error?: string
+  } | null>(null)
   const activeSessionItemRef = useRef<HTMLDivElement | null>(null)
 
   const sortedSessions = sortSessionsByUpdatedAt(sessions)
@@ -116,6 +131,14 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     const openSettings = () => setActiveTab('settings')
     window.addEventListener('modcrafting:open-settings', openSettings)
     return () => window.removeEventListener('modcrafting:open-settings', openSettings)
+  }, [])
+
+  // 订阅更新下载进度状态
+  useEffect(() => {
+    const unsubscribe = window.api.onUpdateStatus((payload) => {
+      setUpdateStatus(payload)
+    })
+    return unsubscribe
   }, [])
 
   useEffect(() => {
@@ -136,6 +159,22 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
       setRuntimePathLoading(false)
     }
   }, [])
+
+  // 检查应用更新：调用主进程 updater:check，结果存入 updateResult
+  const handleCheckForUpdates = useCallback(async () => {
+    if (updateChecking) return
+    setUpdateChecking(true)
+    setUpdateResult(null)
+    setUpdateStatus(null)
+    try {
+      const result = await window.api.checkForUpdates()
+      setUpdateResult(result)
+    } catch (err) {
+      setUpdateResult({ ok: false, currentVersion: '', error: String(err) })
+    } finally {
+      setUpdateChecking(false)
+    }
+  }, [updateChecking])
 
   useEffect(() => {
     void refreshRuntimePath()
@@ -701,7 +740,53 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
               <button type="button" className="mc-btn" style={{ flex: 1, fontSize: '11px' }} onClick={onOpenProject}>打开项目</button>
               <button type="button" className="mc-btn mc-btn--primary" style={{ flex: 1, fontSize: '11px' }} onClick={onCreateProject}>新建项目</button>
             </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 600 }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
+              检查更新
+            </div>
+            <button
+              type="button"
+              className="mc-btn"
+              style={{ width: '100%', fontSize: '11px' }}
+              onClick={handleCheckForUpdates}
+              disabled={updateChecking}
+            >
+              {updateChecking ? '检查中…' : '检查更新'}
+            </button>
+            {updateResult && (
+              <div style={{
+                fontSize: '10px',
+                marginTop: '6px',
+                lineHeight: 1.5,
+                color: updateResult.ok
+                  ? (updateResult.hasUpdate ? 'var(--success)' : 'var(--text-muted)')
+                  : 'var(--error)',
+                whiteSpace: 'pre-wrap'
+              }}>
+                {updateResult.ok
+                  ? updateResult.hasUpdate
+                    ? `发现新版本：v${updateResult.latestVersion}（当前 v${updateResult.currentVersion}）`
+                    : `已是最新版本（v${updateResult.currentVersion}）`
+                  : `检查失败：${updateResult.error || '未知错误'}`}
+              </div>
+            )}
+            {updateStatus && (
+              <div style={{
+                fontSize: '10px',
+                marginTop: '6px',
+                lineHeight: 1.5,
+                color: updateStatus.phase === 'error' ? 'var(--error)' : 'var(--text-muted)',
+                whiteSpace: 'pre-wrap'
+              }}>
+                {updateStatus.phase === 'downloading' && typeof updateStatus.percent === 'number'
+                  ? `下载中… ${updateStatus.percent}%${updateStatus.source ? `（源：${updateStatus.source}）` : ''}`
+                  : updateStatus.phase === 'downloaded'
+                    ? '下载完成，等待安装…'
+                    : updateStatus.phase === 'error'
+                      ? `更新出错：${updateStatus.error || '未知错误'}`
+                      : updateStatus.phase}
+              </div>
+            )}
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
               关于 ModCrafting
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
