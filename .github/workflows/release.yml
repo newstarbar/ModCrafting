@@ -119,8 +119,7 @@ jobs:
       - name: Build Setup (NSIS) and publish GitHub Release
         run: node scripts/packaging/run-electron-builder.mjs --win nsis --publish always
 
-      - name: Resolve unique Release ID (fail if same-tag releases > 1)
-        id: resolve-release
+      - name: Verify unique Release for tag
         shell: bash
         run: |
           # cleanup 已删除所有同 tag Release，electron-builder 刚创建唯一的 draft Release。
@@ -129,30 +128,27 @@ jobs:
           # 旧 published，有的操作新 draft，导致 draft 残留和 assets 分裂）。
           TAG="${{ github.ref_name }}"
           # 列全部 Release（默认 limit 可能仅列部分，给 --limit 100 避免漏掉）
-          JSON=$(gh release list --limit 100 --json id,tagName,isDraft,name \
+          # 注意：gh release list --json 不支持 id 字段（仅支持 createdAt/isDraft/name/publishedAt/tagName 等）
+          JSON=$(gh release list --limit 100 --json tagName,isDraft,name,isLatest \
             | jq --arg tag "$TAG" '[.[] | select(.tagName == $tag)]')
           COUNT=$(echo "$JSON" | jq 'length')
           echo "Found $COUNT release(s) for tag $TAG"
           echo "$JSON" | jq -c '.[]' | while read -r r; do
-            ID=$(echo "$r" | jq -r '.id')
             DRAFT=$(echo "$r" | jq -r '.isDraft')
             NAME=$(echo "$r" | jq -r '.name')
-            echo "  - id=$ID draft=$DRAFT name=$NAME"
+            echo "  - draft=$DRAFT name=$NAME"
           done
           if [ "$COUNT" -ne 1 ]; then
             echo "ERROR: expected exactly 1 release for tag $TAG, got $COUNT"
             echo "Cleanup or electron-builder may have misbehaved — inspect the list above and retry."
             exit 1
           fi
-          RELEASE_ID=$(echo "$JSON" | jq -r '.[0].id')
           DRAFT=$(echo "$JSON" | jq -r '.[0].isDraft')
-          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-          echo "release_id=$RELEASE_ID" >> "$GITHUB_ENV"
           if [ "$DRAFT" != "true" ]; then
             # 不是 draft 但只有一个，可能是重新发布。给 warning 但不 fail。
             echo "WARNING: the only release for $TAG is not a draft (isDraft=$DRAFT)"
           fi
-          echo "OK — resolved unique release id=$RELEASE_ID (draft=$DRAFT)"
+          echo "OK — verified unique release for tag=$TAG (draft=$DRAFT)"
 
       - name: Build Portable
         run: node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable --publish never
