@@ -27,6 +27,31 @@ type ProgressSender = (input: string | PrefetchProgressPayload) => void
 let activeGradlePid: number | undefined
 let prefetchCancelled = false
 
+// 步骤级标记文件：build 和 downloadAssets 各自独立标记，重启时跳过已完成步骤
+const PREFETCH_BUILD_MARKER = '.prefetch-build-done.json'
+const PREFETCH_ASSETS_MARKER = '.prefetch-assets-done.json'
+
+function isPrefetchStepDone(gradleHome: string, markerFile: string, expected: FabricVersions): boolean {
+  const markerPath = path.join(gradleHome, markerFile)
+  if (!fs.existsSync(markerPath)) return false
+  try {
+    const marker = JSON.parse(fs.readFileSync(markerPath, 'utf-8')) as Partial<FabricVersions>
+    for (const key of Object.keys(expected) as (keyof FabricVersions)[]) {
+      if (marker[key] !== expected[key]) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function writePrefetchStepDone(gradleHome: string, markerFile: string, expected: FabricVersions): void {
+  try {
+    const marker = { ...expected, createdAt: new Date().toISOString() }
+    fs.writeFileSync(path.join(gradleHome, markerFile), JSON.stringify(marker, null, 2), 'utf-8')
+  } catch { /* best effort */ }
+}
+
 /** Stops the complete Gradle process tree. A new initialization reuses .part
  * downloads and the validated cache, so cancellation is safely resumable. */
 export function cancelFabricPrefetch(): void {
@@ -347,28 +372,45 @@ export async function ensureGradleHomeOnline(
     const warmup = async (domestic: boolean): Promise<void> => {
       setupPrefetchProject(projectDir, runtimeRoot, gradleRuntimePath, wrapperJarPath, fabricVersions, domestic)
       const source = domestic ? 'BMCLAPI 国内镜像' : 'Mojang 官方源'
-      onProgress({ phase: 'fabric', message: '正在下载 Fabric Loader、Yarn 与 Fabric API…', percent: 46, source })
-      await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))
+
+      // 步骤 1：build（下载 Fabric Loader、Yarn、Fabric API 并编译）
+      // 成功后写标记文件，重启或换源重试时跳过此步骤
+      if (isPrefetchStepDone(gradleHomePath, PREFETCH_BUILD_MARKER, fabricVersions)) {
+        onProgress({ phase: 'fabric', message: 'Fabric 依赖已下载，跳过 build 步骤', percent: 52, source })
+      } else {
+        onProgress({ phase: 'fabric', message: '正在下载 Fabric Loader、Yarn 与 Fabric API…', percent: 46, source })
+        await runGradle(projectDir, runtimeRoot, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))
+        writePrefetchStepDone(gradleHomePath, PREFETCH_BUILD_MARKER, fabricVersions)
+      }
+
       onProgress({ phase: 'minecraft', message: '正在处理 Minecraft 与映射…', percent: 58, source })
-      onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent: 64, source })
-      // downloadAssets 任务输出可能被缓冲或格式不匹配正则，
-      // 启动定时器在 64%-76% 间基于已用时间线性推进进度，避免进度条卡住。
-      // forward 回调匹配到下载行时仍会更新 currentItem，两者互不冲突。
-      const assetsStart = Date.now()
-      const assetsBase = 64
-      const assetsTarget = 76
-      const assetsDurationMs = 5 * 60 * 1000 // 预估 5 分钟完成，用于线性插值
-      const assetsTimer = setInterval(() => {
-        if (prefetchCancelled) return
-        const elapsed = Date.now() - assetsStart
-        const ratio = Math.min(elapsed / assetsDurationMs, 0.95)
-        const percent = Math.round(assetsBase + (assetsTarget - assetsBase) * ratio)
-        onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent, source })
-      }, 2000)
-      try {
-        await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
-      } finally {
-        clearInterval(assetsTimer)
+
+      // 步骤 2：downloadAssets（下载 Minecraft 资源，约 480MB）
+      // 成功后写标记文件，重启或换源重试时跳过此步骤
+      if (isPrefetchStepDone(gradleHomePath, PREFETCH_ASSETS_MARKER, fabricVersions)) {
+        onProgress({ phase: 'assets', message: '游戏资源已下载，跳过 downloadAssets 步骤', percent: 76, source })
+      } else {
+        onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent: 64, source })
+        // downloadAssets 任务输出可能被缓冲或格式不匹配正则，
+        // 启动定时器在 64%-76% 间基于已用时间线性推进进度，避免进度条卡住。
+        // forward 回调匹配到下载行时仍会更新 currentItem，两者互不冲突。
+        const assetsStart = Date.now()
+        const assetsBase = 64
+        const assetsTarget = 76
+        const assetsDurationMs = 5 * 60 * 1000 // 预估 5 分钟完成，用于线性插值
+        const assetsTimer = setInterval(() => {
+          if (prefetchCancelled) return
+          const elapsed = Date.now() - assetsStart
+          const ratio = Math.min(elapsed / assetsDurationMs, 0.95)
+          const percent = Math.round(assetsBase + (assetsTarget - assetsBase) * ratio)
+          onProgress({ phase: 'assets', message: '正在下载游戏资源（约 480MB，支持缓存复用）…', percent, source })
+        }, 2000)
+        try {
+          await runGradle(projectDir, runtimeRoot, ['downloadAssets', '--no-daemon',], 30 * 60 * 1000, forward('assets', 76))
+        } finally {
+          clearInterval(assetsTimer)
+        }
+        writePrefetchStepDone(gradleHomePath, PREFETCH_ASSETS_MARKER, fabricVersions)
       }
     }
 
