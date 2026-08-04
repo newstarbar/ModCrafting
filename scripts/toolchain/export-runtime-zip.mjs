@@ -310,7 +310,7 @@ async function main() {
 	}
 	console.log("");
 
-	const outputPath = process.argv[2] || path.join(process.env.USERPROFILE || projectRoot, "Desktop", "ModCrafting-runtime-env.zip");
+	const outputPath = process.argv[2] || path.join(projectRoot, "release", "ModCrafting-runtime-env.zip");
 
 	const { totalBytes, fileCount } = getDirSize(runtimeRoot);
 	console.log(`总大小：${formatBytes(totalBytes)}（${fileCount} 个文件）`);
