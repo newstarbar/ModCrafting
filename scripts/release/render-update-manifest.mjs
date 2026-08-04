@@ -56,7 +56,9 @@ if (!notes && existsSync(releaseBodyPath)) {
 }
 
 const githubManifest = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/latest.yml`
-const githubSetup = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting%20Setup%20${ver}.exe`
+// 文件名与 package.json build.nsis.artifactName 一致: ${productName}-Setup-${version}.${ext}
+const githubSetup = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting-Setup-${ver}.exe`
+// 文件名与 electron-builder.portable.json portable.artifactName 一致: ${productName}-${version}-Portable.${ext}
 const githubPortable = `https://github.com/newstarbar/ModCrafting/releases/download/${tag}/ModCrafting-${ver}-Portable.exe`
 
 const manifest = {

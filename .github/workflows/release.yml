@@ -126,11 +126,14 @@ jobs:
         shell: bash
         run: |
           VER=$(node -p "require('./package.json').version")
-          PORTABLE="release/ModCrafting ${VER} Portable.exe"
+          # 文件名必须与 electron-builder.portable.json artifactName 一致：连字符分隔
+          PORTABLE="release/ModCrafting-${VER}-Portable.exe"
           if [ -f "$PORTABLE" ]; then
             gh release upload "${GITHUB_REF_NAME}" "$PORTABLE" --clobber
           else
             echo "Portable not found: $PORTABLE"
+            echo "Contents of release/ dir:"
+            ls -la release/ || true
             exit 1
           fi
 
