@@ -119,8 +119,8 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 				// Electron 拖拽文件时，file.path 包含绝对路径
 				const filePath = (file as File & { path?: string }).path;
 				if (filePath) {
-					if (!filePath.toLowerCase().endsWith(".zip")) {
-						setError("请选择 .zip 格式的压缩包");
+					if (!/\.(zip|tar\.xz|tar\.gz|tar)$/i.test(filePath)) {
+						setError("请选择 .zip / .tar.xz / .tar.gz 格式的压缩包");
 						return;
 					}
 					void handleImport(filePath);
@@ -181,8 +181,8 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 									</button>
 									<span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 4 }}>（点击复制群号，在 QQ 中搜索加入）</span>
 								</li>
-								<li>打开群文件，下载「ModCrafting-runtime-env.zip」</li>
-								<li>将下载的 zip 文件拖拽到下方区域，或点击「选择文件」按钮</li>
+								<li>打开群文件，下载「ModCrafting-runtime-env.tar.xz」</li>
+							<li>将下载的压缩包拖拽到下方区域，或点击「选择文件」按钮</li>
 								<li>等待解压和验证完成即可使用</li>
 							</ol>
 						</div>

@@ -536,7 +536,7 @@ export function setupIpcHandlers(): void {
       title: '选择环境配置压缩包',
       properties: ['openFile'],
       filters: [
-        { name: '环境压缩包', extensions: ['zip'] },
+        { name: '环境压缩包', extensions: ['zip', 'tar.xz', 'tar.gz', 'tar'] },
         { name: '所有文件', extensions: ['*'] }
       ]
     })

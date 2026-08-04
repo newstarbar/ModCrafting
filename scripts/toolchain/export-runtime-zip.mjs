@@ -13,7 +13,8 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+import * as os from "os";
+import { spawn, spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -202,22 +203,34 @@ function validateEnvironment(runtimeRoot) {
 		}
 	}
 
-	// 7. fabric-symbol-index 版本文件
-	const symbolFile = path.join(knowledgeRoot, "fabric-symbol-index", `fabric-symbol-index-${expected.minecraft_version}.json.gz`);
-	if (!fs.existsSync(symbolFile)) {
-		warnings.push(`Fabric 符号索引文件缺失：fabric-symbol-index-${expected.minecraft_version}.json.gz`);
+	// 7. fabric-symbol-index 版本文件（递归搜索，zip 解压可能多一层嵌套目录）
+	const symbolDir = path.join(knowledgeRoot, "fabric-symbol-index");
+	const targetName = `fabric-symbol-index-${expected.minecraft_version}.json.gz`;
+	const findSymbolFile = (dir) => {
+		if (!fs.existsSync(dir)) return false;
+		for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, ent.name);
+			if (ent.isDirectory()) {
+				if (findSymbolFile(full)) return true;
+			} else if (ent.name === targetName) return true;
+		}
+		return false;
+	};
+	if (!findSymbolFile(symbolDir)) {
+		warnings.push(`Fabric 符号索引文件缺失：${targetName}`);
 	}
 
 	return { errors, warnings, expected };
 }
 
-// 需要排除的条目（日志、临时目录、迁移暂存）
+// 需要排除的条目（日志、临时目录、迁移暂存、重复缓存）
 const EXCLUDE_PATTERNS = [
 	/^logs?[/\\]/i,
 	/^_prefetch_project_[^/\\]+[/\\]?/i,
 	/\.migration-\d+[/\\]?$/,
 	/^\.modcrafting-probe-/i,
-	/^caches[/\\]mk-[\w-]+[/\\]daemon$/i // Gradle daemon 注册表（导入后会自动重建）
+	/^caches[/\\]mk-[\w-]+[/\\]daemon$/i, // Gradle daemon 注册表（导入后会自动重建）
+	/^gradle-home[/\\]wrapper[/\\]dists[/\\]?/i // Gradle wrapper 下载缓存（与 gradle-9.5 目录重复，约 150MB）
 ];
 
 function shouldExclude(relPath) {
@@ -228,10 +241,12 @@ function shouldExclude(relPath) {
 function getDirSize(dir) {
 	let total = 0;
 	let count = 0;
-	function walk(d) {
+	function walk(d, relBase = "") {
 		for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
 			const full = path.join(d, entry.name);
-			if (entry.isDirectory()) walk(full);
+			const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+			if (shouldExclude(rel)) continue;
+			if (entry.isDirectory()) walk(full, rel);
 			else {
 				count++;
 				try {
@@ -295,7 +310,7 @@ async function main() {
 	}
 	console.log("");
 
-	const outputPath = process.argv[2] || path.join(process.env.USERPROFILE || projectRoot, "Desktop", "ModCrafting-runtime-env.zip");
+	const outputPath = process.argv[2] || path.join(process.env.USERPROFILE || projectRoot, "Desktop", "ModCrafting-runtime-env.tar.xz");
 
 	const { totalBytes, fileCount } = getDirSize(runtimeRoot);
 	console.log(`总大小：${formatBytes(totalBytes)}（${fileCount} 个文件）`);
@@ -320,19 +335,64 @@ async function main() {
 	}
 
 	// 创建排除列表文件（tar --exclude-from）
-	const excludeFile = path.join(require("os").tmpdir(), `modcrafting-exclude-${Date.now()}.txt`);
-	const excludeLines = ["logs", "log", "_prefetch_project_*", "*.migration-*", ".modcrafting-probe-*", "caches/mk-*/daemon"];
+	const excludeFile = path.join(os.tmpdir(), `modcrafting-exclude-${Date.now()}.txt`);
+	const excludeLines = ["logs", "log", "_prefetch_project_*", "*.migration-*", ".modcrafting-probe-*", "caches/mk-*/daemon", "gradle-home/wrapper/dists"];
 	fs.writeFileSync(excludeFile, excludeLines.join("\n"), "utf-8");
 
-	console.log(`正在压缩为 zip（使用 tar.exe）…`);
+	console.log(`正在压缩为 tar.xz（LZMA2 算法，压缩率高于 zip）…`);
 	console.log(`输出路径：${outputPath}`);
 
-	// 使用 tar.exe 创建 zip 压缩包
-	// tar -a -cf output.zip --exclude-from=exclude.txt -C runtimeRoot .
-	const result = spawnSync("tar", ["-a", "-cf", outputPath, "--exclude-from", excludeFile, "-C", runtimeRoot, "."], {
-		stdio: "inherit",
-		shell: true
+	// 使用 tar.exe 创建 zip 压缩包，异步运行以便显示进度
+	const tarArgs = ["-a", "-cf", outputPath, "--exclude-from", excludeFile, "-C", runtimeRoot, "."];
+	const startTime = Date.now();
+	let stderrBuf = "";
+	let lastSize = 0;
+	let lastTime = startTime;
+
+	const child = spawn("tar", tarArgs, { stdio: ["ignore", "pipe", "pipe"], shell: false });
+	child.stderr?.on("data", (chunk) => {
+		stderrBuf += chunk.toString();
 	});
+	child.stdout?.on("data", () => {
+		/* tar 静默模式无 stdout */
+	});
+
+	// 进度定时器：每 2 秒检查输出文件大小
+	const progressTimer = setInterval(() => {
+		try {
+			const currentSize = fs.statSync(outputPath).size;
+			const now = Date.now();
+			const elapsedSec = (now - startTime) / 1000;
+			const intervalSec = (now - lastTime) / 1000;
+			const intervalBytes = currentSize - lastSize;
+			const speedMBps = intervalSec > 0 ? intervalBytes / 1024 / 1024 / intervalSec : 0;
+			// xz 对已压缩内容（jar/png/ogg）压缩率约 0.8，对文本/json 约 0.3，整体约 0.75
+			const estimatedFinal = totalBytes * 0.75;
+			const percent = Math.min(Math.round((currentSize / estimatedFinal) * 100), 99);
+			const barLen = 30;
+			const filled = Math.round((percent / 100) * barLen);
+			const bar = "█".repeat(filled) + "░".repeat(barLen - filled);
+			process.stdout.write(`\r  ${bar} ${percent}% | ${formatBytes(currentSize)} | ${speedMBps.toFixed(1)} MB/s`);
+			lastSize = currentSize;
+			lastTime = now;
+		} catch {
+			/* 文件可能尚未创建 */
+		}
+	}, 2000);
+
+	const exitCode = await new Promise((resolve) => {
+		child.on("close", resolve);
+		child.on("error", (err) => {
+			stderrBuf += `\nspawn error: ${err.message}`;
+			resolve(1);
+		});
+	});
+
+	clearInterval(progressTimer);
+	process.stdout.write("\r" + " ".repeat(70) + "\r");
+
+	const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+	console.log(`  压缩耗时：${totalElapsedSec}s`);
 
 	// 清理临时文件
 	try {
@@ -341,8 +401,8 @@ async function main() {
 		/* ignore */
 	}
 
-	if (result.error || result.status !== 0) {
-		console.error("压缩失败：", result.error || `tar 退出码 ${result.status}`);
+	if (exitCode !== 0) {
+		console.error("压缩失败：", stderrBuf || `tar 退出码 ${exitCode}`);
 		process.exit(1);
 	}
 
