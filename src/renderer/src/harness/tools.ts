@@ -332,6 +332,7 @@ export class Registry {
 // Extract tool call XML from AI output (ModCrafting format)
 export function parseToolCalls(text: string): Array<{ name: string; args: Record<string, unknown> }> {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = []
+  // 标准 ModCrafting 格式：<tool_call>{"name":"...","args":{...}}<tool_call>tool_call>
   const regex = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g
   let match
   while ((match = regex.exec(text)) !== null) {
@@ -344,7 +345,50 @@ export function parseToolCalls(text: string): Array<{ name: string; args: Record
       // skip malformed
     }
   }
+  // 兼容 MiniMax-M3 等模型输出的 XML invoke 格式：
+  // <invoke name="tool_name"><parameter name="key">value</parameter></invoke>
+  // 标准格式未命中时启用，避免误吞标准格式中的 XML 片段
+  if (calls.length === 0) {
+    calls.push(...parseInvokeXmlToolCalls(text))
+  }
   return calls
+}
+
+/** 解析 `<invoke name="..."><parameter name="...">...</parameter></invoke>` XML 风格的工具调用。
+ *  MiniMax-M3 在未走原生 delta.tool_calls 时，会将工具调用以这种 XML 格式输出到 content。 */
+function parseInvokeXmlToolCalls(text: string): Array<{ name: string; args: Record<string, unknown> }> {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = []
+  const invokeRe = /<invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/invoke>/gi
+  let m: RegExpExecArray | null
+  while ((m = invokeRe.exec(text)) !== null) {
+    const name = m[1]
+    const body = m[2] || ''
+    const args: Record<string, unknown> = {}
+    const paramRe = /<parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/parameter>/gi
+    let pm: RegExpExecArray | null
+    while ((pm = paramRe.exec(body)) !== null) {
+      args[pm[1]] = parseInvokeParamValue(pm[2] || '')
+    }
+    calls.push({ name, args })
+  }
+  return calls
+}
+
+/** 解析 `<parameter>` 值：仅对明确的 JSON 起始字符尝试 JSON.parse，
+ *  避免将 `1.21.4`（多版本号）误判为数字 1.21。 */
+function parseInvokeParamValue(raw: string): unknown {
+  const v = raw.trim()
+  if (v === '') return ''
+  const first = v[0]
+  if (first === '{' || first === '[' || first === '"' || v === 'true' || v === 'false' || v === 'null') {
+    try { return JSON.parse(v) } catch { /* fall through */ }
+  }
+  // 仅纯整数或单点浮点（如 20、-1、3.14）转 number，含多版本号的 1.21.4 保留为字符串
+  if (/^-?\d+$/.test(v) || /^-?\d+\.\d+$/.test(v)) {
+    const n = Number(v)
+    if (!Number.isNaN(n)) return n
+  }
+  return v
 }
 
 // Execute a single tool

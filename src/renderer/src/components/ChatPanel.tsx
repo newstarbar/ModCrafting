@@ -887,7 +887,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           t.streamDone = false
           setDisplayMessages((prev) => [...prev, {
             id: t.msgId, role: 'assistant',
-            entries: [], isStreaming: true, timestamp: Date.now()
+            entries: [], isStreaming: true, timestamp: Date.now(),
+            model: apiConfig.model, providerId: apiConfig.providerId
           }])
         } else if (event.phase === 'plan_done') {
           const planText = (event.text || '').trim()
@@ -1060,7 +1061,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           t.streamDone = false
           setDisplayMessages((prev) => [...prev, {
             id: t.msgId, role: 'assistant',
-            entries: [], isStreaming: true, timestamp: Date.now()
+            entries: [], isStreaming: true, timestamp: Date.now(),
+            model: apiConfig.model, providerId: apiConfig.providerId
           }])
         } else {
           t.streamDone = false

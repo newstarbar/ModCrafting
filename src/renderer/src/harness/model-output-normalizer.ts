@@ -2,13 +2,32 @@
  * 模型输出规范化：处理不同 LLM 厂商的非标准输出格式。
  *
  * 主要处理：
- * 1. `<think>...</think>` 标签：MiniMax-M3 等模型将推理内容直接输出到正文，
+ * 1. ` dimax...` 标签：MiniMax-M3 等模型将推理内容直接输出到正文，
  *    需要提取并路由到 reasoning 字段，避免泄露给用户。
  * 2. `<plan><step .../></plan>` XML：部分模型用 XML 格式输出计划而非调用
  *    submit_plan 工具，需要解析并转换为合成工具调用。
+ * 3. MiniMax 协议标记 `]<]minimax[>[`：MiniMax-M3 tokenizer/chat template 的
+ *    内部边界标记会泄露到 content 流，破坏 XML 参数格式（如
+ *    `<path>...</path>` 被切成 `<path>...]<]minimax[>[</path>`），需在
+ *    流式过滤和最终后处理两个环节清除。
  */
 
-/** 从文本中提取 `<think>...</think>` 块，返回清理后的文本和提取的推理内容。 */
+/**
+ * MiniMax 协议标记清理：清除模型 tokenizer/chat template 泄露的内部边界标记。
+ *
+ * 标记形如 `]<]minimax[>[`（前导 `]` 可选），会插入到 XML 参数值末尾、
+ * 标签边界等位置，导致 `<path>value]<]minimax[>[</path>` 这类被破坏的
+ * XML 无法被 parseToolCalls 正确解析。
+ *
+ * 流式过滤时调用此函数可避免 buffer 累积污染；最终后处理时再次调用
+ * 可清理跨 chunk 残留（流式正则可能因 chunk 边界遗漏）。
+ */
+const MINIMAX_PROTOCOL_TOKEN_RE = /\]?<\]minimax\[>\[/g
+export function stripMinimaxProtocolTokens(text: string): string {
+  return text.replace(MINIMAX_PROTOCOL_TOKEN_RE, '')
+}
+
+/** 从文本中提取 ` dimax...` 块，返回清理后的文本和提取的推理内容。 */
 export function stripThinkTags(text: string): { text: string; reasoning: string } {
   const reasoningParts: string[] = []
   // 匹配 `<think>...</think>`（允许跨行、允许未闭合的 `<think>` 直到文本末尾）
@@ -108,7 +127,9 @@ export class ThinkTagStreamFilter {
 
   /** 处理一个 chunk 的内容，返回应输出到 text 和 reasoning 的部分。 */
   process(chunk: string): { text: string; reasoning: string } {
-    this.buffer += chunk
+    // 前置过滤 MiniMax 协议标记，避免标记累积到 buffer 破坏 ` dimax` 边界检测
+    // 与 XML 参数解析。跨 chunk 的标记残留由流结束后的后处理兜底清理。
+    this.buffer += stripMinimaxProtocolTokens(chunk)
     let textOut = ''
     let reasoningOut = ''
 

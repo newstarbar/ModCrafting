@@ -43,6 +43,10 @@ export interface PersistedMessage {
   displayId?: string
   stateSnapshot?: any
   attachments?: MessageAttachment[]
+  /** assistant 消息实际使用的模型名称（跨会话持久化） */
+  model?: string
+  /** assistant 消息实际使用的 Provider ID */
+  providerId?: string
 }
 
 export interface ChatSession {

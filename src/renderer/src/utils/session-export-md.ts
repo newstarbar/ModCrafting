@@ -293,6 +293,7 @@ function appendAssistantMessageSection(lines: string[], msg: DisplayMessage, tur
   lines.push('')
   lines.push(`- messageId: \`${msg.id}\``)
   lines.push(`- timestamp: ${msg.timestamp ? new Date(msg.timestamp).toISOString() : '（无）'}`)
+  if (msg.model) lines.push(`- 模型: ${msg.model}${msg.providerId ? ` (${msg.providerId})` : ''}`)
   if (msg.turnStatus) lines.push(`- turnStatus: \`${msg.turnStatus}\``)
   lines.push('')
 

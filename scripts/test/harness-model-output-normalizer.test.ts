@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   stripThinkTags,
+  stripMinimaxProtocolTokens,
   extractPlanFromXml,
   buildSubmitPlanArgs,
   ThinkTagStreamFilter
@@ -49,6 +50,35 @@ describe('model-output-normalizer', () => {
       const result = stripThinkTags(input)
       assert.equal(result.text, 'textmore')
       assert.equal(result.reasoning, 'reasoning')
+    })
+  })
+
+  describe('stripMinimaxProtocolTokens', () => {
+    it('removes protocol token with leading ]', () => {
+      // 诊断文件中实测格式：value]<]minimax[>[</param>
+      const input = '<path>src/Foo.java]<]minimax[>[</path>]<]minimax[>[</invoke>'
+      assert.equal(stripMinimaxProtocolTokens(input), '<path>src/Foo.java</path></invoke>')
+    })
+
+    it('removes protocol token without leading ]', () => {
+      const input = 'text<]minimax[>[more'
+      assert.equal(stripMinimaxProtocolTokens(input), 'textmore')
+    })
+
+    it('handles multiple tokens on one line', () => {
+      const input = 'a]<]minimax[>[b]<]minimax[>[c'
+      assert.equal(stripMinimaxProtocolTokens(input), 'abc')
+    })
+
+    it('preserves text without tokens', () => {
+      assert.equal(stripMinimaxProtocolTokens('plain text'), 'plain text')
+      assert.equal(stripMinimaxProtocolTokens(''), '')
+    })
+
+    it('does not touch similar-looking sequences', () => {
+      // 不应误删普通 <] 或 ]> 序列
+      assert.equal(stripMinimaxProtocolTokens('a<]b'), 'a<]b')
+      assert.equal(stripMinimaxProtocolTokens('x]>y'), 'x]>y')
     })
   })
 
@@ -200,6 +230,22 @@ describe('model-output-normalizer', () => {
       const r = filter.process('a<think>b</think>c<think>d</think>e')
       assert.equal(r.text, 'ace')
       assert.equal(r.reasoning, 'bd')
+    })
+
+    it('strips MiniMax protocol tokens before think tag detection', () => {
+      // 协议标记插入到 <think> 边界外，不应破坏边界检测或污染 text
+      const filter = new ThinkTagStreamFilter()
+      const r = filter.process('visible]<]minimax[>[<think>hidden</think>more')
+      assert.equal(r.text, 'visiblemore')
+      assert.equal(r.reasoning, 'hidden')
+    })
+
+    it('strips MiniMax protocol tokens inside think block', () => {
+      // 协议标记插入到 <think> 边界内，不应污染 reasoning
+      const filter = new ThinkTagStreamFilter()
+      const r = filter.process('<think>reasoning]<]minimax[>[continues</think>')
+      assert.equal(r.text, '')
+      assert.equal(r.reasoning, 'reasoningcontinues')
     })
   })
 })

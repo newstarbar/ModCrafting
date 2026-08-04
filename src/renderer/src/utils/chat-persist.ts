@@ -48,6 +48,10 @@ export interface SerializableDisplayMessage {
   timestamp: number
   stateSnapshot?: any
   attachments?: PersistedMessage['attachments']
+  /** assistant 消息实际使用的模型名称 */
+  model?: string
+  /** assistant 消息实际使用的 Provider ID */
+  providerId?: string
 }
 
 export interface ActivePlanSnapshot {
@@ -79,7 +83,10 @@ export function serializeDisplayMessages(
       // Clone so later UI mutations cannot drop persisted attachment metadata.
       attachments: m.attachments?.length
         ? m.attachments.map((a) => ({ ...a }))
-        : undefined
+        : undefined,
+      // 仅记录 assistant 消息使用的模型，便于多模型切换时导出会话日志
+      model: m.model,
+      providerId: m.providerId
     }
 
     if (m.entries && m.entries.length > 0) {
@@ -176,7 +183,9 @@ export function deserializeToDisplay(
         stateSnapshot: (m as any).stateSnapshot,
         attachments: m.attachments?.length
           ? m.attachments.map((a) => ({ ...a }))
-          : undefined
+          : undefined,
+        model: m.model,
+        providerId: m.providerId
       }
     })
 }

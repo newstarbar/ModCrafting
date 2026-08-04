@@ -22,7 +22,7 @@ import { formatNotOfferedBrakeInstruction, updateNotOfferedStreak } from "./tool
 import { MAX_PLAN_OFFERED_REJECT_ROUNDS, MAX_READONLY_ROUNDS, PLAN_EXPLORATION_LOCK_KICK, PLAN_SUBMIT_NUDGE, shouldNudgePlanSubmit } from "./plan-phase-gate.ts";
 import { getModelContextWindow, buildProviderThinkingFields } from "../../../shared/llm-providers.ts";
 import { LONG_REASONING_KICK, MAX_REASONING_HARD_CHARS, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
-import { stripThinkTags, extractPlanFromXml, buildSubmitPlanArgs, ThinkTagStreamFilter } from "./model-output-normalizer.ts";
+import { stripThinkTags, stripMinimaxProtocolTokens, extractPlanFromXml, buildSubmitPlanArgs, ThinkTagStreamFilter } from "./model-output-normalizer.ts";
 
 export { isRepeatGuardedToolCall } from "./repeat-guard.ts";
 export type { ChatMessage } from "./chat-message.ts";
@@ -1354,6 +1354,12 @@ export class Agent {
 			if (stripped.text !== fullText) {
 				fullText = stripped.text;
 			}
+		}
+
+		// 后处理：清理 MiniMax 协议标记（防御性，处理流式 ThinkTagStreamFilter 遗漏的跨 chunk 标记）。
+		// 必须在 parseToolCalls / extractPlanFromXml 之前执行，否则 XML 参数解析会失败。
+		if (/<\]minimax\[>\[/.test(fullText)) {
+			fullText = stripMinimaxProtocolTokens(fullText);
 		}
 
 		const textCalls: ModelToolCall[] = parseToolCalls(fullText).map((tc) => ({

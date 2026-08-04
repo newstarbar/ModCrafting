@@ -83,4 +83,8 @@ export interface DisplayMessage {
   timestamp: number
   stateSnapshot?: SessionStateSnapshot
   attachments?: MessageAttachment[]
+  /** assistant 消息实际使用的模型名称（用于会话日志导出，多模型切换追踪） */
+  model?: string
+  /** assistant 消息实际使用的 Provider ID */
+  providerId?: string
 }
