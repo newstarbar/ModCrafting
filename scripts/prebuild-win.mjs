@@ -25,6 +25,13 @@ function nodeScript(rel, label) {
   run('node', [path.join(root, rel)], label)
 }
 
+// 检测 python 是否可用；assets:prepare 依赖 python 脚本生成 MC 客户端资源。
+// 资源已在历史构建中生成并提交时，可安全跳过。
+function isPythonAvailable() {
+  const r = spawnSync('python', ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' })
+  return r.status === 0
+}
+
 // 知识库下载失败时仅警告但不中断 prebuild（知识库为可选增强，缺失时 agent 会返回服务不可用提示）
 function tryKnowledgeDownload() {
   if (skipKnowledge) {
@@ -51,7 +58,12 @@ if (target === 'portable') {
 
 nodeScript('scripts/assets/generate-icon-ico.mjs', 'generate icons')
 nodeScript('scripts/assets/generate-installer-assets.mjs', 'generate installer assets')
-npm('assets:prepare', 'prepare renderer assets')
+if (isPythonAvailable()) {
+  npm('assets:prepare', 'prepare renderer assets')
+} else {
+  console.warn('[prebuild][warn] python 不可用，跳过 assets:prepare。')
+  console.warn('[prebuild][warn] 若 MC 客户端资源未生成，渲染器可能缺失贴图；资源已存在时可忽略。')
+}
 // Runtime JDK, Gradle and Fabric caches are intentionally downloaded on first
 // launch into the edition-specific runtime directory. Do not create a JRE,
 // Gradle/Fabric seed or any Gitee shards while building a release.
