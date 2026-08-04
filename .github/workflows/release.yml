@@ -69,12 +69,6 @@ jobs:
       - name: Setup full toolchain
         run: npm run toolchain:setup
 
-      - name: Strip Gradle distribution
-        run: npm run toolchain:strip-gradle
-
-      - name: Build jlink JRE
-        run: npm run toolchain:build-jre
-
       - name: Prefetch Fabric deps
         run: npm run toolchain:prefetch
 
@@ -86,21 +80,6 @@ jobs:
 
       - name: Download knowledge bases
         run: node scripts/knowledge/download-knowledge-base.mjs
-
-      - name: Prepare seed for packaging
-        run: node scripts/toolchain/prepare-seed-for-packaging.mjs
-
-      - name: Archive gradle home seed (tar.xz)
-        run: node scripts/toolchain/archive-gradle-home-seed.mjs
-
-      - name: Split seed shards
-        run: node scripts/release/split-seed-shards.mjs
-
-      - name: Archive JRE minimal (tar.xz)
-        run: node scripts/toolchain/archive-jre-minimal.mjs
-
-      - name: Split JRE shards
-        run: node scripts/release/split-jre-shards.mjs
 
       - name: Archive extra resources (knowledge base + symbol index + base mods)
         run: node scripts/release/archive-extra-resources.mjs
@@ -154,40 +133,6 @@ jobs:
             echo "Portable not found: $PORTABLE"
             exit 1
           fi
-
-      - name: Upload seed shards to GitHub Release
-        shell: bash
-        run: |
-          SHARDS_DIR="resources/seed-shards"
-          if [ ! -d "$SHARDS_DIR" ]; then
-            echo "Seed shards dir not found: $SHARDS_DIR"
-            exit 1
-          fi
-          echo "Uploading seed shards..."
-          for f in "$SHARDS_DIR"/*; do
-            if [ -f "$f" ]; then
-              echo "  uploading $(basename "$f")"
-              gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
-            fi
-          done
-          echo "Seed shards uploaded."
-
-      - name: Upload JRE shards to GitHub Release
-        shell: bash
-        run: |
-          JRE_SHARDS_DIR="resources/jre-shards"
-          if [ ! -d "$JRE_SHARDS_DIR" ]; then
-            echo "JRE shards dir not found: $JRE_SHARDS_DIR"
-            exit 1
-          fi
-          echo "Uploading JRE shards..."
-          for f in "$JRE_SHARDS_DIR"/*; do
-            if [ -f "$f" ]; then
-              echo "  uploading $(basename "$f")"
-              gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
-            fi
-          done
-          echo "JRE shards uploaded."
 
       - name: Upload extra resources to GitHub Release
         shell: bash

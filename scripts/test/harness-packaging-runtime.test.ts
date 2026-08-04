@@ -14,12 +14,10 @@ test('packaging keeps Electron runtime files and uses canonical artifact names',
   assert.match(fs.readFileSync('electron-builder.portable.json', 'utf8'), /\$\{productName\}-\$\{version\}-Portable/)
 })
 
-test('toolchain requires a full pinned JDK and no Gitee shard bootstrap', () => {
+test('toolchain requires a full pinned JDK and uses mirror direct download', () => {
   assert.match(toolchain, /JDK_VERSION = '21\.0\.12\+8'/)
   assert.match(toolchain, /javac/)
   assert.match(toolchain, /downloadFileResumable/)
-  assert.doesNotMatch(buildEnv, /downloadAndExtractSeedShards/)
-  assert.doesNotMatch(buildEnv, /downloadAndExtractGradleShards/)
 })
 
 test('Fabric warmup verifies assets and an offline build before writing its receipt', () => {

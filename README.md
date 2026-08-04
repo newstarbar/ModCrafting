@@ -22,7 +22,7 @@
 > **不懂 Gradle？没关系。** 右侧「游戏」面板用图形化进度展示启动状态；AI 负责写代码、改文件、触发构建。终端与命令行默认折叠在「高级」页，仅供开发者备用。
 
 > [!NOTE]
-> **精简安装包 + 首次下载。** 安装包仅内置精简 JRE（约 60 MB），首次启动从国内镜像下载 Gradle 与 Fabric 依赖种子（约 620 MB，5-10 分钟）；下载完成后在无网络或弱网环境下仍可完成模组编译与 `runClient` 测试。
+> **精简安装包 + 首次下载。** 安装包仅含 Electron 本体（约 95 MB），首次启动从国内镜像下载 JDK 21 + Gradle 9.5 + Fabric 依赖（约 1.2 GB，5-10 分钟）；下载完成后在无网络或弱网环境下仍可完成模组编译与 `runClient` 测试。
 
 ---
 
@@ -76,7 +76,7 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 
 > 文件名中的版本号与 Release 标签一致（例如标签 `v1.0.0` 对应 `1.0.0`）。
 
-- **完整版（Setup）**：安装包仅含精简 JRE（约 60 MB）；首次启动从国内镜像（Gitee + 腾讯云）下载 Gradle 与 Fabric 依赖种子到 `runtime/`，完成后可完全离线构建。
+- **完整版（Setup）**：安装包仅含 Electron 本体（约 95 MB）；首次启动从国内镜像（清华 TUNA + 腾讯云 + 华为云）下载 JDK 21 + Gradle 9.5 + Fabric 依赖到 `runtime/`，完成后可完全离线构建。
 - **便携版（Portable）**：仅含应用本体与小文件；首次启动自动联网下载 JDK / Gradle / Fabric 依赖。
 
 ### 应用内更新
@@ -200,12 +200,6 @@ npm install
 # 下载并解压 JDK 21 + Gradle 9.5 到 resources/
 npm run toolchain:setup
 
-# 精简 Gradle 发行版（移除文档/示例，节省 30-50%）
-npm run toolchain:strip-gradle
-
-# 构建 jlink 精简 JRE（约 60 MB，仅含所需 JDK 模块）
-npm run toolchain:build-jre
-
 # 验证工具链文件是否齐全
 npm run toolchain:verify
 ```
@@ -243,13 +237,11 @@ npm run build:win:portable
 |------|------|
 | `npm run test` | 运行 harness 单元测试 |
 | `npm run toolchain:setup` | 下载 JDK 21 + Gradle 发行版 |
-| `npm run toolchain:strip-gradle` | 精简 Gradle 发行版（移除文档/示例） |
-| `npm run toolchain:build-jre` | 构建 jlink 精简 JRE（约 60 MB） |
 | `npm run toolchain:prefetch` | 预取 Fabric/Minecraft 依赖到种子目录 |
 | `npm run toolchain:verify` | 检查 JDK / Gradle / Wrapper |
 | `npm run toolchain:verify-offline` | 验证离线构建流程 |
 | `npm run build:win` | 构建 Setup + Portable（推荐发版用） |
-| `npm run build:win:setup` | 仅构建 NSIS 完整版（含精简 JRE，不含 Gradle/seed） |
+| `npm run build:win:setup` | 仅构建 NSIS 完整版（不含 JDK/Gradle，首启联网下载） |
 | `npm run build:win:portable` | 仅构建轻量便携版（不含 JDK/Gradle/seed） |
 | `npm run assets:icon` | 从 appIcon.png / installerIcon.png 生成 .ico |
 | `npm run release:manifest` | 渲染 `packaging/update-manifest.json`（发布用） |
@@ -261,10 +253,9 @@ npm run build:win:portable
 1. 更新 `package.json` 的 `version`
 2. 打 tag 并推送：`git tag v1.0.0 && git push origin v1.0.0`
 3. GitHub Actions 自动：
-   - 构建 Setup + Portable（含精简 JRE）
-   - 生成 seed 分片（`gradle-home-seed.tar.xz` 分片为 90 MB 块）
-   - 发布 GitHub Release（Setup + Portable + seed 分片）
-   - 同步 Gitee Release（Setup + Portable + seed 分片，需配置 Secret `GITEE_TOKEN`）
+   - 构建 Setup + Portable（仅含 Electron 本体）
+   - 发布 GitHub Release（Setup + Portable + 知识库辅助资源）
+   - 同步 Gitee Release（Setup + Portable + latest.yml，需配置 Secret `GITEE_TOKEN`）
    - 更新 `packaging/update-manifest.json` 到 main
 4. 详见 [`RELEASE.md`](RELEASE.md)（Release 正文由 CI 根据 commit 自动生成，无需手改）
 
@@ -313,7 +304,7 @@ ModCrafting/
 │   ├── preload/        # 安全桥接 API
 │   └── renderer/       # React UI：对话、游戏面板、项目向导
 ├── scripts/            # 构建脚本（toolchain / assets / packaging / release / test）
-├── resources/          # JRE / Gradle / 依赖种子 / seed 分片（由脚本生成，不进 Git）
+├── resources/          # Gradle Wrapper / Fabric 版本配置 / 知识库（由脚本生成，不进 Git）
 ├── packaging/          # 安装包资源：图标、NSIS 脚本、许可说明
 └── package.json
 ```
@@ -450,7 +441,6 @@ git clone https://github.com/newstarbar/ModCrafting.git
 cd ModCrafting
 npm install
 npm run toolchain:setup
-npm run toolchain:build-jre
 npm run toolchain:prefetch
 npm run dev
 ```
