@@ -34,6 +34,31 @@ function git(cmd) {
   }
 }
 
+// 防御：确保目标 tag 指向当前 HEAD。
+// 无论从 release:publish 调用（外层已先 ensureLocalTag）还是独立运行 release:notes，
+// 都强制对齐本地 tag 到最新 HEAD，保证 previousTag 能在 tag 列表中定位，
+// 且 compare 链接中的 {current} 与 changelog 实际区间右端（HEAD）一致。
+;(function ensureLocalTagAtHead() {
+  try {
+    const beforeRaw = execSync(`git rev-parse --verify ${tag}`, {
+      cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
+    const before = beforeRaw ? beforeRaw.slice(0, 7) : ''
+    const headRaw = execSync('git rev-parse --verify HEAD', {
+      cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
+    const head = headRaw ? headRaw.slice(0, 7) : ''
+    execSync(`git tag -f ${tag}`, { cwd: root, stdio: 'ignore' })
+    if (before) {
+      console.error(`[notes] 移动本地 tag: ${tag} (${before} → ${head})`)
+    } else {
+      console.error(`[notes] 创建本地 tag: ${tag} (${head})`)
+    }
+  } catch {
+    // git 不可用时静默跳过，changelog 区间会退化为 HEAD（首版模式）
+  }
+})()
+
 function listVersionTags() {
   const out = git('git tag -l "v*" --sort=-v:refname')
   return out ? out.split(/\r?\n/).filter(Boolean) : []
@@ -73,8 +98,10 @@ function cleanSubject(subject) {
   )
 }
 
-function collectChangelog(prev, current) {
-  const range = prev ? `${prev}..${current}` : current
+function collectChangelog(prev, _current) {
+  // 区间右端一律用 HEAD，避免 current tag 未创建或指向旧 commit 导致 changelog 空或不刷新。
+  // previous tag 作为左端锚点（已存在），当前发布目标永远是此刻工作树 HEAD。
+  const range = prev ? `${prev}..HEAD` : 'HEAD'
   const log = git(`git log ${range} --pretty=format:%h|%s`)
   if (!log) return { feat: [], fix: [], perf: [], other: [] }
 

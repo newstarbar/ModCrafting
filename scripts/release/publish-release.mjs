@@ -167,26 +167,31 @@ function generateReleaseNotes(tag) {
   console.log(`[publish] 已归档: docs/releases/${tag}.md`)
 }
 
-// ─── Git tag 创建与推送 ────────────────────────────────────────────────
-function ensureAndPushTag(tag) {
-  // 检查本地是否已有该 tag
-  const localTag = gitText(['tag', '-l', tag])
-  if (!localTag) {
-    console.log(`\n[publish] 创建 git tag: ${tag}`)
-    gitInherit(['tag', tag])
-  } else {
-    console.log(`[publish] 本地已存在 tag: ${tag}`)
-  }
+// ─── Git tag 本地强制创建与远端推送（分两步） ─────────────────────────────
 
-  // 推送到 GitHub origin(触发 CI)
-  console.log(`[publish] 推送 tag 到 GitHub origin(将触发 CI 发布 GitHub Release)...`)
-  const pushResult = git(['push', 'origin', tag], { stdio: 'inherit' })
-  if (pushResult.status !== 0) {
-    console.warn(`[publish] 警告: 推送 tag 到 origin 失败(可能远程已存在),CI 可能已被触发`)
-    console.warn('[publish] 如需强制重推,请手动执行: git push origin --force ' + tag)
+/** 本地强制 tag 指向当前 HEAD。必须在生成 release notes 之前执行，
+ *  避免 (a) tag 不存在时 previousTag 无法定位，(b) 旧 tag 指向过期 commit。
+ *  若已有同名 tag 则覆盖（-f），保证本轮发布的是最新工作树。 */
+function ensureLocalTag(tag) {
+  const before = gitText(['rev-parse', '--verify', tag]).slice(0, 7)
+  const head = gitText(['rev-parse', '--verify', 'HEAD']).slice(0, 7)
+  gitInherit(['tag', '-f', tag])
+  if (before) {
+    console.log(`\n[publish] 已移动本地 tag: ${tag} (${before} → ${head})`)
   } else {
-    console.log('[publish] tag 已推送,GitHub Actions CI 将自动构建并发布 GitHub Release')
+    console.log(`\n[publish] 已创建本地 tag: ${tag} (${head})`)
   }
+}
+
+/** 推送 tag 到 GitHub origin。验证本地构建产物通过后再调用，
+ *  避免无效触发 CI。使用 --force 覆盖远端已有的同名 tag。 */
+function pushTagToOrigin(tag) {
+  console.log(`[publish] 推送 tag 到 GitHub origin(将触发 CI 发布 GitHub Release)...`)
+  const pushResult = git(['push', '--force', 'origin', tag], { stdio: 'inherit' })
+  if (pushResult.status !== 0) {
+    throw new Error(`推送 tag ${tag} 到 origin 失败(退出码 ${pushResult.status})`)
+  }
+  console.log('[publish] tag 已推送,GitHub Actions CI 将自动构建并发布 GitHub Release')
 }
 
 // ─── 主流程 ────────────────────────────────────────────────────────────
@@ -230,10 +235,15 @@ async function main() {
   const { owner, repo, source } = resolveGiteeRepo()
   console.log(`[publish] Gitee 仓库: ${owner}/${repo} (来源: ${source})`)
 
-  // 3. 生成 release notes 并归档
+  // 3. 先强制移动本地 tag 指向当前 HEAD
+  //    必须在生成 release notes 之前完成：(a) previousTag 能在 tag 列表中定位，
+  //    (b) changelog 区间虽然改用 HEAD，但 tag 指向 HEAD 保证 compare 链接一致
+  ensureLocalTag(tag)
+
+  // 4. 生成 release notes 并归档
   generateReleaseNotes(tag)
 
-  // 4. 检查本地构建产物
+  // 5. 检查本地构建产物
   const missing = checkLocalAssets(ver)
   if (missing.length > 0) {
     console.error('')
@@ -244,10 +254,10 @@ async function main() {
   }
   console.log('[publish] 本地构建产物检查通过')
 
-  // 5. 创建并推送 tag 到 GitHub(触发 CI)
-  ensureAndPushTag(tag)
+  // 6. 验证通过后再推送 tag 到 GitHub(触发 CI)
+  pushTagToOrigin(tag)
 
-  // 6. 查询 Gitee 是否已存在该版本
+  // 7. 查询 Gitee 是否已存在该版本
   console.log(`\n[publish] 查询 Gitee 是否已存在 ${tag} ...`)
   const exists = await giteeReleaseExists(owner, repo, tag, token)
   if (exists) {
@@ -261,21 +271,21 @@ async function main() {
   }
   console.log(`[publish] Gitee 不存在 ${tag},继续发布 Gitee`)
 
-  // 7. GitHub 信息展示
+  // 8. GitHub 信息展示
   const ghTag = await githubLatestTag()
   if (ghTag) {
     console.log(`[publish] GitHub 当前最新 Release: ${ghTag}`)
   }
 
-  // 8. 推送 git + tag 到 Gitee
+  // 9. 推送 git + tag 到 Gitee
   console.log('\n[publish] 步骤 1/2: 推送 git + tag 到 Gitee')
   runScript('scripts/release/push-gitee-git.mjs', tag)
 
-  // 9. 上传 Gitee Release 附件
+  // 10. 上传 Gitee Release 附件
   console.log('\n[publish] 步骤 2/2: 创建 Gitee Release 并上传附件')
   runScript('scripts/release/sync-gitee-release.mjs', tag)
 
-  // 10. 完成
+  // 11. 完成
   const urls = giteeUrls(owner, repo, tag, ver)
   console.log('')
   console.log('[publish] 发布完成:')

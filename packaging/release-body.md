@@ -6,7 +6,7 @@
 
 | 版本 | 大小 | 说明 | Gitee | GitHub |
 |------|------|------|-------|--------|
-| **完整版 Setup** | 95.1 MB | 内置精简 JRE；首次启动下载 Gradle + Fabric 依赖（约 620 MB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) |
+| **完整版 Setup** | 95.1 MB | 安装包仅含 Electron 本体；首次启动联网下载 JDK 21 + Gradle 9.5 + Fabric 依赖（约 1.2GB，国内镜像 5-10 分钟）；支持应用内更新 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-Setup-1.0.0.exe) |
 | **便携版 Portable** | 84.8 MB | 体积小；**首次需联网**下载并验证工具链 | [Gitee 下载](https://gitee.com/chenmo-starry-sky/mod-crafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe) | [GitHub 下载](https://github.com/newstarbar/ModCrafting/releases/download/v1.0.0/ModCrafting-1.0.0-Portable.exe) |
 
 ### 如何选择
@@ -17,7 +17,7 @@
 ## 提示
 
 - ModCrafting 与 Mojang / Microsoft **无官方关联**，使用本软件须遵守 [Minecraft EULA](https://www.minecraft.net/zh-hans/eula)，并自备合法游戏副本
-- **完整版**：安装包仅含精简 JRE（约 60 MB），首次启动会从国内镜像下载 Gradle 与 Fabric 依赖种子（约 620 MB），完成后可完全离线构建模组
+- **完整版**：安装包仅含 Electron 本体（约 95 MB），首次启动从国内镜像下载 JDK 21 + Gradle 9.5 + Fabric 依赖（约 1.2 GB），完成后可完全离线构建模组
 - **便携版**：工具链下载至系统临时目录的 `runtime/`，设置保存在 `%AppData%\modcrafting`
 
 ## 升级说明
