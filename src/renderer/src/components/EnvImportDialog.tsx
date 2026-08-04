@@ -16,12 +16,21 @@ interface ImportProgress {
 const QQ_GROUP = "203657694";
 // QQ 群官方加群页面（浏览器打开）
 const QQ_GROUP_URL = "https://qm.qq.com/q/jGxqZBzh9m";
-// 离线环境包下载源
-const DOWNLOAD_SOURCES = [
-	{ id: "qq", name: "QQ 群文件", desc: "加入 QQ 群，从群文件下载" },
+
+// 离线环境包下载源（QQ 群 + 各类网盘，任选其一）
+type DownloadSource = {
+	id: string;
+	name: string;
+	desc: string;
+	url?: string;
+	pwd?: string;
+};
+const DOWNLOAD_SOURCES: DownloadSource[] = [
+	{ id: "qq", name: "QQ 群文件", desc: "入群后从群文件下载" },
 	{ id: "123pan", name: "123 云盘", url: "https://1840910710.share.123pan.cn/123pan/4VpOTd-VzbBd", pwd: "H8my", desc: "免登录直链，速度较快" },
-	{ id: "baidu", name: "百度网盘", url: "https://pan.baidu.com/s/1CWTMEDhGZqwu6heixoK_PQ", pwd: "tbrs", desc: "需登录百度账号" }
-] as const;
+	{ id: "baidu", name: "百度网盘", url: "https://pan.baidu.com/s/1CWTMEDhGZqwu6heixoK_PQ", pwd: "tbrs", desc: "需登录百度账号" },
+	{ id: "189", name: "天翼云盘", url: "https://cloud.189.cn/t/ArIbuaFNjmEv", pwd: "3j28", desc: "电信用户首选" }
+];
 
 /**
  * 环境配置手动导入对话框。
@@ -179,88 +188,114 @@ const EnvImportDialog: React.FC<Props> = ({ onSuccess, onClose }) => {
 							}}
 						>
 							<div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>下载环境包（任选一种）</div>
-							{DOWNLOAD_SOURCES.map((src, idx) => (
-								<div
-									key={src.id}
-									style={{
-										padding: "8px 10px",
-										marginBottom: idx < DOWNLOAD_SOURCES.length - 1 ? 8 : 0,
-										borderRadius: 6,
-										background: "var(--bg-surface)",
-										border: "1px solid var(--border-color)"
-									}}
-								>
-									<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-										<span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>
-											{idx + 1}. {src.name}
-											<span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 400, marginLeft: 6 }}>{src.desc}</span>
-										</span>
-										{src.id === "qq" ? (
-											<button
-												type="button"
-												onClick={() => void handleCopyQQGroup()}
+						<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+							{DOWNLOAD_SOURCES.map((src, idx) => {
+								const isQQ = src.id === "qq";
+								return (
+									<div
+										key={src.id}
+										style={{
+											display: "flex",
+											alignItems: "center",
+											justifyContent: "space-between",
+											gap: 8,
+											padding: "6px 10px",
+											borderRadius: 6,
+											background: "var(--bg-surface)",
+											border: "1px solid var(--border-color)"
+										}}
+									>
+										<div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
+											<span
 												style={{
-													background: "none",
-													border: "1px solid var(--border-color)",
-													borderRadius: 4,
-													padding: "2px 8px",
-													fontSize: 11,
-													color: copied ? "var(--success)" : "var(--accent)",
-													cursor: "pointer",
-													whiteSpace: "nowrap"
-												}}
-												title="点击复制群号并打开加群页面"
-											>
-												{copied ? "已复制 ✓" : "复制群号"}
-											</button>
-										) : (
-											<button
-												type="button"
-												onClick={() => src.url && handleOpenUrl(src.url)}
-												style={{
-													background: "none",
-													border: "1px solid var(--border-color)",
-													borderRadius: 4,
-													padding: "2px 8px",
-													fontSize: 11,
-													color: "var(--accent)",
-													cursor: "pointer",
-													whiteSpace: "nowrap"
+													flexShrink: 0,
+													width: 18,
+													height: 18,
+													borderRadius: "50%",
+													background: "var(--bg-secondary)",
+													color: "var(--text-muted)",
+													fontSize: 10,
+													display: "inline-flex",
+													alignItems: "center",
+													justifyContent: "center",
+													fontWeight: 600
 												}}
 											>
-												打开链接
-											</button>
-										)}
+												{idx + 1}
+											</span>
+											<span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", flexShrink: 0 }}>{src.name}</span>
+											<span style={{ fontSize: 10, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.desc}</span>
+										</div>
+										<div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+											{isQQ ? (
+												<button
+													type="button"
+													onClick={() => void handleCopyQQGroup()}
+													style={{
+														background: "none",
+														border: "1px solid var(--border-color)",
+														borderRadius: 4,
+														padding: "2px 8px",
+														fontSize: 11,
+														color: copied ? "var(--success)" : "var(--accent)",
+														cursor: "pointer",
+														whiteSpace: "nowrap"
+													}}
+													title="点击复制群号并打开加群页面"
+												>
+													{copied ? "已复制 ✓" : "复制群号"}
+												</button>
+											) : (
+												<>
+													<button
+														type="button"
+														onClick={() => src.url && handleOpenUrl(src.url)}
+														style={{
+															background: "none",
+															border: "1px solid var(--border-color)",
+															borderRadius: 4,
+															padding: "2px 8px",
+															fontSize: 11,
+															color: "var(--accent)",
+															cursor: "pointer",
+															whiteSpace: "nowrap"
+														}}
+													>
+														打开
+													</button>
+													{src.pwd && (
+														<button
+															type="button"
+															onClick={() => void handleCopyPwd(src.pwd, src.id)}
+															title="点击复制提取码"
+															style={{
+																background: "none",
+																border: "1px solid var(--border-color)",
+																borderRadius: 4,
+																padding: "2px 8px",
+																fontSize: 11,
+																fontFamily: "monospace",
+																fontWeight: 600,
+																color: copiedPwd === src.id ? "var(--success)" : "var(--text-secondary)",
+																cursor: "pointer",
+																whiteSpace: "nowrap"
+															}}
+														>
+															{copiedPwd === src.id ? "已复制 ✓" : src.pwd}
+														</button>
+													)}
+												</>
+											)}
+										</div>
 									</div>
-									{src.id === "qq" ? (
-										<div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-											群号：<span style={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>{QQ_GROUP}</span>，入群后从群文件下载「ModCrafting-runtime-env.zip」
-										</div>
-									) : (
-										<div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, display: "flex", alignItems: "center", gap: 8 }}>
-											<span>提取码：</span>
-											<button
-												type="button"
-												onClick={() => src.pwd && void handleCopyPwd(src.pwd, src.id)}
-												style={{
-													background: "none",
-													border: "none",
-													padding: 0,
-													font: "inherit",
-													fontSize: 11,
-													fontFamily: "monospace",
-													fontWeight: 600,
-													color: copiedPwd === src.id ? "var(--success)" : "var(--text-secondary)",
-													cursor: "pointer"
-												}}
-												title="点击复制提取码"
-											>
-												{copiedPwd === src.id ? "已复制 ✓" : src.pwd}
-											</button>
-										</div>
-									)}
-								</div>
-							))}
+								);
+							})}
+						</div>
+						{DOWNLOAD_SOURCES[0] && (
+							<div style={{ marginTop: 6, fontSize: 10, color: "var(--text-muted)", lineHeight: 1.5 }}>
+								QQ 群号：<span style={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>{QQ_GROUP}</span>，入群后从群文件下载「ModCrafting-runtime-env.zip」
+							</div>
+						)}
 							<div style={{ marginTop: 10, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
 								<div style={{ fontWeight: 600, marginBottom: 4 }}>导入步骤</div>
 								<ol style={{ margin: 0, paddingLeft: 20 }}>
