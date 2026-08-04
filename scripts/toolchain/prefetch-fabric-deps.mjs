@@ -111,6 +111,18 @@ function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
     })
     let timer
     let timedOut = false
+    // 收集输出用于失败时判断是否为瞬态网络错误
+    let outputBuf = ''
+    const appendOutput = (d) => {
+      const s = d.toString()
+      outputBuf += s
+      process.stdout.write(d)
+    }
+    child.stdout.on('data', appendOutput)
+    child.stderr.on('data', (d) => {
+      outputBuf += d.toString()
+      process.stderr.write(d)
+    })
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true
@@ -118,8 +130,6 @@ function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
         reject(new Error(`Gradle timed out after ${timeoutMs}ms: ${args.join(' ')}`))
       }, timeoutMs)
     }
-    child.stdout.on('data', (d) => process.stdout.write(d))
-    child.stderr.on('data', (d) => process.stderr.write(d))
     child.on('error', (err) => {
       if (timer) clearTimeout(timer)
       reject(err)
@@ -128,9 +138,52 @@ function runGradle(cwd, gradleHome, args, timeoutMs = 0) {
       if (timer) clearTimeout(timer)
       if (timedOut) return
       if (code === 0) resolve(code)
-      else reject(new Error(`Gradle exited ${code}: ${args.join(' ')}`))
+      else {
+        const err = new Error(`Gradle exited ${code}: ${args.join(' ')}`)
+        err.output = outputBuf
+        reject(err)
+      }
     })
   })
+}
+
+/**
+ * 带重试的 Gradle 构建。Maven Central 偶发 429 Too Many Requests 时自动重试。
+ * 重试时不再使用 --refresh-dependencies（避免再次触发全量下载），并增加 Gradle
+ * 的 HTTP 超时与重试参数。
+ */
+async function runGradleWithRetry(cwd, gradleHome, args, timeoutMs = 0, maxAttempts = 3) {
+  const isBuildTask = args.includes('build')
+  let lastErr
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const retryArgs = [...args]
+    // 重试时移除 --refresh-dependencies，复用已下载的依赖
+    if (attempt > 1) {
+      const idx = retryArgs.indexOf('--refresh-dependencies')
+      if (idx >= 0) retryArgs.splice(idx, 1)
+    }
+    // 增加 Gradle HTTP 超时与重试（通过系统属性）
+    retryArgs.unshift(
+      '-Dorg.gradle.internal.http.connectionTimeout=120000',
+      '-Dorg.gradle.internal.http.socketTimeout=120000'
+    )
+    console.log(`\n>>> gradlew ${retryArgs.join(' ')} (attempt ${attempt}/${maxAttempts})`)
+    try {
+      const code = await runGradle(cwd, gradleHome, retryArgs, timeoutMs)
+      return code
+    } catch (err) {
+      lastErr = err
+      // 从 Gradle 输出中判断是否为瞬态网络错误（429 / 连接失败等）
+      const output = String(err.output || err.message || err)
+      const isTransient = isBuildTask && /429|Too Many Requests|Could not GET|Could not HEAD|Could not get resource|Connection timed out|Could not parse POM/i.test(output)
+      if (!isTransient || attempt === maxAttempts) throw err
+      const waitSec = 30 * attempt
+      console.warn(`\n[retry] Gradle 构建失败（可能为 Maven Central 限流），${waitSec}s 后重试…`)
+      console.warn(`[retry] 错误摘要: ${output.split('\n').find((l) => /429|Too Many|Could not/i.test(l)) || output.split('\n')[0]}`)
+      await sleep(waitSec * 1000)
+    }
+  }
+  throw lastErr
 }
 
 async function stopGradleDaemons(gradleHome) {
@@ -165,8 +218,13 @@ async function main() {
   ]
 
   for (const args of tasks) {
-    console.log(`\n>>> gradlew ${args.join(' ')}`)
-    await runGradle(prefetchProject, gradleHome, args, 30 * 60 * 1000)
+    // build 任务使用带重试的执行器（应对 Maven Central 偶发 429 限流）
+    if (args.includes('build')) {
+      await runGradleWithRetry(prefetchProject, gradleHome, args, 30 * 60 * 1000, 3)
+    } else {
+      console.log(`\n>>> gradlew ${args.join(' ')}`)
+      await runGradle(prefetchProject, gradleHome, args, 30 * 60 * 1000)
+    }
   }
 
   // Brief runClient to pull launch natives/classpath into loom cache
