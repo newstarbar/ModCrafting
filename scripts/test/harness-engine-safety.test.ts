@@ -5,8 +5,10 @@ import { executeBatch, Registry } from '../../src/renderer/src/harness/tools.ts'
 import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
 import { WorkflowEngine } from '../../src/renderer/src/harness/workflow-engine.ts'
+import { isNonBurningRejectionRound } from '../../src/renderer/src/harness/workflow-engine.ts'
 import { compilePlanFromText } from '../../src/renderer/src/harness/plan-compiler.ts'
 import { microCompact } from '../../src/renderer/src/harness/context-compact.ts'
+import { planToolNames, recommendedToolNames } from '../../src/renderer/src/harness/tool-policy.ts'
 
 test('tool boundary rejects tools not offered in the current phase', () => {
   const result = validateToolCalls([
@@ -61,6 +63,70 @@ test('ordered scheduler keeps write -> read observation order', async () => {
   ], registry, { projectPath: null, callId: 'test' })
 
   assert.equal(results.get('read')?.output, 'after')
+})
+
+test('timed-out read settles the batch and does not block the following write', async () => {
+  const registry = new Registry()
+  registry.add({
+    name: 'never_returns', description: 'hang', schema: { type: 'object' }, readOnly: () => true,
+    policy: { capabilities: ['project.read'], executionClass: 'fast', timeoutMs: 15, cancellable: true },
+    async execute() { return await new Promise<string>(() => {}) }
+  })
+  let wrote = false
+  registry.add({
+    name: 'write_after_timeout', description: 'write', schema: { type: 'object' }, readOnly: () => false,
+    policy: { capabilities: ['project.write'], executionClass: 'fast', timeoutMs: 100, cancellable: true },
+    async execute() { wrote = true; return 'written' }
+  })
+
+  const results = await executeBatch([
+    { id: 'hang', name: 'never_returns', args: {} },
+    { id: 'write', name: 'write_after_timeout', args: {} }
+  ], registry, { projectPath: null, callId: 'test', runId: 'run-test' })
+
+  assert.equal(results.get('hang')?.errorKind, 'tool_timeout')
+  assert.equal(results.get('hang')?.outcome, 'timed_out')
+  assert.equal(results.get('hang')?.executionId, 'run-test:hang')
+  assert.equal(wrote, true)
+})
+
+test('tool cancellation settles with a cancelled outcome', async () => {
+  const registry = new Registry()
+  let sawAbort = false
+  registry.add({
+    name: 'wait_for_abort', description: 'wait', schema: { type: 'object' }, readOnly: () => true,
+    policy: { capabilities: ['project.read'], executionClass: 'fast', timeoutMs: 1000, cancellable: true },
+    async execute(ctx) {
+      return await new Promise<string>((_resolve, reject) => {
+        ctx.abortSignal?.addEventListener('abort', () => {
+          sawAbort = true
+          reject(ctx.abortSignal?.reason)
+        }, { once: true })
+      })
+    }
+  })
+  const controller = new AbortController()
+  const pending = executeBatch([{ id: 'cancel', name: 'wait_for_abort', args: {} }], registry, {
+    projectPath: null, callId: 'test', abortSignal: controller.signal
+  })
+  setTimeout(() => controller.abort(new Error('test cancel')), 10)
+  const results = await pending
+  assert.equal(sawAbort, true)
+  assert.equal(results.get('cancel')?.errorKind, 'tool_cancelled')
+  assert.equal(results.get('cancel')?.outcome, 'cancelled')
+})
+
+test('capability catalogue exposes Minecraft data to plan and write steps', () => {
+  assert.ok(planToolNames().includes('minecraft_data_lookup'))
+  assert.ok(planToolNames().includes('mc_wiki_search'))
+  assert.ok(recommendedToolNames('write').includes('minecraft_data_lookup'))
+  assert.ok(recommendedToolNames('write').includes('mc_wiki_search'))
+})
+
+test('policy deferrals do not burn the workflow attempt budget', () => {
+  assert.equal(isNonBurningRejectionRound([{
+    toolName: 'create_recipe', errorKind: 'policy_deferred', output: 'defer', durationMs: 0
+  }]), true)
 })
 
 test('write plus complete_step advances exactly one plan step', async () => {

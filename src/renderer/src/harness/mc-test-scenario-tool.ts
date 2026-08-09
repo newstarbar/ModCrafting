@@ -1,4 +1,5 @@
 import type { Tool } from './tools'
+import { createGameTestSpec, formatGameTestSpec } from './game-test-protocol.ts'
 
 /**
  * 功能测试场景模板。
@@ -538,11 +539,11 @@ function formatScenarioOutput(template: ScenarioTemplate, featureDetail?: string
 export const mcTestScenarioTool: Tool = {
   name: 'mc_test_scenario',
   description:
-    '获取功能测试场景模板。进入游戏世界后必须先调用本工具获取测试步骤脚本，再按步骤执行测试。' +
+    '获取功能测试场景模板，并可编译为 V2 确定性测试规格。进入游戏世界后必须先调用本工具获取测试步骤脚本，再按步骤执行测试。' +
     '参数：feature_type（必填）— new_item（新物品）/ new_block（新方块）/ new_recipe（新合成配方）/ ' +
     'entity_behavior（实体行为修改，如苦力怕爆炸改樱花）/ player_interaction（玩家交互功能，如闪电剑）/ hud_gui（HUD或界面）。' +
-    '可选：feature_detail（功能细节描述，如 "diamond_sword_summon_lightning"）、mod_id（模组 ID，用于替换占位符）。' +
-    '本工具只返回步骤脚本，不执行任何操作；执行由 AI 用其他工具完成。',
+    '可选：feature_detail、mod_id；若同时提供 subject_id（或 hotkey）和 assertions，本工具返回 scenarioId，可用 mc_run_test 执行。' +
+    '旧调用仍返回说明模板；旧模板不是通过证据。',
   schema: {
     type: 'object',
     properties: {
@@ -558,6 +559,23 @@ export const mcTestScenarioTool: Tool = {
       mod_id: {
         type: 'string',
         description: '模组 ID（可选），用于替换步骤中的 <modid> 占位符'
+      },
+      subject_id: {
+        type: 'string',
+        description: 'V2 测试的实际目标 ID，例如 example:lightning_sword 或 minecraft:creeper'
+      },
+      hotkey: {
+        type: 'string',
+        description: 'HUD/GUI 的实际触发热键，例如 f6'
+      },
+      assertions: {
+        type: 'array',
+        description: 'V2 客观断言列表；至少一项，禁止占位符和纯截图断言',
+        items: { type: 'object' }
+      },
+      visual_only: {
+        type: 'boolean',
+        description: '纯视觉效果；会明确返回 INCONCLUSIVE，等待用户确认'
       }
     },
     required: ['feature_type']
@@ -574,7 +592,14 @@ export const mcTestScenarioTool: Tool = {
     const template = TEMPLATES[featureType]
     const featureDetail = args.feature_detail ? String(args.feature_detail) : undefined
     const modId = args.mod_id ? String(args.mod_id) : undefined
-    return formatScenarioOutput(template, featureDetail, modId)
+    const legacy = formatScenarioOutput(template, featureDetail, modId)
+    const requestedV2 = Boolean(args.subject_id || args.target_id || args.hotkey || args.assertions)
+    if (!requestedV2) {
+      return legacy + '\n\n[V2] 要执行确定性测试，请补充 subject_id（或 hotkey）与至少一条 assertions，然后调用 mc_run_test。'
+    }
+    const compiled = createGameTestSpec(args)
+    if (!compiled.ok) return `${legacy}\n\nError: ${compiled.error}`
+    return `${legacy}\n\n${formatGameTestSpec(compiled.spec)}`
   }
 }
 

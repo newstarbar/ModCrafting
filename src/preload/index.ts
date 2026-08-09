@@ -300,6 +300,8 @@ const api = {
     data: Record<string, unknown>
     error?: string
   }> => ipcRenderer.invoke('mc:bridgeCall', payload),
+  saveGameTestReport: (payload: unknown): Promise<{ ok: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke('gameTest:saveReport', payload),
 
   // MC Runtime listeners
   onMcLog: (callback: (id: string, text: string) => void): (() => void) => {
@@ -336,12 +338,13 @@ const api = {
     ipcRenderer.invoke('app:runCommand', command, cwd),
 
   // Run command with streaming output (for builds)
-  runCommandStream: (command: string, cwd: string): Promise<{ output: string; exitCode: number }> =>
-    ipcRenderer.invoke('app:runCommandStream', command, cwd),
+  runCommandStream: (command: string, cwd: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }): Promise<{ output: string; exitCode: number; cancelled?: boolean }> =>
+    ipcRenderer.invoke('app:runCommandStream', command, cwd, options),
+  cancelToolExecution: (executionId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('app:cancelToolExecution', executionId),
 
   // Listen for streaming command output
-  onCommandOutput: (callback: (data: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: string) => callback(data)
+  onCommandOutput: (callback: (data: string, executionId?: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: string, executionId?: string) => callback(data, executionId)
     ipcRenderer.on('command:output', handler)
     return () => ipcRenderer.removeListener('command:output', handler)
   },
@@ -421,8 +424,8 @@ const api = {
     powershellEnv: string
     error?: string
   }> => ipcRenderer.invoke('env:prepareBuild', projectPath),
-  runGradleTask: (projectPath: string, task: string): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean }> =>
-    ipcRenderer.invoke('env:runGradleTask', projectPath, task),
+  runGradleTask: (projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean }> =>
+    ipcRenderer.invoke('env:runGradleTask', projectPath, task, options),
   getToolchainStatus: (): Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean }> =>
     ipcRenderer.invoke('env:getToolchainStatus'),
   checkRuntimeWritable: (): Promise<{ writable: boolean; runtimeRoot: string; error?: string }> =>

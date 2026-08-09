@@ -3,11 +3,13 @@ import { recipePath } from './recipe-utils.ts'
 import { isCombinedBuildRunDescription } from '../utils/plan-steps.ts'
 import type { StepKind, WorkflowStep, WorkflowStatus } from './workflow-types.ts'
 import { resolveCompiledStepKind } from './plan-compiler.ts'
+import { recommendedToolNames } from './tool-policy.ts'
 
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/i
 
 const BUILD_STEP_TITLE = '构建项目（gradlew build / trigger_build build）'
 const RUN_STEP_TITLE = '启动游戏进行真实测试（runClient）'
+export const GAME_TEST_STEP_TITLE = '执行确定性游戏测试（mc_test_scenario → mc_run_test；PASS 才完成）'
 
 const EXPLICIT_KIND_RE = /^\[(write|recipe|mixin|inspect)\]\s*/i
 
@@ -39,7 +41,8 @@ function inferKind(
   if (parsed.kind) return parsed.kind
 
   const d = parsed.body.toLowerCase()
-  if (/runclient|启动游戏|运行游戏|进入测试世界|进入世界|执行功能测试|验证功能效果|mc_ensure_test_world|mc_ensure_cheats/.test(d)) return 'run'
+  if (/mc_run_test|确定性游戏测试|执行功能测试|验证功能效果|mc_test_scenario/.test(d)) return 'game_test'
+  if (/runclient|启动游戏|运行游戏|进入测试世界|进入世界|mc_ensure_test_world|mc_ensure_cheats/.test(d)) return 'run'
   if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
   if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
   if (/mixin|@mixin|mixins?\.json/.test(d)) return 'mixin'
@@ -84,130 +87,7 @@ export function stepRequiresGuiPreview(description: string, targetPath?: string)
 }
 
 function defaultAllowedTools(kind: StepKind): string[] {
-  switch (kind) {
-    case 'inspect':
-      return [
-        'read_file',
-        'list_directory',
-        'grep',
-        'complete_step',
-        'explain_code',
-        'ask_clarification',
-        'fabric_docs_search',
-        'fabric_javadoc_lookup',
-        'vanilla_mc_wiki_query',
-        'fabric_meta_version_check',
-        'fabric_mod_json_validate',
-        'fabric_log_debugger',
-        'read_error_log'
-      ]
-    case 'recipe':
-      return [
-        'fabric_recipe_generate',
-        'create_recipe',
-        'fabric_recipe_validate',
-        'complete_step',
-        'read_file',
-        'list_directory',
-        'grep',
-        'ask_clarification',
-        'run_command',
-        'fabric_docs_search',
-        'fabric_javadoc_lookup',
-        'vanilla_mc_wiki_query',
-        'fabric_meta_version_check',
-        'fabric_mod_json_validate'
-      ]
-    case 'mixin':
-      return [
-        'fabric_mixin_target_lookup',
-        'fabric_mixin_scaffold',
-        'fabric_mixin_register',
-        'fabric_mixin_validate',
-        'edit_file',
-        'write_file',
-        'delete_file',
-        'read_file',
-        'list_directory',
-        'grep',
-        'complete_step',
-        'fabric_docs_search',
-        'fabric_javadoc_lookup',
-        'fabric_log_debugger',
-        // GUI 布局预览：Mixin 修改GUI渲染逻辑时需要
-        'gui_layout_preview',
-        'read_error_log'
-      ]
-    case 'write':
-      return [
-        'edit_file',
-        'write_file',
-        'delete_file',
-        'complete_step',
-        'fabric_template_generate',
-        'fabric_content_register',
-        'fabric_data_assets_generate',
-        'fabric_recipe_generate',
-        'create_recipe',
-        // Hybrid write steps often also register mixins.json / update fabric.mod.json
-        'fabric_mixin_register',
-        'fabric_mixin_validate',
-        'fabric_mixin_scaffold',
-        'read_file',
-        'list_directory',
-        'grep',
-        'ask_clarification',
-        'run_command',
-        'fabric_docs_search',
-        'fabric_javadoc_lookup',
-        'vanilla_mc_wiki_query',
-        'fabric_meta_version_check',
-        'fabric_mod_json_validate',
-        // GUI 布局预览：编写 Screen/HUD 代码前必须先调用此工具让用户确认布局
-        'gui_layout_preview'
-      ]
-    case 'build':
-      return [
-        'trigger_build',
-        'run_command',
-        // edit/write only after build fails (repair mode). Offering them here caused
-        // schema/policy mismatch loops: model keeps calling edit_file → tool_not_allowed.
-        'read_file',
-        'list_directory',
-        'grep',
-        'ask_clarification',
-        'fabric_log_debugger',
-        'fabric_docs_search',
-        'read_error_log',
-        // GUI 布局预览：修复场景需要编辑GUI文件时可用
-        'gui_layout_preview'
-      ]
-    case 'run':
-      return [
-        'trigger_build',
-        'run_command',
-        'read_file',
-        'list_directory',
-        'grep',
-        'ask_clarification',
-        'fabric_log_debugger',
-        'fabric_docs_search',
-        'read_error_log',
-        'mc_screenshot',
-        'mc_inspect',
-        'mc_inventory',
-        'mc_world',
-        'mc_chat',
-        'mc_command',
-        'mc_input',
-        'mc_ensure_test_world',
-        'mc_ensure_cheats',
-        // GUI 布局预览：测试失败修复GUI时可用
-        'gui_layout_preview'
-      ]
-    case 'answer':
-      return ['complete_step', 'explain_code', 'read_file', 'ask_clarification']
-  }
+	return recommendedToolNames(kind)
 }
 
 function defaultMaxAttempts(kind: StepKind): number {
@@ -215,6 +95,7 @@ function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'mixin') return 6
   if (kind === 'build') return 6
   if (kind === 'run') return 20
+  if (kind === 'game_test') return 8
   // write often needs a few docs lookups before the first write_file
   if (kind === 'write') return 6
   if (kind === 'inspect') return 2
@@ -290,6 +171,8 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
           ? { type: 'build_success' }
           : kind === 'run'
             ? { type: 'run_started' }
+            : kind === 'game_test'
+              ? { type: 'game_test_passed' }
             : { type: 'tool_success' }
   }
 }

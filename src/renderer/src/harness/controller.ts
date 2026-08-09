@@ -772,7 +772,7 @@ ${projectInfo}`;
 		for (const step of this.planTracker.steps) {
 			if (step.status === "error") step.status = "pending";
 		}
-		// 自动追加测试步骤：确保计划末尾有"进入世界 + 触发场景 + 验证功能效果"。
+		// 自动追加测试步骤：启动与确定性验收是两个独立的宿主管理步骤。
 		// 系统提示词声称"主机会自动追加 gradlew build 与 runClient"，这里真正实现追加逻辑。
 		const appended = this.ensureTestVerificationSteps();
 		if (appended > 0) {
@@ -781,7 +781,7 @@ ${projectInfo}`;
 				kind: EventKind.Notice,
 				notice: {
 					level: "info",
-					text: `已自动追加 ${appended} 个测试步骤（进入世界 / 触发场景 / 验证功能效果）。Agent 必须执行完所有步骤才能结束会话。`
+					text: `已自动追加 ${appended} 个测试步骤（启动游戏 / 确定性断言）。仅 PASS 可完成游戏测试。`
 				}
 			});
 		}
@@ -812,8 +812,7 @@ ${projectInfo}`;
 
 		const hasBuild = steps.some((s) => /gradlew|trigger_build.*build|构建项目|编译/i.test(s.description));
 		const hasRun = steps.some((s) => /runclient|启动游戏|运行游戏/i.test(s.description));
-		const hasEnterWorld = steps.some((s) => /mc_ensure_test_world|进入世界|进入测试世界/i.test(s.description));
-		const hasVerify = steps.some((s) => /mc_screenshot|mc_inspect|验证功能|验证效果/i.test(s.description));
+		const hasGameTest = steps.some((s) => /mc_run_test|确定性游戏测试/i.test(s.description));
 
 		let appended = 0;
 		const pushStep = (description: string) => {
@@ -833,16 +832,9 @@ ${projectInfo}`;
 			pushStep("启动游戏进行真实测试（runClient）");
 		}
 
-		// 追加"进入测试世界 + 触发功能场景"步骤
-		if (!hasEnterWorld) {
-			pushStep(
-				"进入测试世界并执行功能场景（mc_ensure_test_world 进入世界 → mc_ensure_cheats 确保作弊权限 → mc_command/mc_input 触发待测功能）"
-			);
-		}
 
-		// 追加"验证功能效果"步骤
-		if (!hasVerify) {
-			pushStep("验证功能效果（mc_screenshot/mc_inspect 客观校验，禁止仅凭 MC_PHASE:menu 宣称完成）");
+		if (!hasGameTest) {
+			pushStep("执行确定性游戏测试（mc_test_scenario 生成含 assertions 的场景 → mc_run_test；仅 PASS 完成，INCONCLUSIVE 等待用户确认）");
 		}
 
 		return appended;
@@ -861,7 +853,38 @@ ${projectInfo}`;
 		if (!this.activeUserSymptom || this.activeUserSymptom === "用户请求游戏内测试/验证") {
 			this.activeUserSymptom = recovered || "用户请求游戏内测试/验证";
 		}
-		this.ensureVerifyTargetForGui();
+		// Keep an explicit test request feature-neutral. It used to manufacture an
+		// F6 GUI target here, which made item/block tests wander into unrelated UI.
+		const deterministicOnly = true;
+		if (deterministicOnly) {
+			this.lastPlanCandidate = null;
+			this.planReadyAwaitingExecute = false;
+			await this.updateSystemPrompt("execute");
+			this._phase = "execute";
+			this.planTracker = PlanTracker.fromSteps([
+				{ id: "1", description: "启动游戏客户端与桥接（runClient）", status: "pending" },
+				{ id: "2", description: "执行确定性游戏测试（mc_test_scenario → mc_run_test；仅 PASS 完成）", status: "pending" }
+			]).markSynthetic();
+			this.emitPlanState(this.planTracker);
+			this.emitEvent({ kind: EventKind.Phase, phase: "plan_done", text: "启动客户端后，按实际功能类型生成带客观 assertions 的 V2 场景，并由 mc_run_test 裁决。", planActionable: true });
+			this.messages.push({
+				role: "user",
+				content: [
+					"用户请求游戏内测试。禁止 submit_plan、默认 F6、截图即通过或仅凭命令发送即通过。",
+					"先启动客户端并进入 ModCrafting Test World；再按实际功能分类调用 mc_test_scenario，提供 concrete subject_id/hotkey 和 assertions，最后调用 mc_run_test。只有 PASS 才完成；环境、导航、桥接或纯视觉问题必须返回 INCONCLUSIVE，不能改代码。",
+					buildUserSymptomBlock(this.activeUserSymptom)
+				].filter(Boolean).join("\n\n"),
+				origin: "harness",
+				taskId: this.taskId,
+				phase: "execute"
+			});
+			const result = await this.runExecutePhase(streamCb, { forceFeatureGuiVerify: false });
+			this.releaseIncompleteSyntheticPlan();
+			return result;
+		}
+		// An explicit in-game test is not implicitly a GUI/F6 test. The scenario
+		// must name a concrete feature and include V2 assertions.
+		this.activeVerifyTarget = null;
 		// Drop any stale plan/candidate so we never fall back into submit_plan.
 		this.lastPlanCandidate = null;
 		this.planReadyAwaitingExecute = false;
@@ -902,7 +925,7 @@ ${projectInfo}`;
 			taskId: this.taskId,
 			phase: "execute"
 		});
-		const result = await this.runExecutePhase(streamCb, { forceFeatureGuiVerify: true });
+		const result = await this.runExecutePhase(streamCb, { forceFeatureGuiVerify: false });
 		this.releaseIncompleteSyntheticPlan();
 		return result;
 	}
@@ -958,6 +981,7 @@ ${projectInfo}`;
 		this._running = true;
 		this.abortController = new AbortController();
 		this.agent.resetRunState();
+		try {
 
 		const inputText = contentPartsAsClassifyText(input);
 
@@ -987,7 +1011,6 @@ ${projectInfo}`;
 			this.onStreamUpdate?.(text, reasoning);
 		};
 
-		try {
 			if (classified.usedFallback) {
 				this.emitEvent({
 					kind: EventKind.Notice,
@@ -1453,6 +1476,9 @@ ${projectInfo}`;
 	}
 
 	cancel(): void {
+		// Interactive tools intentionally have no wall-clock timeout; cancellation must
+		// settle their resolver before aborting the rest of the execution tree.
+		this.cancelAllPendingGuiLayouts();
 		if (this.abortController) {
 			this.abortController.abort();
 			this._running = false;

@@ -585,6 +585,7 @@ public final class GameQueries {
         m.put("type", Registries.ENTITY_TYPE.getId(entity.getType()).toString());
         m.put("name", entity.getName().getString());
         m.put("uuid", entity.getUuidAsString());
+		m.put("tags", new ArrayList<>(entity.getCommandTags()));
         m.put("x", round(entity.getX()));
         m.put("y", round(entity.getY()));
         m.put("z", round(entity.getZ()));

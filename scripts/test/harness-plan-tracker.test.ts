@@ -183,7 +183,7 @@ test('step policy rejects create_recipe while current step is build', () => {
   assert.equal(decision.allowed.length, 1)
   assert.equal(decision.allowed[0].name, 'trigger_build')
   assert.equal(decision.rejected.length, 1)
-  assert.equal(decision.rejected[0].errorKind, 'tool_not_allowed')
+  assert.equal(decision.rejected[0].errorKind, 'policy_deferred')
 })
 
 test('workflow normalizer treats reading fabric.mod.json as inspect, not write', () => {

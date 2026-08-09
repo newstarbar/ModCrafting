@@ -130,6 +130,7 @@ interface ModCraftingApi {
     data: Record<string, unknown>
     error?: string
   }>
+  saveGameTestReport: (payload: unknown) => Promise<{ ok: boolean; path?: string; error?: string }>
   onMcLog: (callback: (id: string, text: string) => void) => () => void
   onMcStateChanged: (callback: (id: string, state: object) => void) => () => void
   onMcCrashed: (callback: (id: string, exitCode: number, crashReportPath: string | null) => void) => () => void
@@ -140,8 +141,9 @@ interface ModCraftingApi {
   removeRecentProject: (projectPath: string) => Promise<{ success: boolean; data?: RecentProject[]; error?: string }>
   clearRecentProjects: () => Promise<WriteResult>
   runCommand: (command: string, cwd: string) => Promise<{ output: string; exitCode: number }>
-  runCommandStream: (command: string, cwd: string) => Promise<{ output: string; exitCode: number }>
-  onCommandOutput: (callback: (data: string) => void) => () => void
+  runCommandStream: (command: string, cwd: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => Promise<{ output: string; exitCode: number; cancelled?: boolean }>
+  cancelToolExecution: (executionId: string) => Promise<{ ok: boolean }>
+  onCommandOutput: (callback: (data: string, executionId?: string) => void) => () => void
   onCommandDone: (callback: (result: { exitCode: number }) => void) => () => void
   // Environment
   findJdk: () => Promise<{ found: boolean; path?: string; java?: string }>
@@ -172,7 +174,7 @@ interface ModCraftingApi {
   ensureJdkReady: () => Promise<{ ok: boolean; path?: string; error?: string }>
   ensureGradleHomeFromSeed: () => Promise<{ ok: boolean; error?: string }>
   prepareBuild: (projectPath: string) => Promise<{ ok: boolean; jdkPath?: string; cmdPrefix: string; powershellEnv: string; error?: string }>
-  runGradleTask: (projectPath: string, task: string) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean }>
+  runGradleTask: (projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean }>
   getToolchainStatus: () => Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean; edition: 'dev' | 'full' | 'portable' }>
   checkRuntimeWritable: () => Promise<{ writable: boolean; runtimeRoot: string; error?: string }>
   checkRuntimeCapacity: () => Promise<{ ok: boolean; freeBytes?: number; error?: string }>

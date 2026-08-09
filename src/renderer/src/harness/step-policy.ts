@@ -1,5 +1,6 @@
 import type { ToolResult } from './tools.ts'
 import type { WorkflowStep } from './workflow-types.ts'
+import { isKnowledgeTool } from './tool-policy.ts'
 
 export interface ToolCallWithId {
   name: string
@@ -14,17 +15,6 @@ export interface ToolGateResult {
 
 const RECIPE_DATA_PATH_RE = /(?:src\/main\/resources\/)?data\/[^/]+\/recipes?\/[^/]+\.json$/i
 const PROJECT_FILE_DELETE_RE = /^(?:src\/|data\/|gradle\/).+\.(java|json|gradle|properties|accesswidener|toml)$/i
-
-const READONLY_KNOWLEDGE_TOOLS = new Set([
-  'fabric_docs_search',
-  'fabric_javadoc_lookup',
-  'vanilla_mc_wiki_query',
-  'fabric_meta_version_check',
-  'fabric_mod_json_validate',
-  'fabric_mixin_target_lookup',
-  'fabric_recipe_validate',
-  'fabric_mixin_validate'
-])
 
 /** Paths Agent may read during recipe steps: mod id + existing recipe JSON inspection. */
 export function isRecipeInspectionPath(path: string): boolean {
@@ -101,7 +91,7 @@ export function isRepairWriteBlocked(
   options?: ToolGateOptions
 ): boolean {
   if (!options?.repairMode || (!options?.repairWriteRequired && !options?.repairValidationRequired)) return false
-  if (step.kind !== 'build' && step.kind !== 'run') return false
+  if (step.kind !== 'build' && step.kind !== 'run' && step.kind !== 'game_test') return false
   return REPAIR_WRITE_BLOCKED_TOOLS.has(call.name)
 }
 
@@ -116,7 +106,7 @@ function isFileInspectionCommand(command: string): boolean {
 }
 
 function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options?: ToolGateOptions): boolean {
-  if (READONLY_KNOWLEDGE_TOOLS.has(call.name) && (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin')) {
+	if (isKnowledgeTool(call.name) && (step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin')) {
     return true
   }
   if (call.name === 'read_file' && step.kind === 'recipe') {
@@ -125,13 +115,14 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
   if (call.name === 'delete_file') {
     // Build/run steps often need to delete misplaced main copies (duplicate class /
     // splitEnvironment migration) before or during repair — allow without waiting for repairMode.
-    if (step.kind === 'build' || step.kind === 'run') return true
+    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return true
     return step.kind === 'write'
   }
   if (call.name === 'run_command') {
     const command = String(call.args.command || '')
     if (step.kind === 'build') return /gradlew|gradle|build/i.test(command) || isFileInspectionCommand(command)
     if (step.kind === 'run') return /runClient/i.test(command) || isFileInspectionCommand(command)
+    if (step.kind === 'game_test') return isFileInspectionCommand(command)
     if (step.kind === 'recipe' || step.kind === 'write') {
       return isRecipeCleanupCommand(command) || isProjectFileDeleteCommand(command)
     }
@@ -159,7 +150,7 @@ export function isToolAllowedForStep(
   const repairOverride = Boolean(options?.repairMode && REPAIR_OVERRIDE_TOOLS.has(call.name))
   // Build/run may delete misplaced files (duplicate class) before repairMode flips on.
   const buildRunDelete =
-    call.name === 'delete_file' && (step.kind === 'build' || step.kind === 'run')
+    call.name === 'delete_file' && (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test')
   if (!explicitlyAllowed && !repairOverride && !buildRunDelete) return false
 
   if (call.name === 'list_directory') return true
@@ -167,8 +158,8 @@ export function isToolAllowedForStep(
   if (call.name === 'ask_clarification') return true
 
   if (call.name === 'write_file' || call.name === 'edit_file') {
-    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run')) return true
-    if (step.kind === 'build' || step.kind === 'run') return false
+    if (options?.repairMode && (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test')) return true
+    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return false
     if (step.kind === 'recipe') return false
     // mixin 步需要 write_file（新建 client 路径）+ edit_file（改 stub）才能完成 main→client 迁移
     if (step.kind === 'mixin') return true
@@ -176,7 +167,7 @@ export function isToolAllowedForStep(
   }
 
   if (call.name === 'delete_file') {
-    if (step.kind === 'build' || step.kind === 'run') return true
+    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return true
     return step.kind === 'write' || step.kind === 'mixin'
   }
 
@@ -188,7 +179,7 @@ export function isToolAllowedForStep(
   }
 
   // complete_step only in non-terminal steps (build/run auto-detected by host)
-  if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run') return true
+  if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run' && step.kind !== 'game_test') return true
 
   return commandAllowedForStep(step, call, options)
 }
@@ -220,15 +211,18 @@ export function createRejectedToolResult(
     return rejectedRepairWriteResult(step, call, options)
   }
   let output = `blocked: [tool_not_allowed] 当前步骤 #${step.id}（${step.title}）不允许调用 "${call.name}"。`
-  if (call.name === 'complete_step' && (step.kind === 'build' || step.kind === 'run')) {
+  if (call.name === 'complete_step' && (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test')) {
     output =
-      step.kind === 'run'
+      step.kind === 'game_test'
+        ? `blocked: [tool_not_allowed] game_test 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
+          `请调用 mc_run_test；只有结构化 verdict=PASS 才会自动推进。`
+      : step.kind === 'run'
         ? `blocked: [tool_not_allowed] run 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
           `请用 mc_inspect / mc_screenshot 完成验收；满足验收后系统会自动推进。勿再调用 complete_step。`
         : `blocked: [tool_not_allowed] build 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
           `请调用 trigger_build({"task":"build"})；构建成功后系统会自动推进。`
   } else if (
-    (step.kind === 'build' || step.kind === 'run') &&
+    (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') &&
     !options?.repairMode &&
     (call.name === 'edit_file' || call.name === 'write_file')
   ) {
@@ -252,7 +246,7 @@ export function createRejectedToolResult(
         : ' 文件删除命令'
     output += ` 当前步骤类型为 ${step.kind}，run_command 仅允许${allowedHint}。如需列出目录文件，请改用 list_directory。`
   } else if (call.name === 'mc_screenshot' || call.name === 'mc_inspect' || call.name === 'mc_command' || call.name === 'mc_input' || call.name === 'mc_ensure_test_world' || call.name === 'mc_ensure_cheats' || call.name === 'mc_inventory' || call.name === 'mc_world' || call.name === 'mc_chat') {
-    output += ` MC 操作工具仅在 run 步骤允许。当前步骤类型为 ${step.kind}，请先完成当前步骤推进到 run 步骤。`
+    output += ` MC 操作工具仅在 run/game_test 步骤允许。当前步骤类型为 ${step.kind}，请先完成当前步骤推进到对应游戏步骤。`
   } else if (call.name === 'fabric_recipe_generate' || call.name === 'create_recipe') {
     output += ` 配方工具仅在 recipe 步骤允许。当前步骤类型为 ${step.kind}。`
   } else if (call.name === 'fabric_mixin_scaffold' || call.name === 'fabric_mixin_register') {
@@ -260,16 +254,16 @@ export function createRejectedToolResult(
   } else {
     output += ` 当前步骤允许的工具：${step.allowedTools.join(', ')}。请改用允许的工具，或调用 complete_step 推进到下一步骤。`
   }
-  return {
-    output,
-    error: `tool_not_allowed: ${call.name}`,
+	return {
+		output,
+		error: `policy_deferred: ${call.name}`,
     durationMs: 0,
     ok: false,
     toolName: call.name,
     args: call.args,
     exitCode: null,
-    errorKind: 'tool_not_allowed'
-  }
+		errorKind: 'policy_deferred'
+	}
 }
 
 function rejectedToolResult(step: WorkflowStep, call: ToolCallWithId, options?: ToolGateOptions): ToolResult {

@@ -18,8 +18,8 @@ import { MAX_EXECUTE_CLARIFICATIONS } from "./clarify-validation.ts";
 import { appendToolRoundHistory, isVisionCapableModel, type ChatMessage, type ModelToolCall } from "./chat-message.ts";
 import { MAX_FETCH_RETRIES, fetchRetryDelayMs, isRetryableFetchError, sleep } from "./fetch-retry.ts";
 import { validateToolCalls } from "./tool-call-validator.ts";
-import { formatNotOfferedBrakeInstruction, updateNotOfferedStreak } from "./tool-not-offered-brake.ts";
 import { MAX_PLAN_OFFERED_REJECT_ROUNDS, MAX_READONLY_ROUNDS, PLAN_EXPLORATION_LOCK_KICK, PLAN_SUBMIT_NUDGE, shouldNudgePlanSubmit } from "./plan-phase-gate.ts";
+import { isExploreTool, planToolNames } from "./tool-policy.ts";
 import { getModelContextWindow, buildProviderThinkingFields } from "../../../shared/llm-providers.ts";
 import { LONG_REASONING_KICK, MAX_REASONING_HARD_CHARS, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
 import { stripThinkTags, stripMinimaxProtocolTokens, extractPlanFromXml, buildSubmitPlanArgs, ThinkTagStreamFilter } from "./model-output-normalizer.ts";
@@ -60,25 +60,9 @@ export interface RunOptions {
 
 const REPEAT_SUCCESS_THRESHOLD = 2;
 const MAX_FINAL_READINESS_BLOCKS = 3;
-const EXPLORATION_TOOL_NAMES = ["list_directory", "read_file", "grep", "read_error_log", "run_command"];
-const EXPLORATION_TOOLS = EXPLORATION_TOOL_NAMES;
 const CONTROL_TOOL_NAMES = ["complete_step"];
 const PLAN_POST_LOCK_TOOL_NAMES = new Set(["submit_plan", "ask_clarification", "grep", "list_directory"]);
-const PLAN_READONLY_TOOL_NAMES = new Set([
-	"read_file",
-	"list_directory",
-	"grep",
-	"fabric_docs_search",
-	"fabric_javadoc_lookup",
-	"vanilla_mc_wiki_query",
-	"fabric_meta_version_check",
-	"fabric_mod_json_validate",
-	"fabric_log_debugger",
-	"read_error_log",
-	"explain_code",
-	"submit_plan",
-	"ask_clarification"
-]);
+const PLAN_READONLY_TOOL_NAMES = new Set(planToolNames());
 
 function stableStringify(args: Record<string, unknown>): string {
 	const keys = Object.keys(args).sort();
@@ -120,12 +104,6 @@ export class Agent {
 	private clarificationCount = 0;
 	// Rounds where every tool call was rejected by the loop guard (no progress)
 	private consecutiveBlockedRounds = 0;
-	/** Consecutive whitelist rejects per tool name (tool_not_offered / tool_not_allowed). */
-	private notOfferedStreak = new Map<string, number>();
-	/** Tools hard-banned for the rest of this run after streak brake. */
-	private hardBannedTools = new Set<string>();
-	/** After brake, one more all-banned round ends the loop. */
-	private notOfferedBrakeEscalated = false;
 	// Rounds where the model only called complete_step without any real work
 	private consecutiveStepDoneOnlyRounds = 0;
 	// Rounds where model outputs mostly reasoning (>80%) with no tool calls
@@ -167,9 +145,6 @@ export class Agent {
 		this.finalReadinessBlocks = 0;
 		this.graceRound = false;
 		this.consecutiveBlockedRounds = 0;
-		this.notOfferedStreak.clear();
-		this.hardBannedTools.clear();
-		this.notOfferedBrakeEscalated = false;
 		this.consecutiveStepDoneOnlyRounds = 0;
 		this.consecutiveReasoningOnlyRounds = 0;
 		this.consecutiveIdleRounds = 0;
@@ -197,7 +172,7 @@ export class Agent {
 	private filterExplorationTools(
 		tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
 	): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-		return tools.filter((t) => !EXPLORATION_TOOL_NAMES.includes(t.name));
+		return tools.filter((t) => !isExploreTool(t.name, this.registry.policyFor(t.name)));
 	}
 
 	private filterControlTools(
@@ -271,7 +246,8 @@ export class Agent {
 		onStream?: (text: string, reasoning?: string) => void,
 		requireInGameVerify = false,
 		requireFeatureGuiVerify = false,
-		verifyTarget: VerifyTarget | null = null
+		verifyTarget: VerifyTarget | null = null,
+		runId?: string
 	): Promise<string> {
 		const clarificationGate = { count: this.clarificationCount };
 		const engine = new WorkflowEngine({
@@ -291,6 +267,7 @@ export class Agent {
 			requireInGameVerify,
 			requireFeatureGuiVerify,
 			verifyTarget,
+			runId,
 			modelCall: async (workflowMessages, tools, onChunk) => {
 				// Last message is the per-step workflow prompt; compact/persist history only.
 				const stepPromptMsg = workflowMessages[workflowMessages.length - 1];
@@ -420,6 +397,7 @@ export class Agent {
 		onStream?: (text: string, reasoning?: string) => void,
 		options: RunOptions = {}
 	): Promise<string> {
+		const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 		const phase = options.phase ?? "execute";
 		const emitLifecycle = options.emitLifecycle ?? true;
 		const planTracker = options.planTracker ?? null;
@@ -451,7 +429,8 @@ export class Agent {
 				onStream,
 				Boolean(options.requireInGameVerify),
 				Boolean(options.requireFeatureGuiVerify),
-				options.verifyTarget ?? null
+				options.verifyTarget ?? null,
+				runId
 			);
 		}
 
@@ -600,26 +579,6 @@ export class Agent {
 
 				const rawToolCalls = result.toolCalls;
 				const validation = validateToolCalls(rawToolCalls, availableTools, { phase });
-				// Hard-ban tools that already hit the not-offered streak brake.
-				for (const call of [...validation.accepted]) {
-					if (!this.hardBannedTools.has(call.name)) continue;
-					validation.accepted = validation.accepted.filter((c) => c.id !== call.id);
-					const brakeOut = formatNotOfferedBrakeInstruction(
-						[call.name],
-						availableTools.map((t) => t.name),
-						phase
-					);
-					validation.rejected.set(call.id, {
-						output: brakeOut,
-						error: brakeOut,
-						durationMs: 0,
-						ok: false,
-						toolName: call.name,
-						args: call.args,
-						exitCode: null,
-						errorKind: "tool_not_offered"
-					});
-				}
 				for (const [id, rejected] of validation.rejected) {
 					this.emit({
 						kind: EventKind.ToolDispatch,
@@ -638,36 +597,12 @@ export class Agent {
 					});
 					this.onToolResult?.(rejected.toolName || "unknown", id, rejected.output);
 				}
-				const brakedTools = updateNotOfferedStreak(this.notOfferedStreak, validation.rejected.values());
-				for (const name of brakedTools) this.hardBannedTools.add(name);
 				const toolCalls = validation.accepted;
 				const cleanText = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").trim();
 				finalContent = cleanText || streamContent;
 
 				if (rawToolCalls.length > 0 && toolCalls.length === 0) {
 					if (cleanText) messages.push({ role: "assistant", content: cleanText });
-					const allowedNames = availableTools.map((t) => t.name);
-					if (brakedTools.length > 0) {
-						const brakeMsg = formatNotOfferedBrakeInstruction(brakedTools, allowedNames, phase);
-						messages.push({ role: "user", content: brakeMsg });
-						this.emit({
-							kind: EventKind.Notice,
-							notice: {
-								level: "warn",
-								text: `已禁止继续调用：${brakedTools.join(", ")}（白名单连续拒绝）`
-							}
-						});
-						if (this.notOfferedBrakeEscalated) {
-							logger.agent("Stop: not-offered brake escalated after repeat", { brakedTools });
-							break;
-						}
-						this.notOfferedBrakeEscalated = true;
-						if (phase === "plan") {
-							this.planForceSubmitOnly = true;
-							this.planExplorationLocked = true;
-						}
-						continue;
-					}
 					if (phase === "plan" && this.planExplorationLocked) {
 						this.planOfferedRejectRounds++;
 						const rejectedNames = [...new Set([...validation.rejected.values()].map((r) => r.toolName || "unknown"))].join(", ");
@@ -701,7 +636,6 @@ export class Agent {
 
 				if (toolCalls.length > 0) {
 					this.planOfferedRejectRounds = 0;
-					this.notOfferedBrakeEscalated = false;
 				}
 
 				// Final answer — plan phase must submit_plan (or ask); prose-only is nudged.
@@ -794,7 +728,7 @@ export class Agent {
 				}
 
 				// Track exploration rounds (readonly + diagnostic run_command)
-				const allExploration = toolCalls.every((tc) => EXPLORATION_TOOLS.includes(tc.name));
+				const allExploration = toolCalls.every((tc) => isExploreTool(tc.name, this.registry.policyFor(tc.name)));
 				if (allExploration) readonlyRounds++;
 				else readonlyRounds = 0;
 
@@ -865,6 +799,7 @@ export class Agent {
 				const ctx: ToolContext = {
 					projectPath,
 					callId: `step_${step}`,
+					runId,
 					abortSignal,
 					planTracker,
 					fileSession: this.fileSession,
@@ -892,7 +827,7 @@ export class Agent {
 							if (call) this.recordRepeatSuccess(name, call.args, Boolean(result.error));
 							this.emit({
 								kind: EventKind.ToolResult,
-								tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff }
+								tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff, outcome: result.outcome, runId: result.runId, executionId: result.executionId }
 							});
 							this.onToolResult?.(name, id, result.output);
 						},

@@ -2125,24 +2125,69 @@ function formatGradleCommand(
   return `${cmdPrefix}gradle ${gradleTask}`
 }
 
+function terminateProcessTree(child: ReturnType<typeof spawn>): void {
+  if (!child.pid) return
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+    killer.on('error', () => child.kill())
+    return
+  }
+  child.kill('SIGTERM')
+}
+
+export interface GradleExecutionOptions {
+  abortSignal?: AbortSignal
+  timeoutMs?: number
+  idleTimeoutMs?: number
+}
+
 async function execShellCommand(
   command: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  onOutput?: (text: string) => void
-): Promise<{ output: string; exitCode: number }> {
+  onOutput?: (text: string) => void,
+  options?: GradleExecutionOptions
+): Promise<{ output: string; exitCode: number; cancelled?: boolean }> {
   return new Promise((resolve) => {
     const child = spawn(command, { cwd, shell: true, env })
     let fullOutput = ''
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let idleTimeout: ReturnType<typeof setTimeout> | undefined
+    const finish = (result: { output: string; exitCode: number; cancelled?: boolean }) => {
+      if (settled) return
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      if (idleTimeout) clearTimeout(idleTimeout)
+      options?.abortSignal?.removeEventListener('abort', onAbort)
+      resolve(result)
+    }
+    const onAbort = () => {
+      terminateProcessTree(child)
+      finish({ output: fullOutput + '\n[command cancelled]', exitCode: -1, cancelled: true })
+    }
+    const resetIdle = () => {
+      if (!options?.idleTimeoutMs) return
+      if (idleTimeout) clearTimeout(idleTimeout)
+      idleTimeout = setTimeout(() => onAbort(), options.idleTimeoutMs)
+    }
+    if (options?.abortSignal?.aborted) {
+      onAbort()
+      return
+    }
+    options?.abortSignal?.addEventListener('abort', onAbort, { once: true })
+    if (options?.timeoutMs) timeout = setTimeout(() => onAbort(), options.timeoutMs)
+    resetIdle()
     const onData = (data: Buffer) => {
       const text = data.toString()
       fullOutput += text
       onOutput?.(text)
+      resetIdle()
     }
     child.stdout.on('data', onData)
     child.stderr.on('data', onData)
-    child.on('close', (code) => resolve({ output: fullOutput, exitCode: code ?? -1 }))
-    child.on('error', (err) => resolve({ output: String(err), exitCode: -1 }))
+    child.on('close', (code) => finish({ output: fullOutput, exitCode: code ?? -1 }))
+    child.on('error', (err) => finish({ output: String(err), exitCode: -1 }))
   })
 }
 
@@ -2158,8 +2203,9 @@ export function canRunGradleBuild(): boolean {
 export async function runGradleTask(
   projectPath: string,
   task: string,
-  onOutput?: (text: string) => void
-): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean }> {
+  onOutput?: (text: string) => void,
+  options?: GradleExecutionOptions
+): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean }> {
   if (!canRunGradleBuild()) {
     const msg = isToolchainInitializing()
       ? '[ModCrafting] 构建环境正在初始化，请等待进度条完成后再构建。'
@@ -2180,14 +2226,16 @@ export async function runGradleTask(
   writeGradlewBat(projectPath)
 
   let cmd = formatGradleCommand(projectPath, prep.cmdPrefix, task, true)
-  let result = await execShellCommand(cmd, projectPath, prep.env, onOutput)
+  let result = await execShellCommand(cmd, projectPath, prep.env, onOutput, options)
+  if (result.cancelled) return { ...result, usedOnlineFallback: false }
 
   if (result.exitCode !== 0 && isRecoverableGradleCacheError(result.output)) {
     const gradleHome = getGradleUserHome()
     const purged = purgeGradleEphemeralCaches(gradleHome)
     if (purged > 0) {
       onOutput?.(`\n[ModCrafting] 已清理 ${purged} 处损坏的 Gradle 缓存，正在重试离线构建…\n`)
-      result = await execShellCommand(cmd, projectPath, prep.env, onOutput)
+      result = await execShellCommand(cmd, projectPath, prep.env, onOutput, options)
+      if (result.cancelled) return { ...result, usedOnlineFallback: false }
     }
 
     if (result.exitCode !== 0 && isRecoverableGradleCacheError(result.output) && app.isPackaged && isFullEdition()) {
@@ -2200,7 +2248,8 @@ export async function runGradleTask(
         const refreshedPrep = await prepareBuild(projectPath)
         if (refreshedPrep.ok) {
           cmd = formatGradleCommand(projectPath, refreshedPrep.cmdPrefix, task, true)
-          result = await execShellCommand(cmd, projectPath, refreshedPrep.env, onOutput)
+          result = await execShellCommand(cmd, projectPath, refreshedPrep.env, onOutput, options)
+          if (result.cancelled) return { ...result, usedOnlineFallback: false }
         }
       } else if (recovered.error) {
         onOutput?.(`[ModCrafting] ${recovered.error}\n`)
@@ -2215,7 +2264,7 @@ export async function runGradleTask(
       return { output: result.output, exitCode: result.exitCode, usedOnlineFallback: false }
     }
     cmd = formatGradleCommand(projectPath, onlinePrep.cmdPrefix, task, false)
-    result = await execShellCommand(cmd, projectPath, onlinePrep.env, onOutput)
+    result = await execShellCommand(cmd, projectPath, onlinePrep.env, onOutput, options)
     if (result.exitCode === 0) {
       onOutput?.('\n[ModCrafting] 依赖已下载到本地缓存，后续构建可离线进行。\n')
     }

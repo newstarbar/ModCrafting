@@ -24,6 +24,7 @@ const KNOWLEDGE_INSPECT_RE = /mixin|网络|payload|datagen|新\s*api|access\s*wi
 
 const HOST_BUILD_DESC = '构建项目（gradlew build）'
 const HOST_RUN_DESC = '启动游戏进行真实测试（runClient）'
+const HOST_GAME_TEST_DESC = '执行确定性游戏测试（mc_test_scenario → mc_run_test；PASS 才完成）'
 const HOST_INSPECT_DESC =
   '查询知识库确认当前 Minecraft/Fabric 版本 API 与资源格式（fabric_docs_search / fabric_meta_version_check）'
 
@@ -326,12 +327,20 @@ export function appendHostTerminalSteps(steps: CompiledPlanStep[]): CompiledPlan
   if (steps.length === 0) return steps
   const hasBuild = steps.some((s) => BUILD_STEP_PATTERN.test(s.description))
   const hasRun = steps.some((s) => RUN_STEP_PATTERN.test(s.description))
+  const hasGameTest = steps.some((s) => /mc_run_test|确定性游戏测试/i.test(s.description))
+  const needsGameTest = steps.some((s) =>
+    s.kind === 'write' || s.kind === 'recipe' || s.kind === 'mixin' ||
+    /\.java|src\/.*resources|配方|物品|方块|实体|交互|hud|gui|mixin/i.test(s.description)
+  )
   const result = [...steps]
   if (!hasBuild) {
     result.push({ id: '0', description: HOST_BUILD_DESC, hostManaged: true })
   }
   if (!hasRun) {
     result.push({ id: '0', description: HOST_RUN_DESC, hostManaged: true })
+  }
+  if (needsGameTest && !hasGameTest) {
+    result.push({ id: '0', description: HOST_GAME_TEST_DESC, hostManaged: true })
   }
   return renumber(result.slice(0, MAX_PLAN_STEPS))
 }

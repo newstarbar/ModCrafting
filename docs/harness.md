@@ -1,5 +1,15 @@
 # Harness 系统
 
+## 确定性游戏内测试 V2
+
+`run` 与 `game_test` 是两个独立的宿主步骤：前者只确认客户端和桥接已经启动；后者执行 `Arrange → Act → Assert → Cleanup`，只有 `mc_run_test` 返回结构化 `PASS` 才能完成。每次 `game_test` 都会创建新会话，旧截图、旧聊天和旧快照不得复用为证据。
+
+- `submit_plan.gameTest` 和 `mc_test_scenario` 要求具体的功能类型、目标 ID（或 GUI 热键）及至少一条客观断言；`<modid>` 等占位符和纯截图测试会被拒绝。
+- 宿主固定使用 `ModCrafting Test World` 与 `x/z=-16..16、y=96..112` 测试区，准备阶段会清背包、状态、区域和带 `modcrafting_test` 标签的实体，清理阶段再次回收。
+- 裁决只有 `PASS`、`FAIL`、`INCONCLUSIVE`。桥接缺少能力、导航/世界异常、纯视觉布局或无法查询的状态均为 `INCONCLUSIVE`，禁止自动改代码。相同客观断言在清理后的两个独立会话连续失败，才允许进入修复模式。
+- V2 桥接提供 `/v2/capabilities`、`/v2/command`、`/v2/snapshot` 和 `/v2/query`；快照带时间戳和世界 tick。V1 可继续协助操作，但不能产生自动通过。
+- 每次会话会保存 JSON 报告到应用数据目录的 `game-test-reports/`，其中包含动作、命令、断言、新鲜快照、清理和最终裁决；不写入模组仓库。
+
 Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/harness/`。
 
 ## 模块清单
@@ -8,14 +18,15 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 |--------|------|
 | `controller.ts` | 顶层编排器：会话生命周期、意图解析、plan→execute 阶段切换、系统提示词构建 |
 | `agent.ts` | LLM 交互循环：SSE 流式输出，工具调用解析（原生 function-calling + XML 回退），循环守卫，指数退避重试 |
-| `tools.ts` | `Registry`、`Tool` 接口、`ToolContext`。`executeBatch()` 并行执行只读工具，串行执行写入工具 |
+| `tools.ts` | `Registry`、`Tool` 接口、`ToolContext`。工具有 deadline/取消结果；`executeBatch()` 以最多 4 个并发执行相邻只读工具，并串行执行写入工具 |
+| `tool-policy.ts` | 工具能力、执行类型与超时策略的唯一目录；生成 Plan/工作流推荐工具集合 |
 | `tool-definitions.ts` | 通过 `registerModCraftingTools()` 注册的内置工具 |
 | `mc-data-tool.ts` | `minecraft_data_lookup` 与 `mc_wiki_search` 工具实现 |
 | `workflow-engine.ts` | 执行阶段串行逐步执行；修复模式（构建/运行失败时最多 3 轮修复）；`ask_clarification` 暂停 |
 | `plan-tracker.ts` | `PlanTracker` 类：步骤状态追踪、自动推进、上下文块格式化 |
 | `plan-compiler.ts` | 计划编译管道：解析 → 剥离主机终端步骤 → 删除模糊步骤 → 按路径去重 → 追加构建+运行步骤 |
 | `plan-phase-gate.ts` | 计划阶段只读门控：`MAX_READONLY_ROUNDS`、`isPlanPostLockTool`、`shouldNudgePlanSubmit` |
-| `step-policy.ts` | 按工作流步骤类型（inspect/write/recipe/build/run/answer）的工具门控 |
+| `step-policy.ts` | 按工作流步骤类型执行安全门控；非安全性的步骤时机问题返回 `policy_deferred`，不会消耗 attempt |
 | `step-evidence.ts` | 基于证据的步骤推进：`findAdvanceEvidence()` 根据步骤类型检查工具结果 |
 | `turn-intent.ts` | 将用户输入分类为 `chat`/`resume`/`develop`/`plan_only` |
 | `fabric-agent-policy.ts` | 领域特定的护栏规则、任务分类、知识源定义 |
@@ -56,6 +67,14 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - 知识查询工具不消耗 attempt 配额
 - 修复模式：构建/运行失败时最多 3 轮修复
 - 支持 `ask_clarification` 暂停
+
+## 工具策略与取消
+
+- 工具能力统一为项目读写、知识查询、构建/命令、游戏观察/控制、用户交互和流程控制；新增内置工具必须在 `tool-policy.ts` 声明策略。
+- Plan 与写入类步骤均提供 `minecraft_data_lookup`、`mc_wiki_search`，避免系统提示与公开工具集冲突。
+- 默认 deadline：本地读写/校验 15 秒，知识库 60 秒，游戏桥 30 秒，进入世界 150 秒，命令 5 分钟，构建/启动游戏 10 分钟。命令和构建另有无进度超时。
+- 停止任务会取消 GUI 预览、渲染进程工具和主进程命令/Gradle 子进程；Windows 使用进程树终止避免残留 Java/Gradle。
+- 工具结果统一标记 `succeeded`、`failed`、`timed_out` 或 `cancelled`；工具卡会显示超时/取消终态，不会永久停留在运行中。
 
 ## 工具集（30+）
 

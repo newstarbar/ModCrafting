@@ -36,6 +36,7 @@ import {
 	type MixinSide
 } from "./mixin-registration.ts";
 import { listDirectoryEmptyFileMessage, pathBasenameLooksLikeFile } from "./list-directory-guard.ts";
+import { createGameTestSpec, formatGameTestSpec } from "./game-test-protocol.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
 	if (typeof args.mcVersion === "string" && args.mcVersion.trim()) return args.mcVersion.trim();
@@ -217,11 +218,19 @@ async function generateValidatedRecipe(
 }
 
 async function runWithCommandStream(ctx: ToolContext, run: () => Promise<{ output: string; exitCode: number | null }>): Promise<{ output: string; exitCode: number | null }> {
-	const unsub = ctx.onProgress ? window.api.onCommandOutput((text) => ctx.onProgress!(text)) : null;
+	const executionId = ctx.executionId;
+	const unsub = ctx.onProgress ? window.api.onCommandOutput((text, sourceExecutionId) => {
+		if (!sourceExecutionId || sourceExecutionId === executionId) ctx.onProgress!(text);
+	}) : null;
+	const onAbort = () => {
+		if (executionId) void window.api.cancelToolExecution(executionId);
+	};
+	ctx.abortSignal?.addEventListener('abort', onAbort, { once: true });
 	try {
 		return await run();
 	} finally {
 		unsub?.();
+		ctx.abortSignal?.removeEventListener('abort', onAbort);
 	}
 }
 
@@ -969,7 +978,11 @@ export const runCommandTool: Tool = {
 			const command = String(args.command || "");
 			const prep = await window.api.prepareBuild(ctx.projectPath);
 			const fullCmd = prep.ok ? prep.cmdPrefix + command : command;
-			const res = await runWithCommandStream(ctx, () => window.api.runCommandStream(fullCmd, ctx.projectPath!));
+			const res = await runWithCommandStream(ctx, () => window.api.runCommandStream(fullCmd, ctx.projectPath!, {
+				executionId: ctx.executionId,
+				timeoutMs: 5 * 60_000,
+				idleTimeoutMs: 90_000
+			}));
 			const output = res.output || "(no output)";
 			const exitInfo = res.exitCode !== null ? `\n[exit code: ${res.exitCode}]` : "";
 			if (!prep.ok && prep.error) return `环境准备失败: ${prep.error}\n${output}${exitInfo}`;
@@ -1166,6 +1179,12 @@ export const triggerBuildTool: Tool = {
 			try {
 				if (isPanelBridgeRegistered()) {
 					const res = await startGameViaPanel();
+					// Panel startup is legacy/non-abortable. If it completes after this tool
+					// has been cancelled, stop only the instance created by this invocation.
+					if (ctx.abortSignal?.aborted && res.instanceId) {
+						await window.api.mcStop(res.instanceId).catch(() => undefined);
+						return `游戏启动已取消（实例 ${res.instanceId} 已停止）。[MC_PHASE:error]`;
+					}
 					if (!res.ok) {
 						return `游戏启动失败：${res.error || "unknown error"}\n[MC_PHASE:error]`;
 					}
@@ -1178,6 +1197,10 @@ export const triggerBuildTool: Tool = {
 					].join('\n');
 				}
 				const start = await window.api.mcStartOrCreate(ctx.projectPath);
+				if (ctx.abortSignal?.aborted && start.id) {
+					await window.api.mcStop(start.id).catch(() => undefined);
+					return `游戏启动已取消（实例 ${start.id} 已停止）。[MC_PHASE:error]`;
+				}
 				if (!start.success) {
 					return `Error starting game: ${start.error || "unknown error"}\n[MC_PHASE:error]`;
 				}
@@ -1228,7 +1251,11 @@ export const triggerBuildTool: Tool = {
 				return `构建已完成。${logBlock}${exitInfo}`;
 			}
 
-			const res = await runWithCommandStream(ctx, () => window.api.runGradleTask(ctx.projectPath!, task));
+			const res = await runWithCommandStream(ctx, () => window.api.runGradleTask(ctx.projectPath!, task, {
+				executionId: ctx.executionId,
+				timeoutMs: task === 'runClient' ? 10 * 60_000 : 10 * 60_000,
+				idleTimeoutMs: 3 * 60_000
+			}));
 		const output = res.output || `Task "${task}" completed (exit: ${res.exitCode})`;
 		const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "";
 		const fallbackNote = res.usedOnlineFallback ? "\n[已联网补全依赖缓存]" : "";
@@ -2015,6 +2042,19 @@ export const submitPlanTool: Tool = {
 						{ required: ["targetPaths"] }
 					]
 				}
+			},
+			gameTest: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					featureType: { type: "string", enum: ["new_item", "new_block", "new_recipe", "entity_behavior", "player_interaction", "hud_gui"] },
+					subjectId: { type: "string", minLength: 1 },
+					modId: { type: "string", minLength: 1 },
+					hotkey: { type: "string", minLength: 1 },
+					assertions: { type: "array", minItems: 1, items: { type: "object" } },
+					visualOnly: { type: "boolean" }
+				},
+				required: ["featureType", "assertions"]
 			}
 		},
 		required: ["steps"],
@@ -2023,7 +2063,33 @@ export const submitPlanTool: Tool = {
 	readOnly: () => true,
 	async execute(_ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
 		const steps = Array.isArray(args.steps) ? args.steps : [];
-		return `\`\`\`json\n${JSON.stringify(steps, null, 2)}\n\`\`\``;
+		const gameTest = args.gameTest && typeof args.gameTest === "object" && !Array.isArray(args.gameTest)
+			? args.gameTest as Record<string, unknown>
+			: undefined;
+		const gameRelevant = steps.some((step) => {
+			const value = step && typeof step === "object" ? step as Record<string, unknown> : {};
+			return /(?:\.java|src\/main\/resources|物品|方块|配方|实体|玩家交互|HUD|GUI|mixin|recipe|minecraft|fabric)/i.test(`${value.kind || ""} ${value.description || ""}`);
+		});
+		if (gameRelevant && !gameTest) {
+			return "Error: 涉及 Minecraft 游戏行为的计划必须提供 gameTest（featureType、具体 subjectId/hotkey 与至少一条客观 assertions）。截图、进入世界或命令已发送不能作为验收。";
+		}
+		if (!gameTest) return `\`\`\`json\n${JSON.stringify(steps, null, 2)}\n\`\`\``;
+		const created = createGameTestSpec({
+			feature_type: gameTest.featureType,
+			subject_id: gameTest.subjectId,
+			mod_id: gameTest.modId,
+			hotkey: gameTest.hotkey,
+			assertions: gameTest.assertions,
+			visual_only: gameTest.visualOnly
+		});
+		if (!created.ok) return `Error: ${created.error}`;
+		const plannedSteps = [...steps, {
+			kind: "inspect",
+			description: `执行确定性游戏测试（mc_run_test scenarioId=${created.spec.id}；仅 PASS 完成）`,
+			targetPath: ".",
+			evidence: "V2 GameTestSession verdict=PASS 与逐条断言的新鲜证据"
+		}];
+		return `\`\`\`json\n${JSON.stringify({ steps: plannedSteps, gameTest: created.spec }, null, 2)}\n\`\`\`\n\n${formatGameTestSpec(created.spec)}`;
 	}
 };
 
@@ -2169,6 +2235,7 @@ import { logger } from "../utils/logger";
 import { MC_OBSERVER_TOOLS } from "./mc-observer-tools";
 import { minecraftDataLookupTool, mcWikiSearchTool } from "./mc-data-tool";
 import { mcTestScenarioTool } from "./mc-test-scenario-tool";
+import { mcRunTestTool } from "./game-test-runner";
 
 export function registerModCraftingTools(registry: Registry, options?: { disabledTools?: string[] }): void {
 	const disabled = new Set(options?.disabledTools || []);
@@ -2207,10 +2274,12 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		guiLayoutPreviewTool,
 		completeStepTool,
 		mcTestScenarioTool,
+		mcRunTestTool,
 		...MC_OBSERVER_TOOLS
 	];
 	for (const tool of tools) {
 		if (!disabled.has(tool.name)) registry.add(tool);
 	}
+	registry.validatePolicies();
 	logger.agent("Tools registered", registry.names());
 }

@@ -206,7 +206,7 @@ export const mcChatTool: Tool = {
 };
 export const mcCommandTool: Tool = {
 	name: "mc_command",
-	description: "以本地玩家执行 Minecraft 命令（自动补 /）。多数命令需要单人集成服务端。",
+	description: "以本地玩家执行 Minecraft 命令（自动补 /）。优先使用 V2 集成服务端执行并返回真实 result/错误；旧桥接仅返回 sent，不能作为功能通过证据。",
 	schema: {
 		type: "object",
 		properties: {
@@ -218,8 +218,11 @@ export const mcCommandTool: Tool = {
 	readOnly: () => false,
 	async execute(_ctx: ToolContext, args: Record<string, unknown>) {
 		const command = String(args.command || "");
-		const result = await callMcBridge("POST", "/v1/command", { command }, optionalInstanceId(args));
-		return formatBridgeResult(result);
+		const instanceId = optionalInstanceId(args);
+		const v2 = await callMcBridge("POST", "/v2/command", { command }, instanceId);
+		if (v2.ok || v2.status !== 404) return formatBridgeResult(v2);
+		const legacy = await callMcBridge("POST", "/v1/command", { command }, instanceId);
+		return `${formatBridgeResult(legacy)}\n[note] 当前桥接仅确认命令已发送（V1）；这不能作为 V2 测试断言通过证据。`;
 	}
 };
 
@@ -232,7 +235,7 @@ export const mcInputTool: Tool = {
 		properties: {
 			action: {
 				type: "string",
-				description: "click_at|click_widget|key_press|key_down|key_up|mouse_click|mouse_move|scroll|forward|back|left|right|jump|sneak|sprint|use|attack|inventory|drop|swap_hands"
+				description: "click_at|click_widget|set_text|key_press|key_down|key_up|mouse_click|mouse_move|scroll|forward|back|left|right|jump|sneak|sprint|use|attack|inventory|drop|swap_hands"
 			},
 			key: { type: "string", description: "key_* 用按键（w/e/space/f6/esc/…）" },
 			button: { type: "string", description: "left|right|middle" },
@@ -307,6 +310,7 @@ export const mcInputTool: Tool = {
 const POLL_INTERVAL_MS = 500;
 const WORLD_ENTER_TIMEOUT_MS = 120_000;
 const LAN_OPEN_TIMEOUT_MS = 5_000;
+const DEDICATED_TEST_WORLD_NAME = "ModCrafting Test World";
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
@@ -375,6 +379,13 @@ async function autoCreateTestWorld(instanceId?: string, alreadyInCreateScreen = 
 		await sleep(1500);
 	}
 
+	// The first editable field in CreateWorldScreen is the world name. A named world
+	// lets deterministic V2 tests avoid opening a developer's ordinary save.
+	const setWorldName = await callMcBridge("POST", "/v1/input", { action: "set_text", text: DEDICATED_TEST_WORLD_NAME }, instanceId);
+	if (!setWorldName.ok) {
+		return { ok: false, message: `自动创建专用测试世界失败：无法设置世界名“${DEDICATED_TEST_WORLD_NAME}”。${formatBridgeResult(setWorldName)}` };
+	}
+
 	// 2. 开启"允许命令"（作弊权限）
 	// 1.21.4 中按钮文案可能是"允许命令"或"Allow Commands"
 	const cheatsToggle = await callMcBridge("POST", "/v1/input", { action: "click_widget", label: "允许命令" }, instanceId);
@@ -406,9 +417,9 @@ async function autoCreateTestWorld(instanceId?: string, alreadyInCreateScreen = 
 		return {
 			ok: true,
 			message: [
-				"已自动创建测试世界并进入。",
+		`已自动创建测试世界（专用：${DEDICATED_TEST_WORLD_NAME}），已进入游戏世界。`,
 				`玩家：${player.name || "unknown"} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || "unknown"}`,
-				"下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。",
+				"下一步：先调用 mc_ensure_cheats，再调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。",
 				"feature_type 取值：new_item（新物品）/ new_block（新方块）/ new_recipe（新合成配方）/ entity_behavior（实体行为修改，如苦力怕爆炸改樱花）/ player_interaction（玩家交互功能，如闪电剑）/ hud_gui（HUD或界面）。",
 				"::kh::测试环境|世界|已进入"
 			].join("\n")
@@ -460,9 +471,9 @@ async function probeCommandPermission(instanceId?: string): Promise<boolean> {
 export const mcEnsureTestWorldTool: Tool = {
 	name: "mc_ensure_test_world",
 	description:
-		"确保已进入 Minecraft 测试世界：检测当前状态，若在主菜单则自动进入已有世界；若已在世界则直接返回。" +
+		`确保已进入 Minecraft 专用测试世界“${DEDICATED_TEST_WORLD_NAME}”：检测当前状态，若在主菜单则自动进入已有世界；若已在世界则直接返回。` +
 		"用途：功能测试前必须先进入世界，不能停在主菜单。runClient 后调用本工具进入世界，再触发功能场景。" +
-		"注意：本工具不创建新世界（创建世界需要手动操作）。如果没有任何存档，会返回明确提示让用户手动创建。",
+		`注意：若专用世界不存在，会自动创建名为“${DEDICATED_TEST_WORLD_NAME}”且开启命令的隔离存档；绝不自动进入其它已有存档。`,
 	schema: {
 		type: "object",
 		properties: {
@@ -608,14 +619,17 @@ export const mcEnsureTestWorldTool: Tool = {
 				return false;
 			});
 
-			if (!worldEntry) {
-				// 没有存档时自动创建测试世界，避免 AI 手动操作消耗大量迭代
+			const dedicatedWorldEntry = worldEntry && String(worldEntry.message || "").includes(DEDICATED_TEST_WORLD_NAME)
+				? worldEntry
+				: widgetList.find((w) => String(w.message || "").includes(DEDICATED_TEST_WORLD_NAME));
+			if (!dedicatedWorldEntry) {
+				// Never enter an arbitrary developer save. Create the named isolated world instead.
 				const createResult = await autoCreateTestWorld(instanceId);
 				return createResult.message;
 			}
 
 			// 点击世界条目
-			const clickWorld = await callMcBridge("POST", "/v1/input", { action: "click_widget", index: worldEntry.index }, instanceId);
+			const clickWorld = await callMcBridge("POST", "/v1/input", { action: "click_widget", index: dedicatedWorldEntry.index }, instanceId);
 			if (!clickWorld.ok) {
 				return "点击世界条目失败：" + formatBridgeResult(clickWorld);
 			}
@@ -638,7 +652,7 @@ export const mcEnsureTestWorldTool: Tool = {
 			if (worldState.inWorld) {
 				const player = (worldInspect.data.player as Record<string, unknown>) || {};
 				return [
-					"已进入游戏世界：" + (worldEntry.message || "unknown"),
+					"已进入专用测试世界：" + (dedicatedWorldEntry.message || DEDICATED_TEST_WORLD_NAME),
 					`玩家：${player.name || "unknown"} | 位置：(${player.x}, ${player.y}, ${player.z}) | 游戏模式：${player.gamemode || "unknown"}`,
 					"下一步：调用 mc_test_scenario(feature_type=...) 获取测试步骤模板。",
 					"feature_type 取值：new_item / new_block / new_recipe / entity_behavior / player_interaction / hud_gui。",

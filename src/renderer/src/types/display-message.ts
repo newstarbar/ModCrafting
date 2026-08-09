@@ -42,7 +42,7 @@ export interface ChronoEntryTool {
   kind: 'tool'
   id: string
   name: string
-  status: 'pending' | 'running' | 'done' | 'error'
+  status: 'pending' | 'running' | 'done' | 'error' | 'timed_out' | 'cancelled'
   output?: string
   liveOutput?: string
   durationMs?: number

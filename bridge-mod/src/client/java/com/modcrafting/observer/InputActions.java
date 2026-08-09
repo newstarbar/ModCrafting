@@ -3,6 +3,7 @@ package com.modcrafting.observer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ClickableWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import org.lwjgl.glfw.GLFW;
@@ -61,6 +62,7 @@ public final class InputActions {
             case "scroll" -> scroll(body);
             case "click_at" -> clickAt(body);
             case "click_widget" -> clickWidget(body);
+			case "set_text" -> setText(body);
             case "forward", "back", "left", "right", "jump", "sneak", "sprint",
                  "use", "attack", "inventory", "drop", "swap_hands" -> preset(action, body);
             default -> error("BAD_REQUEST", "未知 action: " + action);
@@ -145,6 +147,22 @@ public final class InputActions {
         result.put("index", matchedIndex);
         result.put("message", target.getMessage() != null ? target.getMessage().getString() : "");
         return result;
+    }
+
+    /** Set a visible text field deterministically (used to name the dedicated test world). */
+    private static Map<String, Object> setText(Map<String, Object> body) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        Screen screen = client.currentScreen;
+        String text = str(body.get("text"));
+        if (screen == null) return error("NO_SCREEN", "当前没有 GUI，无法设置文本");
+        if (text.isEmpty()) return error("BAD_REQUEST", "set_text 需要 text");
+        for (var element : screen.children()) {
+            if (element instanceof TextFieldWidget field) {
+                field.setText(text);
+                return Map.of("ok", true, "action", "set_text", "text", text, "screenAfter", screen.getClass().getSimpleName());
+            }
+        }
+        return error("NOT_FOUND", "当前屏幕没有可编辑文本框");
     }
 
     private static int mouseButtonCode(String button) {

@@ -105,7 +105,7 @@ async function reloadAgentToolRegistry(controller: Controller | null): Promise<R
 
 interface ToolCallDisplay {
   id: string; name: string
-  status: 'pending' | 'running' | 'done' | 'error'
+  status: 'pending' | 'running' | 'done' | 'error' | 'timed_out' | 'cancelled'
   output?: string; durationMs?: number
 }
 
@@ -1178,7 +1178,11 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           for (const entry of t.entries) {
             if (entry.kind === 'tool' && entry.id === event.tool.id) {
               foundEntry = true
-              entry.status = event.tool.error ? 'error' : 'done'
+              entry.status = event.tool.outcome === 'timed_out'
+                ? 'timed_out'
+                : event.tool.outcome === 'cancelled'
+                  ? 'cancelled'
+                  : event.tool.error ? 'error' : 'done'
               entry.output = event.tool.output || event.tool.error || entry.liveOutput || ''
               entry.liveOutput = undefined
               entry.durationMs = event.tool.durationMs
@@ -2153,6 +2157,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                     entry.status === 'done' ? <span className="tool-status-dot done" />
                       : entry.status === 'running' ? <span className="tool-status-dot running" />
                         : entry.status === 'error' ? <span className="tool-status-dot error" />
+                          : entry.status === 'timed_out' ? <span className="tool-status-dot error" title="已超时" />
+                            : entry.status === 'cancelled' ? <span className="tool-status-dot pending" title="已取消" />
                           : <span className="tool-status-dot pending" />
                   const displayName = entry.displayName || getToolDisplayName(entry.name, entry.args)
                   const diff = entry.fileDiff
@@ -2161,7 +2167,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                   const targetPath = diff?.path
                     || (typeof entry.args?.path === 'string' ? entry.args.path : undefined)
                     || undefined
-                  const showPathTag = targetPath && (entry.status === 'done' || entry.status === 'error')
+                  const showPathTag = targetPath && ['done', 'error', 'timed_out', 'cancelled'].includes(entry.status)
                   const pathFileName = targetPath ? targetPath.split('/').pop() || targetPath : ''
                   return (
                     <div
@@ -2189,7 +2195,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                       {elapsedSec != null && (
                         <span className="mc-dim" style={{ fontSize: '10px' }}>({elapsedSec}s)</span>
                       )}
-                      {(entry.status === 'done' || entry.status === 'error') && displayOutput && (
+                      {(['done', 'error', 'timed_out', 'cancelled'].includes(entry.status)) && displayOutput && (
                         <>
                           {isCollapsed && (
                             hasKnowledgeHitTags(displayOutput) ? (
@@ -2260,7 +2266,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                             </div>
                           )}
                           {(displayOutput || entry.status === 'running') && (
-                            <pre className={entry.status === 'error' ? 'is-error' : undefined}>
+                            <pre className={['error', 'timed_out'].includes(entry.status) ? 'is-error' : undefined}>
                               {displayOutput || '正在执行，等待实时日志…'}
                             </pre>
                           )}

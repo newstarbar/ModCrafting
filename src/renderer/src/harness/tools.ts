@@ -7,6 +7,7 @@ import type { FileDiff, GuiLayoutElement, GuiLayoutType } from './events.ts'
 import type { PlanTracker, PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
 import type { FileSession } from './file-session.ts'
+import { getBuiltinToolPolicy, type ToolPolicy } from './tool-policy.ts'
 
 // A single tool that the agent can call
 export interface Tool {
@@ -15,14 +16,18 @@ export interface Tool {
   schema: Record<string, unknown> // JSON Schema
   execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload>
   readOnly(): boolean
+  /** Declarative execution and capability metadata. Built-ins may inherit the central catalogue. */
+  policy?: ToolPolicy
 }
 
 export interface ToolValidationEvidence {
-  kind: 'recipe' | 'mixin'
+  kind: 'recipe' | 'mixin' | 'game'
   valid: boolean
   version: '1.21.4'
   targetPath?: string
   checkedAt: number
+  /** Present for deterministic in-game test sessions. */
+  verdict?: 'PASS' | 'FAIL' | 'INCONCLUSIVE'
 }
 
 export interface ToolExecutionPayload {
@@ -43,6 +48,10 @@ export interface Previewer {
 export interface ToolContext {
   projectPath: string | null
   callId: string
+  /** Identifies the parent Agent turn; late completions from old runs are ignored by the host. */
+  runId?: string
+  /** Identifies this concrete execution across renderer and main-process IPC. */
+  executionId?: string
   abortSignal?: AbortSignal
   onProgress?: (chunk: string) => void
   planTracker?: PlanTracker | null
@@ -262,6 +271,9 @@ export interface ToolResult {
   }
   imageBase64?: string
   imageMimeType?: string
+  outcome?: 'succeeded' | 'failed' | 'timed_out' | 'cancelled'
+  runId?: string
+  executionId?: string
 }
 
 export function parseTriggerBuildMeta(output: string): ToolResult['meta'] | undefined {
@@ -299,7 +311,8 @@ export class Registry {
     if (this.tools.has(tool.name)) {
       throw new Error(`Tool "${tool.name}" already registered`)
     }
-    this.tools.set(tool.name, tool)
+    const policy = tool.policy ?? getBuiltinToolPolicy(tool.name)
+    this.tools.set(tool.name, policy ? { ...tool, policy } : tool)
     this.order.push(tool.name)
   }
 
@@ -324,6 +337,16 @@ export class Registry {
 
   len(): number {
     return this.tools.size
+  }
+
+  policyFor(name: string): ToolPolicy | undefined {
+    return this.tools.get(name)?.policy
+  }
+
+  /** Call after built-in registration. Custom test tools intentionally retain a permissive fallback. */
+  validatePolicies(): void {
+    const missing = this.order.filter((name) => !this.tools.get(name)?.policy)
+    if (missing.length > 0) throw new Error(`Missing tool policy: ${missing.join(', ')}`)
   }
 }
 
@@ -400,8 +423,51 @@ export async function executeTool(
   const start = Date.now()
   logger.tool(`Executing: ${tool.name}`, args)
 
+  const policy = tool.policy
+  const controller = new AbortController()
+  const parentSignal = ctx.abortSignal
+  const abortFromParent = () => controller.abort(parentSignal?.reason ?? new Error('Tool cancelled'))
+  if (parentSignal?.aborted) abortFromParent()
+  else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  let idleTimeout: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
+  const resetIdleTimer = (): void => {
+    if (!policy?.idleTimeoutMs) return
+    if (idleTimeout) clearTimeout(idleTimeout)
+    idleTimeout = setTimeout(() => {
+      timedOut = true
+      controller.abort(new Error(`Tool idle timeout after ${policy.idleTimeoutMs}ms`))
+    }, policy.idleTimeoutMs)
+  }
+  if (policy?.timeoutMs) {
+    timeout = setTimeout(() => {
+      timedOut = true
+      controller.abort(new Error(`Tool timeout after ${policy.timeoutMs}ms`))
+    }, policy.timeoutMs)
+  }
+  resetIdleTimer()
+  const toolCtx: ToolContext = {
+    ...ctx,
+    abortSignal: controller.signal,
+    onProgress: (chunk) => {
+      resetIdleTimer()
+      ctx.onProgress?.(chunk)
+    }
+  }
+
   try {
-    const executed = await tool.execute(ctx, args)
+    // Racing is deliberate: third-party/legacy tools do not all consume AbortSignal.
+    // Their late completion is detached and cannot hold this Agent turn hostage.
+    const execution = tool.execute(toolCtx, args)
+    execution.catch(() => {})
+    const aborted = controller.signal.aborted
+      ? Promise.reject<never>(controller.signal.reason ?? new Error('Tool cancelled'))
+      : new Promise<never>((_, reject) => {
+          controller.signal.addEventListener('abort', () => reject(controller.signal.reason ?? new Error('Tool cancelled')), { once: true })
+        })
+    const executed = await Promise.race([execution, aborted])
     const payload = typeof executed === 'string' ? undefined : executed
     const output = typeof executed === 'string' ? executed : executed.output
     const duration = Date.now() - start
@@ -444,11 +510,18 @@ export async function executeTool(
       fileDiff,
       meta,
       imageBase64: payload?.imageBase64,
-      imageMimeType: payload?.imageMimeType
+      imageMimeType: payload?.imageMimeType,
+      outcome: inferredError ? 'failed' : 'succeeded',
+      runId: ctx.runId,
+      executionId: ctx.executionId
     }
   } catch (err) {
     const duration = Date.now() - start
     let errMsg = err instanceof Error ? err.message : String(err)
+    const cancelled = controller.signal.aborted && !timedOut
+    const errorKind = timedOut ? 'tool_timeout' : cancelled ? 'tool_cancelled' : 'exception'
+    if (timedOut) errMsg = `工具 ${tool.name} 超时：${errMsg}`
+    if (cancelled) errMsg = `工具 ${tool.name} 已取消：${errMsg}`
     logger.tool(`Error: ${tool.name}`, errMsg)
 
     // File tools: diagnose the error with context
@@ -468,8 +541,15 @@ export async function executeTool(
       artifactPath,
       artifactPaths: artifactPath ? [artifactPath] : [],
       exitCode: null,
-      errorKind: 'exception'
+      errorKind,
+      outcome: timedOut ? 'timed_out' : cancelled ? 'cancelled' : 'failed',
+      runId: ctx.runId,
+      executionId: ctx.executionId
     }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+    if (idleTimeout) clearTimeout(idleTimeout)
+    parentSignal?.removeEventListener('abort', abortFromParent)
   }
 }
 
@@ -493,6 +573,25 @@ export async function executeBatch(
 
   const executeOne = async (call: NormalizedCall): Promise<void> => {
     onDispatch?.(call.name, call.id, call.args)
+    if (ctx.abortSignal?.aborted) {
+      const output = `工具 ${call.name} 已取消：未开始执行`
+      const result: ToolResult = {
+        output,
+        error: output,
+        durationMs: 0,
+        ok: false,
+        toolName: call.name,
+        args: call.args,
+        exitCode: null,
+        errorKind: 'tool_cancelled',
+        outcome: 'cancelled',
+        runId: ctx.runId,
+        executionId: ctx.runId ? `${ctx.runId}:${call.id}` : call.id
+      }
+      results.set(call.id, result)
+      onResult?.(call.name, call.id, result)
+      return
+    }
     const tool = registry.get(call.name)
     if (!tool) {
       const output = `Error: unknown tool "${call.name}"`
@@ -517,6 +616,7 @@ export async function executeBatch(
     const callCtx: ToolContext = {
       ...ctx,
       callId: call.id,
+      executionId: ctx.runId ? `${ctx.runId}:${call.id}` : call.id,
       onProgress: onProgress ? (chunk) => onProgress(call.id, chunk) : undefined
     }
     const result = await executeTool(tool, call.args, callCtx)
@@ -532,7 +632,11 @@ export async function executeBatch(
     if (readGroup.length === 0) return
     const group = readGroup
     readGroup = []
-    await Promise.all(group.map(executeOne))
+    // A bounded allSettled prevents one stalled legacy read from blocking the entire turn.
+    const CONCURRENCY = 4
+    for (let index = 0; index < group.length; index += CONCURRENCY) {
+      await Promise.allSettled(group.slice(index, index + CONCURRENCY).map(executeOne))
+    }
   }
 
   for (const call of normalized) {

@@ -44,6 +44,7 @@ import {
   getRuntimePathOverride
 } from './app-config'
 import { migrateRuntimeToPath } from './runtime-layout'
+import { beginToolExecution, cancelToolExecution, finishToolExecution } from './tool-execution-registry'
 import { exportEnvironmentDiagnostics, getLastEnvironmentError, openEnvironmentLogs } from './environment-diagnostics'
 import { checkForUpdates, openReleasePages } from './updater'
 import { lookupFabricSymbol, verifyFabricSymbolIndex, type FabricSymbolLookupRequest } from './fabric-metadata'
@@ -89,6 +90,24 @@ import {
 const watchers = new Map<string, fs.FSWatcher>()
 
 export function setupIpcHandlers(): void {
+	// Deterministic game-test reports are application diagnostics, never project files.
+	ipcMain.handle('gameTest:saveReport', async (_event, payload: unknown) => {
+		try {
+			const text = JSON.stringify(payload, null, 2)
+			if (text.length > 2 * 1024 * 1024) return { ok: false, error: '测试报告过大，拒绝写入。' }
+			const dir = path.join(app.getPath('userData'), 'game-test-reports')
+			fs.mkdirSync(dir, { recursive: true })
+			const id = typeof (payload as { session?: { id?: unknown } })?.session?.id === 'string'
+				? (payload as { session: { id: string } }).session.id.replace(/[^a-zA-Z0-9_-]/g, '_')
+				: `test_${Date.now()}`
+			const reportPath = path.join(dir, `${id}.json`)
+			fs.writeFileSync(reportPath, text, 'utf-8')
+			return { ok: true, path: reportPath }
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) }
+		}
+	})
+
   // Dialog: select project directory
   ipcMain.handle('dialog:selectDirectory', async () => {
     const result = await dialog.showOpenDialog({
@@ -306,29 +325,71 @@ export function setupIpcHandlers(): void {
   })
 
   // Run command with streaming output (for long-running commands like builds)
-  ipcMain.handle('app:runCommandStream', async (event, command: string, cwd: string) => {
+  ipcMain.handle('app:cancelToolExecution', async (_event, executionId: string) => ({ ok: cancelToolExecution(executionId) }))
+
+  ipcMain.handle('app:runCommandStream', async (event, command: string, cwd: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => {
     try {
       const { spawn } = require('child_process')
       const child = spawn(command, { cwd, shell: true })
       let fullOutput = ''
+      const signal = beginToolExecution(options?.executionId)
+      let settled = false
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      let idleTimeout: ReturnType<typeof setTimeout> | undefined
+      const finish = (result: { output: string; exitCode: number; cancelled?: boolean }) => {
+        if (settled) return
+        settled = true
+        if (timeout) clearTimeout(timeout)
+        if (idleTimeout) clearTimeout(idleTimeout)
+        signal?.removeEventListener('abort', onAbort)
+        finishToolExecution(options?.executionId)
+        resolvePromise?.(result)
+      }
+      const killTree = () => {
+        if (!child.pid) return
+        if (process.platform === 'win32') {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+          killer.on('error', () => child.kill())
+        } else child.kill('SIGTERM')
+      }
+      const onAbort = () => {
+        killTree()
+        finish({ output: fullOutput + '\n[command cancelled]', exitCode: -1, cancelled: true })
+      }
+      const resetIdle = () => {
+        if (!options?.idleTimeoutMs) return
+        if (idleTimeout) clearTimeout(idleTimeout)
+        idleTimeout = setTimeout(onAbort, options.idleTimeoutMs)
+      }
+      let resolvePromise: ((result: { output: string; exitCode: number; cancelled?: boolean }) => void) | undefined
       child.stdout.on('data', (data: Buffer) => {
         const text = data.toString()
         fullOutput += text
-        event.sender.send('command:output', text)
+        event.sender.send('command:output', text, options?.executionId)
+        resetIdle()
       })
       child.stderr.on('data', (data: Buffer) => {
         const text = data.toString()
         fullOutput += text
-        event.sender.send('command:output', text)
+        event.sender.send('command:output', text, options?.executionId)
+        resetIdle()
       })
       return await new Promise((resolve) => {
+        resolvePromise = resolve
+        if (signal?.aborted) {
+          onAbort()
+          return
+        }
+        signal?.addEventListener('abort', onAbort, { once: true })
+        if (options?.timeoutMs) timeout = setTimeout(onAbort, options.timeoutMs)
+        resetIdle()
         child.on('close', (code: number | null) => {
-          event.sender.send('command:done', { exitCode: code })
-          resolve({ output: fullOutput, exitCode: code ?? -1 })
+          event.sender.send('command:done', { exitCode: code, executionId: options?.executionId })
+          finish({ output: fullOutput, exitCode: code ?? -1 })
         })
         child.on('error', (err: Error) => {
-          event.sender.send('command:done', { exitCode: -1, error: String(err) })
-          resolve({ output: String(err), exitCode: -1 })
+          event.sender.send('command:done', { exitCode: -1, error: String(err), executionId: options?.executionId })
+          finish({ output: String(err), exitCode: -1 })
         })
       })
     } catch (err) {
@@ -431,11 +492,16 @@ export function setupIpcHandlers(): void {
     prepareBuild(projectPath)
   )
 
-  ipcMain.handle('env:runGradleTask', async (event, projectPath: string, task: string) =>
-    runGradleTask(projectPath, task, (text) => {
-      event.sender.send('command:output', text)
-    })
-  )
+  ipcMain.handle('env:runGradleTask', async (event, projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => {
+    const signal = beginToolExecution(options?.executionId)
+    try {
+      return await runGradleTask(projectPath, task, (text) => {
+        event.sender.send('command:output', text, options?.executionId)
+      }, { abortSignal: signal, timeoutMs: options?.timeoutMs, idleTimeoutMs: options?.idleTimeoutMs })
+    } finally {
+      finishToolExecution(options?.executionId)
+    }
+  })
 
   ipcMain.handle('env:getToolchainStatus', async () => getToolchainStatus())
 

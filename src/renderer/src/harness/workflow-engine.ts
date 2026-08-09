@@ -20,6 +20,7 @@ import { MAX_EXECUTE_CLARIFICATIONS } from "./clarify-validation.ts";
 import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
 import type { VerifyTarget } from "./verify-target.ts";
 import { describeVerifyMismatch, formatVerifyRepairKick, isWrongScreenVerifyFinding, matchesVerifyTarget } from "./verify-target.ts";
+import { isExploreTool, isKnowledgeTool, isProjectWriteTool, recommendedToolNames } from "./tool-policy.ts";
 
 export interface WorkflowModelResult {
 	finishReason?: string;
@@ -72,6 +73,7 @@ export interface WorkflowEngineOptions {
 	requireFeatureGuiVerify?: boolean;
 	/** Explicit screen/hotkey target; when set, inspect must match it. */
 	verifyTarget?: import("./verify-target.ts").VerifyTarget | null;
+	runId?: string;
 }
 
 let workflowToolId = 0;
@@ -81,34 +83,6 @@ const MAX_REPAIR_ROUNDS_CAP = 10;
 /** Free repair-diagnostic rounds (read_error_log / fabric_log_debugger only). */
 export const MAX_FREE_REPAIR_DIAG_ROUNDS = 2;
 const MAX_MODEL_NETWORK_RETRIES = 2;
-const REPAIR_EXTRA_TOOLS = [
-	"edit_file",
-	"write_file",
-	"delete_file",
-	"read_file",
-	"grep",
-	"read_error_log",
-	"fabric_log_debugger",
-	"fabric_docs_search",
-	"minecraft_data_lookup",
-	"mc_wiki_search",
-	"vanilla_mc_wiki_query",
-	"fabric_mixin_target_lookup",
-	"fabric_mixin_scaffold",
-	"fabric_mixin_register",
-	"fabric_recipe_validate",
-	"fabric_mixin_validate",
-	"mc_screenshot",
-	"mc_inspect",
-	"mc_inventory",
-	"mc_world",
-	"mc_chat",
-	"mc_command",
-	"mc_input",
-	"mc_ensure_test_world",
-	"mc_ensure_cheats"
-] as const;
-
 const REPAIR_DIAG_DEDUP_TOOLS = new Set(["read_error_log", "fabric_log_debugger"]);
 
 /**
@@ -295,10 +269,10 @@ export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boole
 }
 
 function repairExtraTools(step: WorkflowStep): string[] {
-	return [...new Set([...step.allowedTools, ...REPAIR_EXTRA_TOOLS])];
+	return [...new Set([...step.allowedTools, ...recommendedToolNames(step.kind, true)])];
 }
 
-function writeFileRetryInstruction(kind: "build" | "run"): string {
+function writeFileRetryInstruction(kind: "build" | "run" | "game_test"): string {
 	const retry = kind === "build" ? "trigger_build build" : "trigger_build runClient";
 	return `【SYSTEM: 文件已修改，可以重新构建。请调用 ${retry} 验证修复结果。】`;
 }
@@ -326,36 +300,12 @@ function isRepairExploreResult(result: ToolResult): boolean {
 
 /** Knowledge queries that should not consume attempt budget for non-terminal steps.
  *  However, beyond MAX_FREE_KNOWLEDGE_ROUNDS per step, they WILL count toward attempt. */
-const KNOWLEDGE_TOOLS = new Set([
-	"fabric_docs_search",
-	"fabric_javadoc_lookup",
-	"vanilla_mc_wiki_query",
-	"minecraft_data_lookup",
-	"mc_wiki_search",
-	"fabric_meta_version_check",
-	"fabric_mod_json_validate"
-]);
-
 const MAX_FREE_KNOWLEDGE_ROUNDS = 3;
 const MAX_DOC_SEARCH_PER_WRITE_STEP = 2;
 /** Pure read/list/grep rounds before first write evidence — do not burn attempt. */
 export const MAX_FREE_EXPLORE_ROUNDS = 4;
 /** Fix 5: after this many consecutive identical rejections, force-stop the stuck step. */
 export const MAX_IDENTICAL_REJECTIONS = 4;
-const EXPLORE_TOOLS = new Set(["read_file", "list_directory", "grep"]);
-/** Tools whose successful execution constitutes a real file mutation this run (Fix 3 guard). */
-const RUN_WRITE_TOOLS = new Set([
-	"write_file",
-	"edit_file",
-	"delete_file",
-	"create_recipe",
-	"fabric_recipe_generate",
-	"fabric_template_generate",
-	"fabric_content_register",
-	"fabric_data_assets_generate",
-	"fabric_mixin_scaffold",
-	"fabric_mixin_register"
-]);
 
 /**
  * Fix 3: detect a "no-op" build — Gradle reports BUILD SUCCESSFUL but every task is
@@ -370,7 +320,6 @@ export function isNoOpBuildResult(output: string | undefined): boolean {
 	return taskLines.every((line) => /UP-TO-DATE|NO-SOURCE|SKIPPED|FROM-CACHE/i.test(line));
 }
 /** After explore budget: strip roam tools only — keep read_file so edit_file aci_read_gate still works. */
-const EXPLORE_ROAM_TOOLS = new Set(["list_directory", "grep"]);
 
 /**
  * When explore rounds are exhausted, drop list/grep; optionally strip knowledge tools.
@@ -378,8 +327,8 @@ const EXPLORE_ROAM_TOOLS = new Set(["list_directory", "grep"]);
  */
 export function applyExploreToolLimit(names: string[], options: { exploreExhausted: boolean; stripKnowledge?: boolean }): string[] {
 	return names.filter((name) => {
-		if (options.exploreExhausted && EXPLORE_ROAM_TOOLS.has(name)) return false;
-		if (options.stripKnowledge && KNOWLEDGE_TOOLS.has(name)) return false;
+		if (options.exploreExhausted && (name === "list_directory" || name === "grep")) return false;
+		if (options.stripKnowledge && isKnowledgeTool(name)) return false;
 		return true;
 	});
 }
@@ -418,12 +367,12 @@ export function nextWriteTruncationStreak(results: ToolResult[], prevStreak: num
 
 export function isDocSearchLimitedStep(step: WorkflowStep, repairMode = false): boolean {
 	if (step.kind === "write" || step.kind === "recipe" || step.kind === "mixin") return true;
-	if (repairMode && (step.kind === "build" || step.kind === "run")) return true;
+	if (repairMode && (step.kind === "build" || step.kind === "run" || step.kind === "game_test")) return true;
 	return false;
 }
 
 export function isExploreLimitedStep(step: WorkflowStep, repairMode = false): boolean {
-	if (repairMode && (step.kind === "build" || step.kind === "run")) return true;
+	if (repairMode && (step.kind === "build" || step.kind === "run" || step.kind === "game_test")) return true;
 	return step.kind === "write" || step.kind === "recipe" || step.kind === "mixin";
 }
 
@@ -449,7 +398,7 @@ export function isDocSearchOnlyRejectionRound(results: Iterable<ToolResult>): bo
 
 export function isKnowledgeOnlyRejectionRound(results: Iterable<ToolResult>): boolean {
 	const list = [...results];
-	return list.length > 0 && list.every((result) => KNOWLEDGE_TOOLS.has(result.toolName || ""));
+	return list.length > 0 && list.every((result) => isKnowledgeTool(result.toolName || ""));
 }
 
 /** Rejected-only rounds (whitelist / doc limit) must not burn write-step attempt. */
@@ -460,6 +409,7 @@ export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boole
 		(result) =>
 			result.errorKind === "doc_search_limit" ||
 			result.errorKind === "repair_doc_dedup" ||
+			result.errorKind === "policy_deferred" ||
 			result.errorKind === "tool_not_offered" ||
 			result.errorKind === "tool_call_limit" ||
 			result.errorKind === "after_control_barrier"
@@ -467,7 +417,7 @@ export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boole
 }
 
 export function isPureExploreRound(results: ToolResult[]): boolean {
-	return results.length > 0 && results.every((result) => EXPLORE_TOOLS.has(result.toolName || "") && result.ok && !result.error);
+	return results.length > 0 && results.every((result) => isExploreTool(result.toolName || "") && result.ok && !result.error);
 }
 
 /**
@@ -525,6 +475,13 @@ export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
 			`禁止只输出旁白。`
 		);
 	}
+	if (step.kind === "game_test") {
+		return (
+			`【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+			`本步为确定性游戏测试：先 mc_test_scenario 提供实际 subject_id、hotkey（如适用）和至少一条 assertions；再调用 mc_run_test。` +
+			`只有 PASS 可完成；截图、进入世界、任意 Screen 或“命令已发送”均不能通过。INCONCLUSIVE 必须报告缺失证据，禁止改代码。`
+		);
+	}
 	const targetHint = step.targetPath ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)` : "write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)";
 	return `【系统】当前步骤尚未完成：#${step.id} ${step.title}。` + `请立即调用 ${targetHint} 写入目标文件，或 complete_step()，不要只输出旁白或继续无目标探索。`;
 }
@@ -554,7 +511,7 @@ export function successfulWriteArtifacts(results: ToolResult[]): string[] {
 	const paths: string[] = [];
 	for (const result of results) {
 		if (!result.ok || result.error) continue;
-		if (!RUN_WRITE_TOOLS.has(result.toolName || "")) continue;
+		if (!isProjectWriteTool(result.toolName || "")) continue;
 		const artifacts = result.artifactPaths?.length ? result.artifactPaths : [result.artifactPath || String(result.args?.path || "")].filter(Boolean);
 		for (const p of artifacts) {
 			const n = String(p).replace(/\\/g, "/");
@@ -599,7 +556,7 @@ export function buildStepFailureMessage(step: WorkflowStep, attempt: number, max
 function isKnowledgeRound(step: WorkflowStep, result: ToolResult | undefined, knowledgeCount: number): boolean {
 	if (!result || !result.ok || result.error) return false;
 	if (step.kind === "build" || step.kind === "run") return false;
-	if (!KNOWLEDGE_TOOLS.has(result.toolName || "")) return false;
+	if (!isKnowledgeTool(result.toolName || "")) return false;
 	// After MAX_FREE_KNOWLEDGE_ROUNDS, knowledge queries count as real attempts
 	return knowledgeCount < MAX_FREE_KNOWLEDGE_ROUNDS;
 }
@@ -631,7 +588,7 @@ function resultCompletesStep(
 ): boolean {
 	if (!result.ok || result.error) return false;
 	if (result.toolName === "complete_step") {
-		if (step.kind === "build" || step.kind === "run") return false;
+		if (step.kind === "build" || step.kind === "run" || step.kind === "game_test") return false;
 		if (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin") {
 			return stepHasEvidence;
 		}
@@ -653,13 +610,27 @@ function resultCompletesStep(
 				(result.toolName === "run_command" && result.exitCode === 0)
 			);
 		case "run":
-			if (runGate?.requireInGameVerify) {
-				return runGate.runReady && runGate.inGameVerified;
-			}
 			return isRunClientReadyResult(result);
+		case "game_test":
+			return result.toolName === "mc_run_test" && result.validation?.kind === "game" && result.validation.verdict === "PASS" && result.validation.valid;
 		case "answer":
 			return true;
 	}
+}
+
+/** Stable across fresh test-session ids/timestamps; only repeat the same failed assertion. */
+export function gameTestFailureSignature(output: unknown): string {
+	const text = String(output || "");
+	try {
+		const parsed = JSON.parse(text) as { scenarioId?: unknown; evidence?: Array<{ passed?: unknown; assertion?: unknown; detail?: unknown }> };
+		const failed = Array.isArray(parsed.evidence)
+			? parsed.evidence.filter((row) => row && row.passed === false).map((row) => ({ assertion: row.assertion, detail: String(row.detail || "").replace(/\d{2,}/g, "#") }))
+			: [];
+		if (failed.length > 0) return JSON.stringify({ scenarioId: parsed.scenarioId, failed });
+	} catch {
+		// Keep a conservative fallback for malformed bridge reports.
+	}
+	return text.replace(/test_[a-z0-9_]+/gi, "test").replace(/\d{10,}/g, "#").slice(0, 600);
 }
 
 /** True when inspect/screenshot payload is still the main menu title screen. */
@@ -696,6 +667,9 @@ export function isInGameVerifyResult(
 
 export function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
 	if (!result.ok || result.error) return false;
+	if (step.kind === "game_test") {
+		return result.toolName === "mc_run_test" && result.validation?.kind === "game" && result.validation.verdict === "PASS";
+	}
 	if (step.kind === "recipe") {
 		return result.validation?.kind === "recipe" && result.validation.valid;
 	}
@@ -828,6 +802,7 @@ export class WorkflowEngine {
 	private fileSession: FileSession;
 	private clarificationGate?: { count: number };
 	private visionModel: boolean;
+	private runId?: string;
 	private requireInGameVerify: boolean;
 	private requireFeatureGuiVerify: boolean;
 	private verifyTarget: VerifyTarget | null;
@@ -837,6 +812,8 @@ export class WorkflowEngine {
 	private prevStepWasRun = false;
 	private lastVerifyWasTitleScreen = false;
 	private lastVerifyMismatch = "";
+	/** A functional assertion must fail twice in fresh sessions before repair is allowed. */
+	private gameTestFailureCounts = new Map<string, number>();
 	/** GUI 布局预览状态：当前步骤是否已完成预览（用户确认过布局 JSON） */
 	private guiPreviewCompletedForStep = false;
 	private lastPreviewStepId: string | null = null;
@@ -858,6 +835,7 @@ export class WorkflowEngine {
 		this.fileSession = options.fileSession || new FileSession();
 		this.clarificationGate = options.clarificationGate;
 		this.visionModel = Boolean(options.visionModel);
+		this.runId = options.runId;
 		this.requireInGameVerify = Boolean(options.requireInGameVerify);
 		this.requireFeatureGuiVerify = Boolean(options.requireFeatureGuiVerify);
 		this.verifyTarget = options.verifyTarget ?? null;
@@ -907,7 +885,7 @@ export class WorkflowEngine {
 		// Runtime gates (filterToolCallsForStep / isToolAllowedForStep) still block
 		// edit/write until repair, and reject over-limit doc/explore calls.
 		let names: string[];
-		if (step.kind === "build" || step.kind === "run") {
+		if (step.kind === "build" || step.kind === "run" || step.kind === "game_test") {
 			names = repairExtraTools(step);
 		} else {
 			names = [...step.allowedTools];
@@ -949,7 +927,9 @@ export class WorkflowEngine {
 					? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
 					: '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n' +
 						"【禁止 complete_step】run 步不提供 complete_step；请用 mc_inspect/mc_screenshot 验收，验证成功后等待系统自动推进，或继续 mc_* 操作。\n"
-				: "";
+				: step.kind === "game_test" && !repairMode
+					? "本步不得 trigger_build 或 complete_step。使用 mc_test_scenario 生成带实际 ID 与 assertions 的规格，再调用 mc_run_test；只有 PASS 会推进。\n"
+					: "";
 		const migrationHint = migrationPending && pendingMigration ? formatMigrationChecklist(pendingMigration) : "";
 		const ephemeral = ephemeralInstruction?.trim() ? `\n${ephemeralInstruction.trim()}\n` : "";
 		return {
@@ -992,6 +972,7 @@ export class WorkflowEngine {
 		const ctx: ToolContext = {
 			projectPath: this.projectPath,
 			callId: `workflow_${step.id}`,
+			runId: this.runId,
 			abortSignal: this.abortSignal,
 			planTracker: this.planTracker,
 			fileSession: this.fileSession,
@@ -1029,6 +1010,9 @@ export class WorkflowEngine {
 						error: result.error,
 						durationMs: result.durationMs,
 						fileDiff: result.fileDiff,
+						outcome: result.outcome,
+						runId: result.runId,
+						executionId: result.executionId,
 						// 始终携带截图数据供 UI 展示（不依赖 visionModel）
 						imageBase64: result.imageBase64,
 						imageMimeType: result.imageMimeType
@@ -1634,7 +1618,8 @@ export class WorkflowEngine {
 					// identical wall (model keeps hitting the same rejection with no new evidence)
 					// is force-stopped so the step fails fast with an actionable message instead of
 					// spinning silently until maxIterations.
-					if (consecutiveIdenticalRejections >= MAX_IDENTICAL_REJECTIONS) {
+					const policyDeferOnly = [...resultsById.values()].every((result) => result.errorKind === "policy_deferred");
+					if (consecutiveIdenticalRejections >= (policyDeferOnly ? 2 : MAX_IDENTICAL_REJECTIONS)) {
 						attempt = maxIterations;
 					} else if (consecutiveIdenticalRejections >= 2) {
 						attempt += 2;
@@ -1649,7 +1634,7 @@ export class WorkflowEngine {
 				const executed = await this.executeAllowedCalls(step, executableAllowed);
 				for (const [id, result] of executed) {
 					resultsById.set(id, result);
-					if (result.ok && !result.error && RUN_WRITE_TOOLS.has(result.toolName || "")) {
+					if (result.ok && !result.error && isProjectWriteTool(result.toolName || "")) {
 						anyWriteThisRun = true;
 						writeTruncationStreak = 0;
 						writeTruncationPath = "";
@@ -1672,7 +1657,7 @@ export class WorkflowEngine {
 
 				const truncAfterExec = nextWriteTruncationStreak([...resultsById.values()], writeTruncationStreak, writeTruncationPath);
 				// Only advance streak from this round's truncations if we didn't just succeed a write
-				if ([...executed.values()].some((r) => r.ok && !r.error && RUN_WRITE_TOOLS.has(r.toolName || ""))) {
+				if ([...executed.values()].some((r) => r.ok && !r.error && isProjectWriteTool(r.toolName || ""))) {
 					// already cleared above
 				} else {
 					writeTruncationStreak = truncAfterExec.streak;
@@ -1748,11 +1733,53 @@ export class WorkflowEngine {
 					runReady: this.runClientReady,
 					inGameVerified: this.inGameVerified
 				};
+				const gameTestResult = step.kind === "game_test"
+					? orderedResults.find((result) => result.toolName === "mc_run_test" && result.validation?.kind === "game")
+					: undefined;
+				if (gameTestResult?.validation?.verdict === "INCONCLUSIVE") {
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
+					return {
+						finalContent: `游戏测试结果为 INCONCLUSIVE：${gameTestResult.output}`,
+						allDone: false,
+						partial: false,
+						needsClarification: true,
+						clarificationQuestion: "游戏测试缺少可自动判定的证据。请提供预期的可观察结果，或在界面中确认纯视觉效果。",
+						clarificationOptions: ["补充断言", "确认视觉效果", "停止测试"],
+						steps: this.steps
+					};
+				}
+				if (gameTestResult?.validation?.verdict === "FAIL") {
+					const signature = gameTestFailureSignature(gameTestResult.output);
+					const count = (this.gameTestFailureCounts.get(signature) || 0) + 1;
+					this.gameTestFailureCounts.set(signature, count);
+					if (count < 2) {
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							resultsById,
+							"【确定性复测】功能断言首次失败。环境已清理；请使用相同 scenarioId 再调用 mc_run_test。首次失败禁止改代码。"
+						);
+						attempt++;
+						continue;
+					}
+					if (!repairMode) await stopRunningGameAndHideGuard();
+					repairMode = true;
+					repairWriteRequired = true;
+					repairRounds++;
+					pendingEphemeralInstruction = this.appendToolRound(
+						baseMessages,
+						modelResult.text || streamText,
+						allCalls,
+						resultsById,
+						`【确定性测试确认失败，进入修复模式】同一断言已在两个清理后的测试会话中失败。\n${buildRepairInstruction(String(gameTestResult.output), "run")}`
+					);
+					attempt++;
+					continue;
+				}
 				const decisiveResult = orderedResults.find((result) => isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence, runGate));
 				const success =
-					(decisiveResult ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate) : false) ||
-					(step.kind === "run" && this.requireInGameVerify && this.runClientReady && this.inGameVerified) ||
-					(step.kind === "run" && completeStepAdvanceSignal && runGatesSatisfied);
+					(decisiveResult ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate) : false);
 				let roundInstruction: string | undefined;
 				if (stripKnowledgeForTruncation) {
 					roundInstruction = LARGE_FILE_REWRITE_RECOVERY;
@@ -1996,7 +2023,7 @@ export class WorkflowEngine {
 				}
 
 				// Track knowledge queries and limit per step
-				const successfulKnowledge = orderedResults.filter((result) => result.ok && !result.error && KNOWLEDGE_TOOLS.has(result.toolName || ""));
+				const successfulKnowledge = orderedResults.filter((result) => result.ok && !result.error && isKnowledgeTool(result.toolName || ""));
 				if (successfulKnowledge.length > 0) {
 					knowledgeQueries += successfulKnowledge.length;
 					if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
