@@ -46,9 +46,13 @@ async function startReplayServer(logFile: string): Promise<{ endpoint: string; c
         return
       }
       res.setHeader('content-type', 'text/event-stream')
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Automation replay response.' } }] })}\n\n`)
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
-      res.end('data: [DONE]\n\n')
+      // Leave a short first-token gap so the test can inspect the real UI's
+      // liveness affordance instead of only a completed response.
+      setTimeout(() => {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Automation replay response.' } }] })}\n\n`)
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
+        res.end('data: [DONE]\n\n')
+      }, 800)
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -101,6 +105,18 @@ async function main(): Promise<void> {
     await wait(250)
     const sent = await request('/v1/command', { method: 'POST', body: JSON.stringify({ method: 'send_turn', params: { text: '请简短介绍当前项目', mode: 'agent' } }) })
     assert.equal(sent.status, 200)
+    let activityVisible = false
+    const activityDeadline = Date.now() + 600
+    while (Date.now() < activityDeadline) {
+      const activeSnapshot = await request('/v1/snapshot')
+      const activeUi = (((activeSnapshot.body.snapshot as Record<string, unknown>).chat as Record<string, unknown>).ui || {}) as Record<string, unknown>
+      if (activeUi.activeAssistantStreaming === true) { activityVisible = true; break }
+      await wait(50)
+    }
+    assert.equal(activityVisible, true, 'a running turn must show an in-transcript assistant activity placeholder')
+    const activityScreenshot = await request('/v1/command', { method: 'POST', body: JSON.stringify({ method: 'screenshot', params: {} }) })
+    const activityScreenshotPath = ((activityScreenshot.body.result as Record<string, unknown>).path || '') as string
+    assert.ok(activityScreenshotPath && fs.existsSync(activityScreenshotPath), 'running-turn screenshot was not captured')
     const turnDeadline = Date.now() + 15_000
     let done = false
     while (Date.now() < turnDeadline) {

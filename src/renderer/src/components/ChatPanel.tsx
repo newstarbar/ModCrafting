@@ -902,14 +902,19 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     switch (event.kind) {
       case EventKind.Phase:
         if (event.phase === 'plan_start') {
-          t.msgId = uid()
-          t.entries = []
-          t.streamDone = false
-          setDisplayMessages((prev) => [...prev, {
-            id: t.msgId, role: 'assistant',
-            entries: [], isStreaming: true, timestamp: Date.now(),
-            model: apiConfig.model, providerId: apiConfig.providerId
-          }])
+          if (!t.msgId) {
+            t.msgId = uid()
+            t.entries = []
+            t.streamDone = false
+            setDisplayMessages((prev) => [...prev, {
+              id: t.msgId, role: 'assistant',
+              entries: [], isStreaming: true, timestamp: Date.now(),
+              model: apiConfig.model, providerId: apiConfig.providerId
+            }])
+          } else {
+            t.streamDone = false
+            refreshDisplay()
+          }
         } else if (event.phase === 'plan_done') {
           const planText = (event.text || '').trim()
           const actionable = event.planActionable ?? isActionablePlanText(planText)
@@ -1532,6 +1537,20 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setIsLoading(true)
     setAgentStatus('思考中...')
     setCompletionFlash('')
+    // Create the visible assistant placeholder before classification/network work.
+    // Some providers can take several seconds before emitting the first stream or
+    // phase event; without this the composer says “stop” but the transcript looks stuck.
+    const assistantPlaceholder: DisplayMessage = {
+      id: uid(),
+      role: 'assistant',
+      content: '',
+      entries: [],
+      isStreaming: true,
+      timestamp: Date.now(),
+      model: apiConfig.model,
+      providerId: apiConfig.providerId
+    }
+    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false }
 
     if (!currentSessionId) {
       const newId = onNewSession(
@@ -1556,9 +1575,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         stateSnapshot: preSnapshot,
         attachments: messageAttachments.length ? messageAttachments : undefined
       }
-      setDisplayMessages([firstUser])
+      setDisplayMessages([firstUser, assistantPlaceholder])
       // Persist immediately so reopen keeps image paths (do not wait for TurnDone).
-      flushPersistTo(newId, [firstUser], null)
+      flushPersistTo(newId, [firstUser, assistantPlaceholder], null)
       ctrl.clearSession()
       ctrl.setComposerMode(composerMode)
       ctrl.setSessionGoal(sessionGoal)
@@ -1580,7 +1599,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           timestamp: Date.now(),
           stateSnapshot: preSnapshot,
           attachments: messageAttachments.length ? messageAttachments : undefined
-        }]
+        }, assistantPlaceholder]
         flushPersist(next, executeWaitingPlan ? activePlanRef.current : null)
         return next
       })
@@ -1853,9 +1872,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       composerMode,
       planReady,
       messageCount: displayMessages.length,
+      activeAssistantStreaming: Boolean(
+        [...displayMessages].reverse().find((message) => message.role === 'assistant')?.isStreaming
+      ),
       activePlan: activePlanRef.current
     }
-  }), [isLoading, agentStatus, composerMode, planReady, displayMessages.length])
+  }), [isLoading, agentStatus, composerMode, planReady, displayMessages])
 
   const automationCancel = useCallback(() => controllerRef.current?.cancel(), [])
 
@@ -2153,6 +2175,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const renderMessage = (msg: DisplayMessage, turn: ChatTurn) => {
     const isUser = msg.role === 'user'
+    // Streaming text can pause while the controller is classifying, waiting for a
+    // provider, or running a tool. Keep a visible liveness indicator in the
+    // conversation itself so the header/status bar is not the only signal.
+    const showActivity = !isUser && isLoading && msg.isStreaming && turn.assistant?.id === msg.id
+    const activityLabel = agentStatus.trim() || 'AI 正在处理，请稍候…'
+    const activityElapsed = Math.max(1, Math.floor((Date.now() - msg.timestamp) / 1000))
     const suppressPlanText = Boolean(
       msg.embeddedPlan?.length
       || (activePlan?.pinned && activePlan.anchorMsgId === msg.id)
@@ -2436,6 +2464,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               })}
               {(!msg.entries || msg.entries.length === 0) && msg.content && (
                 <div>{renderContent(msg.content)}</div>
+              )}
+              {showActivity && (
+                <div className="assistant-activity" role="status" aria-live="polite">
+                  <span className="assistant-activity__dots" aria-hidden="true"><i /><i /><i /></span>
+                  <span className="assistant-activity__label">{activityLabel}</span>
+                  <span className="assistant-activity__elapsed">已进行 {activityElapsed}s</span>
+                </div>
               )}
             </>
           )}
