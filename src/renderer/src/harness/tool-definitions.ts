@@ -29,6 +29,7 @@ import { buildMixinScaffold, expectedMixinSourcePaths, isValidMixinSourcePath, p
 import {
 	assertRegisterableMixin,
 	inferSideFromSourcePath,
+	isAcceptableHandwrittenMixinPath,
 	parseJavaIdentity,
 	relativeMixinClassName,
 	sideToConfigKey,
@@ -1487,7 +1488,30 @@ export const fabricMixinScaffoldTool: Tool = {
 		} catch (error) {
 			return `Error: 无法生成确定性 Mixin 外壳: ${String(error)}`;
 		}
-		const written = await guardedWriteFile(ctx, classPath, content, { allowOverwrite: true });
+		// A scaffold command is a generator, not a destructive repair primitive.
+		// It may refresh only the exact generated file it originally owns; handwritten
+		// business Mixins must be changed through edit_file so their logic is preserved.
+		let allowOverwrite = false;
+		const existing = await window.api.readFile(`${ctx.projectPath}/${classPath}`);
+		if (existing.success && existing.content?.trim()) {
+			const existingIdentity = parseJavaIdentity(existing.content);
+			const existingMetadata = readMixinMetadata(existing.content);
+			const sameGeneratedMixin = Boolean(
+				existingIdentity?.fqn === mixinClass &&
+				existingMetadata &&
+				existingMetadata.targetClass === metadata.targetClass &&
+				existingMetadata.selector === metadata.selector &&
+				existingMetadata.descriptor === metadata.descriptor &&
+				existingMetadata.injectionType === metadata.injectionType &&
+				existingMetadata.side === metadata.side
+			);
+			if (!sameGeneratedMixin) {
+				return `Error: refusing to overwrite existing Mixin ${classPath}. ` +
+					`fabric_mixin_scaffold only refreshes a matching MODCRAFTING_MIXIN scaffold; use edit_file for handwritten/business logic.`;
+			}
+			allowOverwrite = true;
+		}
+		const written = await guardedWriteFile(ctx, classPath, content, { allowOverwrite });
 		if (!written.ok) return `Error writing ${classPath}: ${written.message}`;
 		return { output: `已生成签名校验过的 Mixin 源码: ${classPath}\n下一步必须调用 fabric_mixin_register，再调用 fabric_mixin_validate。`, artifactPaths: [classPath] };
 	}
@@ -1607,6 +1631,13 @@ export const fabricMixinRegisterTool: Tool = {
 		const metadata = readMixinMetadata(sourceResult.content);
 		const gate = assertRegisterableMixin(sourceResult.content, Boolean(metadata));
 		if (gate) return gate;
+		if (metadata) {
+			if (!isValidMixinSourcePath(sourcePath, identity.fqn, metadata.side)) {
+				return `Error: source path does not match parsed Mixin identity: ${identity.fqn}`;
+			}
+		} else if (!isAcceptableHandwrittenMixinPath(sourcePath, identity.fqn)) {
+			return `Error: source path does not match parsed handwritten Mixin identity: ${identity.fqn}`;
+		}
 		if (metadata && metadata.side !== side) {
 			return `Error: source metadata side=${metadata.side} 与注册 side=${side} 不一致`;
 		}
@@ -1642,6 +1673,18 @@ export const fabricMixinRegisterTool: Tool = {
 		if (createdConfig) {
 			modJson.mixins = [...refs, configName];
 			const modWrite = await guardedWriteFile(ctx, modJsonPath, `${JSON.stringify(modJson, null, 2)}\n`, { allowOverwrite: true });
+			if (!modWrite.ok) {
+				// Two files are involved. Restore the config if the reference update
+				// fails, so a failed registration never leaves a half-applied config.
+				const absoluteConfigPath = `${ctx.projectPath}/${configPath}`;
+				try {
+					if (configWrite.fileExisted) await window.api.writeFile(absoluteConfigPath, configWrite.oldContent);
+					else await window.api.deleteFile(absoluteConfigPath);
+				} catch {
+					return `Error: fabric.mod.json update failed and Mixin config rollback also failed: ${modWrite.message}`;
+				}
+				return `Error: fabric.mod.json update failed; Mixin config change was rolled back: ${modWrite.message}`;
+			}
 			if (!modWrite.ok) return `Error: Mixin 配置已创建，但 fabric.mod.json 更新失败: ${modWrite.message}`;
 			artifactPaths.push(modJsonPath);
 		}
@@ -1697,7 +1740,7 @@ export const fabricMixinValidateTool: Tool = {
 			return {
 				output: `Mixin 轻量校验通过（手写 Mixin，已跳过 selector/签名深度校验）: ${identity.fqn}`,
 				artifactPaths: artifacts,
-				validation: { kind: "mixin", valid: true, version: "1.21.4", targetPath: sourcePath, checkedAt: Date.now() }
+				validation: { kind: "mixin", valid: true, level: "structural", version: "1.21.4", targetPath: sourcePath, checkedAt: Date.now() }
 			};
 		}
 
@@ -1763,7 +1806,7 @@ export const fabricMixinValidateTool: Tool = {
 		return {
 			output: `Mixin 静态校验通过: ${identity.fqn} -> ${metadata.targetClass}.${metadata.selector}${metadata.descriptor}`,
 			artifactPaths: artifacts,
-			validation: { kind: "mixin", valid: true, version: "1.21.4", targetPath: sourcePath, checkedAt: Date.now() }
+			validation: { kind: "mixin", valid: true, level: "structural", version: "1.21.4", targetPath: sourcePath, checkedAt: Date.now() }
 		};
 	}
 };

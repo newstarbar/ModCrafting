@@ -308,6 +308,9 @@ interface ModCraftingApi {
     name?: string
     source?: string
   }) => void) => () => void
+  onAutomationCommand?: (callback: (payload: { id: string; method: string; params: Record<string, unknown> }) => void) => () => void
+  automationReply?: (payload: { id: string; result?: Record<string, unknown>; error?: string }) => Promise<{ ok: boolean }>
+  automationEmit?: (event: Record<string, unknown>) => Promise<{ ok: boolean; cursor?: number }>
 }
 
 declare global {

@@ -52,6 +52,23 @@ test('parseJavaIdentity extracts package and class', () => {
   assert.equal(id!.fqn, 'com.example.frame_cover.mixin.MouseMixin')
 })
 
+test('parseJavaIdentity ignores comments and literals that mention class names', () => {
+  const source = `package com.example.mixin;
+/** Route from a mixin class to a helper without visibility issues. */
+public abstract class PlayerEntityMixin {
+  String note = "class WrongName";
+}`
+  const id = parseJavaIdentity(source)
+  assert.ok(id)
+  assert.equal(id!.className, 'PlayerEntityMixin')
+  assert.equal(id!.fqn, 'com.example.mixin.PlayerEntityMixin')
+  assert.equal(
+    isAcceptableHandwrittenMixinPath('src/main/java/com/example/mixin/to.java', id!.fqn),
+    false,
+    'a comment must never cause the registrar to accept a phantom class named to'
+  )
+})
+
 test('inferSideFromSourcePath maps client/main/server', () => {
   assert.equal(
     inferSideFromSourcePath('src/client/java/com/example/frame_cover/mixin/MouseMixin.java'),
@@ -202,6 +219,7 @@ test('recordsStepEvidence accepts lightweight mixin validation result', () => {
     validation: {
       kind: 'mixin',
       valid: true,
+      level: 'structural',
       version: '1.21.4',
       targetPath: 'src/client/java/com/example/frame_cover/mixin/MouseMixin.java',
       checkedAt: Date.now()

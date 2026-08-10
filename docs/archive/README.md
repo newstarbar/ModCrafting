@@ -1,5 +1,7 @@
 # 归档索引
 
+- [2026-08-10] [Harness Test Lab and repair-safety recovery](./2026-08-10-harness-test-lab.md) — real Electron automation, stdio MCP, replay regression and bounded repair scope.
+
 - [2026-08-10] **Agent 对话与游戏测试会话恢复** — 修复计划步骤迁移后遗留的 Mixin 证据推进和 MiniMax 意图分类全量兜底。触发：自动。
 
 - [2026-08-09] [确定性游戏内测试 V2](./2026-08-09-deterministic-game-test-v2.md) — 将“启动/截图即成功”改为宿主控制的 Arrange → Act → Assert → Cleanup 状态机；触发：核心 Harness 重构。

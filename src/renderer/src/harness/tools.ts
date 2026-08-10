@@ -24,6 +24,8 @@ export interface ToolValidationEvidence {
   kind: 'recipe' | 'mixin' | 'game'
   valid: boolean
   version: '1.21.4'
+  /** What this tool actually proved. Mixin validation is structural, not compilation. */
+  level?: 'structural' | 'compile' | 'runtime'
   targetPath?: string
   checkedAt: number
   /** Present for deterministic in-game test sessions. */

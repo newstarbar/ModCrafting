@@ -317,6 +317,10 @@ function appendClarificationTextEntry(
 
 interface ChatPanelRef {
   handleTemplateSelect: (templateId: string, name: string) => void
+  automationSend: (text: string, mode?: ComposerMode) => Promise<Record<string, unknown>>
+  automationSnapshot: () => Record<string, unknown>
+  automationCancel: () => void
+  automationRespond: (params: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
 const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextQueue, setContextQueue, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings }, ref) {
@@ -878,6 +882,22 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       return
     }
     const t = turnRef.current
+    void window.api.automationEmit?.({
+      type: 'harness_event',
+      kind: event.kind,
+      phase: event.phase,
+      text: event.text?.slice(0, 4_000),
+      error: event.error,
+      notice: event.notice,
+      tool: event.tool ? {
+        id: event.tool.id,
+        name: event.tool.name,
+        outcome: event.tool.outcome,
+        error: event.tool.error,
+        durationMs: event.tool.durationMs
+      } : undefined,
+      planSteps: event.planSteps
+    })
 
     switch (event.kind) {
       case EventKind.Phase:
@@ -1803,9 +1823,70 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setSelectedTemplateId('')
   }, [])
 
+  const automationSend = useCallback(async (text: string, mode: ComposerMode = 'agent') => {
+    const prompt = text.trim()
+    const ctrl = controllerRef.current
+    if (!prompt) throw new Error('empty_prompt')
+    if (!ctrl) throw new Error('controller_unavailable')
+    if (ctrl.running) throw new Error('turn_already_running')
+    const resolvedKey = ensureApiKey ? await ensureApiKey() : apiConfig.apiKey.trim()
+    if (!resolvedKey) throw new Error('api_key_unavailable')
+    ctrl.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
+    ctrl.setComposerMode(mode)
+    setComposerMode(mode)
+    bindActiveTurnGeneration()
+    setIsLoading(true)
+    setAgentStatus('automation running...')
+    void ctrl.send(prompt).catch(() => {
+      setIsLoading(false)
+      setAgentStatus('')
+      onRunningChangeRef.current?.(false)
+    })
+    return { accepted: true, ...ctrl.getAutomationSnapshot() }
+  }, [apiConfig, ensureApiKey, bindActiveTurnGeneration])
+
+  const automationSnapshot = useCallback(() => ({
+    controller: controllerRef.current?.getAutomationSnapshot() || null,
+    ui: {
+      isLoading,
+      agentStatus,
+      composerMode,
+      planReady,
+      messageCount: displayMessages.length,
+      activePlan: activePlanRef.current
+    }
+  }), [isLoading, agentStatus, composerMode, planReady, displayMessages.length])
+
+  const automationCancel = useCallback(() => controllerRef.current?.cancel(), [])
+
+  const automationRespond = useCallback(async (params: Record<string, unknown>) => {
+    const ctrl = controllerRef.current
+    if (!ctrl) throw new Error('controller_unavailable')
+    const requestId = String(params.requestId || '')
+    const action = String(params.action || '')
+    if (!requestId || !action) throw new Error('invalid_response')
+    if (action === 'approve' || action === 'deny') {
+      ctrl.approve(requestId, action === 'approve')
+      return { accepted: true }
+    }
+    if (action === 'clarify') {
+      await ctrl.answerClarification(String(params.value || ''))
+      return { accepted: true }
+    }
+    if (action === 'gui_layout') {
+      ctrl.resolveGuiLayout(requestId, String(params.value || '{}'))
+      return { accepted: true }
+    }
+    throw new Error('unsupported_response_action')
+  }, [])
+
   useImperativeHandle(ref, () => ({
-    handleTemplateSelect
-  }), [handleTemplateSelect])
+    handleTemplateSelect,
+    automationSend,
+    automationSnapshot,
+    automationCancel,
+    automationRespond
+  }), [handleTemplateSelect, automationSend, automationSnapshot, automationCancel, automationRespond])
 
   const handleComposerModeChange = useCallback((mode: ComposerMode) => {
     setComposerMode(mode)

@@ -5,6 +5,7 @@ import {
   computeRepairBudget,
   countGradleErrorEntries,
   extractClientInMainMigrations,
+  isBuildFailureWithinRepairScope,
   mainToClientPath,
   MAX_FREE_REPAIR_DIAG_ROUNDS,
   uniqueGradleErrorFiles
@@ -22,11 +23,27 @@ const CLIENT_IN_MAIN_LOG = [
   '  59 个错误'
 ].join('\n')
 
-test('computeRepairBudget scales with unique error files', () => {
+test('computeRepairBudget remains bounded even when a build names many files', () => {
   assert.equal(computeRepairBudget('BUILD FAILED\nno files'), 3)
   const budget = computeRepairBudget(CLIENT_IN_MAIN_LOG)
-  assert.equal(budget, Math.min(10, Math.max(3, 3 + 2)))
+  assert.equal(budget, 3)
   assert.ok(uniqueGradleErrorFiles(CLIENT_IN_MAIN_LOG).length >= 3)
+})
+
+test('repair scope rejects a compiler error outside declared plan paths', () => {
+  const declared = ['src/main/resources/assets/example/lang/en_us.json']
+  assert.equal(
+    isBuildFailureWithinRepairScope('src/main/java/com/example/PlayerEntityMixin.java', declared, 'D:/sandbox/project'),
+    false
+  )
+  assert.equal(
+    isBuildFailureWithinRepairScope('D:/sandbox/project/src/main/resources/assets/example/lang/en_us.json', declared, 'D:/sandbox/project'),
+    true
+  )
+  assert.equal(
+    isBuildFailureWithinRepairScope('src/main/java/com/example/PlayerEntityMixin.java', ['src/main/java/com/example'], null),
+    true
+  )
 })
 
 test('countGradleErrorEntries detects progress when errors drop', () => {

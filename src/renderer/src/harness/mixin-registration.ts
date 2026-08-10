@@ -14,12 +14,80 @@ export interface JavaIdentity {
 
 /** True when source looks like a Mixin class (has @Mixin annotation). */
 export function hasMixinAnnotation(source: string): boolean {
-  return /@Mixin\s*\(/.test(source)
+  return /@Mixin\s*\(/.test(stripJavaTrivia(source))
+}
+
+/**
+ * Removes comments and literal bodies while keeping newlines intact.  This is
+ * deliberately small rather than a full Java parser: callers only need a
+ * trustworthy package and top-level declaration, and must never let prose in
+ * a Javadoc comment become a class name.
+ */
+export function stripJavaTrivia(source: string): string {
+  let result = ''
+  let state: 'code' | 'line_comment' | 'block_comment' | 'string' | 'char' = 'code'
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]
+    const next = source[i + 1]
+    if (state === 'code') {
+      if (ch === '/' && next === '/') {
+        result += '  '
+        i++
+        state = 'line_comment'
+      } else if (ch === '/' && next === '*') {
+        result += '  '
+        i++
+        state = 'block_comment'
+      } else if (ch === '"') {
+        result += ' '
+        state = 'string'
+      } else if (ch === "'") {
+        result += ' '
+        state = 'char'
+      } else {
+        result += ch
+      }
+      continue
+    }
+    if (state === 'line_comment') {
+      if (ch === '\n') {
+        result += '\n'
+        state = 'code'
+      } else result += ' '
+      continue
+    }
+    if (state === 'block_comment') {
+      if (ch === '*' && next === '/') {
+        result += '  '
+        i++
+        state = 'code'
+      } else result += ch === '\n' ? '\n' : ' '
+      continue
+    }
+    if (ch === '\\') {
+      result += ' '
+      if (i + 1 < source.length) {
+        result += source[i + 1] === '\n' ? '\n' : ' '
+        i++
+      }
+      continue
+    }
+    if ((state === 'string' && ch === '"') || (state === 'char' && ch === "'")) {
+      result += ' '
+      state = 'code'
+    } else {
+      result += ch === '\n' ? '\n' : ' '
+    }
+  }
+  return result
 }
 
 export function parseJavaIdentity(source: string): JavaIdentity | null {
-  const packageMatch = source.match(/^\s*package\s+([\w.]+)\s*;/m)
-  const classMatch = source.match(/\b(?:class|interface)\s+([A-Za-z_$][\w$]*)/)
+  const code = stripJavaTrivia(source)
+  const packageMatch = code.match(/^\s*package\s+([\w.]+)\s*;/m)
+  // A declaration must start a source line and may have Java modifiers.  In
+  // particular, do not match arbitrary prose such as "class to ...".
+  const classMatch = code.match(/^\s*(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed)\s+)*(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)\b/m)
   if (!packageMatch || !classMatch) return null
   return {
     packageName: packageMatch[1],

@@ -1,5 +1,11 @@
 # Vibecoding 工作流
 
+## Test Lab regression workflow
+
+For Harness changes, prefer a deterministic application scenario over manually replaying a diagnostic log. `npm run test:app` launches the built Electron application in a fresh profile, opens a sandbox copy of a fixture, configures an in-memory OpenAI-compatible replay provider, sends a real turn, and verifies the Controller/event ledger. `npm run test:mcp` verifies the development-only stdio MCP surface. Failures retain artifacts under `%LOCALAPPDATA%/ModCrafting Test Lab/runs/`.
+
+Use a real provider or Minecraft only as an explicit low-frequency smoke test. These paths can yield `INCONCLUSIVE` when credentials, the observer bridge, startup, or the host environment is unavailable; they must never be converted to a code-repair signal.
+
 ## 确定性游戏内测试
 
 游戏内验收采用确定性测试状态机，而不是“看到截图就算成功”：

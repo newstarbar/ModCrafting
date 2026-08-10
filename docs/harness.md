@@ -1,5 +1,13 @@
 # Harness 系统
 
+## Test Lab application automation
+
+`--automation` starts an isolated, real Electron instance for Harness regression tests. The main process creates a loopback-only authenticated bridge, while React and `HarnessController` receive semantic commands through their normal lifecycle. The bridge records monotonic event cursors, run/session identifiers and timestamps; it exposes capabilities, commands, event polling, snapshots and shutdown only. It deliberately does not expose arbitrary JavaScript execution.
+
+Repair safety is bounded at the workflow layer: structural Mixin/recipe validation is evidence, not a Java compilation result; a write may always be followed by a real build. Automatic repair is limited to three write/build rounds, twenty model rounds and forty tool calls per step. Compiler failures outside declared plan paths stop as `INCONCLUSIVE/out_of_scope_build_failure`; the agent must re-plan instead of changing unrelated source files. The same failure signature is allowed one evidence-producing retry and then stops as inconclusive.
+
+See [Test Lab MCP](./test-lab-mcp.md) for the stdio tools, sandbox model, reports and local replay workflow.
+
 ## 确定性游戏内测试 V2
 
 `run` 与 `game_test` 是两个独立的宿主步骤：前者只确认客户端和桥接已经启动；后者执行 `Arrange → Act → Assert → Cleanup`，只有 `mc_run_test` 返回结构化 `PASS` 才能完成。每次 `game_test` 都会创建新会话，旧截图、旧聊天和旧快照不得复用为证据。

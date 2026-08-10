@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog, shell } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { existsSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { setupMenu } from './menu'
@@ -18,6 +18,12 @@ import {
   startContextIngressServer,
   stopContextIngressServer
 } from './context-ingress-server'
+import {
+  readAutomationOptions,
+  setupAutomationHandlers,
+  startAutomationServer,
+  stopAutomationServer
+} from './automation-server'
 
 if (is.dev) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
@@ -26,6 +32,16 @@ if (is.dev) {
 let mainWindow: BrowserWindow | null = null
 let shutdownStarted = false
 const smokeTest = process.argv.includes('--smoke-test')
+const automationOptions = readAutomationOptions()
+const automationHidden = process.argv.includes('--automation-hidden')
+
+// This must happen before the single-instance lock and before any main-process
+// service reads app.getPath('userData').
+if (automationOptions.enabled && process.argv.includes('--automation-profile')) {
+  const profileIndex = process.argv.indexOf('--automation-profile')
+  const profile = process.argv[profileIndex + 1]
+  if (profile) app.setPath('userData', resolve(profile))
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -46,6 +62,7 @@ async function runShutdownCleanup(): Promise<void> {
   stopAllTerminalSessions()
   stopAllMcInstances()
   stopContextIngressServer()
+  stopAutomationServer()
   await stopGradleDaemonsOnExit()
 }
 
@@ -116,13 +133,15 @@ function createWindow(): void {
       preload: resolvePreloadScript(),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      ...(automationOptions.enabled ? { additionalArguments: ['--automation'] } : {})
     }
   })
 
   setupWindowKeyboardShortcuts(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
+    if (automationHidden) return
     mainWindow?.maximize()
     mainWindow?.show()
   })
@@ -204,12 +223,15 @@ app.whenReady().then(async () => {
 
   setupMenu()
   setupIpcHandlers()
+  setupAutomationHandlers()
   setupContextIngressHandlers()
   startContextIngressServer()
   setupTerminalHandlers()
   setupMcRuntimeHandlers()
+  startAutomationServer(automationOptions)
   createWindow()
-  if (!smokeTest) initUpdater()
+  // Test Lab must not check for or apply updates from its isolated test profile.
+  if (!smokeTest && !automationOptions.enabled) initUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

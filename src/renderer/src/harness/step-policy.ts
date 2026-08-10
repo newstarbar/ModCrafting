@@ -90,7 +90,10 @@ export function isRepairWriteBlocked(
   call: ToolCallWithId,
   options?: ToolGateOptions
 ): boolean {
-  if (!options?.repairMode || (!options?.repairWriteRequired && !options?.repairValidationRequired)) return false
+  // A structural Mixin/recipe validator is helpful evidence, but it is never
+  // authoritative enough to block the compiler.  Only a missing repair write
+  // may hold a build/run retry back.
+  if (!options?.repairMode || !options?.repairWriteRequired) return false
   if (step.kind !== 'build' && step.kind !== 'run' && step.kind !== 'game_test') return false
   return REPAIR_WRITE_BLOCKED_TOOLS.has(call.name)
 }

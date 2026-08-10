@@ -1661,6 +1661,25 @@ ${projectInfo}`;
 		return this.classifierDiagnostics.map((entry) => ({ ...entry }));
 	}
 
+	/** Sanitized state for the local automation bridge; never exposes API keys. */
+	getAutomationSnapshot(): Record<string, unknown> {
+		return {
+			running: this._running,
+			phase: this._phase,
+			projectPath: this._projectPath,
+			composerMode: this.composerMode,
+			planReady: this.planReadyAwaitingExecute,
+			lastTurnMode: this.lastTurnMode,
+			messages: this.messages.map((message) => ({
+				role: message.role,
+				name: message.name,
+				content: contentAsText(message.content).slice(0, 12_000)
+			})),
+			planSteps: this.planTracker?.steps.map((step) => ({ ...step })) || [],
+			classifierDiagnostics: this.getClassifierDiagnosticsSnapshot()
+		};
+	}
+
 	restoreSnapshot(messages: ChatMessage[]): void {
 		for (const message of messages) hydrateGameTestSpecsFromText(contentAsText(message.content));
 		this.messages = messages.map((message) => ({

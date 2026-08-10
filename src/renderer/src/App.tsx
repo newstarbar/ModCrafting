@@ -124,7 +124,13 @@ const App: React.FC = () => {
 	const [appView, setAppView] = useState<AppView>("hub");
 	const bottomPanelRef = useRef<BottomPanelHandle>(null);
 	const mcRuntimeRef = useRef<McRuntimePanelHandle>(null);
-	const chatPanelRef = useRef<{ handleTemplateSelect: (templateId: string, name: string) => void }>(null);
+	const chatPanelRef = useRef<{
+		handleTemplateSelect: (templateId: string, name: string) => void;
+		automationSend: (text: string, mode?: 'agent' | 'plan' | 'ask') => Promise<Record<string, unknown>>;
+		automationSnapshot: () => Record<string, unknown>;
+		automationCancel: () => void;
+		automationRespond: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	}>(null);
 
 	const refreshRecentProjects = useCallback(async () => {
 		const list = await window.api.listRecentProjects();
@@ -374,6 +380,64 @@ const App: React.FC = () => {
 		},
 		[refreshRecentProjects]
 	);
+
+	useEffect(() => {
+		if (!window.api.onAutomationCommand || !window.api.automationReply) return;
+		return window.api.onAutomationCommand((command) => {
+			void (async () => {
+				try {
+					let result: Record<string, unknown>;
+					switch (command.method) {
+						case 'configure_provider': {
+							const endpoint = String(command.params.endpoint || '');
+							const model = String(command.params.model || '');
+							const apiKey = String(command.params.apiKey || '');
+							if (!endpoint || !model || !apiKey) throw new Error('provider_configuration_required');
+							setApiConfig({ endpoint, model, apiKey, providerId: String(command.params.providerId || 'automation-replay') });
+							setHasSavedApiKey(true);
+							result = { configured: true, endpoint, model };
+							break;
+						}
+						case 'open_project': {
+							const projectPath = String(command.params.projectPath || '');
+							if (!projectPath) throw new Error('project_path_required');
+							await loadProjectDir(projectPath);
+							result = { opened: true, projectPath };
+							break;
+						}
+						case 'send_turn':
+							result = await chatPanelRef.current?.automationSend(
+								String(command.params.text || ''),
+								command.params.mode === 'ask' || command.params.mode === 'plan' ? command.params.mode : 'agent'
+							) || (() => { throw new Error('chat_unavailable'); })();
+							break;
+						case 'snapshot':
+							result = {
+								app: { projectPath: state.projectPath, projectName: state.projectName, toolchainReady, projectPreparing },
+								chat: chatPanelRef.current?.automationSnapshot() || null
+							};
+							break;
+						case 'cancel':
+							chatPanelRef.current?.automationCancel();
+							result = { cancelled: true };
+							break;
+						case 'respond':
+							result = await chatPanelRef.current?.automationRespond(command.params) || (() => { throw new Error('chat_unavailable'); })();
+							break;
+						default:
+							throw new Error('unsupported_command');
+					}
+					await window.api.automationReply?.({ id: command.id, result });
+				} catch (error) {
+					await window.api.automationReply?.({ id: command.id, error: error instanceof Error ? error.message : String(error) });
+				}
+			})();
+		});
+	}, [loadProjectDir, state.projectPath, state.projectName, toolchainReady, projectPreparing]);
+
+	useEffect(() => {
+		void window.api.automationEmit?.({ type: 'renderer_ready' });
+	}, []);
 
 	const openProjectDialog = useCallback((initialPath?: string | null) => {
 		setOpenDialogInitialPath(initialPath ?? null);

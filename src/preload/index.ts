@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+const automationEnabled = process.argv.includes('--automation')
+
 export interface FileEntry {
   name: string
   isDirectory: boolean
@@ -680,7 +682,18 @@ const api = {
     return () => ipcRenderer.removeListener('context:push', handler)
   },
   // 拖拽文件路径获取（Electron 32+ File.path 已废弃，需用 webUtils）
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  ...(automationEnabled ? {
+    onAutomationCommand: (callback: (payload: { id: string; method: string; params: Record<string, unknown> }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; method: string; params: Record<string, unknown> }) => callback(payload)
+      ipcRenderer.on('automation:command', handler)
+      return () => ipcRenderer.removeListener('automation:command', handler)
+    },
+    automationReply: (payload: { id: string; result?: Record<string, unknown>; error?: string }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('automation:reply', payload),
+    automationEmit: (event: Record<string, unknown>): Promise<{ ok: boolean; cursor?: number }> =>
+      ipcRenderer.invoke('automation:emit', event)
+  } : {})
 }
 
 contextBridge.exposeInMainWorld('api', api)

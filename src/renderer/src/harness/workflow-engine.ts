@@ -79,7 +79,9 @@ export interface WorkflowEngineOptions {
 let workflowToolId = 0;
 
 const MAX_REPAIR_ROUNDS = 3;
-const MAX_REPAIR_ROUNDS_CAP = 10;
+const MAX_REPAIR_ROUNDS_CAP = 3;
+const MAX_STEP_MODEL_ROUNDS = 20;
+const MAX_STEP_TOOL_CALLS = 40;
 /** Free repair-diagnostic rounds (read_error_log / fabric_log_debugger only). */
 export const MAX_FREE_REPAIR_DIAG_ROUNDS = 2;
 const MAX_MODEL_NETWORK_RETRIES = 2;
@@ -159,9 +161,32 @@ export function uniqueGradleErrorFiles(output: string): string[] {
  * n unique error files → max(3, n+2), capped at MAX_REPAIR_ROUNDS_CAP.
  */
 export function computeRepairBudget(failureOutput: string): number {
-	const n = uniqueGradleErrorFiles(failureOutput).length;
-	if (n <= 0) return MAX_REPAIR_ROUNDS;
-	return Math.min(MAX_REPAIR_ROUNDS_CAP, Math.max(MAX_REPAIR_ROUNDS, n + 2));
+	void failureOutput;
+	return MAX_REPAIR_ROUNDS;
+}
+
+function normalizeRepairPath(value: string, projectPath: string | null): string {
+	let normalized = value.replace(/\\/g, "/").replace(/^\.\//, "");
+	const root = projectPath?.replace(/\\/g, "/").replace(/\/+$/, "");
+	if (root && normalized.toLowerCase().startsWith(`${root.toLowerCase()}/`)) {
+		normalized = normalized.slice(root.length + 1);
+	}
+	return normalized.replace(/^\/+/, "");
+}
+
+/** Keep automatic repair inside paths declared by the plan or changed this run. */
+export function isBuildFailureWithinRepairScope(
+	failurePath: string,
+	declaredPaths: Iterable<string>,
+	projectPath: string | null
+): boolean {
+	const candidate = normalizeRepairPath(failurePath, projectPath).toLowerCase();
+	for (const rawPath of declaredPaths) {
+		const scope = normalizeRepairPath(rawPath, projectPath).replace(/\/+$/, "").toLowerCase();
+		if (!scope) continue;
+		if (candidate === scope || candidate.startsWith(`${scope}/`)) return true;
+	}
+	return false;
 }
 
 const CLIENT_PACKAGE_ERROR_RE = /程序包\s*net\.minecraft\.client|package\s+net\.minecraft\.client/i;
@@ -1110,7 +1135,11 @@ export class WorkflowEngine {
 			let effectiveMaxRepairRounds = MAX_REPAIR_ROUNDS;
 			let lastErrorCount = 0;
 			let lastFailureOutput = "";
-			const seenRepairSignatures = new Set<string>();
+			const seenRepairSignatures = new Map<string, number>();
+			const repairScope = new Set<string>();
+			for (const plannedStep of this.steps) {
+				for (const path of plannedStep.targetPaths || (plannedStep.targetPath ? [plannedStep.targetPath] : [])) repairScope.add(path);
+			}
 			const seenDiagSignatures = new Set<string>();
 			const seenDocFingerprints = new Set<string>();
 			const pendingMigration = new Set<string>();
@@ -1134,12 +1163,13 @@ export class WorkflowEngine {
 			let notOfferedBrakeEscalated = false;
 			let attempt = 0;
 			let loopIterations = 0;
+			let toolCallCount = 0;
 			let modelNetworkRetries = 0;
 			let knowledgeQueries = 0;
 			let fabricDocsSearchCount = 0;
 			let lastToolName = "";
 			const maxIterations = step.maxAttempts + MAX_REPAIR_ROUNDS_CAP;
-			const maxLoopIterations = maxIterations + MAX_REPAIR_ROUNDS_CAP * 8;
+			const maxLoopIterations = MAX_STEP_MODEL_ROUNDS;
 
 			while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
 				loopIterations++;
@@ -1209,6 +1239,11 @@ export class WorkflowEngine {
 				}
 
 				const allCalls = normalizeModelToolCalls(modelResult.toolCalls);
+				toolCallCount += allCalls.length;
+				if (toolCallCount > MAX_STEP_TOOL_CALLS) {
+					this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `Step #${step.id} reached the ${MAX_STEP_TOOL_CALLS}-tool safety limit; stopping as INCONCLUSIVE.` } });
+					break;
+				}
 				if (allCalls.length === 0) {
 					// Answer steps auto-complete on text output; no tool calls needed.
 					if (step.kind === "answer") {
@@ -1955,13 +1990,26 @@ export class WorkflowEngine {
 				if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
 					const signature = repairErrorSignature(decisiveResult.output, step.kind as "build" | "run");
 					const errorCount = countGradleErrorEntries(decisiveResult.output);
-					if (seenRepairSignatures.has(signature)) {
+					const failureFiles = uniqueGradleErrorFiles(decisiveResult.output);
+					if (failureFiles.length > 0 && !failureFiles.some((file) => isBuildFailureWithinRepairScope(file, repairScope, this.projectPath))) {
+						step.status = "failed";
+						this.emitPlanState();
+						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `Build failure is outside the declared repair scope (${failureFiles.join(", ")}); stopping as INCONCLUSIVE instead of editing unrelated code.` } });
+						return { finalContent: `INCONCLUSIVE/out_of_scope_build_failure: ${failureFiles.join(", ")}. Regenerate the plan with the affected source path before attempting an automatic repair.`, allDone: false, partial: true, steps: this.steps };
+					}
+					const signatureCount = seenRepairSignatures.get(signature) || 0;
+					if (signatureCount >= 2) {
+						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `Identical ${step.kind} failure repeated twice without a successful build; stopping as INCONCLUSIVE.` } });
+						break;
+					}
+					if (signatureCount > 0) {
+						seenRepairSignatures.set(signature, signatureCount + 1);
 						roundInstruction = "【修复去重】相同错误签名已出现，禁止重复相同诊断/构建。请换用 write_file/edit_file/delete_file 做不同修改；仅用户偏好不明时才 ask_clarification。";
 						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
 						attempt++;
 						continue;
 					}
-					seenRepairSignatures.add(signature);
+					seenRepairSignatures.set(signature, signatureCount + 1);
 					// 进入修复模式前停止游戏（如果是 run 步骤失败，游戏可能还在运行）
 					if (!repairMode) {
 						await stopRunningGameAndHideGuard();
@@ -2023,6 +2071,7 @@ export class WorkflowEngine {
 				);
 				if (repairMode && repairWrite) {
 					const changedPath = String(repairWrite.artifactPath || repairWrite.args?.path || "").replace(/\\/g, "/");
+					if (changedPath) repairScope.add(changedPath);
 					const changedLower = changedPath.toLowerCase();
 					if (repairWrite.toolName === "delete_file" && pendingMigration.has(changedPath)) {
 						pendingMigration.delete(changedPath);
@@ -2035,14 +2084,9 @@ export class WorkflowEngine {
 						repairValidationRequired = undefined;
 					} else {
 						repairWriteRequired = false;
-						repairValidationRequired =
-							repairWrite.toolName === "delete_file"
-								? undefined
-								: /\/data\/[^/]+\/recipes?\/.+\.json$/.test(changedLower)
-									? "recipe"
-									: /mixins?\.json$/.test(changedLower) || (/mixin/.test(changedLower) && changedLower.endsWith(".java"))
-										? "mixin"
-										: undefined;
+						// Structural validation is optional evidence; the compiler remains
+						// available immediately after a repair write.
+						repairValidationRequired = undefined;
 						roundInstruction = repairValidationRequired
 							? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
 							: writeFileRetryInstruction(step.kind as "build" | "run");
