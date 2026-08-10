@@ -4,7 +4,8 @@
 
 `run` 与 `game_test` 是两个独立的宿主步骤：前者只确认客户端和桥接已经启动；后者执行 `Arrange → Act → Assert → Cleanup`，只有 `mc_run_test` 返回结构化 `PASS` 才能完成。每次 `game_test` 都会创建新会话，旧截图、旧聊天和旧快照不得复用为证据。
 
-- `submit_plan.gameTest` 和 `mc_test_scenario` 要求具体的功能类型、目标 ID（或 GUI 热键）及至少一条客观断言；`<modid>` 等占位符和纯截图测试会被拒绝。
+- `submit_plan.gameTest` 和 `mc_test_scenario` 使用严格的断言联合 Schema；未知 `type`、旧 `kind`、缺字段和占位符会返回字段级错误。可声明 `actions`；热键交互编译为按键动作，截图不能单独通过。
+- 提交计划会固定重排为实现 → build → run → `game_test`。恢复旧会话时，误标为 `inspect` 的 `mc_run_test` 步骤会迁移为 `game_test`，并从计划或旧 JSON 工具输出恢复原 `scenarioId`。
 - 宿主固定使用 `ModCrafting Test World` 与 `x/z=-16..16、y=96..112` 测试区，准备阶段会清背包、状态、区域和带 `modcrafting_test` 标签的实体，清理阶段再次回收。
 - 裁决只有 `PASS`、`FAIL`、`INCONCLUSIVE`。桥接缺少能力、导航/世界异常、纯视觉布局或无法查询的状态均为 `INCONCLUSIVE`，禁止自动改代码。相同客观断言在清理后的两个独立会话连续失败，才允许进入修复模式。
 - V2 桥接提供 `/v2/capabilities`、`/v2/command`、`/v2/snapshot` 和 `/v2/query`；快照带时间戳和世界 tick。V1 可继续协助操作，但不能产生自动通过。
@@ -38,7 +39,7 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 每轮独立 LLM 分类，自动分流至三种模式：
 
 - **Chat 模式**：概念问答、方案说明，禁用写入/执行工具，直接给最佳方案不做比较
-- **Plan 模式**：输出结构化 `submit_plan`（write / recipe / mixin / inspect 四种 kind，1-6 步）
+- **Plan 模式**：输出结构化 `submit_plan`（实现步骤加可执行 `gameTest`；宿主追加 build / run / game_test）
 - **Execute 模式**：逐步执行计划，每轮必调工具，旁白 ≤2 句，构建失败自动进入修复模式
 
 模式切换由 `turn-classifier` 完成，同时识别「错误报告 / 用户症状 / 游戏内验证请求」等侧面信号。

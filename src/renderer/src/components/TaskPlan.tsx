@@ -1,14 +1,16 @@
 import React, { useMemo, useState } from 'react'
 import MarkdownContent from './MarkdownContent'
+import type { GameTestSpec } from '../harness/game-test-protocol'
 
 export interface PlanStep {
   id: string
   description: string
   status: 'pending' | 'running' | 'completed' | 'error'
-  kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
+  kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test'
   targetPath?: string
   targetPaths?: string[]
   evidence?: string
+  gameTest?: GameTestSpec
 }
 
 interface TaskPlanProps {

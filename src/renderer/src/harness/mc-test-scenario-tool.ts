@@ -573,6 +573,15 @@ export const mcTestScenarioTool: Tool = {
         description: 'V2 客观断言列表；至少一项，禁止占位符和纯截图断言',
         items: { type: 'object' }
       },
+      actions: {
+        type: 'array',
+        description: 'Optional deterministic actions; each action is command, input, or wait.',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: { type: { type: 'string', enum: ['command', 'input', 'wait'] }, command: { type: 'string' }, action: { type: 'string' }, args: { type: 'object' }, ms: { type: 'number' }, label: { type: 'string' } },
+          required: ['type']
+        }
+      },
       visual_only: {
         type: 'boolean',
         description: '纯视觉效果；会明确返回 INCONCLUSIVE，等待用户确认'

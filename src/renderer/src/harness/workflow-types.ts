@@ -1,4 +1,5 @@
 import type { PlanStepState } from './plan-tracker.ts'
+import type { GameTestSpec } from './game-test-protocol.ts'
 
 export type StepKind = 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test' | 'answer'
 export type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -16,6 +17,7 @@ export interface WorkflowStep {
   targetPath?: string
   targetPaths?: string[]
   evidence?: string
+  gameTest?: GameTestSpec
   allowedTools: string[]
   maxAttempts: number
   validation?: StepValidation
@@ -40,9 +42,10 @@ export function workflowStepToPlanStep(step: WorkflowStep): PlanStepState {
     id: step.id,
     description: step.title,
     status: step.status === 'failed' ? 'pending' : step.status,
-    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' ? step.kind : undefined,
+    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' || step.kind === 'game_test' ? step.kind : undefined,
     targetPath: step.targetPath,
     targetPaths: step.targetPaths,
-    evidence: step.evidence
+    evidence: step.evidence,
+    gameTest: step.gameTest
   }
 }

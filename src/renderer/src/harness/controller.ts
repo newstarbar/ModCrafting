@@ -19,7 +19,8 @@ import type { WorkflowStep } from "./workflow-types.ts";
 import { TOOL_LABELS_ZH } from "./tool-labels";
 import { defaultVerifyTarget, formatVerifyTargetBlock, verifyTargetFromClassification, type VerifyTarget } from "./verify-target.ts";
 import { formatGradleSummary, formatJavaFileList, parseGradleProperties, scanJavaSourceTree } from "./project-info.ts";
-import { isGuiFilePath, stepRequiresGuiPreview } from "./plan-normalizer.ts";
+import { canonicalizePlanSteps, isGuiFilePath, stepRequiresGuiPreview } from "./plan-normalizer.ts";
+import { hydrateGameTestSpecsFromText, registerGameTestSpec, type GameTestSpec } from "./game-test-protocol.ts";
 import { registerKnownProjectPaths } from "./tool-definitions.ts";
 
 export interface ControllerOptions {
@@ -1647,6 +1648,7 @@ ${projectInfo}`;
 	}
 
 	restoreSnapshot(messages: ChatMessage[]): void {
+		for (const message of messages) hydrateGameTestSpecsFromText(contentAsText(message.content));
 		this.messages = messages.map((message) => ({
 			...message,
 			origin:
@@ -1675,23 +1677,24 @@ ${projectInfo}`;
 			id: string;
 			description: string;
 			status: string;
-			kind?: "inspect" | "write" | "recipe" | "mixin";
+			kind?: "inspect" | "write" | "recipe" | "mixin" | "build" | "run" | "game_test";
 			targetPath?: string;
 			targetPaths?: string[];
 			evidence?: string;
+			gameTest?: GameTestSpec;
 		}>
 	): void {
 		if (!steps || steps.length === 0) {
 			this.planTracker = null;
 			return;
 		}
-		// Preserve error so stale/failed plans do not auto-resume into a lock.
-		// Failed steps stay as error (not remapped to pending).
+		for (const step of steps) if (step.gameTest) registerGameTestSpec(step.gameTest);
+		// Canonicalization migrates the old inspect/game-test bug before resuming.
 		this.planTracker = PlanTracker.fromSteps(
-			steps.map((step) => ({
+			canonicalizePlanSteps(steps.map((step) => ({
 				...step,
 				status: step.status === "completed" ? ("completed" as const) : step.status === "running" ? ("running" as const) : step.status === "error" ? ("error" as const) : ("pending" as const)
-			}))
+			})))
 		);
 		if (this.planTracker) {
 			this._phase = "execute";

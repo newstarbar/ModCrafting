@@ -1,6 +1,7 @@
 import { compilePlanFromText, compiledStepsToParsed, type CompiledPlanStep } from './plan-compiler.ts'
 import { validateCompiledSteps, formatPlanValidationIssues } from './plan-validator.ts'
 import { isOpsOnlyPlan, type ParsedPlanStep } from '../utils/plan-steps.ts'
+import type { GameTestSpec } from './game-test-protocol.ts'
 
 export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'error'
 
@@ -9,10 +10,11 @@ export interface PlanStepState {
   description: string
   status: PlanStepStatus
   /** Preserved from structured plan compile; used by workflow normalizer when set. */
-  kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
+  kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test'
   targetPath?: string
   targetPaths?: string[]
   evidence?: string
+  gameTest?: GameTestSpec
 }
 
 export class PlanTracker {
@@ -35,7 +37,8 @@ export class PlanTracker {
       ...(s.kind ? { kind: s.kind } : {}),
       ...(s.targetPath ? { targetPath: s.targetPath } : {}),
       ...(s.targetPaths?.length ? { targetPaths: [...s.targetPaths] } : {}),
-      ...(s.evidence ? { evidence: s.evidence } : {})
+      ...(s.evidence ? { evidence: s.evidence } : {}),
+      ...(s.gameTest ? { gameTest: s.gameTest } : {})
     }))
     return new PlanTracker(steps)
   }

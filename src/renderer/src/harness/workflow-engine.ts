@@ -633,6 +633,11 @@ export function gameTestFailureSignature(output: unknown): string {
 	return text.replace(/test_[a-z0-9_]+/gi, "test").replace(/\d{10,}/g, "#").slice(0, 600);
 }
 
+/** Only the actual submit_plan call gets execute-phase guidance. */
+export function isSoftSubmitPlanRejection(result: Pick<ToolResult, 'toolName'>): boolean {
+	return result.toolName === 'submit_plan'
+}
+
 /** True when inspect/screenshot payload is still the main menu title screen. */
 export function isTitleScreenVerifyOutput(output: string): boolean {
 	const out = String(output || "");
@@ -1232,7 +1237,7 @@ export class WorkflowEngine {
 						(!this.requireInGameVerify && this.runClientReady));
 				let completeStepAdvanceSignal = false;
 				for (const [id, rejected] of validation.rejected) {
-					if (rejected.toolName === "submit_plan" || (rejected.errorKind === "tool_not_offered" && /submit_plan/.test(rejected.output || ""))) {
+					if (isSoftSubmitPlanRejection(rejected)) {
 						const soft: ToolResult = {
 							output: "执行阶段无需 submit_plan。请按当前步骤直接调用工具（read_file/edit_file/write_file/trigger_build 等）。",
 							durationMs: 0,

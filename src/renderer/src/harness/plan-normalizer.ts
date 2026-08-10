@@ -31,29 +31,31 @@ function parseExplicitKind(description: string): {
 
 function inferKind(
   description: string,
-  explicitKind?: 'inspect' | 'write' | 'recipe' | 'mixin'
+  explicitKind?: StepKind
 ): StepKind {
-  if (explicitKind === 'write' || explicitKind === 'recipe' || explicitKind === 'mixin' || explicitKind === 'inspect') {
+  const d = description.toLowerCase()
+  // Legacy V2 plans mislabeled this terminal as inspect. Semantic test markers win.
+  if (/mc_run_test|确定性游戏测试|执行功能测试|验证功能效果|mc_test_scenario/.test(d)) return 'game_test'
+  if (explicitKind === 'write' || explicitKind === 'recipe' || explicitKind === 'mixin' || explicitKind === 'inspect' || explicitKind === 'game_test') {
     return explicitKind
   }
 
   const parsed = parseExplicitKind(description)
   if (parsed.kind) return parsed.kind
 
-  const d = parsed.body.toLowerCase()
-  if (/mc_run_test|确定性游戏测试|执行功能测试|验证功能效果|mc_test_scenario/.test(d)) return 'game_test'
-  if (/runclient|启动游戏|运行游戏|进入测试世界|进入世界|mc_ensure_test_world|mc_ensure_cheats/.test(d)) return 'run'
-  if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(d)) return 'build'
-  if (/配方|合成|recipe|recipes/.test(d)) return 'recipe'
-  if (/mixin|@mixin|mixins?\.json/.test(d)) return 'mixin'
+  const body = parsed.body.toLowerCase()
+  if (/runclient|启动游戏|运行游戏|进入测试世界|进入世界|mc_ensure_test_world|mc_ensure_cheats/.test(body)) return 'run'
+  if (/gradlew|gradle\s|trigger_build|编译|构建|build/.test(body)) return 'build'
+  if (/配方|合成|recipe|recipes/.test(body)) return 'recipe'
+  if (/mixin|@mixin|mixins?\.json/.test(body)) return 'mixin'
   if (
     INSPECT_SIGNAL_RE.test(parsed.body) ||
-    /查询知识库|知识库|mixins?\.json|mixin\s*配置|fabric\.mod\.json/.test(d)
+    /查询知识库|知识库|mixins?\.json|mixin\s*配置|fabric\.mod\.json/.test(body)
   ) {
     return 'inspect'
   }
   if (WRITE_SIGNAL_RE.test(parsed.body)) return 'write'
-  if (/读取|查看|检查|获取|确认|read|list/.test(d)) return 'inspect'
+  if (/读取|查看|检查|获取|确认|read|list/.test(body)) return 'inspect'
   return 'answer'
 }
 
@@ -158,6 +160,7 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
     targetPath,
     targetPaths,
     ...(step.evidence ? { evidence: step.evidence } : {}),
+    ...(step.gameTest ? { gameTest: step.gameTest } : {}),
     allowedTools: defaultAllowedTools(kind),
     maxAttempts: defaultMaxAttempts(kind),
     ...(requiresGuiPreview ? { requiresGuiPreview } : {}),
@@ -178,5 +181,30 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
 }
 
 export function normalizeWorkflowSteps(steps: PlanStepState[]): WorkflowStep[] {
-  return expandCombinedTerminalSteps(steps).map(normalizeStep)
+  return canonicalizePlanSteps(steps).map(normalizeStep)
+}
+
+/**
+ * Repairs persisted V2 plans whose deterministic test was saved as inspect or
+ * placed before build/run. It is intentionally idempotent for new plans.
+ */
+export function canonicalizePlanSteps(steps: PlanStepState[]): PlanStepState[] {
+  const expanded = expandCombinedTerminalSteps(steps)
+  const classified = expanded.map((step) => {
+    const kind = inferKind(step.description, step.kind)
+    return {
+      ...step,
+      ...(kind === 'inspect' || kind === 'write' || kind === 'recipe' || kind === 'mixin' || kind === 'build' || kind === 'run' || kind === 'game_test' ? { kind } : {}),
+      ...(kind === 'game_test' && step.status === 'error' ? { status: 'pending' as const } : {})
+    }
+  })
+  const implementation = classified.filter((step) => !['build', 'run', 'game_test'].includes(inferKind(step.description, step.kind)))
+  const build = classified.find((step) => inferKind(step.description, step.kind) === 'build')
+  const run = classified.find((step) => inferKind(step.description, step.kind) === 'run')
+  const gameTest = classified.find((step) => inferKind(step.description, step.kind) === 'game_test')
+  const terminals: PlanStepState[] = []
+  if (build) terminals.push(build)
+  if (run) terminals.push(run)
+  if (gameTest) terminals.push(gameTest)
+  return [...implementation, ...terminals].map((step, index) => ({ ...step, id: String(index + 1) }))
 }

@@ -27,7 +27,7 @@ export type GameAssertion =
   | { type: 'inventory_contains'; itemId: string; countAtLeast?: number; label?: string }
   | { type: 'main_hand'; itemId: string; label?: string }
   | { type: 'block_equals'; x: number; y: number; z: number; blockId: string; label?: string }
-  | { type: 'entity_exists'; entityType?: string; tag?: string; label?: string }
+  | { type: 'entity_exists'; entityType?: string; tag?: string; exists?: boolean; label?: string }
   | { type: 'screen_matches'; screenName: string; label?: string }
   | { type: 'widget_state'; label: string; enabled?: boolean; labelText?: string }
   | { type: 'player_state'; path: string; equals: unknown; label?: string }
@@ -119,9 +119,70 @@ function defaultCleanup(): GameAction[] {
   ]
 }
 
-function normalizeAssertions(value: unknown): GameAssertion[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is GameAssertion => Boolean(item) && typeof item === 'object' && typeof (item as { type?: unknown }).type === 'string')
+const ASSERTION_TYPES = new Set<GameAssertion['type']>([
+  'command_result', 'inventory_contains', 'main_hand', 'block_equals', 'entity_exists',
+  'screen_matches', 'widget_state', 'player_state', 'recipe_exists', 'state_changed'
+])
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function numberValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+/** Shared runtime validation for both native tool schemas and restored sessions. */
+export function validateGameAssertions(value: unknown): { ok: true; assertions: GameAssertion[] } | { ok: false; error: string } {
+  if (!Array.isArray(value) || value.length === 0) return { ok: false, error: 'assertions must contain at least one objective assertion.' }
+  const assertions: GameAssertion[] = []
+  for (let index = 0; index < value.length; index++) {
+    const item = record(value[index])
+    const path = `assertions[${index}]`
+    if (!item) return { ok: false, error: `${path} must be an object.` }
+    if ('kind' in item && !('type' in item)) return { ok: false, error: `${path}.kind is unsupported; use type.` }
+    const type = item.type
+    if (!nonEmptyString(type) || !ASSERTION_TYPES.has(type as GameAssertion['type'])) return { ok: false, error: `${path}.type is invalid; allowed: ${[...ASSERTION_TYPES].join(', ')}.` }
+    const str = (name: string) => nonEmptyString(item[name])
+    const num = (name: string) => numberValue(item[name])
+    let valid = false
+    switch (type) {
+      case 'command_result': valid = str('command') && (item.minResult === undefined || num('minResult')); break
+      case 'inventory_contains': valid = str('itemId') && (item.countAtLeast === undefined || num('countAtLeast')); break
+      case 'main_hand': valid = str('itemId'); break
+      case 'block_equals': valid = num('x') && num('y') && num('z') && str('blockId'); break
+      case 'entity_exists': valid = (item.entityType === undefined || str('entityType')) && (item.tag === undefined || str('tag')) && (item.exists === undefined || typeof item.exists === 'boolean') && (str('entityType') || str('tag')); break
+      case 'screen_matches': valid = str('screenName'); break
+      case 'widget_state': valid = str('label') && (item.enabled === undefined || typeof item.enabled === 'boolean') && (item.labelText === undefined || str('labelText')); break
+      case 'player_state': valid = str('path') && Object.prototype.hasOwnProperty.call(item, 'equals'); break
+      case 'recipe_exists': valid = str('recipeId'); break
+      case 'state_changed': valid = str('path') && (Object.prototype.hasOwnProperty.call(item, 'from') || Object.prototype.hasOwnProperty.call(item, 'to')); break
+    }
+    if (!valid) return { ok: false, error: `${path} has incomplete or invalid ${type} fields.` }
+    if (PLACEHOLDER_RE.test(JSON.stringify(item))) return { ok: false, error: `${path} contains an unresolved placeholder.` }
+    assertions.push(item as GameAssertion)
+  }
+  return { ok: true, assertions }
+}
+
+function validateActions(value: unknown, path: string): { ok: true; actions: GameAction[] } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, actions: [] }
+  if (!Array.isArray(value)) return { ok: false, error: `${path} must be an action array.` }
+  const actions: GameAction[] = []
+  for (let index = 0; index < value.length; index++) {
+    const item = record(value[index])
+    const itemPath = `${path}[${index}]`
+    if (!item || !nonEmptyString(item.type)) return { ok: false, error: `${itemPath}.type must be command, input, or wait.` }
+    if (item.type === 'command' && nonEmptyString(item.command)) actions.push({ type: 'command', command: item.command, ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
+    else if (item.type === 'input' && nonEmptyString(item.action)) actions.push({ type: 'input', action: item.action, ...(record(item.args) ? { args: item.args } : {}), ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
+    else if (item.type === 'wait' && numberValue(item.ms)) actions.push({ type: 'wait', ms: item.ms, ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
+    else return { ok: false, error: `${itemPath} has incomplete action fields.` }
+  }
+  return { ok: true, actions }
 }
 
 /** Creates a V2 scenario only when it has concrete target IDs and assertions. */
@@ -132,14 +193,18 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
   const subjectId = stringValue(args.subject_id) || stringValue(args.target_id)
   const modId = stringValue(args.mod_id)
   const hotkey = stringValue(args.hotkey)
-  if ((kind !== 'hud_gui' && !subjectId) || (kind === 'hud_gui' && !hotkey && !subjectId)) {
+  if ((kind === 'entity_behavior' || kind === 'new_item' || kind === 'new_block' || kind === 'new_recipe') && !subjectId) {
     return { ok: false, error: 'V2 测试需要 concrete subject_id（HUD/GUI 可提供 hotkey）；禁止使用占位符。' }
   }
   if ([subjectId, modId, hotkey].filter(Boolean).some((item) => PLACEHOLDER_RE.test(String(item)))) {
     return { ok: false, error: '测试目标包含未替换占位符。请提供实际命名空间 ID、热键或控件标识。' }
   }
 
-  const assertions = normalizeAssertions(args.assertions)
+  const validatedAssertions = validateGameAssertions(args.assertions)
+  if (!validatedAssertions.ok) return validatedAssertions
+  const suppliedActions = validateActions(args.actions, 'actions')
+  if (!suppliedActions.ok) return suppliedActions
+  const assertions = validatedAssertions.assertions
   if (assertions.length === 0) {
     return { ok: false, error: 'V2 测试必须包含至少一条客观 assertions；截图和“命令已发送”不构成断言。' }
   }
@@ -147,15 +212,20 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
   if (invalid) return { ok: false, error: `断言包含未替换占位符：${JSON.stringify(invalid)}` }
 
   const setup = defaultSetup()
-  const actions: GameAction[] = []
-  if (kind === 'new_item' || kind === 'player_interaction') {
+  const actions: GameAction[] = [...suppliedActions.actions]
+  if (actions.length === 0 && kind === 'new_item') {
     actions.push({ type: 'command', command: `give @s ${subjectId} 1`, label: '给予目标物品' })
-  } else if (kind === 'new_block') {
+  } else if (actions.length === 0 && kind === 'player_interaction' && hotkey) {
+    actions.push({ type: 'input', action: 'key_press', args: { key: hotkey }, label: 'trigger interaction' })
+    actions.push({ type: 'wait', ms: 500, label: 'wait for interaction' })
+  } else if (actions.length === 0 && kind === 'player_interaction' && subjectId) {
+    actions.push({ type: 'command', command: `give @s ${subjectId} 1`, label: 'give interaction item' })
+  } else if (actions.length === 0 && kind === 'new_block') {
     actions.push({ type: 'command', command: `setblock 0 100 4 ${subjectId}`, label: '放置目标方块' })
-  } else if (kind === 'entity_behavior') {
+  } else if (actions.length === 0 && kind === 'entity_behavior') {
     actions.push({ type: 'command', command: `summon ${subjectId} 0 100 4 {Tags:["modcrafting_test"]}`, label: '召唤测试实体' })
     actions.push({ type: 'wait', ms: 500, label: '等待实体初始化' })
-  } else if (kind === 'hud_gui' && hotkey) {
+  } else if (actions.length === 0 && kind === 'hud_gui' && hotkey) {
     actions.push({ type: 'input', action: 'key_press', args: { key: hotkey }, label: '触发目标界面' })
     actions.push({ type: 'wait', ms: 700, label: '等待界面打开' })
   }
@@ -178,6 +248,52 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
 
 export function getGameTestSpec(id: string): GameTestSpec | undefined {
   return sessions.get(id)
+}
+
+/** Restores a persisted spec without changing its scenario ID. */
+export function registerGameTestSpec(value: unknown): { ok: true; spec: GameTestSpec } | { ok: false; error: string } {
+  const raw = record(value)
+  if (!raw || raw.version !== 2 || !nonEmptyString(raw.id) || !featureType(raw.featureType)) return { ok: false, error: 'Invalid V2 GameTestSpec.' }
+  const subject = record(raw.subject) || {}
+  const asserted = validateGameAssertions(raw.assertions)
+  const setup = validateActions(raw.setup, 'setup')
+  const actions = validateActions(raw.actions, 'actions')
+  const cleanup = validateActions(raw.cleanup, 'cleanup')
+  if (!asserted.ok) return asserted
+  if (!setup.ok) return setup
+  if (!actions.ok) return actions
+  if (!cleanup.ok) return cleanup
+  const spec: GameTestSpec = {
+    version: 2,
+    id: raw.id,
+    featureType: featureType(raw.featureType)!,
+    subject: {
+      ...(nonEmptyString(subject.modId) ? { modId: subject.modId } : {}),
+      ...(nonEmptyString(subject.id) ? { id: subject.id } : {}),
+      ...(nonEmptyString(subject.hotkey) ? { hotkey: subject.hotkey } : {})
+    },
+    setup: setup.actions,
+    actions: actions.actions,
+    assertions: asserted.assertions,
+    cleanup: cleanup.actions,
+    visualOnly: Boolean(raw.visualOnly),
+    createdAt: numberValue(raw.createdAt) ? raw.createdAt : Date.now()
+  }
+  sessions.set(spec.id, spec)
+  return { ok: true, spec }
+}
+
+/** Extracts legacy fenced V2 specs from persisted assistant and tool output. */
+export function hydrateGameTestSpecsFromText(text: string): number {
+  let restored = 0
+  for (const match of text.matchAll(/```json\s*([\s\S]*?)```/gi)) {
+    try {
+      const parsed = JSON.parse(match[1]) as Record<string, unknown>
+      const source = record(parsed.gameTest) || (parsed.version === 2 ? parsed : null)
+      if (source && registerGameTestSpec(source).ok) restored++
+    } catch { /* Ignore non-spec JSON fences. */ }
+  }
+  return restored
 }
 
 export function formatGameTestSpec(spec: GameTestSpec): string {

@@ -81,7 +81,8 @@ function assertionFromSnapshot(assertion: GameAssertion, data: Record<string, un
       (!assertion.entityType || entry.type === assertion.entityType) &&
       (!assertion.tag || (Array.isArray(entry.tags) && entry.tags.includes(assertion.tag)))
     )
-    return evidence(assertion, exists, `matching entities: ${entities.length}`, data)
+    const expected = assertion.exists ?? true
+    return evidence(assertion, exists === expected, `matching entities: ${entities.length}; expected ${expected ? 'present' : 'absent'}`, data)
   }
   if (assertion.type === 'screen_matches') {
     const screen = asRecord(data.screen)
@@ -163,7 +164,10 @@ export const mcRunTestTool: Tool = {
     const scenarioId = String(args.scenarioId || '')
     const instanceId = typeof args.instanceId === 'string' ? args.instanceId : undefined
     const spec = getGameTestSpec(scenarioId)
-    if (!spec) return `Error: 未找到测试场景 ${scenarioId}。请先调用 mc_test_scenario 生成 V2 场景。`
+    if (!spec) {
+      const session = createInconclusiveSession(scenarioId, `Scenario ${scenarioId} is unavailable after session restore; regenerate it with mc_test_scenario.`)
+      return { output: JSON.stringify(session, null, 2), validation: { kind: 'game', valid: false, verdict: 'INCONCLUSIVE', version: '1.21.4', checkedAt: Date.now() } }
+    }
 
     ctx.onProgress?.('确认测试世界与桥接 V2 能力…')
     const worldResult = await mcEnsureTestWorldTool.execute(ctx, instanceId ? { instanceId } : {})

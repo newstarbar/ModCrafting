@@ -1,10 +1,11 @@
 export interface ParsedPlanStep {
   id: string
   description: string
-  kind?: 'inspect' | 'write' | 'recipe'
+  kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test'
   targetPath?: string
   targetPaths?: string[]
   evidence?: string
+  gameTest?: import('../harness/game-test-protocol.ts').GameTestSpec
 }
 
 export const OPS_STEP_PATTERN = /gradlew|gradle\s|runClient|trigger_build|run_command|编译|构建|运行|build/i

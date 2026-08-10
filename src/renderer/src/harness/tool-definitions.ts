@@ -2010,6 +2010,28 @@ export const fabricTemplateGenerateTool: Tool = {
 };
 
 // ── submit_plan ──
+const GAME_ACTION_SCHEMA = {
+	type: 'object', additionalProperties: false,
+	properties: { type: { type: 'string', enum: ['command', 'input', 'wait'] }, command: { type: 'string', minLength: 1 }, action: { type: 'string', minLength: 1 }, args: { type: 'object' }, ms: { type: 'number', minimum: 0 }, label: { type: 'string', minLength: 1 } },
+	required: ['type'],
+	allOf: [{ if: { properties: { type: { const: 'command' } } }, then: { required: ['command'] } }, { if: { properties: { type: { const: 'input' } } }, then: { required: ['action'] } }, { if: { properties: { type: { const: 'wait' } } }, then: { required: ['ms'] } }]
+}
+
+const GAME_ASSERTION_SCHEMA = {
+	anyOf: [
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'command_result' }, command: { type: 'string', minLength: 1 }, minResult: { type: 'number' }, label: { type: 'string' } }, required: ['type', 'command'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'inventory_contains' }, itemId: { type: 'string', minLength: 1 }, countAtLeast: { type: 'number', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'itemId'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'main_hand' }, itemId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'itemId'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'block_equals' }, x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, blockId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'x', 'y', 'z', 'blockId'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'entity_exists' }, entityType: { type: 'string', minLength: 1 }, tag: { type: 'string', minLength: 1 }, exists: { type: 'boolean' }, label: { type: 'string' } }, required: ['type'], anyOf: [{ required: ['entityType'] }, { required: ['tag'] }] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'screen_matches' }, screenName: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'screenName'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'widget_state' }, label: { type: 'string', minLength: 1 }, enabled: { type: 'boolean' }, labelText: { type: 'string', minLength: 1 } }, required: ['type', 'label'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'player_state' }, path: { type: 'string', minLength: 1 }, equals: {} }, required: ['type', 'path', 'equals'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'recipe_exists' }, recipeId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'recipeId'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'state_changed' }, path: { type: 'string', minLength: 1 }, from: {}, to: {}, label: { type: 'string' } }, required: ['type', 'path'], anyOf: [{ required: ['from'] }, { required: ['to'] }] }
+	]
+}
+
 export const submitPlanTool: Tool = {
 	name: "submit_plan",
 	description:
@@ -2051,7 +2073,8 @@ export const submitPlanTool: Tool = {
 					subjectId: { type: "string", minLength: 1 },
 					modId: { type: "string", minLength: 1 },
 					hotkey: { type: "string", minLength: 1 },
-					assertions: { type: "array", minItems: 1, items: { type: "object" } },
+					actions: { type: "array", items: GAME_ACTION_SCHEMA },
+					assertions: { type: "array", minItems: 1, items: GAME_ASSERTION_SCHEMA },
 					visualOnly: { type: "boolean" }
 				},
 				required: ["featureType", "assertions"]
@@ -2080,13 +2103,13 @@ export const submitPlanTool: Tool = {
 			mod_id: gameTest.modId,
 			hotkey: gameTest.hotkey,
 			assertions: gameTest.assertions,
+			actions: gameTest.actions,
 			visual_only: gameTest.visualOnly
 		});
 		if (!created.ok) return `Error: ${created.error}`;
 		const plannedSteps = [...steps, {
-			kind: "inspect",
+			kind: "game_test",
 			description: `执行确定性游戏测试（mc_run_test scenarioId=${created.spec.id}；仅 PASS 完成）`,
-			targetPath: ".",
 			evidence: "V2 GameTestSession verdict=PASS 与逐条断言的新鲜证据"
 		}];
 		return `\`\`\`json\n${JSON.stringify({ steps: plannedSteps, gameTest: created.spec }, null, 2)}\n\`\`\`\n\n${formatGameTestSpec(created.spec)}`;

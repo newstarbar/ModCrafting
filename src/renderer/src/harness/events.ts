@@ -146,10 +146,11 @@ export interface Event {
     id: string
     description: string
     status: string
-    kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
+    kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test'
     targetPath?: string
     targetPaths?: string[]
     evidence?: string
+    gameTest?: import('./game-test-protocol.ts').GameTestSpec
   }>
   clarification?: { question: string; options?: string[] }
   guiLayout?: {

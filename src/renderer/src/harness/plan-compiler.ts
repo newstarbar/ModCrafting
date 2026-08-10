@@ -6,8 +6,9 @@ import {
   parsePlanSteps,
   type ParsedPlanStep
 } from '../utils/plan-steps.ts'
+import type { GameTestSpec } from './game-test-protocol.ts'
 
-export type StructuredStepKind = 'write' | 'recipe' | 'mixin' | 'inspect'
+export type StructuredStepKind = 'write' | 'recipe' | 'mixin' | 'inspect' | 'game_test'
 
 export interface CompiledPlanStep extends ParsedPlanStep {
   kind?: StructuredStepKind
@@ -15,9 +16,10 @@ export interface CompiledPlanStep extends ParsedPlanStep {
   targetPaths?: string[]
   hostManaged?: boolean
   evidence?: string
+  gameTest?: GameTestSpec
 }
 
-const STRUCTURED_KIND_RE = /^\[(write|recipe|mixin|inspect)\]\s*/i
+const STRUCTURED_KIND_RE = /^\[(write|recipe|mixin|inspect|game_test)\]\s*/i
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;—\-]+)(?:`)?/i
 const VAGUE_STEP_RE = /确保|测试功能|检查|验证|确认无错|输出总结/
 const KNOWLEDGE_INSPECT_RE = /mixin|网络|payload|datagen|新\s*api|access\s*widener|右键|交互|interact/i
@@ -118,7 +120,7 @@ function renumber(steps: CompiledPlanStep[]): CompiledPlanStep[] {
 
 function isHostTerminalStep(description: string): boolean {
   const d = description.toLowerCase()
-  return BUILD_STEP_PATTERN.test(d) || RUN_STEP_PATTERN.test(d)
+  return BUILD_STEP_PATTERN.test(d) || RUN_STEP_PATTERN.test(d) || /mc_run_test|确定性游戏测试/.test(d)
 }
 
 function parseStructuredLine(description: string): { kind?: StructuredStepKind; body: string; targetPath?: string; evidence?: string } {
@@ -164,6 +166,9 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
           ? (parsed as { steps: unknown[] }).steps
           : null
       if (!list || list.length === 0) continue
+      const topLevelSpec = !Array.isArray(parsed) && parsed && typeof parsed === 'object'
+        ? (parsed as { gameTest?: unknown }).gameTest as GameTestSpec | undefined
+        : undefined
 
       const steps: CompiledPlanStep[] = []
       for (let i = 0; i < list.length; i++) {
@@ -172,7 +177,7 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
         const description = String(item.description || item.title || '').trim()
         if (!description) continue
         const kindRaw = String(item.kind || '').toLowerCase()
-        const kind = (['write', 'recipe', 'mixin', 'inspect'].includes(kindRaw)
+        const kind = (['write', 'recipe', 'mixin', 'inspect', 'game_test'].includes(kindRaw)
           ? kindRaw
           : undefined) as StructuredStepKind | undefined
         const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
@@ -188,6 +193,10 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
           ...(targetPaths && targetPaths.length > 0 ? { targetPaths } : {}),
           ...(evidence ? { evidence } : {})
         })
+      }
+      if (topLevelSpec) {
+        const gameStep = steps.find((step) => /mc_run_test|确定性游戏测试/i.test(step.description))
+        if (gameStep) gameStep.gameTest = topLevelSpec
       }
       if (steps.length > 0) return steps
     } catch {
@@ -225,7 +234,7 @@ export function dropVagueSteps(steps: CompiledPlanStep[]): CompiledPlanStep[] {
 }
 
 export function stripHostTerminalFromLlmSteps(steps: CompiledPlanStep[]): CompiledPlanStep[] {
-  return steps.filter((s) => !isHostTerminalStep(s.description))
+  return steps.filter((s) => !BUILD_STEP_PATTERN.test(s.description) && !RUN_STEP_PATTERN.test(s.description))
 }
 
 export function dedupeByPath(steps: CompiledPlanStep[]): CompiledPlanStep[] {
@@ -325,24 +334,21 @@ export function appendMixinsJsonUpdateWarning(steps: CompiledPlanStep[]): Compil
 
 export function appendHostTerminalSteps(steps: CompiledPlanStep[]): CompiledPlanStep[] {
   if (steps.length === 0) return steps
-  const hasBuild = steps.some((s) => BUILD_STEP_PATTERN.test(s.description))
-  const hasRun = steps.some((s) => RUN_STEP_PATTERN.test(s.description))
-  const hasGameTest = steps.some((s) => /mc_run_test|确定性游戏测试/i.test(s.description))
+  const build = steps.find((s) => BUILD_STEP_PATTERN.test(s.description))
+  const run = steps.find((s) => RUN_STEP_PATTERN.test(s.description))
+  const gameTest = steps.find((s) => /mc_run_test|确定性游戏测试/i.test(s.description))
   const needsGameTest = steps.some((s) =>
     s.kind === 'write' || s.kind === 'recipe' || s.kind === 'mixin' ||
     /\.java|src\/.*resources|配方|物品|方块|实体|交互|hud|gui|mixin/i.test(s.description)
   )
-  const result = [...steps]
-  if (!hasBuild) {
-    result.push({ id: '0', description: HOST_BUILD_DESC, hostManaged: true })
-  }
-  if (!hasRun) {
-    result.push({ id: '0', description: HOST_RUN_DESC, hostManaged: true })
-  }
-  if (needsGameTest && !hasGameTest) {
-    result.push({ id: '0', description: HOST_GAME_TEST_DESC, hostManaged: true })
-  }
-  return renumber(result.slice(0, MAX_PLAN_STEPS))
+  // Host terminals always run last in build -> run -> deterministic test order.
+  const implementation = steps.filter((s) => !isHostTerminalStep(s.description))
+  const terminals: CompiledPlanStep[] = [
+    build || { id: '0', description: HOST_BUILD_DESC, hostManaged: true },
+    run || { id: '0', description: HOST_RUN_DESC, hostManaged: true },
+    ...(needsGameTest ? [gameTest || { id: '0', description: HOST_GAME_TEST_DESC, kind: 'game_test', hostManaged: true }] : [])
+  ]
+  return renumber([...implementation, ...terminals].slice(0, MAX_PLAN_STEPS))
 }
 
 export function prependKnowledgeInspect(steps: CompiledPlanStep[]): CompiledPlanStep[] {
@@ -421,12 +427,13 @@ function defaultEvidenceForKind(kind: StructuredStepKind | undefined): string | 
 }
 
 export function compiledStepsToParsed(steps: CompiledPlanStep[]): ParsedPlanStep[] {
-  return steps.map(({ id, description, kind, targetPath, targetPaths, evidence }) => ({
+  return steps.map(({ id, description, kind, targetPath, targetPaths, evidence, gameTest }) => ({
     id,
     description,
     ...(kind ? { kind } : {}),
     ...(targetPath ? { targetPath } : {}),
     ...(targetPaths?.length ? { targetPaths } : {}),
-    ...(evidence ? { evidence } : {})
+    ...(evidence ? { evidence } : {}),
+    ...(gameTest ? { gameTest } : {})
   }))
 }

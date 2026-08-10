@@ -9,6 +9,8 @@
 3. `mc_run_test` 在专用 `ModCrafting Test World` 内准备环境、执行动作、采集动作后的快照、逐项断言并清理。
 4. 只有 `PASS` 可结束测试；`FAIL` 需清理后复测一次才会触发修复；`INCONCLUSIVE` 显示缺失证据并暂停，绝不把导航、桥接或视觉问题当成代码错误。
 
+计划终端顺序固定为“实现 → 构建 → 启动客户端/桥接 → `game_test`”。执行阶段只会对真实的 `submit_plan` 调用给出阶段提示；其他被门控的工具保留原工具名和允许列表，避免错误提示驱动的调用循环。恢复历史会话时会迁移旧的 `inspect + mc_run_test` 步骤，并恢复保存在计划或工具 JSON 中的场景规格。
+
 截图是报告附件，不能单独通过测试。物品、方块、配方、实体、交互和 GUI 分别使用注册表、背包/主手、方块/实体快照、命令结果、Screen/控件状态等客观证据；纯视觉布局交由用户确认。
 
 ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手架**、**一键游戏内测试** 和 **离线构建环境** 整合进同一个 Electron 桌面应用。
@@ -47,7 +49,7 @@ AI 规划并修改项目文件（Plan → Execute）
   - `MAX_READONLY_ROUNDS = 15`：超过 15 轮只读勘探后进入"建议提交"状态
   - 锁定后仍允许 `grep` / `list_directory` / `read_file`，仅禁用写入工具
   - 措辞为"建议尽快提交"而非"已锁定"
-- **输出**：`submit_plan`（write / recipe / mixin / inspect 四种 kind，1-6 步）
+- **输出**：`submit_plan`（write / recipe / mixin / inspect 实现步骤；游戏功能附带严格断言的 `gameTest`）
 
 ### 计划编译
 

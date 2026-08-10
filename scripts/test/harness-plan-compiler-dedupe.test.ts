@@ -145,3 +145,15 @@ test('buildEmptyToolCallInstruction: inspect nudges read/complete, not write', (
   assert.match(instruction, /read_file|grep|complete_step/)
   assert.equal(/write_file|edit_file/.test(instruction), false)
 })
+
+test('compiler moves a supplied deterministic test after build and run', () => {
+  const compiled = compilePlanFromText(`\`\`\`json\n${JSON.stringify({
+    steps: [
+      { kind: 'write', description: 'create src/main/java/com/example/Wand.java', targetPath: 'src/main/java/com/example/Wand.java', evidence: 'written' },
+      { kind: 'game_test', description: 'run deterministic test mc_run_test scenarioId=scenario_wand', evidence: 'PASS evidence' }
+    ],
+    gameTest: { version: 2, id: 'scenario_wand', featureType: 'new_item', subject: { id: 'example:wand' }, setup: [], actions: [], assertions: [{ type: 'inventory_contains', itemId: 'example:wand' }], cleanup: [], createdAt: 1 }
+  })}\n\`\`\``)
+  assert.deepEqual(compiled.slice(-3).map((step) => step.kind || (step.description.includes('runClient') ? 'run' : 'build')), ['build', 'run', 'game_test'])
+  assert.equal(compiled.at(-1)?.gameTest?.id, 'scenario_wand')
+})
