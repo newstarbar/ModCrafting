@@ -13,7 +13,7 @@ import { logger } from "../utils/logger";
 import { buildFabricAgentPolicyPrompt } from "./fabric-agent-policy";
 import { isRetryableFetchError } from "./fetch-retry";
 import { type ComposerMode, buildSessionGoalBlock, isNarrowResumeInput, isStructuralErrorReport, buildUserSymptomBlock, buildCrossTurnDiagnosisRetain } from "./turn-intent";
-import { classifyUserTurn, type ClassifyUserTurnResult } from "./turn-classifier.ts";
+import { classifyUserTurn, type ClassifyUserTurnResult, type ClassifierDiagnostics } from "./turn-classifier.ts";
 import { isQuickCreateGeneratedMessage } from "../project/template-params.ts";
 import type { WorkflowStep } from "./workflow-types.ts";
 import { TOOL_LABELS_ZH } from "./tool-labels";
@@ -26,7 +26,7 @@ import { registerKnownProjectPaths } from "./tool-definitions.ts";
 export interface ControllerOptions {
 	registry: Registry;
 	projectPath: string | null;
-	apiConfig: { endpoint: string; apiKey: string; model: string };
+	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string };
 	onEvent?: (event: Event) => void;
 	onAgentStatus?: (status: string) => void;
 	onStreamUpdate?: (text: string, reasoning?: string) => void;
@@ -38,7 +38,7 @@ export class Controller {
 	private sink: Sink;
 	private _projectPath: string | null;
 
-	apiConfig: { endpoint: string; apiKey: string; model: string };
+	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string };
 
 	// Session
 	messages: ChatMessage[] = [];
@@ -62,6 +62,8 @@ export class Controller {
 	/** Last plan text that had parseable steps (even if hard-validation failed). Used by 继续. */
 	private lastPlanCandidate: string | null = null;
 	private lastTurnMode: "chat" | "develop" | "plan_only" | "resume" = "chat";
+	/** Sanitized classifier transport failures for session diagnostic export. */
+	private classifierDiagnostics: ClassifierDiagnostics[] = [];
 	/** Last mode written into messages[0]; skip rewrite when unchanged (prompt-cache). */
 	private lastSystemMode: "chat" | "plan" | "execute" | null = null;
 	private taskId = `task_${Date.now().toString(36)}`;
@@ -151,7 +153,7 @@ export class Controller {
 		this._projectPath = p;
 	}
 
-	setApiConfig(config: { endpoint: string; apiKey: string; model: string }): void {
+	setApiConfig(config: { endpoint: string; apiKey: string; model: string; providerId?: string }): void {
 		this.apiConfig = config;
 	}
 
@@ -994,6 +996,9 @@ ${projectInfo}`;
 			stickySymptom: this.activeUserSymptom,
 			abortSignal: this.abortController.signal
 		});
+		if (classified.diagnostics) {
+			this.classifierDiagnostics = [...this.classifierDiagnostics, classified.diagnostics].slice(-30);
+		}
 		this.applyClassificationSideEffects(classified, inputText);
 
 		const intent = classified.intent;
@@ -1013,11 +1018,15 @@ ${projectInfo}`;
 		};
 
 			if (classified.usedFallback) {
+				const detail = classified.diagnostics
+					? `${classified.diagnostics.providerId}/${classified.diagnostics.model} ${classified.diagnostics.failureCode}` +
+						(classified.diagnostics.httpStatus ? ` (HTTP ${classified.diagnostics.httpStatus})` : "")
+					: classified.rationale;
 				this.emitEvent({
 					kind: EventKind.Notice,
 					notice: {
 						level: "warn",
-						text: `意图分类失败，已用兜底：${classified.rationale}`
+						text: `意图分类失败，已用结构规则继续：${detail}`
 					}
 				});
 			}
@@ -1582,6 +1591,7 @@ ${projectInfo}`;
 		this.planTracker = null;
 		this.planReadyAwaitingExecute = false;
 		this.lastSystemMode = null;
+		this.classifierDiagnostics = [];
 		this.agent.resetRunState();
 		this.agent.clarificationPending = false;
 		// 清理 GUI 布局预览 pending 状态
@@ -1645,6 +1655,10 @@ ${projectInfo}`;
 
 	getSnapshot(): ChatMessage[] {
 		return [...this.messages];
+	}
+
+	getClassifierDiagnosticsSnapshot(): ClassifierDiagnostics[] {
+		return this.classifierDiagnostics.map((entry) => ({ ...entry }));
 	}
 
 	restoreSnapshot(messages: ChatMessage[]): void {

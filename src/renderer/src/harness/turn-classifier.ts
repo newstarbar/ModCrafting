@@ -9,6 +9,8 @@ import {
   isNarrowResumeInput,
   isStructuralErrorReport
 } from './turn-intent.ts'
+import { parseToolCalls } from './tools.ts'
+import { stripMinimaxProtocolTokens, stripThinkTags } from './model-output-normalizer.ts'
 
 export interface ClassifyVerifyTargetPayload {
   label: string
@@ -29,10 +31,21 @@ export interface ClassifyUserTurnResult {
   rationale: string
   /** true when LLM failed and structural fallback was used */
   usedFallback: boolean
+  classificationSource?: 'fast_path' | 'tool_call' | 'json_retry' | 'structural_fallback'
+  diagnostics?: ClassifierDiagnostics
+}
+
+export interface ClassifierDiagnostics {
+  providerId: string
+  model: string
+  endpointHost: string
+  attempted: 'tool_call' | 'json_retry'
+  failureCode: string
+  httpStatus?: number
 }
 
 export interface ClassifyUserTurnArgs {
-  apiConfig: { endpoint: string; apiKey: string; model: string }
+  apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string }
   input: string
   ctx: TurnIntentContext
   stickySymptom?: string | null
@@ -177,7 +190,10 @@ function parseVerifyTarget(raw: unknown): ClassifyVerifyTargetPayload | null {
 }
 
 /** Validate and coerce tool arguments from the model. */
-export function parseClassifyToolArgs(raw: unknown): ClassifyUserTurnResult | null {
+export function parseClassifyToolArgs(
+  raw: unknown,
+  classificationSource: 'tool_call' | 'json_retry' = 'tool_call'
+): ClassifyUserTurnResult | null {
   if (!raw || typeof raw !== 'object') return null
   const obj = raw as Record<string, unknown>
   const intent = asIntent(obj.intent)
@@ -192,7 +208,8 @@ export function parseClassifyToolArgs(raw: unknown): ClassifyUserTurnResult | nu
     isGuiFeatureSymptom: asBool(obj.isGuiFeatureSymptom),
     verifyTarget: parseVerifyTarget(obj.verifyTarget),
     rationale: String(obj.rationale || '').trim().slice(0, 200) || '（无理由）',
-    usedFallback: false
+    usedFallback: false,
+    classificationSource
   }
 }
 
@@ -247,7 +264,8 @@ export function applyClassifyContextGates(
 
 export function structuralClassifyFallback(
   input: string,
-  ctx: TurnIntentContext
+  ctx: TurnIntentContext,
+  diagnostics?: ClassifierDiagnostics
 ): ClassifyUserTurnResult {
   const trimmed = input.trim()
   const canResumePlan =
@@ -279,8 +297,12 @@ export function structuralClassifyFallback(
       isErrorReport: error,
       isGuiFeatureSymptom: false,
       verifyTarget: null,
-      rationale: '意图分类失败，已用结构性兜底',
-      usedFallback: true
+      rationale: diagnostics
+        ? `意图分类失败（${diagnostics.failureCode}），已用结构性兜底`
+        : '意图分类失败，已用结构性兜底',
+      usedFallback: true,
+      classificationSource: 'structural_fallback',
+      ...(diagnostics ? { diagnostics } : {})
     },
     ctx,
     input
@@ -311,83 +333,143 @@ function buildUserClassifyPayload(
   )
 }
 
+function parseJsonContent(content: unknown): unknown | null {
+  if (typeof content !== 'string') return null
+  const normalized = stripThinkTags(stripMinimaxProtocolTokens(content)).text.trim()
+  // Preserve the existing ModCrafting XML tool-call fallback before extracting a
+  // generic JSON object: otherwise the outer { name, args } envelope wins.
+  for (const call of parseToolCalls(normalized)) {
+    if (call.name === CLASSIFY_TOOL_NAME) return call.args
+  }
+  const candidates = [
+    normalized,
+    normalized.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() || '',
+    (() => {
+      const start = normalized.indexOf('{')
+      const end = normalized.lastIndexOf('}')
+      return start >= 0 && end > start ? normalized.slice(start, end + 1) : ''
+    })()
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // Try the next normalized JSON shape.
+    }
+  }
+  return null
+}
+
 function extractToolCallArgs(data: unknown): unknown | null {
   if (!data || typeof data !== 'object') return null
   const root = data as {
     choices?: Array<{
       message?: {
         tool_calls?: Array<{
-          function?: { name?: string; arguments?: string }
+          function?: { name?: string; arguments?: string | Record<string, unknown> }
         }>
         content?: string | null
       }
     }>
   }
   const msg = root.choices?.[0]?.message
-  const calls = msg?.tool_calls || []
-  for (const call of calls) {
+  for (const call of msg?.tool_calls || []) {
     if (call.function?.name && call.function.name !== CLASSIFY_TOOL_NAME) continue
-    const argStr = call.function?.arguments
-    if (!argStr) continue
-    try {
-      return JSON.parse(argStr)
-    } catch {
-      return null
+    const raw = call.function?.arguments
+    if (raw && typeof raw === 'object') return raw
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw)
+      } catch {
+        // Some compatible endpoints put their XML/JSON protocol in arguments.
+        const parsed = parseJsonContent(raw)
+        if (parsed) return parsed
+      }
     }
   }
-  // Some providers put JSON in content
-  const content = (msg?.content || '').trim()
-  if (content.startsWith('{')) {
-    try {
-      return JSON.parse(content)
-    } catch {
-      return null
-    }
-  }
-  return null
+  return parseJsonContent(msg?.content)
 }
 
-/**
- * Classify a user turn via forced tool call. On failure returns structural fallback.
- */
-export async function classifyUserTurn(
-  args: ClassifyUserTurnArgs
-): Promise<ClassifyUserTurnResult> {
-  const ctx = args.ctx
-  const input = args.input
-  const timeoutMs = args.timeoutMs ?? 10_000
-  const fetchImpl = args.fetchImpl ?? fetch
-
-  // Fast structural path: no API needed for code-explain / ask / obvious crash dumps
-  if (isCodeExplainInput(input) || ctx.composerMode === 'ask') {
-    return applyClassifyContextGates(
-      {
-        intent: 'chat',
-        isInGameVerifyRequest: false,
-        skipFormalPlan: false,
-        isUserSymptom: false,
-        isSymptomResolved: false,
-        isErrorReport: false,
-        isGuiFeatureSymptom: false,
-        verifyTarget: null,
-        rationale: 'ask/代码解释 → chat',
-        usedFallback: false
-      },
-      ctx,
-      input
-    )
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host
+  } catch {
+    return 'invalid-endpoint'
   }
+}
 
-  const endpoint = (args.apiConfig.endpoint || '').replace(/\/$/, '')
-  if (!endpoint || !args.apiConfig.apiKey?.trim()) {
-    return structuralClassifyFallback(input, ctx)
+function classifierDiagnostics(
+  args: ClassifyUserTurnArgs,
+  attempted: ClassifierDiagnostics['attempted'],
+  failureCode: string,
+  httpStatus?: number
+): ClassifierDiagnostics {
+  return {
+    providerId: args.apiConfig.providerId || 'custom',
+    model: args.apiConfig.model,
+    endpointHost: endpointHost(args.apiConfig.endpoint),
+    attempted,
+    failureCode,
+    ...(httpStatus == null ? {} : { httpStatus })
   }
+}
 
-  const controller = new AbortController()
-  const onAbort = () => controller.abort()
-  args.abortSignal?.addEventListener('abort', onAbort, { once: true })
-  const timer = setTimeout(() => controller.abort(new Error('classify timeout')), timeoutMs)
+function isMiniMax(args: ClassifyUserTurnArgs): boolean {
+  return args.apiConfig.providerId === 'minimax' || /^minimax-/i.test(args.apiConfig.model)
+}
 
+function classifyMessages(args: ClassifyUserTurnArgs, jsonOnly = false): Array<{ role: 'system' | 'user'; content: string }> {
+  const system = jsonOnly
+    ? `${CLASSIFY_SYSTEM_PROMPT}\n不要调用工具。只返回一个符合 classify_user_turn 参数 Schema 的 JSON 对象，不要 Markdown、解释或 think 内容。`
+    : CLASSIFY_SYSTEM_PROMPT
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: buildUserClassifyPayload(args.input, args.ctx, args.stickySymptom) }
+  ]
+}
+
+function buildClassifierRequest(args: ClassifyUserTurnArgs, jsonOnly: boolean): Record<string, unknown> {
+  const minimax = isMiniMax(args)
+  const body: Record<string, unknown> = {
+    model: args.apiConfig.model,
+    stream: false,
+    max_tokens: 400,
+    temperature: minimax ? 0.01 : 0,
+    messages: classifyMessages(args, jsonOnly)
+  }
+  if (jsonOnly) return body
+  body.tools = [
+    {
+      type: 'function',
+      function: {
+        name: CLASSIFY_TOOL_NAME,
+        description: 'Classify the user turn for ModCrafting harness routing',
+        parameters: CLASSIFY_TOOL_PARAMETERS
+      }
+    }
+  ]
+  // MiniMax rejects the OpenAI object form used to force a tool call. Its system
+  // prompt and schema are sufficient; other OpenAI-compatible providers retain it.
+  if (!minimax) {
+    body.tool_choice = { type: 'function', function: { name: CLASSIFY_TOOL_NAME } }
+  }
+  return body
+}
+
+interface ClassifierAttemptResult {
+  parsed?: ClassifyUserTurnResult
+  diagnostics?: ClassifierDiagnostics
+}
+
+async function runClassifierAttempt(
+  args: ClassifyUserTurnArgs,
+  endpoint: string,
+  controller: AbortController,
+  fetchImpl: typeof fetch,
+  jsonOnly: boolean
+): Promise<ClassifierAttemptResult> {
+  const attempted: ClassifierDiagnostics['attempted'] = jsonOnly ? 'json_retry' : 'tool_call'
   try {
     const response = await fetchImpl(`${endpoint}/chat/completions`, {
       method: 'POST',
@@ -396,50 +478,72 @@ export async function classifyUserTurn(
         Authorization: `Bearer ${args.apiConfig.apiKey.trim()}`
       },
       signal: controller.signal,
-      body: JSON.stringify({
-        model: args.apiConfig.model,
-        stream: false,
-        max_tokens: 400,
-        temperature: 0,
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: CLASSIFY_TOOL_NAME,
-              description: 'Classify the user turn for ModCrafting harness routing',
-              parameters: CLASSIFY_TOOL_PARAMETERS
-            }
-          }
-        ],
-        tool_choice: {
-          type: 'function',
-          function: { name: CLASSIFY_TOOL_NAME }
-        },
-        messages: [
-          { role: 'system', content: CLASSIFY_SYSTEM_PROMPT },
-          { role: 'user', content: buildUserClassifyPayload(input, ctx, args.stickySymptom) }
-        ]
-      })
+      body: JSON.stringify(buildClassifierRequest(args, jsonOnly))
     })
-
     if (!response.ok) {
-      return structuralClassifyFallback(input, ctx)
+      return { diagnostics: classifierDiagnostics(args, attempted, `http_${response.status}`, response.status) }
     }
-
-    const data = await response.json()
-    const parsed = parseClassifyToolArgs(extractToolCallArgs(data))
-    if (!parsed) {
-      return structuralClassifyFallback(input, ctx)
+    let data: unknown
+    try {
+      data = await response.json()
+    } catch {
+      return { diagnostics: classifierDiagnostics(args, attempted, 'invalid_json_response') }
     }
-
-    // Structural error override: never trust model to mark crash as chat
-    if (isStructuralErrorReport(input) && !parsed.isErrorReport) {
-      parsed.isErrorReport = true
+    const parsed = parseClassifyToolArgs(extractToolCallArgs(data), jsonOnly ? 'json_retry' : 'tool_call')
+    return parsed
+      ? { parsed }
+      : { diagnostics: classifierDiagnostics(args, attempted, 'unparseable_response') }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      return { diagnostics: classifierDiagnostics(args, attempted, args.abortSignal?.aborted ? 'cancelled' : 'timeout') }
     }
+    return { diagnostics: classifierDiagnostics(args, attempted, error instanceof Error ? 'network_error' : 'request_error') }
+  }
+}
 
+function mayRetryAsJson(diagnostics: ClassifierDiagnostics | undefined): boolean {
+  if (!diagnostics) return false
+  return diagnostics.failureCode === 'unparseable_response' || diagnostics.failureCode === 'invalid_json_response' ||
+    diagnostics.httpStatus === 400 || diagnostics.httpStatus === 404 || diagnostics.httpStatus === 422
+}
+
+/** Classify a user turn with a provider-compatible tool request and one JSON fallback. */
+export async function classifyUserTurn(args: ClassifyUserTurnArgs): Promise<ClassifyUserTurnResult> {
+  const { ctx, input } = args
+  const timeoutMs = args.timeoutMs ?? 10_000
+  const fetchImpl = args.fetchImpl ?? fetch
+
+  if (isCodeExplainInput(input) || ctx.composerMode === 'ask') {
+    return applyClassifyContextGates({
+      intent: 'chat', isInGameVerifyRequest: false, skipFormalPlan: false,
+      isUserSymptom: false, isSymptomResolved: false, isErrorReport: false,
+      isGuiFeatureSymptom: false, verifyTarget: null, rationale: 'ask/代码解释 → chat',
+      usedFallback: false, classificationSource: 'fast_path'
+    }, ctx, input)
+  }
+
+  const endpoint = (args.apiConfig.endpoint || '').replace(/\/$/, '')
+  if (!endpoint || !args.apiConfig.apiKey?.trim()) {
+    return structuralClassifyFallback(input, ctx, classifierDiagnostics(args, 'tool_call', 'missing_config'))
+  }
+
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  args.abortSignal?.addEventListener('abort', onAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(new Error('classify timeout')), timeoutMs)
+
+  try {
+    const first = await runClassifierAttempt(args, endpoint, controller, fetchImpl, false)
+    let parsed = first.parsed
+    let failure = first.diagnostics
+    if (!parsed && !controller.signal.aborted && mayRetryAsJson(failure)) {
+      const retry = await runClassifierAttempt(args, endpoint, controller, fetchImpl, true)
+      parsed = retry.parsed
+      failure = retry.diagnostics || failure
+    }
+    if (!parsed) return structuralClassifyFallback(input, ctx, failure)
+    if (isStructuralErrorReport(input) && !parsed.isErrorReport) parsed.isErrorReport = true
     return applyClassifyContextGates(parsed, ctx, input)
-  } catch {
-    return structuralClassifyFallback(input, ctx)
   } finally {
     clearTimeout(timer)
     args.abortSignal?.removeEventListener('abort', onAbort)

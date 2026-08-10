@@ -2530,6 +2530,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
                 ? activePlan.steps
                 : latestEmbeddedPlan,
               controllerMessages: ctrl?.getSnapshot(),
+              classifierDiagnostics: ctrl?.getClassifierDiagnosticsSnapshot(),
             })
             const result = await window.api.sessionExport(md, 'mc-session-diag')
             if (result.cancelled) return

@@ -128,8 +128,9 @@ export function extractPreview(toolName: string, output: string, args?: Record<s
   }
 
   if (toolName === 'complete_step') {
-    const m = output.match(/步骤 #(\d+)/)
-    return m ? `步骤 ${m[1]} 已完成` : '步骤完成'
+    if (/\[step_evidence_required\]|step_evidence_required/i.test(output)) return '缺少验收证据'
+    const m = output.match(/\[STEP_(?:DONE|COMPLETE_REQUEST):(\d+)\]/)
+    return m ? `步骤 ${m[1]} 已完成` : '等待宿主确认'
   }
   if (toolName === 'ask_clarification') {
     const q = String(args?.question || '')

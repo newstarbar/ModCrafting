@@ -89,6 +89,36 @@ test('recipe and Mixin evidence require structured validation', () => {
   assert.equal(recordsStepEvidence(mixinStep, { ...plain, toolName: 'fabric_mixin_validate', validation: { kind: 'mixin', valid: true, version: '1.21.4', checkedAt: 1 } }), true)
 })
 
+test('inspect step accepts only its declared structured Mixin validation for the matching target', () => {
+  const [inspectStep] = normalizeWorkflowSteps([{
+    id: '1',
+    description: '检查 PlayerEntityMixin.java 的手写 Mixin 注册',
+    status: 'running',
+    kind: 'inspect',
+    targetPath: 'src/main/java/com/example/mixin/PlayerEntityMixin.java',
+    evidence: 'fabric_mixin_validate 通过'
+  }])
+  const valid: ToolResult = {
+    output: 'Mixin 轻量校验通过', ok: true, durationMs: 0, toolName: 'fabric_mixin_validate',
+    args: { sourcePath: 'src/main/java/com/example/mixin/PlayerEntityMixin.java' },
+    validation: {
+      kind: 'mixin', valid: true, version: '1.21.4',
+      targetPath: 'src/main/java/com/example/mixin/PlayerEntityMixin.java', checkedAt: 1
+    }
+  }
+  assert.equal(recordsStepEvidence(inspectStep, valid), true)
+  assert.equal(recordsStepEvidence(inspectStep, {
+    ...valid,
+    args: { sourcePath: 'src/main/java/com/example/mixin/OtherMixin.java' },
+    validation: { ...valid.validation!, targetPath: 'src/main/java/com/example/mixin/OtherMixin.java' }
+  }), false)
+  assert.equal(recordsStepEvidence(inspectStep, {
+    ...valid,
+    validation: { ...valid.validation!, valid: false }
+  }), false)
+  assert.equal(recordsStepEvidence({ ...inspectStep, evidence: '检查源码' }, valid), false)
+})
+
 test('bundled symbol index contains exact static and side metadata', () => {
   const index = JSON.parse(zlib.gunzipSync(fs.readFileSync('resources/fabric-symbol-index-1.21.4.json.gz')).toString('utf8'))
   assert.equal(index.minecraftVersion, '1.21.4')

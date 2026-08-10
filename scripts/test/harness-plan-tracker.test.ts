@@ -651,6 +651,52 @@ test('workflow engine completes recipe step only after evidence-backed complete_
   assert.equal(tracker.allDone(), true)
 })
 
+test('inspect Mixin validation plus complete_step in one round advances to build', async () => {
+  const registry = new Registry()
+  const toolOrder: string[] = []
+  registry.add({
+    name: 'fabric_mixin_validate', description: 'validate mixin', schema: { type: 'object' }, readOnly: () => true,
+    async execute(_ctx, args) {
+      toolOrder.push('validate')
+      return {
+        output: 'Mixin 轻量校验通过',
+        artifactPaths: [String(args.sourcePath)],
+        validation: { kind: 'mixin' as const, valid: true, version: '1.21.4' as const, targetPath: String(args.sourcePath), checkedAt: 1 }
+      }
+    }
+  })
+  registry.add({
+    name: 'complete_step', description: 'complete', schema: { type: 'object' }, readOnly: () => false,
+    async execute() { toolOrder.push('complete'); return '[STEP_COMPLETE_REQUEST:1]' }
+  })
+  registry.add({
+    name: 'trigger_build', description: 'build', schema: { type: 'object' }, readOnly: () => false,
+    async execute() { toolOrder.push('build'); return 'BUILD SUCCESSFUL' }
+  })
+  const target = 'src/main/java/com/example/mixin/PlayerEntityMixin.java'
+  const tracker = PlanTracker.fromSteps([
+    { id: '1', description: '检查 PlayerEntityMixin', status: 'running', kind: 'inspect', targetPath: target, evidence: 'fabric_mixin_validate 通过' },
+    { id: '2', description: '构建项目', status: 'pending', kind: 'build' }
+  ])
+  const engine = new WorkflowEngine({
+    steps: [
+      { id: '1', title: '检查 PlayerEntityMixin', kind: 'inspect', status: 'running', targetPath: target, evidence: 'fabric_mixin_validate 通过', allowedTools: ['fabric_mixin_validate', 'complete_step'], maxAttempts: 3 },
+      { id: '2', title: '构建项目', kind: 'build', status: 'pending', allowedTools: ['trigger_build'], maxAttempts: 3 }
+    ],
+    planTracker: tracker, registry, projectPath: 'D:/fake', emit: () => {},
+    modelCall: async (_messages, _tools) => ({
+      finishReason: undefined,
+      toolCalls: tracker.currentStep?.id === '1'
+        ? [{ name: 'fabric_mixin_validate', args: { sourcePath: target } }, { name: 'complete_step', args: { stepId: '1' } }]
+        : [{ name: 'trigger_build', args: { task: 'build' } }],
+      text: '', reasoning: ''
+    })
+  })
+  const result = await engine.run([])
+  assert.equal(result.allDone, true)
+  assert.deepEqual(toolOrder, ['validate', 'complete', 'build'])
+})
+
 test('workflow engine permits mod id read during recipe step before create_recipe', async () => {
   const registry = new Registry()
   const executed: string[] = []

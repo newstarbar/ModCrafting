@@ -37,7 +37,7 @@ AI 规划并修改项目文件（Plan → Execute）
 | **Plan** | 开发任务 | 只读工具 + `submit_plan` | 1-6 步结构化计划 |
 | **Execute** | 计划已批准 | 全部工具（按步骤门控） | 逐步执行，每轮必调工具，旁白 ≤2 句 |
 
-同时识别错误报告、用户症状、游戏内验证请求等侧面信号并注入到目标块中。
+同时识别错误报告、用户症状、游戏内验证请求等侧面信号并注入到目标块中。MiniMax 分类使用兼容的工具请求（正数低温度、不强制对象式 `tool_choice`）；响应格式不兼容时同一超时预算内尝试一次 JSON-only 分类，仍失败才使用结构兜底，并在诊断导出中记录脱敏失败原因。
 
 ## Plan → Execute 双阶段
 
@@ -58,6 +58,9 @@ AI 规划并修改项目文件（Plan → Execute）
 ### Execute 阶段
 
 `workflow-engine.ts` 串行逐步执行：
+
+- `complete_step` 先等待本轮验证工具结束；只有证据成立才推进。无证据请求会明确返回 `step_evidence_required`，连续两次不会再无限循环。
+- `inspect` 验收可以声明 `fabric_mixin_validate` 或 `fabric_recipe_validate`；宿主仅接受 `valid=true`、对应验证类型和匹配目标路径的结构化结果。
 
 - 每轮执行**全部**允许的工具（只读并行，写入串行）
 - 知识查询工具不消耗 attempt 配额

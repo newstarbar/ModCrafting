@@ -19,3 +19,9 @@
 - `npm test`：412 项通过。
 - `npm run bridge:build`：通过。
 - `npm run build`：通过。
+
+## 更新：步骤证据与意图分类恢复
+
+后续诊断发现，手写 Mixin 的 `fabric_mixin_validate` 已返回结构化成功，但 `inspect` 证据白名单只接受读取/搜索工具；紧接的 `complete_step` 因而表面成功、实际不推进。宿主现会先执行同轮验证，再裁决完成请求，并仅在验收标准显式声明、验证类型正确、目标路径匹配且 `valid=true` 时接受 Mixin/配方验证。无证据完成请求返回 `step_evidence_required`，重复两次后停止循环。
+
+MiniMax 独立分类器此前发送了 `temperature: 0` 和对象式强制 `tool_choice`，并吞掉所有传输/解析错误，导致每轮落入同一兜底。现在按 Provider 使用兼容请求，遇到格式错误仅重试一次 JSON-only 分类；诊断导出记录脱敏的 Provider、模型、endpoint 主机、阶段和状态码。回归覆盖 Mixin 校验→完成→构建、MiniMax 请求体、协议文本解析、400 重试与 401 脱敏。

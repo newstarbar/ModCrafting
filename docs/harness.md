@@ -42,7 +42,7 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - **Plan 模式**：输出结构化 `submit_plan`（实现步骤加可执行 `gameTest`；宿主追加 build / run / game_test）
 - **Execute 模式**：逐步执行计划，每轮必调工具，旁白 ≤2 句，构建失败自动进入修复模式
 
-模式切换由 `turn-classifier` 完成，同时识别「错误报告 / 用户症状 / 游戏内验证请求」等侧面信号。
+模式切换由 `turn-classifier` 完成，同时识别「错误报告 / 用户症状 / 游戏内验证请求」等侧面信号。分类器会按 Provider 协议构造请求；MiniMax 不使用对象式强制 `tool_choice`，并采用正数低温度。主工具调用响应无法解析或返回 400/404/422 时，会在同一超时预算内仅重试一次 JSON-only 请求；两次失败才使用结构性兜底。`classificationSource` 区分 `tool_call`、`json_retry` 与 `structural_fallback`，失败诊断只记录 Provider、模型、endpoint 主机、阶段和 HTTP 状态。
 
 ## 计划阶段门控
 
@@ -68,6 +68,7 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - 知识查询工具不消耗 attempt 配额
 - 修复模式：构建/运行失败时最多 3 轮修复
 - 支持 `ask_clarification` 暂停
+- `complete_step` 是宿主裁决请求：同轮会先运行证据工具，再决定是否推进。`inspect` 可消费验收标准显式声明且目标路径匹配的 `fabric_mixin_validate` / `fabric_recipe_validate` 结构化成功结果；缺少证据会返回 `step_evidence_required`，不会显示为完成或静默忽略。
 
 ## 工具策略与取消
 

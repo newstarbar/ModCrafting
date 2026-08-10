@@ -255,3 +255,98 @@ test('classifyUserTurn: empty api key uses fallback without fetch', async () => 
   assert.equal(result.usedFallback, true)
   assert.equal(result.intent, 'develop')
 })
+
+test('classifyUserTurn: MiniMax request avoids zero temperature and forced object tool_choice', async () => {
+  let body: Record<string, unknown> | undefined
+  const result = await classifyUserTurn({
+    apiConfig: { endpoint: 'https://api.minimax.chat/v1', apiKey: 'test-key', model: 'MiniMax-M3', providerId: 'minimax' },
+    input: '制作一个二段跳模组', ctx: intentCtx(),
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return mockClassifyResponse({
+        intent: 'develop', isInGameVerifyRequest: false, skipFormalPlan: false,
+        isUserSymptom: false, isSymptomResolved: false, isErrorReport: false,
+        isGuiFeatureSymptom: false, verifyTarget: null, rationale: '开发功能'
+      })('')
+    }
+  })
+  assert.equal(result.usedFallback, false)
+  assert.equal(result.classificationSource, 'tool_call')
+  assert.equal(body?.temperature, 0.01)
+  assert.equal('tool_choice' in (body || {}), false)
+})
+
+test('classifyUserTurn: parses think tags, protocol tokens and fenced content JSON', async () => {
+  const payload = {
+    intent: 'develop', isInGameVerifyRequest: true, skipFormalPlan: false,
+    isUserSymptom: false, isSymptomResolved: false, isErrorReport: false,
+    isGuiFeatureSymptom: false, verifyTarget: null, rationale: '重新测试'
+  }
+  const result = await classifyUserTurn({
+    apiConfig: { endpoint: 'http://localhost:9', apiKey: 'test-key', model: 'MiniMax-M3', providerId: 'minimax' },
+    input: '再游戏测试一下', ctx: intentCtx(),
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: `<think>reasoning</think>]<]minimax[>[\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`` } }]
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  })
+  assert.equal(result.usedFallback, false)
+  assert.equal(result.isInGameVerifyRequest, true)
+  assert.equal(result.classificationSource, 'tool_call')
+})
+
+test('classifyUserTurn: parses the existing ModCrafting XML tool-call fallback', async () => {
+  const payload = {
+    intent: 'develop', isInGameVerifyRequest: false, skipFormalPlan: false,
+    isUserSymptom: false, isSymptomResolved: false, isErrorReport: false,
+    isGuiFeatureSymptom: false, verifyTarget: null, rationale: '开发功能'
+  }
+  const result = await classifyUserTurn({
+    apiConfig: { endpoint: 'http://localhost:9', apiKey: 'test-key', model: 'MiniMax-M3', providerId: 'minimax' },
+    input: '做个新物品', ctx: intentCtx(),
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: `<tool_call>${JSON.stringify({ name: 'classify_user_turn', args: payload })}</tool_call>` } }]
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  })
+  assert.equal(result.usedFallback, false)
+  assert.equal(result.intent, 'develop')
+})
+
+test('classifyUserTurn: protocol 400 retries once as JSON and keeps the successful classification', async () => {
+  const requests: Record<string, unknown>[] = []
+  const payload = {
+    intent: 'resume', isInGameVerifyRequest: false, skipFormalPlan: false,
+    isUserSymptom: false, isSymptomResolved: false, isErrorReport: false,
+    isGuiFeatureSymptom: false, verifyTarget: null, rationale: '继续执行'
+  }
+  const result = await classifyUserTurn({
+    apiConfig: { endpoint: 'http://localhost:9', apiKey: 'test-key', model: 'MiniMax-M3', providerId: 'minimax' },
+    input: '继续', ctx: intentCtx({ phase: 'execute', planTracker: PlanTracker.fromSteps([{ id: '1', description: '构建', status: 'running' }]) }),
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)))
+      if (requests.length === 1) return new Response('bad request', { status: 400 })
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+  })
+  assert.equal(requests.length, 2)
+  assert.equal('tools' in requests[1], false)
+  assert.equal(result.usedFallback, false)
+  assert.equal(result.classificationSource, 'json_retry')
+  assert.equal(result.intent, 'resume')
+})
+
+test('classifyUserTurn: auth failure does not retry and records sanitized diagnostics', async () => {
+  let calls = 0
+  const result = await classifyUserTurn({
+    apiConfig: { endpoint: 'https://api.minimax.chat/v1', apiKey: 'super-secret', model: 'MiniMax-M3', providerId: 'minimax' },
+    input: '继续', ctx: intentCtx(),
+    fetchImpl: async () => {
+      calls++
+      return new Response('unauthorized', { status: 401 })
+    }
+  })
+  assert.equal(calls, 1)
+  assert.equal(result.usedFallback, true)
+  assert.equal(result.diagnostics?.failureCode, 'http_401')
+  assert.equal(result.diagnostics?.httpStatus, 401)
+  assert.equal(JSON.stringify(result.diagnostics).includes('super-secret'), false)
+})

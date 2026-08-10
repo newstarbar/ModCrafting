@@ -1120,6 +1120,8 @@ export class WorkflowEngine {
 			const evidenceResults: ToolResult[] = [];
 			let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
 			let evidenceIdleRounds = 0;
+			/** Stop models from repeatedly requesting completion without adding evidence. */
+			let evidenceCompletionRejections = 0;
 			let exploreRounds = 0;
 			let consecutiveIdenticalRejections = 0;
 			let lastRejectionSignature = "";
@@ -1636,7 +1638,11 @@ export class WorkflowEngine {
 				consecutiveIdenticalRejections = 0;
 				lastRejectionSignature = "";
 
-				const executed = await this.executeAllowedCalls(step, executableAllowed);
+				// complete_step is a host control request, not evidence.  Execute all evidence
+				// producers first so a validator + complete_step batch can finish in one round.
+				const completionCalls = executableAllowed.filter((call) => call.name === "complete_step");
+				const actionCalls = executableAllowed.filter((call) => call.name !== "complete_step");
+				const executed = await this.executeAllowedCalls(step, actionCalls);
 				for (const [id, result] of executed) {
 					resultsById.set(id, result);
 					if (result.ok && !result.error && isProjectWriteTool(result.toolName || "")) {
@@ -1659,6 +1665,39 @@ export class WorkflowEngine {
 					evidenceResults.push(result);
 				}
 				stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
+
+				let completionEvidenceRejectedThisRound = false;
+				if (completionCalls.length > 0) {
+					// Keep the existing single-target orphan-write adoption path: the
+					// completion request authorizes adopting a real write even when the
+					// plan listed the wrong helper path.
+					const mayAdoptOrphanWrite = step.kind === "write" && orphanWriteArtifacts(step, evidenceResults).length > 0;
+					if (stepHasEvidence || mayAdoptOrphanWrite) {
+						const completionResults = await this.executeAllowedCalls(step, completionCalls);
+						for (const [id, result] of completionResults) resultsById.set(id, result);
+						evidenceCompletionRejections = 0;
+					} else {
+						completionEvidenceRejectedThisRound = true;
+						evidenceCompletionRejections++;
+						for (const call of completionCalls) {
+							const rejected: ToolResult = {
+								output:
+									`blocked: [step_evidence_required] 步骤 #${step.id}（${step.title}）尚未满足验收证据，不能完成。` +
+									`验收标准：${step.evidence || "先完成当前步骤要求的客观验证"}。` +
+									`允许工具：${step.allowedTools.filter((name) => name !== "complete_step").join(", ") || "无"}。`,
+								error: "step_evidence_required",
+								durationMs: 0,
+								ok: false,
+								toolName: "complete_step",
+								args: call.args,
+								exitCode: null,
+								errorKind: "step_evidence_required"
+							};
+							this.emitRejected(call.id, rejected);
+							resultsById.set(call.id, rejected);
+						}
+					}
+				}
 
 				const truncAfterExec = nextWriteTruncationStreak([...resultsById.values()], writeTruncationStreak, writeTruncationPath);
 				// Only advance streak from this round's truncations if we didn't just succeed a write
@@ -2064,6 +2103,19 @@ export class WorkflowEngine {
 				}
 
 				const requestedCompletion = orderedResults.some((result) => result.toolName === "complete_step" && result.ok);
+				if (completionEvidenceRejectedThisRound) {
+					roundInstruction = [
+						roundInstruction,
+						`【缺少验收证据】不能完成步骤 #${step.id}。请先使用与验收标准匹配的工具取得新证据，再调用 complete_step。`
+					]
+						.filter(Boolean)
+						.join("\n\n");
+					if (evidenceCompletionRejections >= 2) {
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
+						attempt = maxIterations;
+						continue;
+					}
+				}
 				if (requestedCompletion && !success) {
 					const orphans = orphanWriteArtifacts(step, evidenceResults);
 					if (step.kind === "write" && orphans.length > 0) {

@@ -117,6 +117,35 @@ function resultOk(result: ToolResult): boolean {
   return result.ok ?? !result.error
 }
 
+/**
+ * An inspect step can explicitly ask for a deterministic validator instead of a
+ * file read.  Keep this opt-in: a successful validator must be named in the
+ * step's evidence contract and must prove the same target file.
+ */
+function declaredStructuredValidationMatches(step: PlanStepState, result: ToolResult): boolean {
+  const validation = result.validation
+  if (!validation?.valid) return false
+
+  const contract = String(step.evidence || '').toLowerCase()
+  const expected = validation.kind === 'mixin'
+    ? { tool: 'fabric_mixin_validate', kind: 'mixin' }
+    : validation.kind === 'recipe'
+      ? { tool: 'fabric_recipe_validate', kind: 'recipe' }
+      : null
+  if (!expected || result.toolName !== expected.tool || validation.kind !== expected.kind) return false
+  if (!contract.includes(expected.tool)) return false
+
+  const target = step.targetPath
+  if (!target) return true
+  const reportedPaths = [
+    validation.targetPath,
+    result.artifactPath,
+    ...(result.artifactPaths || []),
+    String(result.args?.sourcePath || result.args?.path || '')
+  ].filter((path): path is string => Boolean(path))
+  return reportedPaths.some((path) => patternMatchesPath(target, path))
+}
+
 export function canToolResultAdvanceStep(
   step: PlanStepState | null,
   result: ToolResult
@@ -131,6 +160,9 @@ export function canToolResultAdvanceStep(
   const toolName = result.toolName
 
   if (kind === 'inspect') {
+    if (declaredStructuredValidationMatches(step, result)) {
+      return { ok: true, reason: 'inspect_structured_validation' }
+    }
     const ok =
       toolName === 'read_file' ||
       toolName === 'list_directory' ||

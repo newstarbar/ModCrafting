@@ -1,6 +1,7 @@
 import type { ChronoEntry, DisplayMessage } from '../types/display-message'
 import type { ChatMessage } from '../harness/chat-message.ts'
 import { contentAsText } from '../harness/chat-message.ts'
+import type { ClassifierDiagnostics } from '../harness/turn-classifier.ts'
 import type { PlanStep } from '../components/TaskPlan'
 import type { ChatTurn } from './chat-turns.ts'
 import { groupMessagesIntoTurns } from './chat-turns.ts'
@@ -223,6 +224,7 @@ export interface BuildSessionMarkdownOptions {
   phase?: string
   activePlanSteps?: PlanStep[]
   controllerMessages?: ChatMessage[]
+  classifierDiagnostics?: ClassifierDiagnostics[]
 }
 
 function maskEndpoint(endpoint?: string): string {
@@ -374,6 +376,13 @@ export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string 
   }
 
   lines.push(...controllerAppendix(opts.controllerMessages))
+
+  if (opts.classifierDiagnostics?.length) {
+    lines.push('---', '', '## 附录 · 意图分类器诊断', '')
+    lines.push('_仅含 Provider、模型、endpoint 主机、失败阶段和 HTTP 状态；不包含 API Key 或请求正文。_', '')
+    lines.push(jsonBlock(opts.classifierDiagnostics))
+    lines.push('')
+  }
 
   return lines.join('\n').replace(/\n{3,}/g, '\n\n')
 }
