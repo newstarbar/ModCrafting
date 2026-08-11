@@ -25,12 +25,81 @@ function validatorFor(schema: Record<string, unknown>): ValidateFunction {
   return validator
 }
 
-function formatErrors(errors: ErrorObject[] | null | undefined): string {
+function formatErrors(errors: ErrorObject[] | null | undefined, toolName?: string): string {
   if (!errors?.length) return '参数不符合工具 Schema'
-  return errors
+  const detail = errors
     .slice(0, 5)
     .map((error) => `${error.instancePath || '/'} ${error.message || 'invalid'}`)
     .join('; ')
+  if (toolName === 'submit_plan' && errors.some((error) => /^\/steps\/\d+$/.test(error.instancePath) && error.keyword === 'type')) {
+    return `${detail}。steps 的每一项必须是 JSON 对象，不能是字符串；合法示例：` +
+      `{"steps":[{"kind":"write","description":"实现功能","targetPath":"src/main/java/.../Feature.java","evidence":"文件写入成功"}]}`
+  }
+  return detail
+}
+
+function parseEmbeddedObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+const EMBEDDED_STEP_FIELDS = ['kind', 'description', 'targetPath', 'evidence'] as const
+
+/** MiniMax-compatible fallback for nested step values. Some compatible
+ * endpoints keep the outer arguments as JSON but serialize each array item as
+ * either XML fields or a comma-separated key=value record. Only known fields
+ * are accepted; a missing kind/description keeps the value invalid so the
+ * schema can report it instead of guessing. */
+export function parseEmbeddedPlanStep(value: unknown): Record<string, unknown> | null {
+  const json = parseEmbeddedObject(value)
+  if (json) return json
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+
+  const xml: Record<string, unknown> = {}
+  for (const field of EMBEDDED_STEP_FIELDS) {
+    const match = text.match(new RegExp(`<${field}>\\s*([\\s\\S]*?)\\s*</${field}>`, 'i'))
+    if (match?.[1]?.trim()) xml[field] = match[1].trim()
+  }
+  if (typeof xml.kind === 'string' && typeof xml.description === 'string') return xml
+
+  const assignments: Record<string, unknown> = {}
+  const fieldPattern = /(?:^|,\s*)(kind|description|targetPath|evidence)\s*=\s*([\s\S]*?)(?=,\s*(?:kind|description|targetPath|evidence)\s*=|$)/gi
+  let match: RegExpExecArray | null
+  while ((match = fieldPattern.exec(text)) !== null) {
+    const field = match[1]
+    const fieldValue = match[2]?.trim()
+    if (fieldValue) assignments[field] = fieldValue
+  }
+  return typeof assignments.kind === 'string' && typeof assignments.description === 'string'
+    ? assignments
+    : null
+}
+
+/** Some OpenAI-compatible providers encode nested array objects as JSON strings. */
+export function normalizeToolCallArguments(call: ModelToolCall): ModelToolCall {
+  if (call.name !== 'submit_plan' || !call.args || typeof call.args !== 'object' || Array.isArray(call.args)) return call
+  const steps = call.args.steps
+  if (!Array.isArray(steps)) return call
+  let changed = false
+  const normalizedSteps = steps.map((step) => {
+    const parsed = parseEmbeddedPlanStep(step)
+    if (!parsed) return step
+    changed = true
+    return parsed
+  })
+  if (!changed) return call
+  const args = { ...call.args, steps: normalizedSteps }
+  return { ...call, args, rawArguments: JSON.stringify(args) }
 }
 
 function rejectedResult(
@@ -116,30 +185,31 @@ export function validateToolCalls(
   const rejected = new Map<string, ToolResult>()
 
   for (const call of calls) {
-    const schema = offered.get(call.name)
+    const normalizedCall = normalizeToolCallArguments(call)
+    const schema = offered.get(normalizedCall.name)
     if (!schema) {
       rejected.set(
-        call.id,
-        rejectedNotOfferedResult(call, offeredSchemas, context)
+        normalizedCall.id,
+        rejectedNotOfferedResult(normalizedCall, offeredSchemas, context)
       )
       continue
     }
 
     try {
-      const parsed = JSON.parse(call.rawArguments || '{}') as unknown
+      const parsed = JSON.parse(normalizedCall.rawArguments || '{}') as unknown
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         rejected.set(
-          call.id,
-          rejectedResult(call, 'invalid_tool_arguments', 'arguments 必须是 JSON object')
+          normalizedCall.id,
+          rejectedResult(normalizedCall, 'invalid_tool_arguments', 'arguments 必须是 JSON object')
         )
         continue
       }
     } catch {
       const hint =
-        call.name === 'write_file' || call.name === 'edit_file'
+        normalizedCall.name === 'write_file' || normalizedCall.name === 'edit_file'
           ? 'arguments 不是合法 JSON（大文件易截断）。整文件重写请：① write_file 短骨架（overwrite=true，内容建议 <80 行）；② 多次 edit_file，每次 new_string 只加一小段方法/字段。禁止再次提交整文件 JSON；此问题与文档无关，不要 fabric_docs_search。'
           : 'arguments 不是合法 JSON'
-      rejected.set(call.id, rejectedResult(call, 'invalid_tool_arguments', hint))
+      rejected.set(normalizedCall.id, rejectedResult(normalizedCall, 'invalid_tool_arguments', hint))
       continue
     }
 
@@ -149,18 +219,18 @@ export function validateToolCalls(
     } catch (error) {
       rejected.set(
         call.id,
-        rejectedResult(call, 'invalid_tool_arguments', `工具 Schema 无效：${String(error)}`)
+        rejectedResult(normalizedCall, 'invalid_tool_arguments', `工具 Schema 无效：${String(error)}`)
       )
       continue
     }
-    if (!validator(call.args)) {
+    if (!validator(normalizedCall.args)) {
       rejected.set(
-        call.id,
-        rejectedResult(call, 'invalid_tool_arguments', formatErrors(validator.errors))
+        normalizedCall.id,
+        rejectedResult(normalizedCall, 'invalid_tool_arguments', formatErrors(validator.errors, normalizedCall.name))
       )
       continue
     }
-    accepted.push(call)
+    accepted.push(normalizedCall)
   }
 
   return { accepted, rejected }

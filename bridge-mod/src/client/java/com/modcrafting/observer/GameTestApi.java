@@ -32,6 +32,14 @@ public final class GameTestApi {
         out.put("commandExecution", client != null && client.getServer() != null);
         out.put("snapshot", true);
         out.put("queryKinds", List.of("registry", "block", "entities", "recipe"));
+        out.put("observation", Map.of(
+                "clientPlayer", true,
+                "serverPlayer", client != null && client.getServer() != null,
+                "hudTrace", true,
+                "renderTrace", true,
+                "renderTraceFields", List.of("entityUuid", "entityType", "rendererClass", "worldTick", "observedAt"),
+                "traceCapacity", 256
+        ));
         out.put("testWorld", "ModCrafting Test World");
         return out;
     }
@@ -90,6 +98,7 @@ public final class GameTestApi {
         out.put("worldTime", client.world.getTime());
         out.put("worldName", client.getServer() == null ? null : client.getServer().getSaveProperties().getLevelName());
         out.put("player", GameQueries.player());
+        out.put("serverPlayer", serverPlayerSnapshot(client));
         out.put("inventory", GameQueries.inventory());
         out.put("screen", GameQueries.screen());
         Map<String, Object> widgetState = GameQueries.widgets();
@@ -116,6 +125,8 @@ public final class GameTestApi {
         double radius = body != null && body.get("entityRadius") != null ? Math.max(1, Math.min(64, doubleValue(body.get("entityRadius")))) : 32;
         Map<String, Object> nearby = GameQueries.nearby(radius);
         out.put("entities", nearby.getOrDefault("entities", List.of()));
+        out.put("hudTrace", ObservationTrace.hudSnapshot());
+        out.put("renderTrace", ObservationTrace.renderSnapshot());
         List<String> recipes = new ArrayList<>();
         MinecraftServer server = client.getServer();
         if (server != null) {
@@ -125,6 +136,25 @@ public final class GameTestApi {
             out.put("recipeQuerySupported", false);
         }
         out.put("recipes", recipes);
+        return out;
+    }
+
+    private static Map<String, Object> serverPlayerSnapshot(MinecraftClient client) {
+        MinecraftServer server = client == null ? null : client.getServer();
+        if (server == null || client.player == null) return Map.of("available", false);
+        ServerPlayerEntity player = server.getPlayerManager().getPlayer(client.player.getUuid());
+        if (player == null) return Map.of("available", false);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("available", true);
+        out.put("uuid", player.getUuidAsString());
+        out.put("x", player.getX());
+        out.put("y", player.getY());
+        out.put("z", player.getZ());
+        out.put("yaw", player.getYaw());
+        out.put("pitch", player.getPitch());
+        out.put("health", player.getHealth());
+        out.put("maxHealth", player.getMaxHealth());
+        out.put("worldTick", player.getWorld().getTime());
         return out;
     }
 

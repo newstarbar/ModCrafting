@@ -12,11 +12,13 @@ See [Test Lab MCP](./test-lab-mcp.md) for the stdio tools, sandbox model, report
 
 `run` 与 `game_test` 是两个独立的宿主步骤：前者只确认客户端和桥接已经启动；后者执行 `Arrange → Act → Assert → Cleanup`，只有 `mc_run_test` 返回结构化 `PASS` 才能完成。每次 `game_test` 都会创建新会话，旧截图、旧聊天和旧快照不得复用为证据。
 
-- `submit_plan.gameTest` 和 `mc_test_scenario` 使用严格的断言联合 Schema；未知 `type`、旧 `kind`、缺字段和占位符会返回字段级错误。可声明 `actions`；热键交互编译为按键动作，截图不能单独通过。
+计划必须提交 `AcceptanceContract`。它把用户任务拆为带 `sourceQuote` 的原子 requirement，并为每条 requirement 选择 `build_success`、`game_assertion` 或 `user_confirmation` Oracle。Harness 只校验契约完整性、证据时序和实际结果，绝不从自然语言推断某项功能应该使用哪一个业务类、Mixin、模型或 API。
+
+- `submit_plan` 的客观验收放在 `AcceptanceContract.game_assertion`；`mc_test_scenario` 保持 V2 兼容。断言支持旧 V2 类型以及通用 `snapshot_value` / `snapshot_changed`（来源 + JSON Pointer）、`render_trace` 和 `hud_text`。未知 `type`、旧 `kind`、缺字段和占位符会返回字段级错误。
 - 提交计划会固定重排为实现 → build → run → `game_test`。恢复旧会话时，误标为 `inspect` 的 `mc_run_test` 步骤会迁移为 `game_test`，并从计划或旧 JSON 工具输出恢复原 `scenarioId`。
 - 宿主固定使用 `ModCrafting Test World` 与 `x/z=-16..16、y=96..112` 测试区，准备阶段会清背包、状态、区域和带 `modcrafting_test` 标签的实体，清理阶段再次回收。
 - 裁决只有 `PASS`、`FAIL`、`INCONCLUSIVE`。桥接缺少能力、导航/世界异常、纯视觉布局或无法查询的状态均为 `INCONCLUSIVE`，禁止自动改代码。相同客观断言在清理后的两个独立会话连续失败，才允许进入修复模式。
-- V2 桥接提供 `/v2/capabilities`、`/v2/command`、`/v2/snapshot` 和 `/v2/query`；快照带时间戳和世界 tick。V1 可继续协助操作，但不能产生自动通过。
+- V2 桥接提供 `/v2/capabilities`、`/v2/command`、`/v2/snapshot` 和 `/v2/query`；快照带客户端/服务端玩家状态、HUD 文本轨迹、实体渲染轨迹、时间戳和世界 tick。能力未提供时结果只能是 `INCONCLUSIVE`。V1 可继续协助操作，但不能产生自动通过。
 - 每次会话会保存 JSON 报告到应用数据目录的 `game-test-reports/`，其中包含动作、命令、断言、新鲜快照、清理和最终裁决；不写入模组仓库。
 
 Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/harness/`。

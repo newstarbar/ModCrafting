@@ -14,6 +14,7 @@
 		"test:harness": "npm run test",
 		"test:mcp": "node --experimental-strip-types scripts/mcp/modcrafting-test-mcp.ts --self-test",
 		"test:app": "node --experimental-strip-types scripts/test/run-app-automation.ts",
+		"test:app:hidden": "node --experimental-strip-types scripts/test/run-app-automation.ts --hidden",
 		"test:app:live": "node --experimental-strip-types scripts/test/run-app-automation.ts --live",
 		"test:app:game": "node --experimental-strip-types scripts/test/run-app-automation.ts --game",
 		"test:mcp:serve": "node --experimental-strip-types scripts/mcp/modcrafting-test-mcp.ts",

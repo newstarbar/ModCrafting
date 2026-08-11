@@ -37,7 +37,9 @@ import {
 	type MixinSide
 } from "./mixin-registration.ts";
 import { listDirectoryEmptyFileMessage, pathBasenameLooksLikeFile } from "./list-directory-guard.ts";
-import { createGameTestSpec, formatGameTestSpec } from "./game-test-protocol.ts";
+import { createGameTestSpec, formatGameTestSpec, validateGameAssertions } from "./game-test-protocol.ts";
+import { MAX_IMPLEMENTATION_PLAN_STEPS } from "../utils/plan-steps.ts";
+import { gameAssertionsForContract, validateAcceptanceContract } from "./acceptance-contract.ts";
 
 async function resolveMcVersion(args: Record<string, unknown>): Promise<string> {
 	if (typeof args.mcVersion === "string" && args.mcVersion.trim()) return args.mcVersion.trim();
@@ -1406,7 +1408,18 @@ export const fabricMixinTargetLookupTool: Tool = {
 			descriptor: args.descriptor ? String(args.descriptor) : undefined,
 			memberKind: args.memberKind === "field" || args.memberKind === "method" ? args.memberKind : "any"
 		});
-		if (!result.ok) return `Error: ${result.error || "Fabric symbol lookup failed"}\n${JSON.stringify(result, null, 2)}`;
+		if (!result.ok) {
+			return `Error: ${result.error || "Fabric symbol lookup failed"}\n${JSON.stringify({
+				ok: false,
+				version: result.version,
+				yarnMappings: result.yarnMappings,
+				class: result.class,
+				methods: result.methods.slice(0, 12),
+				fields: result.fields.slice(0, 12),
+				suggestions: result.suggestions.slice(0, 12),
+				ambiguous: result.ambiguous
+			}, null, 2)}`;
+		}
 		return JSON.stringify(result, null, 2);
 	}
 };
@@ -1447,7 +1460,15 @@ export const fabricMixinScaffoldTool: Tool = {
 		if (!mixinClass.startsWith(`${mixinPackage}.`)) return "Error: mixinClass must be inside mixinPackage";
 		const memberKind = injectionType === "accessor" ? "field" : "method";
 		const lookup = await window.api.lookupFabricSymbol({ className: targetClass, memberName: selector, descriptor, memberKind });
-		if (!lookup.ok || !lookup.class) return `Error: Mixin target lookup failed: ${lookup.error || "not found"}\n${JSON.stringify(lookup, null, 2)}`;
+		if (!lookup.ok || !lookup.class) {
+			return `Error: Mixin target lookup failed: ${lookup.error || "not found"}\n${JSON.stringify({
+				class: lookup.class,
+				methods: lookup.methods.slice(0, 12),
+				fields: lookup.fields.slice(0, 12),
+				suggestions: lookup.suggestions.slice(0, 12),
+				ambiguous: lookup.ambiguous
+			}, null, 2)}`;
+		}
 		if (lookup.class.side === "client" && side !== "client") return "Error: client-only target must be registered in the client Mixin array";
 		const member = memberKind === "field" ? lookup.fields[0] : lookup.methods[0];
 		if (!member) return "Error: exact target member was not found";
@@ -2053,9 +2074,10 @@ export const fabricTemplateGenerateTool: Tool = {
 };
 
 // ── submit_plan ──
+const GAME_INPUT_ACTIONS = ['click_at', 'click_widget', 'set_text', 'key_press', 'key_down', 'key_up', 'mouse_click', 'mouse_move', 'scroll', 'forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint', 'use', 'attack', 'inventory', 'drop', 'swap_hands', 'key']
 const GAME_ACTION_SCHEMA = {
 	type: 'object', additionalProperties: false,
-	properties: { type: { type: 'string', enum: ['command', 'input', 'wait'] }, command: { type: 'string', minLength: 1 }, action: { type: 'string', minLength: 1 }, args: { type: 'object' }, ms: { type: 'number', minimum: 0 }, label: { type: 'string', minLength: 1 } },
+	properties: { type: { type: 'string', enum: ['command', 'input', 'wait'] }, command: { type: 'string', minLength: 1 }, action: { type: 'string', enum: GAME_INPUT_ACTIONS }, args: { type: 'object' }, ms: { type: 'number', minimum: 0 }, label: { type: 'string', minLength: 1 } },
 	required: ['type'],
 	allOf: [{ if: { properties: { type: { const: 'command' } } }, then: { required: ['command'] } }, { if: { properties: { type: { const: 'input' } } }, then: { required: ['action'] } }, { if: { properties: { type: { const: 'wait' } } }, then: { required: ['ms'] } }]
 }
@@ -2069,10 +2091,35 @@ const GAME_ASSERTION_SCHEMA = {
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'entity_exists' }, entityType: { type: 'string', minLength: 1 }, tag: { type: 'string', minLength: 1 }, exists: { type: 'boolean' }, label: { type: 'string' } }, required: ['type'], anyOf: [{ required: ['entityType'] }, { required: ['tag'] }] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'screen_matches' }, screenName: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'screenName'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'widget_state' }, label: { type: 'string', minLength: 1 }, enabled: { type: 'boolean' }, labelText: { type: 'string', minLength: 1 } }, required: ['type', 'label'] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'player_state' }, path: { type: 'string', minLength: 1 }, equals: {} }, required: ['type', 'path', 'equals'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'player_state' }, path: { type: 'string', minLength: 1 }, equals: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'path', 'equals'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'recipe_exists' }, recipeId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'recipeId'] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'state_changed' }, path: { type: 'string', minLength: 1 }, from: {}, to: {}, label: { type: 'string' } }, required: ['type', 'path'], anyOf: [{ required: ['from'] }, { required: ['to'] }] }
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'state_changed' }, path: { type: 'string', minLength: 1 }, from: {}, to: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'path'], anyOf: [{ required: ['from'] }, { required: ['to'] }] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_value' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace'] }, pointer: { type: 'string', pattern: '^/' }, equals: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer', 'equals'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_changed' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace'] }, pointer: { type: 'string', pattern: '^/' }, from: {}, to: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer'], anyOf: [{ required: ['from'] }, { required: ['to'] }] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'render_trace' }, entityType: { type: 'string' }, rendererClass: { type: 'string' }, modelClass: { type: 'string' }, textureId: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type'], anyOf: [{ required: ['entityType'] }, { required: ['rendererClass'] }, { required: ['modelClass'] }, { required: ['textureId'] }] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'hud_text' }, text: { type: 'string', minLength: 1 }, match: { type: 'string', enum: ['exact', 'contains'] }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'text'] }
 	]
+}
+
+const ACCEPTANCE_CONTRACT_SCHEMA = {
+	type: 'object', additionalProperties: false,
+	properties: {
+		version: { const: 1 },
+		requirements: {
+			type: 'array', minItems: 1,
+			items: {
+				type: 'object', additionalProperties: false,
+				properties: {
+					id: { type: 'string', minLength: 1 }, sourceQuote: { type: 'string', minLength: 1 }, claim: { type: 'string', minLength: 1 },
+					oracle: { anyOf: [
+						{ type: 'object', additionalProperties: false, properties: { type: { const: 'build_success' } }, required: ['type'] },
+						{ type: 'object', additionalProperties: false, properties: { type: { const: 'game_assertion' }, assertion: GAME_ASSERTION_SCHEMA }, required: ['type', 'assertion'] },
+						{ type: 'object', additionalProperties: false, properties: { type: { const: 'user_confirmation' }, prompt: { type: 'string', minLength: 1 }, capture: { type: 'string', enum: ['screenshot'] } }, required: ['type', 'prompt'] }
+					] }
+				}, required: ['id', 'sourceQuote', 'claim', 'oracle']
+			}
+		}
+	}, required: ['version', 'requirements']
 }
 
 export const submitPlanTool: Tool = {
@@ -2082,10 +2129,11 @@ export const submitPlanTool: Tool = {
 	schema: {
 		type: "object",
 		properties: {
+			acceptanceContract: ACCEPTANCE_CONTRACT_SCHEMA,
 			steps: {
 				type: "array",
 				minItems: 1,
-				maxItems: 6,
+				maxItems: MAX_IMPLEMENTATION_PLAN_STEPS,
 				items: {
 					type: "object",
 					additionalProperties: false,
@@ -2117,13 +2165,14 @@ export const submitPlanTool: Tool = {
 					modId: { type: "string", minLength: 1 },
 					hotkey: { type: "string", minLength: 1 },
 					actions: { type: "array", items: GAME_ACTION_SCHEMA },
+					/** Legacy input only. New plans place all objective assertions in acceptanceContract. */
 					assertions: { type: "array", minItems: 1, items: GAME_ASSERTION_SCHEMA },
 					visualOnly: { type: "boolean" }
 				},
 				required: ["featureType", "assertions"]
 			}
 		},
-		required: ["steps"],
+		required: ["steps", "acceptanceContract"],
 		additionalProperties: false
 	},
 	readOnly: () => true,
@@ -2132,22 +2181,29 @@ export const submitPlanTool: Tool = {
 		const gameTest = args.gameTest && typeof args.gameTest === "object" && !Array.isArray(args.gameTest)
 			? args.gameTest as Record<string, unknown>
 			: undefined;
+		const contract = validateAcceptanceContract(args.acceptanceContract, (assertion) => {
+			const candidate = validateGameAssertions([assertion])
+			return candidate.ok ? { ok: true } : { ok: false, error: candidate.error }
+		});
+		if (!contract.ok) return `Error: ${contract.error}`;
 		const gameRelevant = steps.some((step) => {
 			const value = step && typeof step === "object" ? step as Record<string, unknown> : {};
 			return /(?:\.java|src\/main\/resources|物品|方块|配方|实体|玩家交互|HUD|GUI|mixin|recipe|minecraft|fabric)/i.test(`${value.kind || ""} ${value.description || ""}`);
 		});
-		if (gameRelevant && !gameTest) {
-			return "Error: 涉及 Minecraft 游戏行为的计划必须提供 gameTest（featureType、具体 subjectId/hotkey 与至少一条客观 assertions）。截图、进入世界或命令已发送不能作为验收。";
+		const hasGameOracle = contract.contract.requirements.some((requirement) => requirement.oracle.type === 'game_assertion');
+		if (gameRelevant && (!gameTest || !hasGameOracle)) {
+			return "Error: 涉及 Minecraft 游戏行为的计划必须提供 gameTest 与 acceptanceContract.game_assertion。截图、进入世界或命令已发送不能作为验收。";
 		}
-		if (!gameTest) return `\`\`\`json\n${JSON.stringify(steps, null, 2)}\n\`\`\``;
+		if (!gameTest) return `\`\`\`json\n${JSON.stringify({ steps, acceptanceContract: contract.contract }, null, 2)}\n\`\`\``;
 		const created = createGameTestSpec({
 			feature_type: gameTest.featureType,
 			subject_id: gameTest.subjectId,
 			mod_id: gameTest.modId,
 			hotkey: gameTest.hotkey,
-			assertions: gameTest.assertions,
+			assertions: gameAssertionsForContract(contract.contract),
 			actions: gameTest.actions,
-			visual_only: gameTest.visualOnly
+			visual_only: gameTest.visualOnly,
+			acceptanceContract: contract.contract
 		});
 		if (!created.ok) return `Error: ${created.error}`;
 		const plannedSteps = [...steps, {
@@ -2155,7 +2211,7 @@ export const submitPlanTool: Tool = {
 			description: `执行确定性游戏测试（mc_run_test scenarioId=${created.spec.id}；仅 PASS 完成）`,
 			evidence: "V2 GameTestSession verdict=PASS 与逐条断言的新鲜证据"
 		}];
-		return `\`\`\`json\n${JSON.stringify({ steps: plannedSteps, gameTest: created.spec }, null, 2)}\n\`\`\`\n\n${formatGameTestSpec(created.spec)}`;
+		return `\`\`\`json\n${JSON.stringify({ steps: plannedSteps, gameTest: created.spec, acceptanceContract: contract.contract }, null, 2)}\n\`\`\`\n\n${formatGameTestSpec(created.spec)}`;
 	}
 };
 

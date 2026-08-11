@@ -1,0 +1,22 @@
+{
+  "id": "player-morph-toggle",
+  "fixturePath": "resources/_offline_verify_project",
+  "mode": "agent",
+  "timeoutMs": 3600000,
+  "clarificationResponses": [
+    "Use a single-player integrated-server implementation. Use the requested toggle key, keep the player's identity stable, and choose deterministic default values for unspecified details."
+  ],
+  "prompt": "制作一个 Fabric 模组：玩家按指定快捷键切换形态，再次按键恢复；请完整实现、构建、启动并在专用测试世界验证。",
+  "acceptanceContract": {
+    "version": 1,
+    "requirements": [
+      { "id": "build", "sourceQuote": "完整实现、构建", "claim": "项目构建成功", "oracle": { "type": "build_success" } },
+      { "id": "toggle", "sourceQuote": "按指定快捷键切换形态", "claim": "按键后可观测状态发生变化", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_changed", "source": "player", "pointer": "/width", "afterAction": 0, "to": 1 } } },
+      { "id": "visual", "sourceQuote": "切换形态", "claim": "视觉形态符合设计", "oracle": { "type": "user_confirmation", "prompt": "请确认前台 Minecraft 截图中的形态外观。", "capture": "screenshot" } }
+    ]
+  },
+  "assertions": [
+    { "type": "tool_called", "name": "trigger_build" },
+    { "type": "tool_called", "name": "mc_run_test" }
+  ]
+}

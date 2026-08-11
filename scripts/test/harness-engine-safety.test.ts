@@ -1,14 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { validateToolCalls } from '../../src/renderer/src/harness/tool-call-validator.ts'
-import { executeBatch, Registry } from '../../src/renderer/src/harness/tools.ts'
+import { parseEmbeddedPlanStep, validateToolCalls } from '../../src/renderer/src/harness/tool-call-validator.ts'
+import { executeBatch, inferToolErrorKind, Registry } from '../../src/renderer/src/harness/tools.ts'
 import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
 import { WorkflowEngine } from '../../src/renderer/src/harness/workflow-engine.ts'
 import { isNonBurningRejectionRound } from '../../src/renderer/src/harness/workflow-engine.ts'
+import { isBuildFailureWithinRepairScope } from '../../src/renderer/src/harness/workflow-engine.ts'
 import { compilePlanFromText } from '../../src/renderer/src/harness/plan-compiler.ts'
 import { microCompact } from '../../src/renderer/src/harness/context-compact.ts'
 import { planToolNames, recommendedToolNames } from '../../src/renderer/src/harness/tool-policy.ts'
+import { rejectedToolCallSignature } from '../../src/renderer/src/harness/tool-rejection-guard.ts'
+import { MAX_IMPLEMENTATION_PLAN_STEPS, MAX_PLAN_STEPS } from '../../src/renderer/src/utils/plan-steps.ts'
+import { structuredGameTestGate } from '../../src/renderer/src/harness/plan-execution-gate.ts'
 
 test('tool boundary rejects tools not offered in the current phase', () => {
   const result = validateToolCalls([
@@ -22,6 +26,27 @@ test('tool boundary rejects tools not offered in the current phase', () => {
 
   assert.equal(result.accepted.length, 0)
   assert.equal(result.rejected.get('call_write')?.errorKind, 'tool_not_offered')
+})
+
+test('blocked tool output preserves the concrete host rejection kind', () => {
+  assert.equal(
+    inferToolErrorKind('blocked: [aci_write_gate] file exists'),
+    'aci_write_gate'
+  )
+  assert.equal(inferToolErrorKind('Error: compiler failed'), undefined)
+})
+
+test('ACI write guidance does not consume a write/build attempt', () => {
+  assert.equal(isNonBurningRejectionRound([{
+    output: 'blocked: [aci_write_gate] read first',
+    error: 'blocked: [aci_write_gate] read first',
+    durationMs: 0,
+    ok: false,
+    toolName: 'write_file',
+    args: {},
+    exitCode: null,
+    errorKind: 'aci_write_gate'
+  }]), true)
 })
 
 test('tool boundary rejects malformed or schema-invalid arguments', () => {
@@ -43,6 +68,111 @@ test('tool boundary rejects malformed or schema-invalid arguments', () => {
   assert.equal(result.accepted.length, 0)
   assert.equal(result.rejected.get('bad_json')?.errorKind, 'invalid_tool_arguments')
   assert.equal(result.rejected.get('missing_path')?.errorKind, 'invalid_tool_arguments')
+})
+
+test('submit_plan normalizes provider-encoded nested JSON objects', () => {
+  const step = { kind: 'write', description: '实现功能', targetPath: 'src/main/java/Feature.java', evidence: '文件写入成功' }
+  const args = { steps: [JSON.stringify(step)] }
+  const result = validateToolCalls([{
+    id: 'plan',
+    name: 'submit_plan',
+    args,
+    rawArguments: JSON.stringify(args)
+  }], [{
+    name: 'submit_plan',
+    description: 'plan',
+    parameters: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string' },
+              description: { type: 'string' },
+              targetPath: { type: 'string' },
+              evidence: { type: 'string' }
+            },
+            required: ['kind', 'description', 'targetPath', 'evidence']
+          }
+        }
+      },
+      required: ['steps']
+    }
+  }])
+
+  assert.equal(result.rejected.size, 0)
+  assert.deepEqual(result.accepted[0]?.args.steps, [step])
+})
+
+test('MiniMax XML and key-value nested plan steps normalize deterministically', () => {
+  assert.deepEqual(
+    parseEmbeddedPlanStep(' <kind>mixin</kind> <description>使用 PigEntityModel 渲染</description> <targetPath>src/client/java/PigMixin.java</targetPath> <evidence>校验通过</evidence>'),
+    { kind: 'mixin', description: '使用 PigEntityModel 渲染', targetPath: 'src/client/java/PigMixin.java', evidence: '校验通过' }
+  )
+  assert.deepEqual(
+    parseEmbeddedPlanStep('kind=write, targetPath=src/main/java/Morph.java, description=创建状态, 包含服务端同步, evidence=编译通过'),
+    { kind: 'write', targetPath: 'src/main/java/Morph.java', description: '创建状态, 包含服务端同步', evidence: '编译通过' }
+  )
+  assert.equal(parseEmbeddedPlanStep('|\n<invoke name="submit_plan">'), null)
+})
+
+test('submit_plan string steps receive an actionable field-level example', () => {
+  const args = { steps: ['实现功能'] }
+  const result = validateToolCalls([{
+    id: 'plan', name: 'submit_plan', args, rawArguments: JSON.stringify(args)
+  }], [{
+    name: 'submit_plan', description: 'plan', parameters: {
+      type: 'object', properties: { steps: { type: 'array', items: { type: 'object' } } }, required: ['steps']
+    }
+  }])
+
+  assert.match(result.rejected.get('plan')?.output || '', /每一项必须是 JSON 对象/)
+  assert.match(result.rejected.get('plan')?.output || '', /targetPath/)
+})
+
+test('repeated array-item schema failures share one rejection signature', () => {
+  const make = (output: string) => ({
+    output,
+    toolName: 'submit_plan',
+    errorKind: 'invalid_tool_arguments' as const,
+    durationMs: 0,
+    ok: false
+  })
+  assert.equal(
+    rejectedToolCallSignature([make('/steps/0 must be object; /steps/1 must be object')]),
+    rejectedToolCallSignature([make('/steps/0 must be object; /steps/1 must be object; /steps/2 must be object')])
+  )
+})
+
+test('implementation plan capacity reserves the deterministic terminal tail', () => {
+  assert.equal(MAX_IMPLEMENTATION_PLAN_STEPS, 9)
+  assert.equal(MAX_IMPLEMENTATION_PLAN_STEPS + 3, MAX_PLAN_STEPS)
+})
+
+test('game-code prose plans cannot bypass submit_plan gameTest validation', () => {
+  assert.equal(structuredGameTestGate('1. [mixin] 修改 src/main/java/example/PlayerMixin.java').ok, false)
+  assert.equal(structuredGameTestGate('更新 docs/harness.md').ok, true)
+  assert.equal(structuredGameTestGate('```json\n{"steps":[{"kind":"mixin","targetPath":"src/main/java/X.java"}],"gameTest":{"version":2},"acceptanceContract":{"version":1}}\n```').ok, true)
+})
+
+test('repair scope recovers project-relative src path from a truncated Windows build log path', () => {
+  assert.equal(isBuildFailureWithinRepairScope(
+    'ta/Local/Temp/run/workspace/src/main/java/com/example/PigForm.java',
+    ['src/main/java/com/example/PigForm.java'],
+    'C:/Users/test/AppData/Local/Temp/run/workspace'
+  ), true)
+  assert.equal(isBuildFailureWithinRepairScope(
+    'ta/Local/Temp/run/workspace/src/main/java/com/example/Unrelated.java',
+    ['src/main/java/com/example/PigForm.java'],
+    'C:/Users/test/AppData/Local/Temp/run/workspace'
+  ), false)
+  assert.equal(isBuildFailureWithinRepairScope(
+    'od/mixin/PlayerAttributeMixin.java',
+    ['src/main/java/com/example/prefetch_mod/mixin/PlayerAttributeMixin.java'],
+    'C:/Users/test/AppData/Local/Temp/run/workspace'
+  ), true)
 })
 
 test('ordered scheduler keeps write -> read observation order', async () => {

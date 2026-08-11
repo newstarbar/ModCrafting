@@ -23,6 +23,7 @@ import { isExploreTool, planToolNames } from "./tool-policy.ts";
 import { getModelContextWindow, buildProviderThinkingFields } from "../../../shared/llm-providers.ts";
 import { LONG_REASONING_KICK, MAX_REASONING_HARD_CHARS, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
 import { stripThinkTags, stripMinimaxProtocolTokens, extractPlanFromXml, buildSubmitPlanArgs, ThinkTagStreamFilter } from "./model-output-normalizer.ts";
+import { rejectedToolCallSignature } from "./tool-rejection-guard.ts";
 
 export { isRepeatGuardedToolCall } from "./repeat-guard.ts";
 export type { ChatMessage } from "./chat-message.ts";
@@ -92,6 +93,8 @@ export class Agent {
 	private planForceSubmitOnly = false;
 	/** Plan phase: text-only replies nudged toward submit_plan. */
 	private planSubmitNudgeRounds = 0;
+	private lastRejectedToolSignature = "";
+	private consecutiveSameRejectedToolRounds = 0;
 
 	// Track written files to detect duplicate writes
 	private writtenFiles = new Map<string, string>();
@@ -139,6 +142,8 @@ export class Agent {
 		this.planOfferedRejectRounds = 0;
 		this.planForceSubmitOnly = false;
 		this.planSubmitNudgeRounds = 0;
+		this.lastRejectedToolSignature = "";
+		this.consecutiveSameRejectedToolRounds = 0;
 		this.writtenFiles.clear();
 		this.consecutiveWriteOnlyRounds = 0;
 		this.repeatSuccessCounts.clear();
@@ -602,7 +607,24 @@ export class Agent {
 				finalContent = cleanText || streamContent;
 
 				if (rawToolCalls.length > 0 && toolCalls.length === 0) {
-					if (cleanText) messages.push({ role: "assistant", content: cleanText });
+					// Preserve the exact rejected call and field-level result in model history.
+					// Previously the model only received a generic "tool rejected" nudge and
+					// therefore repeated the same malformed submit_plan forever.
+					appendToolRoundHistory(messages, streamContent, rawToolCalls, validation.rejected);
+					const signature = rejectedToolCallSignature(validation.rejected.values());
+					if (signature && signature === this.lastRejectedToolSignature) {
+						this.consecutiveSameRejectedToolRounds++;
+					} else {
+						this.lastRejectedToolSignature = signature;
+						this.consecutiveSameRejectedToolRounds = signature ? 1 : 0;
+					}
+					if (this.consecutiveSameRejectedToolRounds >= 2) {
+						const rejectedNames = [...new Set([...validation.rejected.values()].map((item) => item.toolName || "unknown"))].join(", ");
+						finalContent = `相同的非法工具调用已连续出现两次（${rejectedNames}），已停止本轮以避免循环。请依据上方字段级错误重新生成参数。`;
+						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: finalContent } });
+						this.finishRun(emitLifecycle, "repeated_invalid_tool_call");
+						return finalContent;
+					}
 					if (phase === "plan" && this.planExplorationLocked) {
 						this.planOfferedRejectRounds++;
 						const rejectedNames = [...new Set([...validation.rejected.values()].map((r) => r.toolName || "unknown"))].join(", ");
@@ -636,6 +658,8 @@ export class Agent {
 
 				if (toolCalls.length > 0) {
 					this.planOfferedRejectRounds = 0;
+					this.lastRejectedToolSignature = "";
+					this.consecutiveSameRejectedToolRounds = 0;
 				}
 
 				// Final answer — plan phase must submit_plan (or ask); prose-only is nudged.
@@ -827,7 +851,7 @@ export class Agent {
 							if (call) this.recordRepeatSuccess(name, call.args, Boolean(result.error));
 							this.emit({
 								kind: EventKind.ToolResult,
-								tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff, outcome: result.outcome, runId: result.runId, executionId: result.executionId }
+								tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff, outcome: result.outcome, runId: result.runId, executionId: result.executionId, validation: result.validation }
 							});
 							this.onToolResult?.(name, id, result.output);
 						},

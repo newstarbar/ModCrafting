@@ -235,6 +235,14 @@ export function applyClassifyContextGates(
     next = { ...next, intent: 'plan_only' }
   }
 
+  // Agent mode is an execution contract. A provider may still predict
+  // plan_only, but that is only honored when the user explicitly asks to stop
+  // after planning; otherwise implementation/build/test must continue.
+  const explicitlyPlanOnly = /(?:只|仅|先).{0,8}(?:计划|规划|方案)(?:不执行|即可|就行)?|(?:不要|无需|先别|暂不).{0,6}(?:执行|修改|动手)/i.test(input)
+  if (ctx.composerMode === 'agent' && next.intent === 'plan_only' && !explicitlyPlanOnly) {
+    next = { ...next, intent: 'develop' }
+  }
+
   if (next.isInGameVerifyRequest) {
     next = {
       ...next,

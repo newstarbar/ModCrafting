@@ -171,6 +171,11 @@ function normalizeRepairPath(value: string, projectPath: string | null): string 
 	if (root && normalized.toLowerCase().startsWith(`${root.toLowerCase()}/`)) {
 		normalized = normalized.slice(root.length + 1);
 	}
+	// Build output is capped and may begin in the middle of a Windows absolute
+	// path (for example "ta/Local/.../workspace/src/main/...").  The repair
+	// boundary is project-relative, so recover from the first known source root.
+	const relativeRoot = normalized.match(/(?:^|\/)((?:src\/(?:main|client|test|generated)\/|data\/|gradle\/).*)$/i);
+	if (relativeRoot?.[1]) normalized = relativeRoot[1];
 	return normalized.replace(/^\/+/, "");
 }
 
@@ -185,6 +190,10 @@ export function isBuildFailureWithinRepairScope(
 		const scope = normalizeRepairPath(rawPath, projectPath).replace(/\/+$/, "").toLowerCase();
 		if (!scope) continue;
 		if (candidate === scope || candidate.startsWith(`${scope}/`)) return true;
+		// A capped build output can start in the middle of the source path itself
+		// ("od/mixin/Foo.java"). Match that sufficiently-specific suffix against
+		// an exact declared file, but never broaden a directory repair scope.
+		if (candidate.includes("/") && /\/[a-z0-9_$-]+\.(?:java|kt)$/i.test(`/${candidate}`) && scope.endsWith(candidate)) return true;
 	}
 	return false;
 }
@@ -437,7 +446,14 @@ export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boole
 			result.errorKind === "policy_deferred" ||
 			result.errorKind === "tool_not_offered" ||
 			result.errorKind === "tool_call_limit" ||
-			result.errorKind === "after_control_barrier"
+			result.errorKind === "after_control_barrier" ||
+			// ACI write-gate rejections are guidance, not a write/build attempt. The
+			// model still has to read the existing file and retry with edit_file or
+			// overwrite=true. Counting the rejection as a repair attempt can exhaust
+			// a step before that corrective round is even possible.
+			result.errorKind === "aci_write_gate" ||
+			result.errorKind === "evidence_required" ||
+			result.errorKind === "step_evidence_required"
 	);
 }
 
@@ -1043,6 +1059,7 @@ export class WorkflowEngine {
 						outcome: result.outcome,
 						runId: result.runId,
 						executionId: result.executionId,
+						validation: result.validation,
 						// 始终携带截图数据供 UI 展示（不依赖 visionModel）
 						imageBase64: result.imageBase64,
 						imageMimeType: result.imageMimeType
@@ -1258,7 +1275,11 @@ export class WorkflowEngine {
 						role: "user",
 						content: buildEmptyToolCallInstruction(step)
 					});
-					attempt++;
+					// A response without a tool is a model-orchestration round, not a
+					// write/build repair attempt. MAX_STEP_MODEL_ROUNDS remains the hard
+					// guard against endless narration. Keeping the budgets separate is
+					// important for long-reasoning providers: a truncated reasoning turn
+					// must not consume the last chance to perform the requested write.
 					continue;
 				}
 
@@ -1468,7 +1489,7 @@ export class WorkflowEngine {
 							.filter(Boolean)
 							.join("\n\n")
 					);
-					if (!onlyKnowledgeRejected) attempt++;
+					if (!onlyKnowledgeRejected && !isNonBurningRejectionRound(validation.rejected.values())) attempt++;
 					continue;
 				}
 

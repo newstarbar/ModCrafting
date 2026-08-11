@@ -2,7 +2,7 @@
 
 ## Test Lab regression workflow
 
-For Harness changes, prefer a deterministic application scenario over manually replaying a diagnostic log. `npm run test:app` launches the built Electron application in a fresh profile, opens a sandbox copy of a fixture, configures an in-memory OpenAI-compatible replay provider, sends a real turn, and verifies the Controller/event ledger. `npm run test:mcp` verifies the development-only stdio MCP surface. Failures retain artifacts under `%LOCALAPPDATA%/ModCrafting Test Lab/runs/`.
+For Harness changes, prefer a deterministic application scenario over manually replaying a diagnostic log. `npm run test:app` launches the built Electron application visibly in a fresh profile, opens a sandbox copy of a fixture, configures an in-memory OpenAI-compatible replay provider, sends a real turn, and verifies the Controller/event ledger. Use `npm run test:app:hidden` for unattended/CI runs (`npm run test:app -- --hidden` also remains compatible). `npm run test:mcp` verifies the development-only stdio MCP surface. Failures retain artifacts under `%LOCALAPPDATA%/ModCrafting Test Lab/runs/`.
 
 Use a real provider or Minecraft only as an explicit low-frequency smoke test. These paths can yield `INCONCLUSIVE` when credentials, the observer bridge, startup, or the host environment is unavailable; they must never be converted to a code-repair signal.
 
@@ -14,6 +14,8 @@ Use a real provider or Minecraft only as an explicit low-frequency smoke test. T
 2. `mc_test_scenario` 根据实际功能创建带目标 ID 与断言的测试规格。
 3. `mc_run_test` 在专用 `ModCrafting Test World` 内准备环境、执行动作、采集动作后的快照、逐项断言并清理。
 4. 只有 `PASS` 可结束测试；`FAIL` 需清理后复测一次才会触发修复；`INCONCLUSIVE` 显示缺失证据并暂停，绝不把导航、桥接或视觉问题当成代码错误。
+
+实施计划先提交 `AcceptanceContract`：每条用户需求必须映射到构建成功、游戏断言或用户视觉确认。Harness 不包含样例功能的实现建议；复杂例子仅作为 Test Lab 的黑盒夹具运行。
 
 计划终端顺序固定为“实现 → 构建 → 启动客户端/桥接 → `game_test`”。执行阶段只会对真实的 `submit_plan` 调用给出阶段提示；其他被门控的工具保留原工具名和允许列表，避免错误提示驱动的调用循环。恢复历史会话时会迁移旧的 `inspect + mc_run_test` 步骤，并恢复保存在计划或工具 JSON 中的场景规格。
 
@@ -40,7 +42,7 @@ AI 规划并修改项目文件（Plan → Execute）
 | 模式 | 触发场景 | 工具集 | 行为 |
 |------|---------|--------|------|
 | **Chat** | 概念问答、方案说明 | 禁用写入/执行工具 | 直接给最佳方案不做比较 |
-| **Plan** | 开发任务 | 只读工具 + `submit_plan` | 1-6 步结构化计划 |
+| **Plan** | 开发任务 | 只读工具 + `submit_plan` | 1-9 步结构化实现计划（宿主另行追加构建、启动和游戏测试） |
 | **Execute** | 计划已批准 | 全部工具（按步骤门控） | 逐步执行，每轮必调工具，旁白 ≤2 句 |
 
 同时识别错误报告、用户症状、游戏内验证请求等侧面信号并注入到目标块中。MiniMax 分类使用兼容的工具请求（正数低温度、不强制对象式 `tool_choice`）；响应格式不兼容时同一超时预算内尝试一次 JSON-only 分类，仍失败才使用结构兜底，并在诊断导出中记录脱敏失败原因。
@@ -55,7 +57,7 @@ AI 规划并修改项目文件（Plan → Execute）
   - `MAX_READONLY_ROUNDS = 15`：超过 15 轮只读勘探后进入"建议提交"状态
   - 锁定后仍允许 `grep` / `list_directory` / `read_file`，仅禁用写入工具
   - 措辞为"建议尽快提交"而非"已锁定"
-- **输出**：`submit_plan`（write / recipe / mixin / inspect 实现步骤；游戏功能附带严格断言的 `gameTest`）
+- **输出**：`submit_plan`（write / recipe / mixin / inspect 实现步骤；`AcceptanceContract`；游戏功能附带动作定义的 `gameTest`）
 
 ### 计划编译
 

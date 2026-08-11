@@ -1,3 +1,5 @@
+import { legacyAcceptanceContract, type AcceptanceContract } from './acceptance-contract.ts'
+
 /**
  * Deterministic in-game test protocol.
  *
@@ -22,7 +24,9 @@ export type GameAction =
   | { type: 'input'; action: string; args?: Record<string, unknown>; label?: string }
   | { type: 'wait'; ms: number; label?: string }
 
-export type GameAssertion =
+export type SnapshotSource = 'player' | 'serverPlayer' | 'screen' | 'entity' | 'renderTrace' | 'hudTrace'
+
+export type GameAssertion = ({ requirementId?: string } & (
   | { type: 'command_result'; command: string; minResult?: number; label?: string }
   | { type: 'inventory_contains'; itemId: string; countAtLeast?: number; label?: string }
   | { type: 'main_hand'; itemId: string; label?: string }
@@ -30,9 +34,14 @@ export type GameAssertion =
   | { type: 'entity_exists'; entityType?: string; tag?: string; exists?: boolean; label?: string }
   | { type: 'screen_matches'; screenName: string; label?: string }
   | { type: 'widget_state'; label: string; enabled?: boolean; labelText?: string }
-  | { type: 'player_state'; path: string; equals: unknown; label?: string }
+  | { type: 'player_state'; path: string; equals: unknown; afterAction?: number; label?: string }
   | { type: 'recipe_exists'; recipeId: string; label?: string }
-  | { type: 'state_changed'; path: string; from?: unknown; to?: unknown; label?: string }
+  | { type: 'state_changed'; path: string; from?: unknown; to?: unknown; afterAction?: number; label?: string }
+  | { type: 'snapshot_value'; source: SnapshotSource; pointer: string; equals: unknown; afterAction?: number; label?: string }
+  | { type: 'snapshot_changed'; source: SnapshotSource; pointer: string; from?: unknown; to?: unknown; afterAction?: number; label?: string }
+  | { type: 'render_trace'; entityType?: string; rendererClass?: string; modelClass?: string; textureId?: string; afterAction?: number; label?: string }
+  | { type: 'hud_text'; text: string; match?: 'exact' | 'contains'; afterAction?: number; label?: string }
+))
 
 export interface GameTestSpec {
   version: 2
@@ -49,6 +58,7 @@ export interface GameTestSpec {
   cleanup: GameAction[]
   /** A visual-only claim cannot become PASS without user confirmation. */
   visualOnly?: boolean
+  acceptanceContract?: AcceptanceContract
   createdAt: number
 }
 
@@ -72,6 +82,14 @@ export interface GameTestSession {
   evidence: GameTestEvidence[]
   reason?: string
   replay: number
+}
+
+export function stateTransitionMatches(assertion: Extract<GameAssertion, { type: 'state_changed' | 'snapshot_changed' }>, before: unknown, after: unknown): boolean {
+  const fromMatches = assertion.from === undefined || JSON.stringify(before) === JSON.stringify(assertion.from)
+  const toMatches = assertion.to === undefined
+    ? JSON.stringify(before) !== JSON.stringify(after)
+    : JSON.stringify(after) === JSON.stringify(assertion.to)
+  return fromMatches && toMatches
 }
 
 const sessions = new Map<string, GameTestSpec>()
@@ -121,7 +139,8 @@ function defaultCleanup(): GameAction[] {
 
 const ASSERTION_TYPES = new Set<GameAssertion['type']>([
   'command_result', 'inventory_contains', 'main_hand', 'block_equals', 'entity_exists',
-  'screen_matches', 'widget_state', 'player_state', 'recipe_exists', 'state_changed'
+  'screen_matches', 'widget_state', 'player_state', 'recipe_exists', 'state_changed',
+  'snapshot_value', 'snapshot_changed', 'render_trace', 'hud_text'
 ])
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -158,9 +177,21 @@ export function validateGameAssertions(value: unknown): { ok: true; assertions: 
       case 'entity_exists': valid = (item.entityType === undefined || str('entityType')) && (item.tag === undefined || str('tag')) && (item.exists === undefined || typeof item.exists === 'boolean') && (str('entityType') || str('tag')); break
       case 'screen_matches': valid = str('screenName'); break
       case 'widget_state': valid = str('label') && (item.enabled === undefined || typeof item.enabled === 'boolean') && (item.labelText === undefined || str('labelText')); break
-      case 'player_state': valid = str('path') && Object.prototype.hasOwnProperty.call(item, 'equals'); break
+      case 'player_state': valid = str('path') && Object.prototype.hasOwnProperty.call(item, 'equals') &&
+        (item.afterAction === undefined || (Number.isInteger(item.afterAction) && Number(item.afterAction) >= 0)); break
       case 'recipe_exists': valid = str('recipeId'); break
-      case 'state_changed': valid = str('path') && (Object.prototype.hasOwnProperty.call(item, 'from') || Object.prototype.hasOwnProperty.call(item, 'to')); break
+      case 'state_changed': valid = str('path') &&
+        (Object.prototype.hasOwnProperty.call(item, 'from') || Object.prototype.hasOwnProperty.call(item, 'to')) &&
+        (item.afterAction === undefined || (Number.isInteger(item.afterAction) && Number(item.afterAction) >= 0)); break
+      case 'snapshot_value': valid = str('source') && str('pointer') && String(item.pointer).startsWith('/') && Object.prototype.hasOwnProperty.call(item, 'equals') &&
+        (item.afterAction === undefined || (Number.isInteger(item.afterAction) && Number(item.afterAction) >= 0)); break
+      case 'snapshot_changed': valid = str('source') && str('pointer') && String(item.pointer).startsWith('/') &&
+        (Object.prototype.hasOwnProperty.call(item, 'from') || Object.prototype.hasOwnProperty.call(item, 'to')) &&
+        (item.afterAction === undefined || (Number.isInteger(item.afterAction) && Number(item.afterAction) >= 0)); break
+      case 'render_trace': valid = (str('entityType') || str('rendererClass') || str('modelClass') || str('textureId')) &&
+        (item.afterAction === undefined || (Number.isInteger(item.afterAction) && Number(item.afterAction) >= 0)); break
+      case 'hud_text': valid = str('text') && (item.match === undefined || item.match === 'exact' || item.match === 'contains') &&
+        (item.afterAction === undefined || (Number.isInteger(item.afterAction) && Number(item.afterAction) >= 0)); break
     }
     if (!valid) return { ok: false, error: `${path} has incomplete or invalid ${type} fields.` }
     if (PLACEHOLDER_RE.test(JSON.stringify(item))) return { ok: false, error: `${path} contains an unresolved placeholder.` }
@@ -178,11 +209,54 @@ function validateActions(value: unknown, path: string): { ok: true; actions: Gam
     const itemPath = `${path}[${index}]`
     if (!item || !nonEmptyString(item.type)) return { ok: false, error: `${itemPath}.type must be command, input, or wait.` }
     if (item.type === 'command' && nonEmptyString(item.command)) actions.push({ type: 'command', command: item.command, ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
-    else if (item.type === 'input' && nonEmptyString(item.action)) actions.push({ type: 'input', action: item.action, ...(record(item.args) ? { args: item.args } : {}), ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
+    else if (item.type === 'input' && nonEmptyString(item.action)) {
+      const action = item.action === 'key' ? 'key_press' : item.action
+      const allowed = new Set(['click_at', 'click_widget', 'set_text', 'key_press', 'key_down', 'key_up', 'mouse_click', 'mouse_move', 'scroll', 'forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint', 'use', 'attack', 'inventory', 'drop', 'swap_hands'])
+      if (!allowed.has(action)) return { ok: false, error: `${itemPath}.action is unsupported; use a concrete mc_input action such as key_press.` }
+      const actionArgs = record(item.args) || {}
+      if ((action === 'key_press' || action === 'key_down' || action === 'key_up') && !nonEmptyString(actionArgs.key)) {
+        return { ok: false, error: `${itemPath}.args.key is required for ${action}.` }
+      }
+      actions.push({ type: 'input', action, ...(Object.keys(actionArgs).length ? { args: actionArgs } : {}), ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
+    }
     else if (item.type === 'wait' && numberValue(item.ms)) actions.push({ type: 'wait', ms: item.ms, ...(nonEmptyString(item.label) ? { label: item.label } : {}) })
     else return { ok: false, error: `${itemPath} has incomplete action fields.` }
   }
   return { ok: true, actions }
+}
+
+function validateAssertionTimeline(actions: GameAction[], assertions: GameAssertion[]): { ok: true } | { ok: false; error: string } {
+  const terminalTargets = new Map<string, Set<string>>()
+  for (let index = 0; index < assertions.length; index++) {
+    const assertion = assertions[index]
+    const afterAction = assertion.type === 'state_changed' || assertion.type === 'player_state' || assertion.type === 'snapshot_changed' || assertion.type === 'snapshot_value' || assertion.type === 'render_trace' || assertion.type === 'hud_text' ? assertion.afterAction : undefined
+    if (afterAction !== undefined && afterAction >= actions.length) {
+      return { ok: false, error: `assertions[${index}].afterAction=${afterAction} exceeds actions length ${actions.length}.` }
+    }
+    if (assertion.type !== 'state_changed' && assertion.type !== 'snapshot_changed') continue
+    if (assertion.afterAction === undefined && assertion.to !== undefined) {
+      const path = assertion.type === 'state_changed' ? assertion.path : `${assertion.source}:${assertion.pointer}`
+      const targets = terminalTargets.get(path) || new Set<string>()
+      targets.add(JSON.stringify(assertion.to))
+      terminalTargets.set(path, targets)
+    }
+  }
+  const hasTimeline = assertions.some((assertion) => (assertion.type === 'state_changed' || assertion.type === 'snapshot_changed') && assertion.afterAction !== undefined)
+  if (hasTimeline) {
+    const ambiguous = assertions.findIndex((assertion) => (assertion.type === 'player_state' || assertion.type === 'snapshot_value') && assertion.afterAction === undefined)
+    if (ambiguous >= 0) {
+      return { ok: false, error: `assertions[${ambiguous}].afterAction is required because this is a multi-stage interaction test.` }
+    }
+  }
+  for (const [path, targets] of terminalTargets) {
+    if (targets.size > 1) {
+      return {
+        ok: false,
+        error: `state_changed path "${path}" has contradictory terminal values. Use ordered actions and afterAction (zero-based action index) for each transition.`
+      }
+    }
+  }
+  return { ok: true }
 }
 
 /** Creates a V2 scenario only when it has concrete target IDs and assertions. */
@@ -230,6 +304,9 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
     actions.push({ type: 'wait', ms: 700, label: '等待界面打开' })
   }
 
+  const timeline = validateAssertionTimeline(actions, assertions)
+  if (!timeline.ok) return timeline
+
   const spec: GameTestSpec = {
     version: 2,
     id: nextId('scenario'),
@@ -240,6 +317,7 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
     assertions,
     cleanup: defaultCleanup(),
     visualOnly: Boolean(args.visual_only),
+    ...(args.acceptanceContract && typeof args.acceptanceContract === 'object' ? { acceptanceContract: args.acceptanceContract as AcceptanceContract } : {}),
     createdAt: Date.now()
   }
   sessions.set(spec.id, spec)
@@ -263,6 +341,8 @@ export function registerGameTestSpec(value: unknown): { ok: true; spec: GameTest
   if (!setup.ok) return setup
   if (!actions.ok) return actions
   if (!cleanup.ok) return cleanup
+  const timeline = validateAssertionTimeline(actions.actions, asserted.assertions)
+  if (!timeline.ok) return timeline
   const spec: GameTestSpec = {
     version: 2,
     id: raw.id,
@@ -277,6 +357,9 @@ export function registerGameTestSpec(value: unknown): { ok: true; spec: GameTest
     assertions: asserted.assertions,
     cleanup: cleanup.actions,
     visualOnly: Boolean(raw.visualOnly),
+    acceptanceContract: raw.acceptanceContract && typeof raw.acceptanceContract === 'object'
+      ? raw.acceptanceContract as AcceptanceContract
+      : legacyAcceptanceContract(asserted.assertions, Boolean(raw.visualOnly)),
     createdAt: numberValue(raw.createdAt) ? raw.createdAt : Date.now()
   }
   sessions.set(spec.id, spec)

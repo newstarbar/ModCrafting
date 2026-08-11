@@ -17,7 +17,7 @@ The server uses stdio: stdout is reserved for MCP protocol messages and diagnost
 2. `modcrafting_configure_provider` supplies an in-memory local replay endpoint for deterministic tests.
 3. `modcrafting_open_project` copies a fixture into the run sandbox before opening it. It never opens the original fixture in place.
 4. `modcrafting_send_turn`, `modcrafting_wait`, and `modcrafting_snapshot` exercise the real Controller and React lifecycle.
-5. `modcrafting_run_scenario` evaluates ordered event, tool, plan-step, process, and file assertions, then writes a report.
+5. `modcrafting_run_scenario` accepts either legacy inline parameters or a declarative fixture ID from `scripts/test/scenarios/`, evaluates ordered event, tool, plan-step, process, and file assertions, then writes a report with the fixture AcceptanceContract.
 6. `modcrafting_stop` cancels the application and retains failed diagnostics.
 
 The bridge only listens on `127.0.0.1`, selects a random port, and requires a fresh 256-bit bearer token on every endpoint, including health/capability reads. It has no arbitrary JavaScript execution endpoint and no CORS policy.
@@ -36,9 +36,14 @@ Screenshots are supporting artifacts only. A screenshot, successful launch, or s
 
 ```powershell
 npm run test:mcp       # MCP schema/server smoke test
-npm run test:app       # real Electron + local replay-provider regression
-npm run test:app:live # optional manual real-provider smoke entry point
-npm run test:app:game # optional Minecraft/Observer smoke entry point
+npm run test:app                 # foreground Electron + local replay-provider regression
+npm run test:app:live            # foreground manual real-provider smoke entry point
+npm run test:app:game            # foreground Minecraft/Observer smoke entry point
+npm run test:app:hidden          # background mode for unattended runs / CI
 ```
 
-The last two commands are intentionally opt-in. Daily CI and development gates use the replay provider; credentials are never copied to a test profile, sent through an MCP result, or written to reports.
+The application window is foreground-visible by default so local developers can watch Agent activity, plan steps and tool calls. `--hidden` hides only the Electron window; the runner still uses a fresh profile and sandbox workspace. Use `npm run test:app:hidden` for a warning-free npm command; `npm run test:app -- --hidden` remains compatible. The last two commands are intentionally opt-in. Daily CI and development gates use the replay provider; credentials are never copied to a test profile, sent through an MCP result, or written to reports.
+
+## Black-box scenarios
+
+`scripts/test/scenarios/` contains complex gameplay fixtures such as a reversible player-state interaction, a HUD event feed, and a post-death state restoration. They are Test Lab inputs, not Harness policy: production source must not import them or infer implementation choices from their prompts. Run one with `modcrafting_run_scenario({ scenario: "player-morph-toggle" })`; the MCP launches a foreground isolated app by default.

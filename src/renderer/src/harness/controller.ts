@@ -8,7 +8,7 @@ import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMes
 import { contentPartsAsClassifyText } from "../context/user-content.ts";
 import { Registry } from "./tools";
 import { PlanTracker } from "./plan-tracker";
-import { parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from "../utils/plan-steps";
+import { MAX_IMPLEMENTATION_PLAN_STEPS, parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from "../utils/plan-steps";
 import { logger } from "../utils/logger";
 import { buildFabricAgentPolicyPrompt } from "./fabric-agent-policy";
 import { isRetryableFetchError } from "./fetch-retry";
@@ -22,6 +22,7 @@ import { formatGradleSummary, formatJavaFileList, parseGradleProperties, scanJav
 import { canonicalizePlanSteps, isGuiFilePath, stepRequiresGuiPreview } from "./plan-normalizer.ts";
 import { hydrateGameTestSpecsFromText, registerGameTestSpec, type GameTestSpec } from "./game-test-protocol.ts";
 import { registerKnownProjectPaths } from "./tool-definitions.ts";
+import { structuredGameTestGate } from "./plan-execution-gate.ts";
 
 export interface ControllerOptions {
 	registry: Registry;
@@ -177,7 +178,7 @@ export class Controller {
 	}
 
 	private rememberPlanCandidate(planText: string): void {
-		if (planHasActionableSteps(planText) || isActionablePlanText(planText)) {
+		if (this.isActionablePlan(planText)) {
 			this.lastPlanCandidate = planText;
 		}
 	}
@@ -195,6 +196,7 @@ export class Controller {
 	 *  fills defaults. Hard-blocking on evidence left sessions stuck at plan_failed. */
 	private isActionablePlan(planText: string): boolean {
 		if (!isActionablePlanText(planText)) return false;
+		if (!structuredGameTestGate(planText).ok) return false;
 		return !PlanTracker.validationIssuesFromText(planText).some((issue) => issue.field === "description" || issue.field === "kind" || issue.field === "targetPath");
 	}
 
@@ -325,7 +327,10 @@ export class Controller {
 			}
 			return `${prefix}模型本轮未返回任何内容。请重试，或换一个模型。`;
 		}
-		const detail = planHasActionableSteps(fullPlanText) ? "计划含编号步骤但缺少目标路径（如 src/main/java/...）。" : "未能解析出符合格式的编号步骤。";
+		const gameGate = structuredGameTestGate(fullPlanText);
+		const detail = !gameGate.ok
+			? gameGate.error
+			: planHasActionableSteps(fullPlanText) ? "计划含编号步骤但缺少目标路径（如 src/main/java/...）。" : "未能解析出符合格式的编号步骤。";
 		return (
 			`${prefix}${detail}请直接发送计划，例如：\n` +
 			"1. [inspect] 确认 API — fabric_docs_search\n" +
@@ -560,11 +565,13 @@ submit_plan 参数要求：
 - 参数为 \`{"steps":[...]}\`，每个步骤包含 \`kind\`、\`description\`、\`evidence\`，并提供 \`targetPath\` 或 \`targetPaths\`。
 - **kind** 仅允许：\`write\` | \`recipe\` | \`mixin\` | \`inspect\`。
 - 示例：\`{"steps":[{"kind":"mixin","description":"实现、注册并验证二段跳 Mixin","targetPath":"src/main/java/.../JumpMixin.java","evidence":"fabric_mixin_validate 通过"}]}\`
+- submit_plan 必须带 acceptanceContract：把用户需求拆为原子 requirement，每条带 sourceQuote、claim 和 build_success / game_assertion / user_confirmation 之一。Harness 只验证契约和新鲜证据，不替你指定业务类、Mixin、模型或 API。
+- 多阶段交互测试使用断言的 afterAction 指定零基动作索引；同一状态的多次变化必须按检查点顺序声明。
 
 计划必须精简：
 - **禁止写构建/运行/测试步骤**。主机会自动在计划末尾追加：① 构建项目（gradlew build）② 启动游戏（runClient）③ 进入测试世界（mc_ensure_test_world + mc_ensure_cheats）④ 验证功能效果（mc_screenshot/mc_inspect）。Agent 只需写代码实现步骤（write/mixin/recipe/inspect）。
 - **禁止空泛步骤**（确保无错、测试功能、输出总结）。
-- **每步只做一件事**；最多 6 步。
+- **每步只做一件事**；最多 ${MAX_IMPLEMENTATION_PLAN_STEPS} 步（主机另行追加构建、启动和游戏测试）。
 - **禁止重复步骤。**
 - **不确定路径/类名时先 grep/read_file，禁止用 ask_clarification 代替勘察，禁止方案对比长文。**
 - **用户已通过模板表单提交完整需求时，禁止先探索项目；直接输出计划。**
@@ -1176,12 +1183,9 @@ ${projectInfo}`;
 							phase: "plan",
 							content:
 								"你刚才的回复不符合计划格式要求。请严格按照以下格式输出实施计划：\n\n" +
-								"方式 A（推荐编号行）：\n" +
-								"N. [kind] 简短标题 — 目标路径\n\n" +
-								"方式 B（JSON）：\n" +
-								'```json\n[{"kind":"write","description":"...","targetPath":"src/..."},...]\n```\n\n' +
-								"其中 kind 必须是 write、recipe、mixin 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence。最多 6 步。\n" +
-								"不要写构建/运行步骤，不要写背景分析段落。直接列出步骤。"
+								"不要输出编号文字或 Markdown 计划。必须调用 submit_plan，并传入 steps、acceptanceContract 与完整 gameTest。\n" +
+								`steps 的 kind 必须是 write、recipe、mixin 或 inspect；每项必须包含 targetPath（或 targetPaths）与 evidence，最多 ${MAX_IMPLEMENTATION_PLAN_STEPS} 步。\n` +
+								"acceptanceContract 必须覆盖每个用户需求；gameTest 必须包含可执行 actions，客观断言放在 acceptanceContract 的 game_assertion 中；不要写构建/运行步骤。"
 						});
 						this.onAgentStatus?.("重新生成计划...");
 						planStreamReasoning = "";
@@ -1388,8 +1392,15 @@ ${projectInfo}`;
 
 	/** Resume execution after a clarification question was answered. */
 	async answerClarification(answer: string): Promise<string> {
-		if (!this.agent.clarificationPending) return "";
-		if (this._running) return "";
+		// A clarification event is emitted as soon as the tool resolves, slightly
+		// before the originating agent turn has necessarily unwound.  UI and
+		// automation can therefore answer in that short window.  Do not silently
+		// discard a valid answer just because the prior turn is still settling.
+		const settleDeadline = Date.now() + 5_000;
+		while (this._running && Date.now() < settleDeadline) {
+			await new Promise<void>((resolve) => setTimeout(resolve, 25));
+		}
+		if (this._running || !this.agent.clarificationPending) return "";
 
 		this.agent.clarificationPending = false;
 

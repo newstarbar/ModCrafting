@@ -16,24 +16,24 @@ export interface ApiSettings {
   encryptionAvailable: boolean
 }
 
-function settingsPath(): string {
-  return path.join(app.getPath('userData'), 'api-settings.json')
+function settingsPath(userDataPath = app.getPath('userData')): string {
+  return path.join(userDataPath, 'api-settings.json')
 }
 
-function legacyApiKeyPath(): string {
-  return path.join(app.getPath('userData'), 'api-key.bin')
+function legacyApiKeyPath(userDataPath = app.getPath('userData')): string {
+  return path.join(userDataPath, 'api-key.bin')
 }
 
-function apiKeysDir(): string {
-  return path.join(app.getPath('userData'), 'api-keys')
+function apiKeysDir(userDataPath = app.getPath('userData')): string {
+  return path.join(userDataPath, 'api-keys')
 }
 
 function sanitizeProviderId(providerId: string): string {
   return providerId.replace(/[^a-z0-9_-]/gi, '_') || DEFAULT_PROVIDER_ID
 }
 
-function apiKeyPathForProvider(providerId: string): string {
-  return path.join(apiKeysDir(), `${sanitizeProviderId(providerId)}.bin`)
+function apiKeyPathForProvider(providerId: string, userDataPath = app.getPath('userData')): string {
+  return path.join(apiKeysDir(userDataPath), `${sanitizeProviderId(providerId)}.bin`)
 }
 
 let legacyKeyMigrated = false
@@ -62,13 +62,48 @@ function migrateLegacyApiKey(): void {
   }
 }
 
-function readSettingsFile(): { endpoint?: string; model?: string; providerId?: string } {
+function readSettingsFile(userDataPath = app.getPath('userData')): { endpoint?: string; model?: string; providerId?: string } {
   try {
-    const p = settingsPath()
+    const p = settingsPath(userDataPath)
     if (!fs.existsSync(p)) return {}
     return JSON.parse(fs.readFileSync(p, 'utf-8'))
   } catch {
     return {}
+  }
+}
+
+export interface LoadedApiConfigWithKey {
+  endpoint: string
+  model: string
+  providerId: string
+  apiKey: string
+}
+
+/**
+ * Read a provider from another ModCrafting profile without mutating it. Used by
+ * explicitly-enabled Test Lab live runs: the decrypted key stays in the main
+ * process and is sent only to the isolated renderer's in-memory Controller.
+ */
+export function loadApiConfigFromUserData(
+  userDataPath: string,
+  requestedProviderId?: string
+): { success: boolean; config?: LoadedApiConfigWithKey; error?: string } {
+  const file = readSettingsFile(userDataPath)
+  const endpoint = file.endpoint || DEFAULT_ENDPOINT
+  const model = file.model || DEFAULT_MODEL
+  const providerId = sanitizeProviderId(
+    requestedProviderId || file.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
+  )
+  const encrypted = readEncryptedBufferAt(apiKeyPathForProvider(providerId, userDataPath))
+    || readEncryptedBufferAt(legacyApiKeyPath(userDataPath))
+  if (!encrypted) return { success: false, error: `saved_provider_key_not_found:${providerId}` }
+  if (!safeStorage.isEncryptionAvailable()) return { success: false, error: 'safe_storage_unavailable' }
+  try {
+    const apiKey = safeStorage.decryptString(encrypted).trim()
+    if (!apiKey) return { success: false, error: `saved_provider_key_empty:${providerId}` }
+    return { success: true, config: { endpoint, model, providerId, apiKey } }
+  } catch {
+    return { success: false, error: `saved_provider_key_decrypt_failed:${providerId}` }
   }
 }
 

@@ -1,0 +1,22 @@
+{
+  "id": "kill-feed-hud",
+  "fixturePath": "resources/_offline_verify_project",
+  "mode": "agent",
+  "timeoutMs": 3600000,
+  "clarificationResponses": [
+    "Use a top-right HUD, show each event for five seconds, and use deterministic default styling for any unspecified visual details."
+  ],
+  "prompt": "制作一个 Fabric 模组：在 HUD 显示 FPS 风格击杀信息；请完整实现、构建、启动并在专用测试世界验证。",
+  "acceptanceContract": {
+    "version": 1,
+    "requirements": [
+      { "id": "build", "sourceQuote": "完整实现、构建", "claim": "项目构建成功", "oracle": { "type": "build_success" } },
+      { "id": "hud-event", "sourceQuote": "显示 FPS 风格击杀信息", "claim": "触发事件后 HUD 绘制对应文本", "oracle": { "type": "game_assertion", "assertion": { "type": "hud_text", "text": "击杀", "match": "contains", "afterAction": 1 } } },
+      { "id": "layout", "sourceQuote": "FPS 风格", "claim": "HUD 布局符合视觉设计", "oracle": { "type": "user_confirmation", "prompt": "请确认前台 Minecraft 截图中的 HUD 布局。", "capture": "screenshot" } }
+    ]
+  },
+  "assertions": [
+    { "type": "tool_called", "name": "trigger_build" },
+    { "type": "tool_called", "name": "mc_run_test" }
+  ]
+}

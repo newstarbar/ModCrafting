@@ -1,6 +1,6 @@
 # 归档索引
 
-- [2026-08-10] [Harness Test Lab and repair-safety recovery](./2026-08-10-harness-test-lab.md) — real Electron automation, stdio MCP, replay regression and bounded repair scope.
+- [2026-08-10] [Harness Test Lab and repair-safety recovery](./2026-08-10-harness-test-lab.md) — real Electron automation, stdio MCP, replay regression, bounded repair scope, and the 2026-08-11 sample-overfitting recovery.
 
 - [2026-08-10] **Agent 对话与游戏测试会话恢复** — 修复计划步骤迁移后遗留的 Mixin 证据推进和 MiniMax 意图分类全量兜底。触发：自动。
 

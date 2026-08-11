@@ -3,11 +3,14 @@ import { randomBytes, randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as http from 'http'
 import * as path from 'path'
+import { loadApiConfigFromUserData } from './api-config'
 
 export interface AutomationOptions {
   enabled: boolean
   discoveryPath?: string
   artifactsPath?: string
+  sourceUserDataPath?: string
+  allowSavedProvider?: boolean
 }
 
 interface PendingCommand {
@@ -38,12 +41,14 @@ function readArg(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined
 }
 
-export function readAutomationOptions(): AutomationOptions {
+export function readAutomationOptions(sourceUserDataPath?: string): AutomationOptions {
   const enabled = process.argv.includes('--automation')
   return {
     enabled,
     discoveryPath: readArg('--automation-discovery'),
-    artifactsPath: readArg('--automation-artifacts')
+    artifactsPath: readArg('--automation-artifacts'),
+    sourceUserDataPath,
+    allowSavedProvider: process.argv.includes('--automation-live-provider')
   }
 }
 
@@ -155,7 +160,9 @@ export function startAutomationServer(next: AutomationOptions): void {
       if (!authorized(req)) return send(res, 401, { ok: false, error: 'unauthorized' })
       const pathname = (req.url || '/').split('?')[0]
       if (req.method === 'GET' && pathname === '/v1/capabilities') {
-        return send(res, 200, { ok: true, version: 1, runId, commands: ['configure_provider', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot'] })
+        const commands = ['configure_provider', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot']
+        if (options.allowSavedProvider) commands.push('use_saved_provider')
+        return send(res, 200, { ok: true, version: 1, runId, commands })
       }
       if (req.method === 'GET' && pathname === '/v1/events') {
         const after = Number(new URL(req.url || '/', 'http://127.0.0.1').searchParams.get('after') || 0)
@@ -168,8 +175,22 @@ export function startAutomationServer(next: AutomationOptions): void {
       if (req.method === 'POST' && pathname === '/v1/command') {
         const body = await readBody(req)
         const method = String(body.method || '')
-        if (!['configure_provider', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot'].includes(method)) {
+        if (!['configure_provider', 'use_saved_provider', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot'].includes(method)) {
           return send(res, 400, { ok: false, error: 'unsupported_command' })
+        }
+        if (method === 'use_saved_provider') {
+          if (!options.allowSavedProvider || !options.sourceUserDataPath) {
+            return send(res, 403, { ok: false, error: 'saved_provider_not_enabled' })
+          }
+          const params = body.params && typeof body.params === 'object' && !Array.isArray(body.params)
+            ? body.params as Record<string, unknown> : {}
+          const loaded = loadApiConfigFromUserData(options.sourceUserDataPath, String(params.providerId || '') || undefined)
+          if (!loaded.success || !loaded.config) {
+            return send(res, 409, { ok: false, error: loaded.error || 'saved_provider_unavailable' })
+          }
+          const result = await dispatch('configure_provider', loaded.config, Number(body.timeoutMs) || 30_000)
+          appendEvent({ type: 'saved_provider_configured', providerId: loaded.config.providerId, model: loaded.config.model })
+          return send(res, 200, { ok: true, runId, cursor, result })
         }
         if (method === 'screenshot') {
           const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())

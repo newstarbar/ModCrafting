@@ -366,6 +366,11 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationPending, setClarificationPending] = useState(false)
   const [clarificationQuestion, setClarificationQuestion] = useState('')
   const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
+  // Automation commands arrive through IPC between React renders. Keep the
+  // pending bit in a ref so a just-emitted clarification cannot be rejected
+  // merely because the imperative handle still closes over the prior render.
+  const clarificationPendingRef = useRef(false)
+  clarificationPendingRef.current = clarificationPending
   const [showExportPanel, setShowExportPanel] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [showTemplateForm, setShowTemplateForm] = useState(false)
@@ -892,9 +897,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       tool: event.tool ? {
         id: event.tool.id,
         name: event.tool.name,
+        // submit_plan contains no credentials and is indispensable when the
+        // application-level Test Lab must diagnose provider/schema mismatches.
+        args: event.tool.name === 'submit_plan' && typeof event.tool.args === 'string'
+          ? event.tool.args.slice(0, 16_000)
+          : undefined,
         outcome: event.tool.outcome,
         error: event.tool.error,
-        durationMs: event.tool.durationMs
+        durationMs: event.tool.durationMs,
+        validation: event.tool.validation
       } : undefined,
       planSteps: event.planSteps
     })
@@ -1856,13 +1867,37 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     bindActiveTurnGeneration()
     setIsLoading(true)
     setAgentStatus('automation running...')
+    // Automation uses the same transcript lifecycle as a UI send. Without these
+    // two entries the agent is genuinely running but the visible test window has
+    // no assistant activity card, which hides liveness regressions from Test Lab.
+    const assistantPlaceholder: DisplayMessage = {
+      id: uid(), role: 'assistant', content: '', entries: [], isStreaming: true,
+      timestamp: Date.now(), model: apiConfig.model, providerId: apiConfig.providerId
+    }
+    if (!currentSessionId) {
+      const newId = onNewSession(prompt)
+      currentSessionIdRef.current = newId
+      restoredSessionIdRef.current = newId
+      const preSnapshot = buildPreTurnSnapshot({ messageIndex: 0, controller: ctrl, composerMode: mode, sessionGoal, activePlan: activePlanRef.current })
+      const userMessage: DisplayMessage = { id: uid(), role: 'user', content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }
+      setDisplayMessages([userMessage, assistantPlaceholder])
+      flushPersistTo(newId, [userMessage, assistantPlaceholder], null)
+    } else {
+      setDisplayMessages((prev) => {
+        const preSnapshot = buildPreTurnSnapshot({ messageIndex: prev.length, controller: ctrl, composerMode: mode, sessionGoal, activePlan: activePlanRef.current })
+        const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }, assistantPlaceholder]
+        flushPersist(next, null)
+        return next
+      })
+    }
+    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false }
     void ctrl.send(prompt).catch(() => {
       setIsLoading(false)
       setAgentStatus('')
       onRunningChangeRef.current?.(false)
     })
     return { accepted: true, ...ctrl.getAutomationSnapshot() }
-  }, [apiConfig, ensureApiKey, bindActiveTurnGeneration])
+  }, [apiConfig, ensureApiKey, bindActiveTurnGeneration, currentSessionId, onNewSession, flushPersist, flushPersistTo, composerMode, sessionGoal])
 
   const automationSnapshot = useCallback(() => ({
     controller: controllerRef.current?.getAutomationSnapshot() || null,
@@ -1875,9 +1910,12 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       activeAssistantStreaming: Boolean(
         [...displayMessages].reverse().find((message) => message.role === 'assistant')?.isStreaming
       ),
-      activePlan: activePlanRef.current
+      activePlan: activePlanRef.current,
+      clarification: clarificationPending
+        ? { question: clarificationQuestion, options: clarificationOptions }
+        : null
     }
-  }), [isLoading, agentStatus, composerMode, planReady, displayMessages])
+  }), [isLoading, agentStatus, composerMode, planReady, displayMessages, clarificationPending, clarificationQuestion, clarificationOptions])
 
   const automationCancel = useCallback(() => controllerRef.current?.cancel(), [])
 
@@ -1886,13 +1924,27 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!ctrl) throw new Error('controller_unavailable')
     const requestId = String(params.requestId || '')
     const action = String(params.action || '')
-    if (!requestId || !action) throw new Error('invalid_response')
+    if (!action || (action !== 'clarify' && !requestId)) throw new Error('invalid_response')
     if (action === 'approve' || action === 'deny') {
       ctrl.approve(requestId, action === 'approve')
       return { accepted: true }
     }
     if (action === 'clarify') {
-      await ctrl.answerClarification(String(params.value || ''))
+      const answer = String(params.value || '').trim()
+      if (!answer || !clarificationPendingRef.current) throw new Error('clarification_not_pending')
+      setClarificationPending(false)
+      setClarificationQuestion('')
+      setClarificationOptions([])
+      setInput('')
+      bindActiveTurnGeneration()
+      setIsLoading(true)
+      setAgentStatus('automation running...')
+      onRunningChangeRef.current?.(true)
+      void ctrl.answerClarification(answer).catch(() => {
+        setIsLoading(false)
+        setAgentStatus('')
+        onRunningChangeRef.current?.(false)
+      })
       return { accepted: true }
     }
     if (action === 'gui_layout') {
@@ -1900,7 +1952,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       return { accepted: true }
     }
     throw new Error('unsupported_response_action')
-  }, [])
+  }, [bindActiveTurnGeneration])
 
   useImperativeHandle(ref, () => ({
     handleTemplateSelect,

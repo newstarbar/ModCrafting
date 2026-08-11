@@ -4,7 +4,9 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "MouseMixin",
-    "KeyboardMixin"
+    "KeyboardMixin",
+    "DrawContextMixin",
+    "EntityRenderDispatcherMixin"
   ],
   "injectors": {
     "defaultRequire": 1

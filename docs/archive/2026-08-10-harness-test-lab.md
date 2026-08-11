@@ -23,3 +23,11 @@ Repeated manual diagnostic exports exposed failures that unit tests could not re
 ## Operational note
 
 Use Test Lab reports before requesting a user to copy a session diagnostic. An inconclusive bridge, provider or environment failure is actionable diagnostic evidence, not a trigger to rewrite mod code.
+
+## Foreground observation update
+
+The standalone Test Lab runner now displays its isolated Electron window by default, including `test:app:live` and `test:app:game`, so a developer can observe Agent activity and Minecraft handoff during a real smoke test. Passing `--hidden` keeps the former unattended behavior; it does not change the isolated profile, sandbox workspace, bridge authentication or report capture.
+
+## 2026-08-11: sample-overfitting recovery
+
+An attempted complex gameplay regression had leaked its sample-specific implementation advice, exact state fields and additional model-round budget into production Harness code. This was removed. `AcceptanceContract` now expresses requirement-to-oracle mapping without prescribing business code; Observer V2 records generic player snapshots plus bounded renderer and HUD traces; and the complex examples live only under `scripts/test/scenarios/` as Test Lab black-box fixtures. Unsupported observation and visual-only claims remain `INCONCLUSIVE` until a user confirms them, never a weak automatic success or an automatic code rewrite.

@@ -43,8 +43,6 @@ interface FabricSymbolLookupResult {
   class?: {
     name: string
     side: 'common' | 'client'
-    fields: FabricMemberRecord[]
-    methods: FabricMemberRecord[]
   }
   methods: FabricMemberRecord[]
   fields: FabricMemberRecord[]

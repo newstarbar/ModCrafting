@@ -71,6 +71,12 @@ export interface ToolEvent {
   outcome?: 'succeeded' | 'failed' | 'timed_out' | 'cancelled'
   runId?: string
   executionId?: string
+  validation?: {
+    kind: 'recipe' | 'mixin' | 'game'
+    valid: boolean
+    verdict?: 'PASS' | 'FAIL' | 'INCONCLUSIVE'
+    checkedAt: number
+  }
 }
 
 export interface FileDiff {

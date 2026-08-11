@@ -73,6 +73,12 @@ public final class GameQueries {
         out.put("pitch", round(player.getPitch()));
         out.put("health", player.getHealth());
         out.put("maxHealth", player.getMaxHealth());
+        out.put("entityType", Registries.ENTITY_TYPE.getId(player.getType()).toString());
+        out.put("width", round(player.getWidth()));
+        out.put("height", round(player.getHeight()));
+        out.put("eyeHeight", round(player.getEyeHeight(player.getPose())));
+        out.put("movementSpeed", round(player.getAttributeValue(EntityAttributes.MOVEMENT_SPEED)));
+        out.put("scoreboardTags", new ArrayList<>(player.getCommandTags()));
         out.put("food", player.getHungerManager().getFoodLevel());
         out.put("saturation", player.getHungerManager().getSaturationLevel());
         out.put("air", player.getAir());

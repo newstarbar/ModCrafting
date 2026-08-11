@@ -1,0 +1,21 @@
+{
+  "id": "death-rewind",
+  "fixturePath": "resources/_offline_verify_project",
+  "mode": "agent",
+  "timeoutMs": 3600000,
+  "clarificationResponses": [
+    "Restore the player position and state from approximately sixty seconds before death in the dedicated single-player test world; use deterministic defaults for omitted details."
+  ],
+  "prompt": "制作一个 Fabric 模组：玩家死亡后恢复约 60 秒前保存的位置和状态；请完整实现、构建、启动并在专用测试世界验证。",
+  "acceptanceContract": {
+    "version": 1,
+    "requirements": [
+      { "id": "build", "sourceQuote": "完整实现、构建", "claim": "项目构建成功", "oracle": { "type": "build_success" } },
+      { "id": "rewind", "sourceQuote": "恢复约 60 秒前保存的位置和状态", "claim": "死亡并重生后服务端位置与检查点一致", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_value", "source": "serverPlayer", "pointer": "/x", "equals": 0, "afterAction": 2 } } }
+    ]
+  },
+  "assertions": [
+    { "type": "tool_called", "name": "trigger_build" },
+    { "type": "tool_called", "name": "mc_run_test" }
+  ]
+}

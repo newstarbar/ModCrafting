@@ -111,6 +111,25 @@ test('applyClassifyContextGates: in-game verify clears skipFormalPlan', () => {
   assert.equal(gated.skipFormalPlan, false)
 })
 
+test('applyClassifyContextGates: agent implementation request cannot be stranded as plan_only', () => {
+  const base = {
+    intent: 'plan_only' as const,
+    isInGameVerifyRequest: false,
+    skipFormalPlan: false,
+    isUserSymptom: false,
+    isSymptomResolved: false,
+    isErrorReport: false,
+    isGuiFeatureSymptom: false,
+    verifyTarget: null,
+    rationale: 'provider result',
+    usedFallback: false,
+    classificationSource: 'tool_call' as const
+  }
+  const ctx = { phase: 'plan' as const, planTracker: null, hasProject: true, composerMode: 'agent' as const, hasPlanCandidate: false }
+  assert.equal(applyClassifyContextGates(base, ctx, '请完整实现、构建并启动游戏测试').intent, 'develop')
+  assert.equal(applyClassifyContextGates(base, ctx, '只给我实施计划，不要执行').intent, 'plan_only')
+})
+
 test('structuralClassifyFallback: crash during execute → resume', () => {
   const tracker = PlanTracker.fromSteps([
     { id: '1', description: '写文件', status: 'completed' },

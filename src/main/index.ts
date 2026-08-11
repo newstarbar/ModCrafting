@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog, shell } from 'electron'
 import { join, resolve } from 'path'
-import { existsSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { setupMenu } from './menu'
 import { setupIpcHandlers } from './ipc-handlers'
@@ -32,7 +32,8 @@ if (is.dev) {
 let mainWindow: BrowserWindow | null = null
 let shutdownStarted = false
 const smokeTest = process.argv.includes('--smoke-test')
-const automationOptions = readAutomationOptions()
+const primaryUserDataPath = app.getPath('userData')
+const automationOptions = readAutomationOptions(primaryUserDataPath)
 const automationHidden = process.argv.includes('--automation-hidden')
 
 // This must happen before the single-instance lock and before any main-process
@@ -40,7 +41,21 @@ const automationHidden = process.argv.includes('--automation-hidden')
 if (automationOptions.enabled && process.argv.includes('--automation-profile')) {
   const profileIndex = process.argv.indexOf('--automation-profile')
   const profile = process.argv[profileIndex + 1]
-  if (profile) app.setPath('userData', resolve(profile))
+  if (profile) {
+    const isolatedProfile = resolve(profile)
+    // Windows safeStorage needs Chromium's DPAPI-wrapped os_crypt metadata from
+    // Local State. For explicitly live Test Lab runs copy only that metadata;
+    // never copy settings, sessions, or encrypted API-key files.
+    if (automationOptions.allowSavedProvider) {
+      const sourceLocalState = join(primaryUserDataPath, 'Local State')
+      const targetLocalState = join(isolatedProfile, 'Local State')
+      if (existsSync(sourceLocalState) && !existsSync(targetLocalState)) {
+        mkdirSync(isolatedProfile, { recursive: true })
+        copyFileSync(sourceLocalState, targetLocalState)
+      }
+    }
+    app.setPath('userData', isolatedProfile)
+  }
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -134,6 +149,11 @@ function createWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
+      // Hidden Test Lab windows still execute the real React/Controller
+      // lifecycle. Disable Chromium background throttling only for that
+      // explicit unattended automation mode so timing assertions remain
+      // deterministic without affecting normal app windows.
+      ...(automationOptions.enabled && automationHidden ? { backgroundThrottling: false } : {}),
       ...(automationOptions.enabled ? { additionalArguments: ['--automation'] } : {})
     }
   })
@@ -144,6 +164,7 @@ function createWindow(): void {
     if (automationHidden) return
     mainWindow?.maximize()
     mainWindow?.show()
+    mainWindow?.focus()
   })
 
   mainWindow.on('focus', () => {

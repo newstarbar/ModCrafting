@@ -13,6 +13,9 @@ export const OPS_STEP_PATTERN = /gradlew|gradle\s|runClient|trigger_build|run_co
 /** Upper bound on plan steps to guard against runaway/verbose plans */
 export const MAX_PLAN_STEPS = 12
 
+/** Reserve three slots for the host-managed build, runClient and game_test tail. */
+export const MAX_IMPLEMENTATION_PLAN_STEPS = MAX_PLAN_STEPS - 3
+
 export const BUILD_STEP_PATTERN = /gradlew|gradle\s|trigger_build|编译|构建|build/i
 export const RUN_STEP_PATTERN = /runclient|启动游戏|运行游戏|真实测试/i
 

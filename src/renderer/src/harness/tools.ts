@@ -112,6 +112,16 @@ export function inferToolError(toolName: string, output: string, exitCode: numbe
   return undefined
 }
 
+/** Preserve the concrete host rejection category instead of collapsing every
+ * blocked tool result into an untyped failure. Workflow budgets and UI
+ * diagnostics use this value to distinguish guidance (for example the ACI
+ * read-before-overwrite gate) from a real implementation/build attempt. */
+export function inferToolErrorKind(error: string | undefined): string | undefined {
+  if (!error) return undefined
+  const match = error.match(/^blocked:\s*\[([^\]]+)\]/i)
+  return match?.[1]?.trim().toLowerCase().replace(/\s+/g, '_')
+}
+
 /** Build a helpful error message when a file operation fails.
  *  Reads the project directory to suggest similar file names on ENOENT. */
 export async function diagnoseFileError(
@@ -476,6 +486,7 @@ export async function executeTool(
     const truncated = truncateOutput(output)
     const exitCode = parseExitCode(output)
     const inferredError = inferToolError(tool.name, output, exitCode)
+    const inferredErrorKind = inferToolErrorKind(inferredError)
     const meta = tool.name === 'trigger_build' ? parseTriggerBuildMeta(output) : undefined
 
     // Extract embedded FILE_DIFF metadata from write_file output
@@ -514,6 +525,7 @@ export async function executeTool(
       imageBase64: payload?.imageBase64,
       imageMimeType: payload?.imageMimeType,
       outcome: inferredError ? 'failed' : 'succeeded',
+      errorKind: inferredErrorKind,
       runId: ctx.runId,
       executionId: ctx.executionId
     }

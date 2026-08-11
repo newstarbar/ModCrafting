@@ -4,6 +4,7 @@ import {
   GAME_TEST_WORLD,
   createInconclusiveSession,
   getGameTestSpec,
+  stateTransitionMatches,
   type GameAction,
   type GameAssertion,
   type GameTestEvidence,
@@ -19,6 +20,20 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function pathValue(value: unknown, path: string): unknown {
   return path.split('.').filter(Boolean).reduce<unknown>((current, key) => asRecord(current)[key], value)
+}
+
+function pointerValue(value: unknown, pointer: string): unknown {
+  if (!pointer.startsWith('/')) return undefined
+  return pointer.slice(1).split('/').reduce<unknown>((current, token) => {
+    const key = token.replace(/~1/g, '/').replace(/~0/g, '~')
+    if (Array.isArray(current)) return current[Number(key)]
+    return asRecord(current)[key]
+  }, value)
+}
+
+function snapshotSource(data: Record<string, unknown>, source: string): unknown {
+  const aliases: Record<string, string> = { player: 'player', serverPlayer: 'serverPlayer', screen: 'screen', entity: 'entities', renderTrace: 'renderTrace', hudTrace: 'hudTrace' }
+  return data[aliases[source] || source]
 }
 
 function resultText(result: BridgeCallResult): string {
@@ -57,7 +72,7 @@ function inventoryEntries(data: Record<string, unknown>): Array<Record<string, u
     .flatMap((key) => Array.isArray(inventory[key]) ? inventory[key] as Record<string, unknown>[] : [])
 }
 
-function assertionFromSnapshot(assertion: GameAssertion, data: Record<string, unknown>): GameTestEvidence {
+function assertionFromSnapshot(assertion: GameAssertion, data: Record<string, unknown>, beforeData?: Record<string, unknown>): GameTestEvidence {
   if (assertion.type === 'inventory_contains') {
     const count = inventoryEntries(data)
       .filter((entry) => entry.id === assertion.itemId)
@@ -108,27 +123,64 @@ function assertionFromSnapshot(assertion: GameAssertion, data: Record<string, un
     return evidence(assertion, recipes.includes(assertion.recipeId), `recipe ${assertion.recipeId}: ${recipes.includes(assertion.recipeId) ? 'found' : 'missing'}`, data)
   }
   if (assertion.type === 'state_changed') {
-    const actual = pathValue(data, assertion.path)
-    const passed = assertion.to !== undefined ? JSON.stringify(actual) === JSON.stringify(assertion.to) : assertion.from !== undefined ? JSON.stringify(actual) !== JSON.stringify(assertion.from) : false
-    return evidence(assertion, passed, `state ${assertion.path}: ${JSON.stringify(actual)}`, data)
+    const before = pathValue(beforeData || {}, assertion.path)
+    const after = pathValue(data, assertion.path)
+    return evidence(assertion, stateTransitionMatches(assertion, before, after), `state ${assertion.path}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`, data)
+  }
+  if (assertion.type === 'snapshot_value') {
+    const source = snapshotSource(data, assertion.source)
+    if (source === undefined) return evidence(assertion, false, `snapshot source ${assertion.source} is unavailable`, data, true)
+    const actual = pointerValue(source, assertion.pointer)
+    return evidence(assertion, JSON.stringify(actual) === JSON.stringify(assertion.equals), `${assertion.source}${assertion.pointer}: ${JSON.stringify(actual)}`, data)
+  }
+  if (assertion.type === 'snapshot_changed') {
+    const source = snapshotSource(data, assertion.source)
+    const beforeSource = snapshotSource(beforeData || {}, assertion.source)
+    if (source === undefined || beforeSource === undefined) return evidence(assertion, false, `snapshot source ${assertion.source} is unavailable`, data, true)
+    const before = pointerValue(beforeSource, assertion.pointer)
+    const after = pointerValue(source, assertion.pointer)
+    return evidence(assertion, stateTransitionMatches(assertion, before, after), `${assertion.source}${assertion.pointer}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`, data)
+  }
+  if (assertion.type === 'render_trace') {
+    const trace = Array.isArray(data.renderTrace) ? data.renderTrace as Record<string, unknown>[] : undefined
+    if (!trace) return evidence(assertion, false, 'render trace is unavailable in this bridge version', data, true)
+    const found = trace.some((entry) =>
+      (!assertion.entityType || entry.entityType === assertion.entityType) &&
+      (!assertion.rendererClass || String(entry.rendererClass || '').includes(assertion.rendererClass)) &&
+      (!assertion.modelClass || String(entry.modelClass || '').includes(assertion.modelClass)) &&
+      (!assertion.textureId || String(entry.textureId || '').includes(assertion.textureId))
+    )
+    return evidence(assertion, found, `render trace matching entries: ${trace.length}`, data)
+  }
+  if (assertion.type === 'hud_text') {
+    const trace = Array.isArray(data.hudTrace) ? data.hudTrace as Record<string, unknown>[] : undefined
+    if (!trace) return evidence(assertion, false, 'HUD text trace is unavailable in this bridge version', data, true)
+    const match = assertion.match || 'contains'
+    const found = trace.some((entry) => match === 'exact' ? entry.text === assertion.text : String(entry.text || '').includes(assertion.text))
+    return evidence(assertion, found, `HUD text ${JSON.stringify(assertion.text)}: ${found ? 'found' : 'missing'}`, data)
   }
   return evidence(assertion, false, 'unsupported snapshot assertion', data)
 }
 
-async function evaluateAssertion(assertion: GameAssertion, instanceId?: string): Promise<GameTestEvidence> {
+async function evaluateAssertion(
+  assertion: GameAssertion,
+  instanceId: string | undefined,
+  observedSnapshot?: BridgeCallResult,
+  beforeSnapshot?: BridgeCallResult
+): Promise<GameTestEvidence> {
   if (assertion.type === 'command_result') {
     const result = await callMcBridge('POST', '/v2/command', { command: assertion.command }, instanceId)
     const returnValue = Number(result.data.result ?? -1)
     const minimum = assertion.minResult ?? 1
     return evidence(assertion, result.ok && result.data.executed === true && returnValue >= minimum, `command result: ${returnValue}/${minimum}; ${resultText(result)}`, result.data)
   }
-  const shot = await snapshot(instanceId)
+  const shot = observedSnapshot || await snapshot(instanceId)
   if (!shot.ok) return evidence(assertion, false, `snapshot unavailable: ${resultText(shot)}`, shot.data)
-  return assertionFromSnapshot(assertion, shot.data)
+  return assertionFromSnapshot(assertion, shot.data, beforeSnapshot?.data)
 }
 
-function verdictFor(evidenceRows: GameTestEvidence[], visualOnly: boolean): { verdict: GameTestVerdict; reason?: string } {
-  if (visualOnly) return { verdict: 'INCONCLUSIVE', reason: '纯视觉效果必须由用户确认，截图不能自动判定通过。' }
+function verdictFor(evidenceRows: GameTestEvidence[], visualOnly: boolean, requiresUserConfirmation: boolean): { verdict: GameTestVerdict; reason?: string } {
+  if (visualOnly || requiresUserConfirmation) return { verdict: 'INCONCLUSIVE', reason: '存在需要用户确认的视觉验收项；截图不能自动判定通过。' }
   if (evidenceRows.length === 0) return { verdict: 'INCONCLUSIVE', reason: '没有可消费的新断言证据。' }
   if (evidenceRows.some((row) => row.unavailable)) {
     return { verdict: 'INCONCLUSIVE', reason: evidenceRows.filter((row) => row.unavailable).map((row) => row.detail).join('; ') }
@@ -194,23 +246,45 @@ export const mcRunTestTool: Tool = {
 
     const session: GameTestSession = { id: `test_${Date.now().toString(36)}`, scenarioId, phase: 'preparing', startedAt: Date.now(), evidence: [], replay: 0 }
     let environmentalFailure: string | undefined
+    let baselineSnapshot: BridgeCallResult | undefined
+    const actionSnapshots = new Map<number, BridgeCallResult>()
     try {
       for (const action of spec.setup) {
         const result = await runAction(action, instanceId)
         if (!result.ok) { environmentalFailure = `环境准备失败：${action.label || action.type}：${result.detail}`; break }
       }
       if (!environmentalFailure) {
+        baselineSnapshot = await snapshot(instanceId)
+        if (!baselineSnapshot.ok) environmentalFailure = `动作前快照失败：${resultText(baselineSnapshot)}`
+      }
+      if (!environmentalFailure) {
         session.phase = 'acting'
-        for (const action of spec.actions) {
+        for (let index = 0; index < spec.actions.length; index++) {
+          const action = spec.actions[index]
           const result = await runAction(action, instanceId)
           if (!result.ok) { environmentalFailure = `测试动作失败：${action.label || action.type}：${result.detail}`; break }
+          const afterAction = await snapshot(instanceId)
+          if (!afterAction.ok) { environmentalFailure = `动作后快照失败（actions[${index}]）：${resultText(afterAction)}`; break }
+          actionSnapshots.set(index, afterAction)
         }
       }
       if (!environmentalFailure) {
         session.phase = 'asserting'
+        const previousStateSnapshots = new Map<string, BridgeCallResult>()
         for (const assertion of spec.assertions) {
-          const row = await evaluateAssertion(assertion, instanceId)
+          const checkpoint = assertion.type === 'state_changed' || assertion.type === 'player_state' || assertion.type === 'snapshot_changed' || assertion.type === 'snapshot_value' || assertion.type === 'render_trace' || assertion.type === 'hud_text' ? assertion.afterAction : undefined
+          const observed = checkpoint === undefined
+            ? (actionSnapshots.get(spec.actions.length - 1) || baselineSnapshot)
+            : actionSnapshots.get(checkpoint)
+          const stateKey = assertion.type === 'state_changed' ? assertion.path : assertion.type === 'snapshot_changed' ? `${assertion.source}:${assertion.pointer}` : ''
+          const before = (assertion.type === 'state_changed' || assertion.type === 'snapshot_changed') && checkpoint !== undefined
+            ? (previousStateSnapshots.get(stateKey) || baselineSnapshot)
+            : baselineSnapshot
+          const row = await evaluateAssertion(assertion, instanceId, observed, before)
           session.evidence.push(row)
+          if ((assertion.type === 'state_changed' || assertion.type === 'snapshot_changed') && checkpoint !== undefined && observed) {
+            previousStateSnapshots.set(stateKey, observed)
+          }
         }
       }
     } finally {
@@ -220,7 +294,7 @@ export const mcRunTestTool: Tool = {
 
     const outcome = environmentalFailure
       ? { verdict: 'INCONCLUSIVE' as const, reason: environmentalFailure }
-      : verdictFor(session.evidence, Boolean(spec.visualOnly))
+      : verdictFor(session.evidence, Boolean(spec.visualOnly), Boolean(spec.acceptanceContract?.requirements.some((requirement) => requirement.oracle.type === 'user_confirmation')))
     session.phase = 'finished'
     session.finishedAt = Date.now()
     session.verdict = outcome.verdict

@@ -19,6 +19,11 @@ export interface FabricClassRecord {
   methods: FabricMemberRecord[]
 }
 
+export interface FabricClassIdentity {
+  name: string
+  side: FabricSide
+}
+
 export interface FabricSymbolLookupRequest {
   className: string
   memberName?: string
@@ -30,7 +35,7 @@ export interface FabricSymbolLookupResult {
   ok: boolean
   version: string
   yarnMappings: string
-  class?: FabricClassRecord
+  class?: FabricClassIdentity
   methods: FabricMemberRecord[]
   fields: FabricMemberRecord[]
   suggestions: string[]
@@ -141,7 +146,7 @@ export function lookupFabricSymbol(request: FabricSymbolLookupRequest): FabricSy
     ok: !ambiguous && !missing,
     version: index.minecraftVersion,
     yarnMappings: index.yarnMappings,
-    class: classRecord,
+    class: { name: classRecord.name, side: classRecord.side },
     methods,
     fields,
     suggestions: missing
