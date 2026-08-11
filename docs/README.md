@@ -16,7 +16,8 @@
 
 ### AI Harness 系统
 - [harness.md](./harness.md) — Harness 模块清单、工具集、计划阶段门控、护栏机制
-- [AI_AGENT_GUIDE.md](./AI_AGENT_GUIDE.md) — AI Agent 完整开发指南（旧版综合文档，保留作历史参考）
+- [test-lab-mcp.md](./test-lab-mcp.md) — 真实 Electron 自动化桥、开发专用 MCP、黑盒场景与报告
+- [AI_AGENT_GUIDE.md](./AI_AGENT_GUIDE.md) — AI Agent 当前开发入口与强制验证清单
 
 ### 工具链
 - [toolchain.md](./toolchain.md) — 离线工具链、版本类型、初始化流程、维护注意
@@ -36,7 +37,9 @@
 | 常用 npm 命令 | [commands.md](./commands.md) |
 | AI Agent 是怎么工作的 | [harness.md](./harness.md) |
 | 计划阶段为什么会被锁定 | [harness.md](./harness.md#计划阶段门控) |
-| 内置了哪些 AI 工具 | [harness.md](./harness.md#工具集30) |
+| 内置了哪些 AI 工具 | [harness.md](./harness.md#工具集45) |
+| 怎么运行应用级 Harness 回归 | [test-lab-mcp.md](./test-lab-mcp.md) |
+| 游戏内测试如何裁决 | [harness.md](./harness.md#确定性游戏内测试-v2) |
 | 离线工具链怎么工作 | [toolchain.md](./toolchain.md) |
 | 知识库怎么构建 | [knowledge-base.md](./knowledge-base.md) |
 | Vibecoding 流程 | [workflow.md](./workflow.md) |

@@ -30,7 +30,7 @@
 
 ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手架**、**一键游戏内测试** 和 **离线构建环境** 整合进同一个 Electron 桌面应用。
 
-你描述想要的功能 → AI 规划并修改项目文件 → 在「游戏」面板启动客户端验证 → 崩溃报告一键送回 AI 修复。  
+你描述想要的功能 → AI 建立验收契约并修改项目 → 构建并启动专用测试世界 → 用动作后的客观证据逐项裁决。
 不必在 IDE、终端、Gradle 日志和游戏窗口之间来回切换。
 
 ---
@@ -40,14 +40,14 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 | 能力 | 说明 |
 |------|------|
 | **三模式智能路由** | 每轮独立 LLM 分类，自动分流至 **Chat**（概念问答）/ **Plan**（结构化计划）/ **Execute**（逐步执行）；同时识别错误报告、用户症状、游戏内验证请求等侧面信号 |
-| **Vibecoding 对话开发** | Plan → Execute 双阶段 Agent 循环；计划阶段只读探索上限 15 轮后建议提交（锁定后仍允许只读工具）；执行阶段每步独立循环 + 修复模式 |
+| **Vibecoding 对话开发** | Chat / Plan / Execute 每轮分类；计划提交 AcceptanceContract；宿主管理实现 → build → run → game_test |
 | **Fabric 项目向导** | 图形化新建项目：Mod ID、包名、作者、版本；自动生成 `build.gradle`、`fabric.mod.json`、入口类 |
 | **模板快速创建** | 7 种内置模板（自定义方块 / 物品 / 食物 / 实体 / 工具 / 护甲 / 配方），表单填写后跳过 Plan 阶段，直接由 `fabric_template_generate` 工具透传生成 |
-| **30+ 内置 AI 工具** | 文件读写（先读后写门控）· 目录列举 · 命令执行 · 触发构建 · 读取错误日志 · `mc_inspect` / `mc_screenshot` 游戏内客观校验 · `ask_clarification` 严格澄清 · `submit_plan` 结构化计划 · `complete_step` 验收推进 |
-| **防御性工程护栏** | ACI 读门控、重复成功守卫、空构建检测、JSON 截断恢复、迁移批量门控、推理长度软/硬限制（6k / 12k 字符） |
+| **45 个内置 AI 工具** | 文件/知识/Fabric/构建/游戏/用户交互/流程控制；能力、超时与步骤可见性由单一策略目录统一管理 |
+| **验收与修复护栏** | `PASS` / `FAIL` / `INCONCLUSIVE` 三态裁决；动作后新鲜证据；修复范围限制；每步骤 20 模型轮次 / 40 工具调用 / 3 修复循环 |
 | **上下文压缩** | 老旧工具结果微压缩 + 接近 token 上限触发 LLM 摘要 + 跨轮诊断保留（近期 5 条用户反馈 + 2 条助手摘要） |
-| **图形化游戏测试** | 多实例、阶段进度条、人话摘要；独立 `gameDir` 与 Gradle 守护进程隔离，支持联机 mod 多开 |
-| **崩溃 → AI 修复** | 自动检测崩溃报告，一键附加到对话上下文；构建失败进入修复模式，先改码再构建 |
+| **确定性游戏测试** | `run` 与 `game_test` 分离；专用测试世界执行 Arrange → Act → Assert → Cleanup；截图不能单独通过 |
+| **受限自动修复** | 自动检测崩溃并附加证据；只有范围内、可重复的产品失败可以修改代码，环境和能力问题保持 `INCONCLUSIVE` |
 | **离线优先工具链** | 精简 JRE 内置 + 首次下载 Gradle / Fabric 依赖种子（国内镜像）；启动遮罩 + 下载预估 + 进度条，环境未就绪前锁定构建 |
 | **高级开发者区** | 编译检查、可折叠构建日志、可展开 xterm、调试日志面板 |
 | **API 密钥本地加密** | 支持 DeepSeek 等 OpenAI 兼容端点；密钥仅存本机，不进仓库 |
@@ -71,10 +71,10 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 
 | 安装包 | 大小 | 网络 | 适用场景 |
 |--------|------|------|----------|
-| **完整版** `ModCrafting Setup 1.0.0.exe` | ~400-500 MB | 首次启动下载依赖（约 620 MB，国内镜像 5-10 分钟），之后可离线 | **推荐**。日常开发、网络不稳定 |
-| **便携版** `ModCrafting 1.0.0 Portable.exe` | ~80-150 MB | **首次必须联网**下载工具链（约 1 GB） | U 盘、临时机器、可接受首启下载 |
+| **完整版** `ModCrafting Setup <version>.exe` | ~80-90 MB | 首次启动下载依赖（约 620 MB，国内镜像 5-10 分钟），之后可离线 | **推荐**。日常开发、网络不稳定 |
+| **便携版** `ModCrafting <version> Portable.exe` | ~70-80 MB | **首次必须联网**下载工具链（约 1 GB） | U 盘、临时机器、可接受首启下载 |
 
-> 文件名中的版本号与 Release 标签一致（例如标签 `v1.0.0` 对应 `1.0.0`）。
+> 文件名中的版本号与 Release 标签一致（例如标签 `v1.0.1` 对应 `1.0.1`）。
 
 - **完整版（Setup）**：安装包仅含 Electron 本体（约 95 MB）；首次启动从国内镜像（清华 TUNA + 腾讯云 + 华为云）下载 JDK 21 + Gradle 9.5 + Fabric 依赖到 `runtime/`，完成后可完全离线构建。
 - **便携版（Portable）**：仅含应用本体与小文件；首次启动自动联网下载 JDK / Gradle / Fabric 依赖。
@@ -133,13 +133,15 @@ flowchart TB
       Controller[controller<br/>三模式系统提示词]
       Agent[agent<br/>LLM 循环]
       PlanGate[plan-phase-gate<br/>只读门控]
-      Workflow[workflow-engine<br/>执行 + 修复模式]
+      Contract[AcceptanceContract<br/>需求 → Oracle]
+      Workflow[workflow-engine<br/>步骤 + 证据 + 受限修复]
       Policy[fabric-agent-policy<br/>领域护栏]
-      Tools[30+ Tool Definitions]
+      Tools[45 Tool Definitions]
     end
     Chat --> Classifier
     Classifier --> Controller
-    Controller --> Agent
+    Controller --> Contract
+    Contract --> Agent
     Agent --> PlanGate
     PlanGate --> Workflow
     Workflow --> Agent
@@ -250,14 +252,15 @@ npm run build:win:portable
 
 ### 发布新版本
 
-1. 更新 `package.json` 的 `version`
-2. 打 tag 并推送：`git tag v1.0.0 && git push origin v1.0.0`
-3. GitHub Actions 自动：
+1. 根据近期提交确定版本并更新 `package.json` 的 `version`
+2. 本地完成目标 Windows 产物构建
+3. 运行 `npm run release:publish`，由脚本创建并推送 tag、同步 GitHub/Gitee
+4. GitHub Actions 自动：
    - 构建 Setup + Portable（仅含 Electron 本体）
    - 发布 GitHub Release（Setup + Portable + 知识库辅助资源）
    - 同步 Gitee Release（Setup + Portable + latest.yml，需配置 Secret `GITEE_TOKEN`）
    - 更新 `packaging/update-manifest.json` 到 main
-4. 详见 [`RELEASE.md`](RELEASE.md)（Release 正文由 CI 根据 commit 自动生成，无需手改）
+5. 详见 [`RELEASE.md`](RELEASE.md)
 
 ---
 
@@ -268,14 +271,14 @@ npm run build:win:portable
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | API Endpoint | `https://api.deepseek.com/v1` | OpenAI 兼容接口地址 |
-| Model | `deepseek-chat` | 可按提供商文档更换 |
+| Model | `deepseek-v4-flash` | 可从内置 Provider/模型列表切换 |
 | API Key | （用户填写） | 本地加密存储，**切勿提交到 Git** |
 
 Agent 每轮独立分类用户消息，自动分流至三种模式：
 
 - **Chat 模式**：概念问答、方案说明，禁用写入/执行工具，直接给最佳方案不做比较
-- **Plan 模式**：输出结构化 `submit_plan`（write / recipe / mixin / inspect 四种 kind，1-6 步），最多 15 轮只读探索后建议提交（锁定后仍允许 grep/list_directory/read_file 等只读工具）
-- **Execute 模式**：逐步执行计划，每轮必调工具，旁白 ≤2 句，构建失败自动进入修复模式
+- **Plan 模式**：输出结构化 `submit_plan`（最多 9 个实现步骤 + AcceptanceContract；游戏行为附完整 V2 gameTest），最多 15 轮只读探索后建议提交
+- **Execute 模式**：宿主按证据逐步执行；游戏计划固定追加 build → run → game_test；只有范围内、可重复的产品失败进入受限修复
 
 模式切换由 `turn-classifier` 完成，同时识别「错误报告 / 用户症状 / 游戏内验证请求」等侧面信号并注入到目标块中。澄清工具 `ask_clarification` 仅允许用于产品偏好与需求歧义，代码事实（API 命名、类名、mixin 路径等）必须走工具勘察。
 
@@ -287,7 +290,7 @@ Agent 每轮独立分类用户消息，自动分流至三种模式：
 |--|-------------|-------------------|-------------------|
 | 面向场景 | **Minecraft Fabric 模组** | 通用 Java | 通用代码 |
 | 新建 Fabric 项目 | **向导一键** | 手动模板 / 文档 | 需自己搭脚手架 |
-| 游戏内测试 | **图形化多实例面板** | 自己跑 `gradlew runClient` | 通常不支持 |
+| 游戏内测试 | **专用测试世界 + V2 客观断言 + 三态裁决** | 自己跑 `gradlew runClient` | 通常不支持 |
 | 离线构建环境 | **内置捆绑** | 自行配置 JDK/Gradle | 依赖本机环境 |
 | 崩溃报告 → AI | **一键附加** | 手动复制日志 | 手动 |
 | 非开发者友好 | **默认图形化** | 低 | 中（终端为主） |
@@ -422,17 +425,17 @@ Built by [@newstarbar](https://github.com/newstarbar) and contributors
 
 ## English
 
-**ModCrafting** is an AI-native desktop environment for **Minecraft Fabric mod development**. Describe your mod in natural language, let the agent edit project files, then launch the game from a graphical panel to verify — no Gradle expertise required.
+**ModCrafting** is an AI-native desktop environment for **Minecraft Fabric mod development**. Describe a mod in natural language; the agent plans against an acceptance contract, builds it, and verifies gameplay with post-action evidence in a dedicated test world.
 
 ### Highlights
 
 - Three-mode routing (Chat / Plan / Execute) via per-turn LLM classification
-- Vibecoding agent with Plan → Execute loop, 30+ tools, and defensive guardrails (read-before-write, repeat-success guard, empty-build detection, JSON-truncation recovery)
+- Vibecoding agent with Chat / Plan / Execute routing, 45 policy-governed tools, AcceptanceContract requirements, and bounded repair
 - Fabric project wizard + 7 built-in quick-create templates (block / item / food / entity / tool / armor / recipe)
 - Context compaction: micro-compact old tool results, LLM summary near token limit, cross-turn diagnosis retention
 - Slim installer (~400-500 MB) with bundled minimal JRE; first launch downloads Gradle + Fabric deps (~620 MB via domestic mirrors)
-- Graphical game test panel with multi-instance support
-- Crash reports → one-click send to AI for repair; build failures enter automatic repair mode
+- Deterministic Arrange → Act → Assert → Cleanup game tests with PASS / FAIL / INCONCLUSIVE verdicts
+- Crash reports can be attached to AI; only reproducible, in-scope product failures may trigger automatic repair
 
 ### Quick start (developers)
 

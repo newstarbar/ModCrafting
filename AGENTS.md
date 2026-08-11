@@ -29,6 +29,9 @@
 ```bash
 npm run dev                     # 开发模式（热更新）
 npm run test                    # harness 单元测试
+npm run test:app                # 前台真实 Electron + 回放 Provider 回归
+npm run test:mcp                # Test Lab MCP 协议烟测
+npm run bridge:build            # 构建 Observer V2 桥接模组
 npm run build:win               # Windows 构建（Setup + Portable）
 npm run toolchain:verify       # 检查 JDK/Gradle 是否齐全
 npm run knowledge:download    # 下载所有离线知识库
@@ -42,8 +45,10 @@ npm run knowledge:download    # 下载所有离线知识库
 |------|------|------|
 | 三模式路由 | Chat / Plan / Execute，每轮独立分类 | [docs/harness.md](./docs/harness.md#三模式路由) |
 | 计划阶段门控 | `MAX_READONLY_ROUNDS = 15`，锁定后仍允许只读工具 | [docs/harness.md](./docs/harness.md#计划阶段门控) |
-| 工具集（30+） | 文件 / 搜索 / Fabric / 构建 / 知识库 / 流程控制 | [docs/harness.md](./docs/harness.md#工具集30) |
-| 关键护栏 | 读门控、重复成功守卫、推理长度 6k/12k | [docs/harness.md](./docs/harness.md#关键护栏) |
+| 验收契约 | 每条需求映射到构建、游戏断言或用户确认 | [docs/harness.md](./docs/harness.md#确定性游戏内测试-v2) |
+| 工具集（45） | 文件 / Fabric / 构建 / 游戏 / 用户交互 / 流程控制 | [docs/harness.md](./docs/harness.md#工具集45) |
+| Test Lab | 隔离 Electron、回放 Provider、MCP、黑盒场景 | [docs/test-lab-mcp.md](./docs/test-lab-mcp.md) |
+| 关键护栏 | 证据推进、修复范围、20/40/3 预算、三态裁决 | [docs/harness.md](./docs/harness.md#关键护栏) |
 | 输出截断 | read_file 默认 400 行；工具输出 32KB；不显示原始大小 | [docs/harness.md](./docs/harness.md#输出截断) |
 
 ## Minecraft 知识库
@@ -101,6 +106,7 @@ AI Agent 必须在以下场景触发归档，将工作总结写入 [`docs/archiv
 | [docs/commands.md](./docs/commands.md) | 完整命令清单 |
 | [docs/workflow.md](./docs/workflow.md) | Vibecoding 工作流 |
 | [docs/harness.md](./docs/harness.md) | AI Harness 系统详细说明 |
+| [docs/test-lab-mcp.md](./docs/test-lab-mcp.md) | Test Lab 应用级自动化与 MCP |
 | [docs/toolchain.md](./docs/toolchain.md) | 离线工具链 |
 | [docs/knowledge-base.md](./docs/knowledge-base.md) | Minecraft 知识库 |
 | [docs/archiving.md](./docs/archiving.md) | 归档机制 |

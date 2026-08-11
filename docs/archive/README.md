@@ -1,5 +1,7 @@
 # 归档索引
 
+- [2026-08-11] [Harness 可靠性重构会话总复盘](./2026-08-11-harness-reliability-session-retrospective.md) — 系统梳理确定性游戏测试、会话恢复、分类与步骤推进、Test Lab、运行态 UX 和去除样例过拟合的完整演进链。触发：开发者主动。
+
 - [2026-08-10] [Harness Test Lab and repair-safety recovery](./2026-08-10-harness-test-lab.md) — real Electron automation, stdio MCP, replay regression, bounded repair scope, and the 2026-08-11 sample-overfitting recovery.
 
 - [2026-08-10] **Agent 对话与游戏测试会话恢复** — 修复计划步骤迁移后遗留的 Mixin 证据推进和 MiniMax 意图分类全量兜底。触发：自动。
