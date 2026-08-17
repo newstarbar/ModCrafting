@@ -60,6 +60,92 @@ const PROGRESS_THROTTLE_MS = 300
 /** 下载字节进度回调：received 已接收字节，totalBytes 来自 Content-Length（0 表示未知） */
 type DownloadProgressFn = (received: number, totalBytes: number) => void
 
+type KnowledgeArtifactDir = (typeof KB_ARTIFACTS)[number]['dir'] | (typeof EXTRA_ARTIFACTS)[number]['dir']
+
+function hasAnyFile(dir: string, predicate: (name: string) => boolean = () => true): boolean {
+  if (!fs.existsSync(dir)) return false
+  const pending = [dir]
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name)
+      if (entry.isDirectory()) pending.push(full)
+      else if (predicate(entry.name)) return true
+    }
+  }
+  return false
+}
+
+function artifactIsReady(root: string, artifact: KnowledgeArtifactDir, mcVersion: string): boolean {
+  const dir = path.join(root, artifact)
+  if (!fs.existsSync(dir)) return false
+  switch (artifact) {
+    case 'minecraft-data':
+      return fs.existsSync(path.join(dir, mcVersion)) && hasAnyFile(path.join(dir, mcVersion))
+    case 'mc-wiki-zh':
+      return fs.existsSync(path.join(dir, '.failures.json')) && hasAnyFile(dir)
+    case 'mc-wiki-zh-index':
+      return ['manifest.json', 'chunks.json', 'embeddings.bin'].every((name) => fs.existsSync(path.join(dir, name)))
+    case 'mc-wiki-model':
+      return fs.existsSync(path.join(dir, '.manifest.json')) && fs.existsSync(path.join(dir, 'Xenova'))
+    case 'agent-knowledge':
+      return hasAnyFile(dir, (name) => name.endsWith('.md'))
+    case 'fabric-symbol-index':
+      return fs.existsSync(path.join(dir, `fabric-symbol-index-${mcVersion}.json.gz`))
+    case '_base_mods':
+      return fs.existsSync(path.join(dir, 'modcrafting-observer.jar')) &&
+        hasAnyFile(dir, (name) => /^modmenu-.*\.jar$/i.test(name))
+  }
+}
+
+/**
+ * Releases published before the flat-archive contract contain one matching top-level
+ * directory. Normalize that layout in place before consumers inspect the artifact.
+ */
+function flattenNestedArtifact(destDir: string, artifact: string): boolean {
+  const nested = path.join(destDir, artifact)
+  if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) return false
+  const entries = fs.readdirSync(destDir)
+  if (entries.length !== 1 || entries[0] !== artifact) return false
+
+  const normalized = `${destDir}.normalized`
+  const backup = `${destDir}.legacy`
+  try {
+    if (fs.existsSync(normalized)) fs.rmSync(normalized, { recursive: true, force: true })
+    fs.renameSync(nested, normalized)
+    fs.renameSync(destDir, backup)
+    fs.renameSync(normalized, destDir)
+    fs.rmSync(backup, { recursive: true, force: true })
+    return true
+  } catch (err) {
+    // Preserve the last complete copy if a locked runtime directory prevents migration.
+    try {
+      if (!fs.existsSync(destDir) && fs.existsSync(backup)) fs.renameSync(backup, destDir)
+    } catch { /* best effort rollback */ }
+    console.warn(`[knowledge-downloader] failed to flatten ${artifact}: ${String(err)}`)
+    return false
+  }
+}
+
+function normalizeExtractedArtifact(staging: string, artifact: string): void {
+  const nested = path.join(staging, artifact)
+  const entries = fs.readdirSync(staging)
+  if (!fs.existsSync(nested) || entries.length !== 1 || entries[0] !== artifact) return
+  const normalized = `${staging}.normalized`
+  if (fs.existsSync(normalized)) fs.rmSync(normalized, { recursive: true, force: true })
+  fs.renameSync(nested, normalized)
+  fs.rmdirSync(staging)
+  fs.renameSync(normalized, staging)
+}
+
+function normalizeExistingArtifacts(root: string, mcVersion: string): void {
+  const artifacts: KnowledgeArtifactDir[] = [...KB_ARTIFACTS.map((a) => a.dir), ...EXTRA_ARTIFACTS.map((a) => a.dir)]
+  for (const artifact of artifacts) {
+    const dest = path.join(root, artifact)
+    if (!artifactIsReady(root, artifact, mcVersion)) flattenNestedArtifact(dest, artifact)
+  }
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n}B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)}KB`
@@ -279,6 +365,7 @@ async function downloadAndExtractArtifact(
       await downloadFile(url, zipPath, onProgress)
       fs.mkdirSync(staging, { recursive: true })
       await extractZip(zipPath, staging)
+      normalizeExtractedArtifact(staging, label)
 
       // 替换 destDir
       if (fs.existsSync(destDir)) {
@@ -311,6 +398,9 @@ async function downloadAndExtractArtifact(
 export function isKnowledgeBaseReady(): boolean {
   const root = path.join(getRuntimeRoot(), 'knowledge')
   const mcVersion = loadFabricVersions().minecraft_version
+  const artifacts: KnowledgeArtifactDir[] = [...KB_ARTIFACTS.map((a) => a.dir), ...EXTRA_ARTIFACTS.map((a) => a.dir)]
+  return artifacts.every((artifact) => artifactIsReady(root, artifact, mcVersion))
+
   const requiredDirs = [
     ...KB_ARTIFACTS.map((a) => a.dir),
     'agent-knowledge',
@@ -335,13 +425,13 @@ export function isKnowledgeBaseReady(): boolean {
 export async function ensureKnowledgeBase(
   onProgress: ProgressFn = () => {}
 ): Promise<{ ok: boolean; error?: string }> {
+  const root = path.join(getRuntimeRoot(), 'knowledge')
+  fs.mkdirSync(root, { recursive: true })
+  normalizeExistingArtifacts(root, loadFabricVersions().minecraft_version)
   if (isKnowledgeBaseReady()) {
     onProgress('知识库已就绪', 100)
     return { ok: true }
   }
-
-  const root = path.join(getRuntimeRoot(), 'knowledge')
-  fs.mkdirSync(root, { recursive: true })
 
   const results: KnowledgeArtifactResult[] = []
   const totalArtifacts = KB_ARTIFACTS.length + EXTRA_ARTIFACTS.length
@@ -382,7 +472,7 @@ export async function ensureKnowledgeBase(
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
 
     // 已下载且非空则跳过（重启不重复下载）
-    if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
+    if (artifactIsReady(root, artifact.dir, loadFabricVersions().minecraft_version)) {
       onProgress(`${artifact.dir} 已存在，跳过下载`, stepPercent)
       results.push({ dir: artifact.dir, ok: true })
       completed++
@@ -424,7 +514,7 @@ export async function ensureKnowledgeBase(
     const stepPercent = Math.round(5 + (completed / totalArtifacts) * 90)
 
     // 已下载且非空则跳过（重启不重复下载）
-    if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
+    if (artifactIsReady(root, artifact.dir, loadFabricVersions().minecraft_version)) {
       onProgress(`${artifact.dir} 已存在，跳过下载`, stepPercent)
       results.push({ dir: artifact.dir, ok: true })
       completed++

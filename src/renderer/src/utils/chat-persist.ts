@@ -5,6 +5,7 @@ import type { ChatContentPart } from '../harness/chat-message.ts'
 import type { GuiLayoutElement, GuiLayoutType } from '../harness/events'
 import { collectExploreGroupKeys } from './tool-explore-group.ts'
 import { buildUserContent } from '../context/user-content.ts'
+import type { CollaborationTrace } from '../../../shared/model-routing.ts'
 
 export interface SerializableChronoEntry {
   kind: 'reasoning' | 'text' | 'tool' | 'guiLayoutPreview'
@@ -52,6 +53,7 @@ export interface SerializableDisplayMessage {
   model?: string
   /** assistant 消息实际使用的 Provider ID */
   providerId?: string
+  collaborationTrace?: CollaborationTrace[]
 }
 
 export interface ActivePlanSnapshot {
@@ -86,7 +88,8 @@ export function serializeDisplayMessages(
         : undefined,
       // 仅记录 assistant 消息使用的模型，便于多模型切换时导出会话日志
       model: m.model,
-      providerId: m.providerId
+      providerId: m.providerId,
+      collaborationTrace: m.collaborationTrace?.map((trace) => ({ ...trace }))
     }
 
     if (m.entries && m.entries.length > 0) {
@@ -185,7 +188,8 @@ export function deserializeToDisplay(
           ? m.attachments.map((a) => ({ ...a }))
           : undefined,
         model: m.model,
-        providerId: m.providerId
+        providerId: m.providerId,
+        collaborationTrace: m.collaborationTrace?.map((trace) => ({ ...trace }))
       }
     })
 }

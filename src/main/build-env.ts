@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron'
 import { spawn, spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as unzipper from 'unzipper'
 import { promisify } from 'util'
 import { getAppEdition, isPortableEdition, isFullEdition } from './edition'
 import { getRuntimeLayout, migrateLegacyRuntime, type RuntimeLayout } from './runtime-layout'
@@ -108,7 +109,23 @@ const RM_OPTS: fs.RmOptions = { recursive: true, force: true, maxRetries: 8, ret
 let gradleHomeSeedLock: Promise<{ ok: boolean; error?: string }> | null = null
 let toolchainInitLock: Promise<{ ok: boolean; error?: string }> | null = null
 let toolchainInitDone = false
-let copyModsLock: Promise<{ copied: number; skipped: boolean }> | null = null
+export interface BaseModSyncResult {
+  ok?: boolean
+  copied: number
+  skipped: boolean
+  modIds?: string[]
+  error?: string
+}
+
+type BaseModMetadata = {
+  id: string
+  version?: string
+  observerProtocol?: number
+}
+
+const REQUIRED_BASE_MOD_IDS = ['modmenu', 'modcrafting_observer'] as const
+
+let copyModsLock: Promise<BaseModSyncResult> | null = null
 let copyModsLockPath: string | null = null
 let initCancellationRequested = false
 
@@ -1017,32 +1034,91 @@ function bundledBaseModsSearchPaths(): string[] {
   ]
 }
 
+function findJarFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return []
+  const files: string[] = []
+  const pending = [dir]
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name)
+      if (entry.isDirectory()) pending.push(full)
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith('.jar')) files.push(full)
+    }
+  }
+  return files
+}
+
+async function readBaseModMetadata(jarPath: string): Promise<BaseModMetadata | null> {
+  try {
+    const archive = await unzipper.Open.file(jarPath)
+    const entry = archive.files.find((file) => file.path === 'fabric.mod.json')
+    if (!entry) return null
+    const parsed = JSON.parse((await entry.buffer()).toString('utf8')) as {
+      id?: unknown
+      version?: unknown
+      custom?: { modcrafting?: { observerProtocol?: unknown } }
+    }
+    if (typeof parsed.id !== 'string' || !parsed.id.trim()) return null
+    const protocol = parsed.custom?.modcrafting?.observerProtocol
+    return {
+      id: parsed.id,
+      version: typeof parsed.version === 'string' ? parsed.version : undefined,
+      observerProtocol: typeof protocol === 'number' ? protocol : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+async function resolveBaseModSources(): Promise<{ files: Map<string, string>; error?: string }> {
+  const files = new Map<string, string>()
+  const metadata = new Map<string, BaseModMetadata>()
+  for (const candidate of [...bundledBaseModsSearchPaths()].reverse()) {
+    for (const jar of findJarFiles(candidate)) {
+      const parsed = await readBaseModMetadata(jar)
+      if (!parsed || files.has(parsed.id)) continue
+      files.set(parsed.id, jar)
+      metadata.set(parsed.id, parsed)
+    }
+  }
+  const missing = REQUIRED_BASE_MOD_IDS.filter((id) => !files.has(id))
+  if (missing.length > 0) return { files, error: `缺少必需基础模组: ${missing.join(', ')}` }
+  if ((metadata.get('modcrafting_observer')?.observerProtocol ?? 0) < 2) {
+    return { files, error: 'ModCrafting Observer 不支持 V2 游戏测试协议，请更新基础模组。' }
+  }
+  return { files }
+}
+
+async function copyFileAtomically(from: string, to: string): Promise<void> {
+  const temp = `${to}.modcrafting-${process.pid}-${Date.now()}.tmp`
+  await copyFileAsync(from, temp)
+  fs.renameSync(temp, to)
+}
+
 /** Copy bundled dev helper mods (e.g. Mod Menu) into the project for runClient. */
 export async function copyBaseModsToProject(
   projectPath: string,
   onProgress: ProgressSender = defaultProgress,
   opts?: { quiet?: boolean }
-): Promise<{ copied: number; skipped: boolean }> {
-  if (copyModsLock && copyModsLockPath === projectPath) {
-    return copyModsLock
-  }
-
-  const job = copyBaseModsToProjectImpl(projectPath, onProgress, opts).finally(() => {
+): Promise<BaseModSyncResult> {
+  if (copyModsLock && copyModsLockPath === projectPath) return copyModsLock
+  const syncJob = copyBaseModsToProjectV2(projectPath, onProgress, opts).finally(() => {
     if (copyModsLockPath === projectPath) {
       copyModsLock = null
       copyModsLockPath = null
     }
   })
-  copyModsLock = job
+  copyModsLock = syncJob
   copyModsLockPath = projectPath
-  return job
+  return syncJob
 }
 
 async function copyBaseModsToProjectImpl(
   projectPath: string,
   onProgress: ProgressSender,
   opts?: { quiet?: boolean }
-): Promise<{ copied: number; skipped: boolean }> {
+): Promise<BaseModSyncResult> {
   const report: ProgressSender = opts?.quiet ? () => {} : onProgress
 
   const src = bundledBaseModsSearchPaths().find((p) => fs.existsSync(p))
@@ -1097,6 +1173,40 @@ async function copyBaseModsToProjectImpl(
     percent: 99
   })
   return { copied, skipped: false }
+}
+
+/** Validate and atomically synchronize the app-managed runtime helper mods. */
+async function copyBaseModsToProjectV2(
+  projectPath: string,
+  onProgress: ProgressSender,
+  opts?: { quiet?: boolean }
+): Promise<BaseModSyncResult> {
+  const report: ProgressSender = opts?.quiet ? () => {} : onProgress
+  const dest = path.join(projectPath, '.modcrafting', 'base-mods')
+  fs.mkdirSync(dest, { recursive: true })
+
+  const resolved = await resolveBaseModSources()
+  const sources = Array.from(resolved.files.entries())
+  const modIds = sources.map(([id]) => id)
+  if (resolved.error) {
+    return { ok: false, copied: 0, skipped: false, modIds, error: resolved.error }
+  }
+
+  let copied = 0
+  for (const [id, from] of sources) {
+    const to = path.join(dest, `${id}.jar`)
+    try {
+      if (!modFilesMatch(from, to)) {
+        await copyFileAtomically(from, to)
+        copied++
+      }
+    } catch (err) {
+      return { ok: false, copied, skipped: false, modIds, error: `同步基础模组 ${id} 失败: ${String(err)}` }
+    }
+  }
+
+  report({ phase: 'project', message: copied > 0 ? `已同步 ${sources.length} 个基础模组` : `基础模组已就绪（${sources.length} 个）`, percent: 99 })
+  return { ok: true, copied, skipped: copied === 0, modIds }
 }
 
 function fabricVersionsSearchPaths(): string[] {
@@ -2316,7 +2426,16 @@ export async function prepareBuild(projectPath: string): Promise<{
       await ensureGradleHomeFromSeed()
     }
   }
-  await copyBaseModsToProject(projectPath, () => {}, { quiet: true })
+  const baseMods = await copyBaseModsToProject(projectPath, () => {}, { quiet: true })
+  if (baseMods.ok === false) {
+    return {
+      ok: false,
+      cmdPrefix: '',
+      powershellEnv: '',
+      env: { ...process.env },
+      error: `基础模组准备失败: ${baseMods.error || '未知错误'}`
+    }
+  }
 
   const jdkPath = jdkResult.path
   return {

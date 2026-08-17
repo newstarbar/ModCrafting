@@ -46,6 +46,7 @@ interface SessionSidebarProps {
   panelCollapsed?: boolean
   panelDragging?: boolean
   onTogglePanelCollapse?: () => void
+  onOpenSettingsCenter?: () => void
 }
 
 type SidebarTab = 'sessions' | 'files' | 'tools' | 'settings'
@@ -81,7 +82,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onApiSettingsChange, onApiKeySave,
   onOpenProject, onCreateProject,
   fileTreeRefreshKey = 0, selectedFilePath, selectedFile, fileContent, onSelectFile,
-  panelCollapsed = false, panelDragging = false, onTogglePanelCollapse
+  panelCollapsed = false, panelDragging = false, onTogglePanelCollapse, onOpenSettingsCenter
 }) => {
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -362,7 +363,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
           type="button"
           className={`activity-item ${activeTab === 'settings' ? 'active' : ''}`}
           title="设置"
-          onClick={() => setActiveTab('settings')}
+          onClick={() => onOpenSettingsCenter?.() ?? setActiveTab('settings')}
         >
           <IconSettings size="lg" />
         </button>

@@ -1,13 +1,71 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createGameTestSpec, getGameTestSpec, hydrateGameTestSpecsFromText, stateTransitionMatches, validateGameAssertions } from '../../src/renderer/src/harness/game-test-protocol.ts'
+import { acceptanceContractFingerprint, createGameTestSpec, gameTestScenarioFingerprint, getGameTestSpec, hydrateGameTestSpecsFromText, registerGameTestSpec, stateTransitionMatches, validateGameAssertions } from '../../src/renderer/src/harness/game-test-protocol.ts'
 import { validateAcceptanceContract } from '../../src/renderer/src/harness/acceptance-contract.ts'
 import { canonicalizePlanSteps, normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
 import { gameTestFailureSignature, isSoftSubmitPlanRejection, recordsStepEvidence } from '../../src/renderer/src/harness/workflow-engine.ts'
+import { mcRunTestTool } from '../../src/renderer/src/harness/game-test-runner.ts'
+import type { ToolContext } from '../../src/renderer/src/harness/tools.ts'
 
 test('GameTestSpec rejects placeholders and specs without objective assertions', () => {
   assert.equal(createGameTestSpec({ feature_type: 'new_item', subject_id: '<modid>:wand', assertions: [{ type: 'inventory_contains', itemId: 'example:wand' }] }).ok, false)
   assert.equal(createGameTestSpec({ feature_type: 'new_block', subject_id: 'example:altar', assertions: [] }).ok, false)
+})
+
+test('V2 scenarios reject a feature with no executable action', () => {
+  const result = createGameTestSpec({
+    feature_type: 'hud_gui', subject_id: 'example:hud',
+    assertions: [{ type: 'hud_text', text: 'KILL' }]
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /action/i)
+})
+
+test('strict scenarios require declared checkpoints on every action and relation references', () => {
+  const missing = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player', checkpoints: ['M0', 'M1'], baselineCheckpoint: 'M0',
+    actions: [{ type: 'wait', ms: 10 }], assertions: [{ type: 'snapshot_relation', source: 'player', pointer: '/width', leftCheckpoint: 'M0', rightCheckpoint: 'M1', operator: 'ratio', ratio: 0.5, tolerance: 0.02 }]
+  })
+  assert.equal(missing.ok, false)
+  if (!missing.ok) assert.match(missing.error, /checkpoint/i)
+  const valid = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player', checkpoints: ['M0', 'M1'], baselineCheckpoint: 'M0', variables: { token: { type: 'token', values: ['abc123'] } },
+    actions: [{ type: 'wait', ms: 10, checkpoint: 'M1' }], assertions: [{ type: 'snapshot_relation', source: 'player', pointer: '/width', leftCheckpoint: 'M0', rightCheckpoint: 'M1', operator: 'ratio', ratio: 0.5, tolerance: 0.02 }]
+  })
+  assert.equal(valid.ok, true)
+})
+
+test('strict protocol rejects layout or trace downgrades', () => {
+  const noLayout = createGameTestSpec({
+    feature_type: 'hud_gui', subject_id: 'example:hud', checkpoints: ['H1'], approvedLayoutId: 'layout-1',
+    actions: [{ type: 'wait', ms: 1, checkpoint: 'H1' }], assertions: [{ type: 'hud_text', text: '{{token}}', token: '{{token}}', checkpoint: 'H1', approvedLayoutElementId: 'kill-feed' }]
+  })
+  assert.equal(noLayout.ok, false)
+  if (!noLayout.ok) assert.match(noLayout.error, /layout|approved/i)
+})
+
+test('new objective assertion types validate their observer fields', () => {
+  assert.equal(validateGameAssertions([{ type: 'combat_event', victimTag: 'round', killed: true }]).ok, true)
+  assert.equal(validateGameAssertions([{ type: 'combat_event', victimTag: 'round', attackerIsPlayer: true }]).ok, false)
+  assert.equal(validateGameAssertions([{ type: 'elapsed_between', fromCheckpoint: 'P', toCheckpoint: 'D', minMs: 60000, minWorldTicks: 1200 }]).ok, true)
+  assert.equal(validateGameAssertions([{ type: 'snapshot_relation', source: 'serverPlayer', pointer: '/width', leftCheckpoint: 'M0', rightCheckpoint: 'M1', operator: 'approximately', tolerance: 0.01 }]).ok, true)
+  const unsupported = createGameTestSpec({ feature_type: 'player_interaction', subject_id: 'example:player', actions: [{ type: 'wait', ms: 1 }], assertions: [{ type: 'snapshot_relation', source: 'serverPlayer', pointer: '/unsupported', leftCheckpoint: 'M0', rightCheckpoint: 'M1', operator: 'equals' }] })
+  assert.equal(unsupported.ok, false)
+})
+
+test('mc_run_test rejects a missing AcceptanceContract before touching the game host', async () => {
+  const created = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player',
+    actions: [{ type: 'wait', ms: 1 }],
+    assertions: [{ type: 'snapshot_value', source: 'player', pointer: '/width', equals: 2 }]
+  })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const result = await mcRunTestTool.execute({ projectPath: 'D:/test', callId: 'contract-check' } as ToolContext, { scenarioId: created.spec.id })
+  const payload = typeof result === 'string' ? JSON.parse(result) : JSON.parse(result.output)
+  assert.equal(payload.verdict, 'INCONCLUSIVE')
+  assert.equal(payload.inconclusiveCode, 'SPEC_NO_ASSERTIONS')
+  assert.equal(payload.responsibility, 'agent_test_design')
 })
 
 test('GameTestSpec creates an isolated scenario with cleanup', () => {
@@ -19,11 +77,15 @@ test('GameTestSpec creates an isolated scenario with cleanup', () => {
 })
 
 test('game_test accepts only fresh mc_run_test PASS evidence, never screenshots', () => {
-  const [step] = normalizeWorkflowSteps([{ id: '1', description: 'run deterministic game test mc_run_test scenarioId=scenario_1', status: 'pending' }])
+  const created = createGameTestSpec({ feature_type: 'new_block', subject_id: 'example:altar', assertions: [{ type: 'block_equals', x: 0, y: 100, z: 4, blockId: 'example:altar' }] })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const [step] = normalizeWorkflowSteps([{ id: '1', description: `run deterministic game test mc_run_test scenarioId=${created.spec.id}`, status: 'pending', gameTest: created.spec }])
   assert.equal(step.kind, 'game_test')
   assert.equal(recordsStepEvidence(step, { ok: true, toolName: 'mc_screenshot', output: 'screenshot captured', durationMs: 0, exitCode: 0 }), false)
-  assert.equal(recordsStepEvidence(step, { ok: true, toolName: 'mc_run_test', output: '{}', durationMs: 0, exitCode: 0, validation: { kind: 'game', valid: true, verdict: 'PASS', version: '1.21.4', checkedAt: Date.now() } }), true)
-  assert.equal(recordsStepEvidence(step, { ok: true, toolName: 'mc_run_test', output: '{}', durationMs: 0, exitCode: 0, validation: { kind: 'game', valid: false, verdict: 'INCONCLUSIVE', version: '1.21.4', checkedAt: Date.now() } }), false)
+  assert.equal(recordsStepEvidence(step, { ok: true, toolName: 'mc_run_test', args: { scenarioId: created.spec.id }, output: '{}', durationMs: 0, exitCode: 0, validation: { kind: 'game', valid: true, verdict: 'PASS', version: '1.21.4', checkedAt: Date.now() } }), true)
+  assert.equal(recordsStepEvidence(step, { ok: true, toolName: 'mc_run_test', args: { scenarioId: created.spec.id }, output: '{}', durationMs: 0, exitCode: 0, validation: { kind: 'game', valid: false, verdict: 'INCONCLUSIVE', version: '1.21.4', checkedAt: Date.now() } }), false)
+  assert.equal(recordsStepEvidence(step, { ok: true, toolName: 'mc_run_test', args: { scenarioId: 'scenario_stale' }, output: '{}', durationMs: 0, exitCode: 0, validation: { kind: 'game', valid: true, verdict: 'PASS', version: '1.21.4', checkedAt: Date.now() } }), false)
 })
 
 test('same failed assertion has a stable signature across fresh sessions', () => {
@@ -36,8 +98,11 @@ test('generic assertion protocol validates type, placeholders, pointers, and tim
   assert.equal(validateGameAssertions([{ type: 'world_state' }]).ok, false)
   assert.equal(validateGameAssertions([{ type: 'snapshot_value', source: 'player', pointer: '/x', equals: 4 }]).ok, true)
   assert.equal(validateGameAssertions([{ type: 'snapshot_changed', source: 'serverPlayer', pointer: '/health', to: 20, afterAction: 0 }]).ok, true)
+  assert.equal(validateGameAssertions([{ type: 'snapshot_changed', source: 'player', pointer: '/width', afterAction: 0 }]).ok, true)
+  assert.equal(validateGameAssertions([{ type: 'snapshot_unchanged', source: 'player', pointer: '/uuid', afterAction: 0 }]).ok, true)
   assert.equal(validateGameAssertions([{ type: 'snapshot_value', source: 'player', pointer: 'x', equals: 4 }]).ok, false)
   assert.equal(validateGameAssertions([{ type: 'hud_text', text: '<widget_index>' }]).ok, false)
+  assert.equal(createGameTestSpec({ feature_type: 'player_interaction', subject_id: 'example:player', actions: [{ type: 'wait', ms: 10 }], assertions: [{ type: 'render_trace', modelClass: 'UnsupportedModel' }] }).ok, false)
 })
 
 test('hotkey interactions compile to input and ordered checkpoints remain generic', () => {
@@ -63,6 +128,23 @@ test('acceptance contract requires a structural oracle per atomic requirement', 
   assert.equal(valid.ok, true)
 })
 
+test('GameTestSpec requires every objective contract requirement to map to an assertion', () => {
+  const result = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player',
+    actions: [{ type: 'wait', ms: 1 }],
+    assertions: [{ type: 'snapshot_value', source: 'player', pointer: '/width', equals: 2 }],
+    acceptanceContract: {
+      version: 1,
+      requirements: [{
+        id: 'health', sourceQuote: 'health', claim: 'health is observable',
+        oracle: { type: 'game_assertion', assertion: { type: 'snapshot_value', source: 'player', pointer: '/health', equals: 20 } }
+      }]
+    }
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /no matching GameTestSpec assertion/i)
+})
+
 test('persisted V2 spec retains its scenario id and gets a legacy acceptance contract', () => {
   const created = createGameTestSpec({ feature_type: 'new_item', subject_id: 'example:wand', assertions: [{ type: 'inventory_contains', itemId: 'example:wand' }] })
   assert.equal(created.ok, true)
@@ -70,6 +152,67 @@ test('persisted V2 spec retains its scenario id and gets a legacy acceptance con
   const legacy = { ...created.spec, acceptanceContract: undefined }
   assert.equal(hydrateGameTestSpecsFromText(`\`\`\`json\n${JSON.stringify({ gameTest: legacy })}\n\`\`\``), 1)
   assert.equal(getGameTestSpec(created.spec.id)?.acceptanceContract?.requirements.length, 1)
+})
+
+test('scenario fingerprints exclude runtime identity while retaining revision metadata', () => {
+  const first = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player',
+    actions: [{ type: 'input', action: 'key_press', args: { key: 'g' } }],
+    assertions: [{ type: 'snapshot_value', source: 'player', pointer: '/width', equals: 2 }]
+  })
+  const second = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player',
+    actions: [{ type: 'input', action: 'key_press', args: { key: 'g' } }],
+    assertions: [{ type: 'snapshot_value', source: 'player', pointer: '/width', equals: 2 }]
+  })
+  assert.equal(first.ok, true)
+  assert.equal(second.ok, true)
+  if (!first.ok || !second.ok) return
+  assert.equal(gameTestScenarioFingerprint(first.spec), gameTestScenarioFingerprint(second.spec))
+  assert.notEqual(first.spec.id, second.spec.id)
+  assert.equal(first.spec.scenarioRevision, 1)
+})
+
+test('scenarios persist a separate AcceptanceContract fingerprint', () => {
+  const contract = {
+    version: 1 as const,
+    requirements: [{
+      id: 'state', sourceQuote: 'state', claim: 'width changes',
+      oracle: { type: 'game_assertion' as const, assertion: { type: 'snapshot_changed' as const, source: 'player' as const, pointer: '/width' } }
+    }]
+  }
+  const created = createGameTestSpec({
+    feature_type: 'player_interaction', subject_id: 'example:player',
+    actions: [{ type: 'wait', ms: 1 }], assertions: contract.requirements.map((entry) => entry.oracle.assertion),
+    acceptanceContract: contract
+  })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  assert.equal(created.spec.acceptanceContractFingerprint, acceptanceContractFingerprint(contract))
+  assert.notEqual(created.spec.acceptanceContractFingerprint, created.spec.scenarioFingerprint)
+})
+
+test('visual review decision persists as user_confirmation evidence without changing scenario identity', () => {
+  const created = createGameTestSpec({
+    feature_type: 'hud_gui', subject_id: 'example:hud',
+    actions: [{ type: 'wait', ms: 1 }],
+    assertions: [{ type: 'snapshot_value', source: 'player', pointer: '/width', equals: 2 }]
+  })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const restored = registerGameTestSpec({
+    ...created.spec,
+    visualReviewDecision: 'accepted',
+    visualReviewEvidence: {
+      decision: 'accepted', prompt: '确认 HUD 视觉效果', screenshotToolId: 'shot-1', capturedAt: 10, reviewedAt: 20
+    }
+  })
+  assert.equal(restored.ok, true)
+  if (!restored.ok) return
+  assert.equal(restored.spec.visualReviewDecision, 'accepted')
+  assert.equal(restored.spec.visualReviewEvidence?.decision, 'accepted')
+  assert.equal(restored.spec.visualReviewEvidence?.screenshotToolId, 'shot-1')
+  assert.equal(restored.spec.scenarioFingerprint, created.spec.scenarioFingerprint)
 })
 
 test('legacy inspect game test is migrated after build and run without losing status', () => {

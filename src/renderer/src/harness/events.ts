@@ -21,6 +21,9 @@ export interface GuiLayoutElement {
   y: number
   width: number
   height: number
+  color?: number
+  alpha?: number
+  shadow?: boolean
   dataLayoutType?: string
 }
 
@@ -36,12 +39,15 @@ export const EventKind = {
   ToolProgress: 'ToolProgress',
   ToolResult: 'ToolResult',
   Usage: 'Usage',
+  Collaboration: 'Collaboration',
+  ModelInvocation: 'ModelInvocation',
   Notice: 'Notice',
   Phase: 'Phase',
   PlanState: 'PlanState',
   ApprovalRequest: 'ApprovalRequest',
   AskRequest: 'AskRequest',
   ClarificationNeeded: 'ClarificationNeeded',
+  GameTestStatus: 'GameTestStatus',
   GuiLayoutPreview: 'GuiLayoutPreview',
   GuiLayoutPreviewCancelled: 'GuiLayoutPreviewCancelled',
   TurnDone: 'TurnDone',
@@ -71,11 +77,30 @@ export interface ToolEvent {
   outcome?: 'succeeded' | 'failed' | 'timed_out' | 'cancelled'
   runId?: string
   executionId?: string
+  /** Provenance of the tool implementation. Test Lab suites only accept core. */
+  source?: 'core' | 'plugin' | 'external'
   validation?: {
     kind: 'recipe' | 'mixin' | 'game'
     valid: boolean
     verdict?: 'PASS' | 'FAIL' | 'INCONCLUSIVE'
     checkedAt: number
+    inconclusiveCode?: import('./game-test-protocol.ts').GameTestInconclusiveCode
+    responsibility?: import('./game-test-protocol.ts').GameTestResponsibility
+    scenarioRevision?: number
+    scenarioFingerprint?: string
+    acceptanceContractFingerprint?: string
+    requiredPassCount?: number
+    observerSessionId?: string
+    windowFingerprint?: string
+    variantFingerprint?: string
+    replayPurpose?: 'first_failure_replay' | 'product_diagnostic'
+    diagnosticReplay?: boolean
+    resolvedVariables?: Record<string, string | number>
+    currentCheckpoint?: string
+    failureSignature?: string
+    runtimeState?: import('./game-test-protocol.ts').GameTestRuntimeState
+    instanceId?: string
+    minecraftProcessId?: string
   }
 }
 
@@ -120,6 +145,10 @@ export interface Usage {
   cacheHitTokens?: number
   cacheMissTokens?: number
   finishReason?: string
+  roleId?: import('../../../shared/model-routing.ts').AgentRoleId
+  providerId?: string
+  modelId?: string
+  invocationId?: string
 }
 
 // Compaction payload
@@ -139,6 +168,9 @@ export interface Event {
   reasoning?: string
   tool?: ToolEvent
   usage?: Usage
+  collaboration?: import('../../../shared/model-routing.ts').CollaborationTrace
+  modelInvocation?: ModelInvocationEvent
+  routeDecision?: import('../../../shared/model-routing.ts').RouteDecision
   approval?: Approval
   ask?: Ask
   notice?: { level: NoticeLevel; text: string }
@@ -159,6 +191,7 @@ export interface Event {
     gameTest?: import('./game-test-protocol.ts').GameTestSpec
   }>
   clarification?: { question: string; options?: string[] }
+  gameTestStatus?: import('./game-test-protocol.ts').GameTestWorkflowStatus
   guiLayout?: {
     id: string
     title: string
@@ -168,6 +201,18 @@ export interface Event {
   }
   turnMode?: 'chat' | 'develop' | 'plan_only' | 'resume'
   composerMode?: 'agent' | 'plan' | 'ask'
+}
+
+export interface ModelInvocationEvent {
+  invocationId: string
+  roleId: import('../../../shared/model-routing.ts').AgentRoleId
+  providerId: string
+  modelId: string
+  phase: 'start' | 'end'
+  startedAt: number
+  endedAt?: number
+  status?: 'running' | 'completed' | 'failed' | 'fallback'
+  error?: string
 }
 
 // Sink interface — same contract as Reasonix event.Sink

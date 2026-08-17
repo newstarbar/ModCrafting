@@ -5,11 +5,14 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.UUID;
 
 public class ModCraftingObserverClient implements ClientModInitializer {
     public static final String MOD_ID = "modcrafting_observer";
     public static final String MOD_VERSION = "1.0.0";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+    /** A fresh ID for every Minecraft JVM/client lifecycle. Never persisted across restarts. */
+    public static final String OBSERVER_SESSION_ID = UUID.randomUUID().toString();
 
     private static BridgeHttpServer server;
 

@@ -69,7 +69,10 @@ function normalizeSession(raw: unknown): ChatSession | null {
         embeddedPlan: msg.embeddedPlan,
         timestamp: msg.timestamp,
         displayId: msg.displayId,
-        stateSnapshot: msg.stateSnapshot
+        stateSnapshot: msg.stateSnapshot,
+        model: msg.model,
+        providerId: msg.providerId,
+        collaborationTrace: msg.collaborationTrace
       }
     }),
     createdAt: s.createdAt ?? Date.now(),
@@ -81,6 +84,7 @@ function normalizeSession(raw: unknown): ChatSession | null {
       ? s.composerMode
       : undefined,
     sessionGoal: typeof s.sessionGoal === 'string' ? s.sessionGoal : undefined
+    ,routingSelection: s.routingSelection && typeof s.routingSelection === 'object' ? s.routingSelection : undefined
   }
 }
 

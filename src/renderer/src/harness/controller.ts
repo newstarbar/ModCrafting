@@ -3,7 +3,7 @@
 // Session management, plan/execute phases, approval gates
 
 import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from "./events";
-import { Agent } from "./agent";
+import { Agent, type RunOptions } from "./agent";
 import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMessage } from "./chat-message";
 import { contentPartsAsClassifyText } from "../context/user-content.ts";
 import { Registry } from "./tools";
@@ -20,14 +20,28 @@ import { TOOL_LABELS_ZH } from "./tool-labels";
 import { defaultVerifyTarget, formatVerifyTargetBlock, verifyTargetFromClassification, type VerifyTarget } from "./verify-target.ts";
 import { formatGradleSummary, formatJavaFileList, parseGradleProperties, scanJavaSourceTree } from "./project-info.ts";
 import { canonicalizePlanSteps, isGuiFilePath, stepRequiresGuiPreview } from "./plan-normalizer.ts";
-import { hydrateGameTestSpecsFromText, registerGameTestSpec, type GameTestSpec } from "./game-test-protocol.ts";
+import { computeApprovedLayoutFingerprint, getApprovedLayoutRecord, hydrateGameTestSpecsFromText, registerApprovedLayoutRecord, registerGameTestSpec, type GameTestSpec, type GameTestWorkflowStatus } from "./game-test-protocol.ts";
 import { registerKnownProjectPaths } from "./tool-definitions.ts";
 import { structuredGameTestGate } from "./plan-execution-gate.ts";
+import {
+  routeUserTurn,
+  findRoutingPreset,
+  isVisionModelRef,
+  type AgentRoleId,
+  type CollaborationTrace,
+  type ModelRef,
+  type ModelRoutingConfig,
+  type RouteDecision,
+  type RoutingSelection
+} from "../../../shared/model-routing.ts";
 
 export interface ControllerOptions {
 	registry: Registry;
 	projectPath: string | null;
 	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string };
+	routingConfig?: ModelRoutingConfig;
+	routingSelection?: RoutingSelection;
+	resolveModelConfig?: (model: ModelRef) => Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string } | null>;
 	onEvent?: (event: Event) => void;
 	onAgentStatus?: (status: string) => void;
 	onStreamUpdate?: (text: string, reasoning?: string) => void;
@@ -40,6 +54,12 @@ export class Controller {
 	private _projectPath: string | null;
 
 	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string };
+	private routingConfig?: ModelRoutingConfig;
+	private routingSelection?: RoutingSelection;
+	private resolveModelConfig?: ControllerOptions['resolveModelConfig'];
+	private routeDecision: RouteDecision | null = null;
+	private collaborationTrace: CollaborationTrace[] = [];
+	private activeRoleContext: { roleId: AgentRoleId; providerId: string; modelId: string; invocationId: string } | null = null;
 
 	// Session
 	messages: ChatMessage[] = [];
@@ -70,8 +90,11 @@ export class Controller {
 	private taskId = `task_${Date.now().toString(36)}`;
 	/** GUI 布局预览：pending 的 Promise resolver（id → resolve）。同一时刻只允许一个 pending。 */
 	private pendingGuiLayoutResolvers = new Map<string, (json: string) => void>();
+	private approvedGuiLayoutIds = new Set<string>();
 	/** GUI 布局预览是否正在等待用户确认。 */
 	guiLayoutPending = false;
+	/** Dedicated visual-review request; never represented as clarificationPending. */
+	private pendingVisualReview: GameTestWorkflowStatus | null = null;
 
 	// Callbacks
 	onEvent?: (event: Event) => void;
@@ -82,12 +105,23 @@ export class Controller {
 		this.registry = opts.registry;
 		this._projectPath = opts.projectPath;
 		this.apiConfig = opts.apiConfig;
+		this.routingConfig = opts.routingConfig;
+		this.routingSelection = opts.routingSelection;
+		this.resolveModelConfig = opts.resolveModelConfig;
 		this.onEvent = opts.onEvent;
 		this.onAgentStatus = opts.onAgentStatus;
 		this.onStreamUpdate = opts.onStreamUpdate;
 
 		this.sink = new LoggerSink(
 			new FuncSink((event) => {
+				if (event.tool && !event.tool.source) {
+					const name = event.tool.name || '';
+					event.tool.source = name.startsWith('plugin_') || name.startsWith('plugin:') ? 'plugin' : name.startsWith('external_') || name.startsWith('external:') ? 'external' : 'core';
+				}
+				this.trackGameTestStatus(event);
+				if (event.kind === EventKind.Usage && event.usage && this.activeRoleContext) {
+					event.usage = { ...event.usage, ...this.activeRoleContext };
+				}
 				this.onEvent?.(event);
 			})
 		);
@@ -103,7 +137,19 @@ export class Controller {
 				logger.tool(`${name} completed`, output.slice(0, 100));
 			},
 			onGuiLayoutPreview: (payload) => this.handleGuiLayoutPreview(payload),
-			onCancelPendingGuiLayouts: () => this.cancelAllPendingGuiLayouts()
+			onCancelPendingGuiLayouts: () => this.cancelAllPendingGuiLayouts(),
+			onModelInvocation: (request) => {
+				const context = this.activeRoleContext;
+				// Agent model calls are always made inside runForRole. Keep a safe
+				// fallback for direct harness invocations so the audit is never
+				// silently dropped if a future caller bypasses role routing.
+				this.emitModelInvocation({
+					...request,
+					roleId: context?.roleId || 'implementer',
+					providerId: context?.providerId || this.apiConfig.providerId || 'custom',
+					modelId: request.modelId
+				});
+			}
 		});
 	}
 
@@ -158,13 +204,100 @@ export class Controller {
 		this.apiConfig = config;
 	}
 
+	setRouting(config: ModelRoutingConfig | undefined, selection: RoutingSelection | undefined, resolver?: ControllerOptions['resolveModelConfig']): void {
+		this.routingConfig = config;
+		this.routingSelection = selection;
+		this.resolveModelConfig = resolver;
+	}
+
+	getCollaborationTrace(): CollaborationTrace[] { return [...this.collaborationTrace]; }
+	getRouteDecision(): RouteDecision | null { return this.routeDecision; }
+
+	private async modelConfigsForRole(roleId: AgentRoleId): Promise<Array<{ endpoint: string; apiKey: string; model: string; providerId?: string; ref: ModelRef }>> {
+		const fixed = this.routingSelection?.mode !== 'routed';
+		if (fixed || !this.routingConfig || !this.routingSelection) {
+			return [{ ...this.apiConfig, ref: { providerId: this.apiConfig.providerId || 'custom', modelId: this.apiConfig.model } }];
+		}
+		const preset = findRoutingPreset(this.routingConfig, this.routingSelection.customPresetId || this.routingSelection.strategyId);
+		const binding = preset.roles[roleId];
+		const candidates = [binding.primary, ...binding.fallbacks];
+		const resolvedConfigs: Array<{ endpoint: string; apiKey: string; model: string; providerId?: string; ref: ModelRef }> = [];
+		let lastError = '';
+		for (const candidate of candidates) {
+			if (roleId === 'visualReviewer' && !isVisionModelRef(candidate)) continue;
+			const resolved = await this.resolveModelConfig?.(candidate);
+			if (resolved?.apiKey?.trim()) resolvedConfigs.push({ ...resolved, ref: candidate });
+			lastError = `${candidate.providerId}/${candidate.modelId}`;
+		}
+		if (resolvedConfigs.length > 0) return resolvedConfigs;
+		throw new Error(`角色「${roleId}」没有可用模型${lastError ? `（已尝试 ${lastError}）` : ''}。请在设置中保存所需 Provider 的 API Key。`);
+	}
+
+	private async modelConfigForRole(roleId: AgentRoleId): Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string; ref: ModelRef }> {
+		return (await this.modelConfigsForRole(roleId))[0];
+	}
+
+	private recordCollaboration(trace: CollaborationTrace): void {
+		this.collaborationTrace.push(trace);
+		this.emitEvent({ kind: EventKind.Collaboration, collaboration: trace, routeDecision: this.routeDecision || undefined });
+	}
+
+	private emitModelInvocation(invocation: import('./events.ts').ModelInvocationEvent): void {
+		this.emitEvent({ kind: EventKind.ModelInvocation, modelInvocation: invocation, routeDecision: this.routeDecision || undefined });
+	}
+
+	private async runForRole(roleId: AgentRoleId, streamCb: (text: string, reasoning?: string) => void, options: RunOptions): Promise<string> {
+		const configs = await this.modelConfigsForRole(roleId);
+		let lastError: unknown;
+		for (let index = 0; index < configs.length; index++) {
+			const config = configs[index];
+			const trace: CollaborationTrace = {
+				id: `role_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+				roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, status: 'running', startedAt: Date.now(),
+				...(index > 0 ? { fallbackFrom: configs[index - 1].ref } : {})
+			};
+			this.recordCollaboration(trace);
+			this.emitModelInvocation({ invocationId: trace.id, roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, phase: 'start', startedAt: trace.startedAt, status: 'running' });
+			try {
+				this.activeRoleContext = { roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, invocationId: trace.id };
+				const result = await this.agent.run(config.endpoint, config.apiKey, config.model, this.messages, this._projectPath, this.abortController?.signal, streamCb, options);
+				const failed = /^Error:|执行因错误中断/.test(result);
+				trace.status = failed ? 'failed' : 'completed'; trace.endedAt = Date.now(); trace.summary = failed ? result.slice(0, 180) : '职责完成';
+				this.emitModelInvocation({ invocationId: trace.id, roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, phase: 'end', startedAt: trace.startedAt, endedAt: trace.endedAt, status: trace.status });
+				this.recordCollaboration(trace); this.activeRoleContext = null;
+				if (!failed || index === configs.length - 1) return result;
+				lastError = new Error(result);
+			} catch (error) {
+				this.activeRoleContext = null; trace.status = 'failed'; trace.endedAt = Date.now(); trace.summary = String(error); this.emitModelInvocation({ invocationId: trace.id, roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, phase: 'end', startedAt: trace.startedAt, endedAt: trace.endedAt, status: 'failed', error: String(error) }); this.recordCollaboration(trace); lastError = error;
+				if (index === configs.length - 1) throw error;
+			}
+			this.recordCollaboration({ ...trace, id: `${trace.id}_fallback`, status: 'fallback', summary: '主模型不可用，切换备用模型。' });
+		}
+		throw lastError instanceof Error ? lastError : new Error(String(lastError || '模型调用失败'));
+	}
+
 	setRegistry(registry: Registry): void {
 		this.registry = registry;
 		this.agent.setRegistry(registry);
 	}
 
 	private emitEvent(event: Event): void {
+		if (event.tool && !event.tool.source) {
+			const name = event.tool.name || '';
+			event.tool.source = name.startsWith('plugin_') || name.startsWith('plugin:') ? 'plugin' : name.startsWith('external_') || name.startsWith('external:') ? 'external' : 'core';
+		}
+		this.trackGameTestStatus(event);
 		this.sink.emit(event);
+	}
+
+	private trackGameTestStatus(event: Event): void {
+		if (event.kind === EventKind.GameTestStatus && event.gameTestStatus) {
+			if (event.gameTestStatus.reviewDecision && this.pendingVisualReview?.reviewId === event.gameTestStatus.reviewId) {
+				this.pendingVisualReview = null;
+			} else if (event.gameTestStatus.state === "visual_review") {
+				this.pendingVisualReview = event.gameTestStatus;
+			}
+		}
 	}
 
 	private intentContext() {
@@ -582,11 +715,11 @@ submit_plan 参数要求：
 1. 只执行当前步骤。不确定路径/类名/包名时先 read_file/grep；仅用户偏好才 ask_clarification，禁止猜需求。
 2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。禁止 Wait/Hmm 式反复自我否定与超长推理；想清后立即调工具。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
-4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient → mc_ensure_test_world 进入世界 → mc_test_scenario(feature_type=...) 获取测试步骤模板 → 按步骤执行测试场景 → mc_screenshot/mc_inspect/mc_world/mc_observe_entity 客观验证效果。
+4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient → mc_ensure_test_world 进入世界 → mc_test_scenario(feature_type=...) 生成带有效 acceptanceContract、客观 assertions 和 actions 的新场景 → 按步骤执行测试场景 → mc_screenshot/mc_inspect/mc_world/mc_observe_entity 客观验证效果。若用户要求重启后完整复测，必须在 mc_test_scenario 传 required_pass_count=2，Harness 会重启并用同一 scenarioId 从 setup 独立复测。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
 6. **GUI 布局预览强制要求：任何涉及 Screen/HUD/ConfigScreen 代码的步骤（无论是新建还是修改现有 GUI），必须先调用 gui_layout_preview 工具生成 HTML 布局预览供用户确认，拿到用户确认的布局 JSON 后才能编写/修改 GUI 代码。禁止跳过预览直接 edit_file/write_file GUI 代码。layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。生成的 HTML 仅用于可视化布局，禁止包含 <button>、<input type="button">、onclick 事件或任何确认/取消按钮；确认/取消由外层 UI 统一提供。**
 7. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
-8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ mc_test_scenario(feature_type=...) 获取测试步骤模板 ④ 按步骤执行测试场景（生成生物/给予物品/触发事件） ⑤ mc_screenshot/mc_inspect/mc_world/mc_observe_entity 客观验证效果。禁止仅凭 menu 宣称完成。禁止仅凭"已进入世界"宣称完成。禁止跳过 mc_test_scenario 直接 complete_step。feature_type 取值：new_item/new_block/new_recipe/entity_behavior/player_interaction/hud_gui。实体行为修改类功能必须用 mc_observe_entity 对比状态变化（爆炸倒计时/AI 目标/移动速度），禁止仅凭截图宣称完成。mc_ensure_test_world 失败后必须用 mc_inspect 检视界面再 mc_input 手动操作，禁止跳过世界进入步骤。任务总结必须列出实际执行的验证工具调用和结果，禁止虚构验证结果。
+8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ mc_test_scenario(feature_type=...) 生成有效 acceptanceContract、客观 assertions 与 actions 的新场景 ④ 按步骤执行测试场景（生成生物/给予物品/触发事件） ⑤ mc_screenshot/mc_inspect/mc_world/mc_observe_entity 客观验证效果。禁止仅凭 menu 宣称完成。禁止仅凭"已进入世界"宣称完成。禁止跳过 mc_test_scenario 直接 complete_step。feature_type 取值：new_item/new_block/new_recipe/entity_behavior/player_interaction/hud_gui。实体行为修改类功能必须用 mc_observe_entity 对比状态变化（爆炸倒计时/AI 目标/移动速度），禁止仅凭截图宣称完成。mc_ensure_test_world 失败后必须用 mc_inspect 检视界面再 mc_input 手动操作，禁止跳过世界进入步骤。任务总结必须列出实际执行的验证工具调用和结果，禁止虚构验证结果。
 9. ${isVisionCapableModel(this.apiConfig.model)
 		? "验证策略：当前模型支持图片理解。功能测试时调用 mc_screenshot 截图，模型会直接分析截图验证功能效果。"
 		: "验证策略：当前模型不支持图片理解。功能测试验证策略：① 优先使用 mc_inspect 获取结构化数据（界面类型、控件列表、玩家状态）进行数据化验证；② 仍需调用 mc_screenshot 截图（供总结展示和用户参考），但不要尝试从截图本身分析；③ 若 mc_inspect 无法验证的功能（如颜色/动画/渲染效果），在输出中明确标注\"需用户手动确认\"；④ 禁止声称\"测试通过\"而无客观证据（mc_inspect 数据或用户确认）。"}`;
@@ -703,7 +836,7 @@ ${projectInfo}`;
 
 	private async runChatTurn(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
 		await this.updateSystemPrompt("chat");
-		const result = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController!.signal, streamCb, {
+		const result = await this.runForRole('coordinator', streamCb, {
 			phase: "plan",
 			emitLifecycle: true,
 			turnMode: "chat",
@@ -728,7 +861,7 @@ ${projectInfo}`;
 			this.ensureVerifyTargetForGui();
 		}
 
-		const result = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController!.signal, streamCb, {
+		const result = await this.runForRole('implementer', streamCb, {
 			phase: "execute",
 			emitLifecycle: true,
 			planTracker: this.planTracker,
@@ -844,7 +977,7 @@ ${projectInfo}`;
 
 
 		if (!hasGameTest) {
-			pushStep("执行确定性游戏测试（mc_test_scenario 生成含 assertions 的场景 → mc_run_test；仅 PASS 完成，INCONCLUSIVE 等待用户确认）");
+			pushStep("执行确定性游戏测试（mc_test_scenario 生成含客观 assertions 的场景 → mc_run_test；INCONCLUSIVE 由 Harness 自动进入契约修订、环境恢复或专用视觉审核）");
 		}
 
 		return appended;
@@ -881,9 +1014,16 @@ ${projectInfo}`;
 				role: "user",
 				content: [
 					"用户请求游戏内测试。禁止 submit_plan、默认 F6、截图即通过或仅凭命令发送即通过。",
-					"先启动客户端并进入 ModCrafting Test World；再按实际功能分类调用 mc_test_scenario，提供 concrete subject_id/hotkey 和 assertions，最后调用 mc_run_test。只有 PASS 才完成；环境、导航、桥接或纯视觉问题必须返回 INCONCLUSIVE，不能改代码。",
+					"先启动客户端并进入 ModCrafting Test World；再按实际功能分类调用 mc_test_scenario，提供 concrete subject_id/hotkey、客观 assertions 和 acceptanceContract，最后调用 mc_run_test。组合项目若要求重启后完整复测，传 required_pass_count=2。只有达到所需独立 PASS 次数才完成；INCONCLUSIVE 由 Harness 按原因自动修订测试契约、恢复环境或进入专用视觉审核，禁止通用澄清和误改产品代码。",
 					buildUserSymptomBlock(this.activeUserSymptom)
 				].filter(Boolean).join("\n\n"),
+				origin: "harness",
+				taskId: this.taskId,
+				phase: "execute"
+			});
+			this.messages.push({
+				role: "system",
+				content: "游戏测试 INCONCLUSIVE 由 Harness 自动分类：测试契约缺陷进入 Evidence Repair，Observer/世界问题自动恢复最多两次，纯视觉项目进入专用审核卡；禁止把这些状态转换为通用澄清或等待用户补写断言。",
 				origin: "harness",
 				taskId: this.taskId,
 				phase: "execute"
@@ -996,23 +1136,53 @@ ${projectInfo}`;
 		const inputText = contentPartsAsClassifyText(input);
 
 		this.onAgentStatus?.("意图分类...");
-		const classified = await classifyUserTurn({
-			apiConfig: this.apiConfig,
-			input: inputText,
-			ctx: this.intentContext(),
-			stickySymptom: this.activeUserSymptom,
-			abortSignal: this.abortController.signal
-		});
+		const routerConfig = await this.modelConfigForRole('router');
+		const classifierInvocationId = `router_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+		const classifierStartedAt = Date.now();
+		this.emitModelInvocation({ invocationId: classifierInvocationId, roleId: 'router', providerId: routerConfig.ref.providerId, modelId: routerConfig.ref.modelId, phase: 'start', startedAt: classifierStartedAt, status: 'running' });
+		let classified: ClassifyUserTurnResult;
+		try {
+			classified = await classifyUserTurn({
+				apiConfig: routerConfig,
+				input: inputText,
+				ctx: this.intentContext(),
+				stickySymptom: this.activeUserSymptom,
+				abortSignal: this.abortController.signal
+			});
+			this.emitModelInvocation({ invocationId: classifierInvocationId, roleId: 'router', providerId: routerConfig.ref.providerId, modelId: routerConfig.ref.modelId, phase: 'end', startedAt: classifierStartedAt, endedAt: Date.now(), status: 'completed' });
+		} catch (error) {
+			this.emitModelInvocation({ invocationId: classifierInvocationId, roleId: 'router', providerId: routerConfig.ref.providerId, modelId: routerConfig.ref.modelId, phase: 'end', startedAt: classifierStartedAt, endedAt: Date.now(), status: 'failed', error: String(error) });
+			throw error;
+		}
 		if (classified.diagnostics) {
 			this.classifierDiagnostics = [...this.classifierDiagnostics, classified.diagnostics].slice(-30);
 		}
 		this.applyClassificationSideEffects(classified, inputText);
+		this.routeDecision = routeUserTurn(inputText, this.routingSelection?.taskTemplateId || 'auto', /data:image\//i.test(inputText));
+		this.emitEvent({ kind: EventKind.Collaboration, routeDecision: this.routeDecision });
+		for (const delegation of this.routeDecision.delegations) {
+			if (delegation.roleId === 'router') continue;
+			const preset = this.routingConfig && this.routingSelection?.mode === 'routed'
+				? findRoutingPreset(this.routingConfig, this.routingSelection.customPresetId || this.routingSelection.strategyId)
+				: undefined;
+			const model = preset?.roles[delegation.roleId]?.primary || { providerId: this.apiConfig.providerId || 'custom', modelId: this.apiConfig.model };
+			this.recordCollaboration({ id: `queued_${delegation.id}`, roleId: delegation.roleId, providerId: model.providerId, modelId: model.modelId, status: 'queued', summary: delegation.reason });
+		}
 
 		const intent = classified.intent;
 		this.lastTurnMode = intent === "plan_only" ? "plan_only" : intent;
 
 		if (options.pushUser) {
 			this.messages.push({ role: "user", content: input, origin: "user", taskId: this.taskId });
+		}
+		if (this.routeDecision.taskTemplateId === 'ui') {
+			try {
+				await this.modelConfigForRole('visualReviewer');
+			} catch (error) {
+				const message = `UI / GUI 任务需要可用的视觉审查模型。${error instanceof Error ? error.message : String(error)}`;
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: 'error', text: message } });
+				return message;
+			}
 		}
 		this.onAgentStatus?.("思考中...");
 
@@ -1161,7 +1331,7 @@ ${projectInfo}`;
 				await this.updateSystemPrompt("plan");
 				this.emitEvent({ kind: EventKind.Phase, phase: "plan_start" });
 
-				const planResult = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController.signal, streamCb, {
+				const planResult = await this.runForRole('planner', streamCb, {
 					phase: "plan",
 					emitLifecycle: false,
 					turnMode: intent,
@@ -1190,16 +1360,7 @@ ${projectInfo}`;
 						this.onAgentStatus?.("重新生成计划...");
 						planStreamReasoning = "";
 						planStreamText = "";
-						const retryResult = await this.agent.run(
-							this.apiConfig.endpoint,
-							this.apiConfig.apiKey,
-							this.apiConfig.model,
-							this.messages,
-							this._projectPath,
-							this.abortController.signal,
-							streamCb,
-							{ phase: "plan", emitLifecycle: false, turnMode: intent, composerMode: this.composerMode }
-						);
+						const retryResult = await this.runForRole('planner', streamCb, { phase: "plan", emitLifecycle: false, turnMode: intent, composerMode: this.composerMode });
 						if (this.agent.clarificationPending) return retryResult;
 						const retryPlanText = this.emitPlanDonePhase(planStreamReasoning, planStreamText, retryResult);
 						if (!this.isActionablePlan(retryPlanText)) {
@@ -1426,16 +1587,7 @@ ${projectInfo}`;
 				// Resume plan phase — regenerate plan with clarified requirements
 				await this.updateSystemPrompt("plan");
 
-				const planResult = await this.agent.run(
-					this.apiConfig.endpoint,
-					this.apiConfig.apiKey,
-					this.apiConfig.model,
-					this.messages,
-					this._projectPath,
-					this.abortController!.signal,
-					streamCb,
-					{ phase: "plan", emitLifecycle: false, turnMode: "develop", composerMode: this.composerMode }
-				);
+				const planResult = await this.runForRole('planner', streamCb, { phase: "plan", emitLifecycle: false, turnMode: "develop", composerMode: this.composerMode });
 
 				if (this.agent.clarificationPending) return planResult;
 
@@ -1473,7 +1625,7 @@ ${projectInfo}`;
 
 			// Resume execute phase — rebuild execute system prompt (may have been overwritten by a chat turn).
 			await this.updateSystemPrompt("execute");
-			const result = await this.agent.run(this.apiConfig.endpoint, this.apiConfig.apiKey, this.apiConfig.model, this.messages, this._projectPath, this.abortController!.signal, streamCb, {
+			const result = await this.runForRole('implementer', streamCb, {
 				phase: "execute",
 				emitLifecycle: false,
 				planTracker: this.planTracker,
@@ -1515,6 +1667,73 @@ ${projectInfo}`;
 		}
 	}
 
+	/**
+	 * Resolve the dedicated visual-review card. This is intentionally separate
+	 * from answerClarification: a visual decision records user_confirmation and
+	 * resumes the current game-test step without sending a free-form user
+	 * message back to the model.
+	 */
+	async resolveVisualReview(id: string, decision: "accepted" | "rejected"): Promise<string> {
+		if (decision !== "accepted" && decision !== "rejected") throw new Error("invalid_visual_review_decision");
+		const settleDeadline = Date.now() + 5_000;
+		while (this._running && Date.now() < settleDeadline) {
+			await new Promise<void>((resolve) => setTimeout(resolve, 25));
+		}
+		const pending = this.pendingVisualReview;
+		if (!pending || pending.reviewId !== id) throw new Error("visual_review_not_pending");
+		if (!this.planTracker) throw new Error("visual_review_plan_unavailable");
+		const step = this.planTracker.steps.find((candidate) => candidate.kind === "game_test" && candidate.gameTest?.id === pending.scenarioId);
+		if (!step?.gameTest) throw new Error("visual_review_scenario_unavailable");
+
+		const updated = registerGameTestSpec({
+			...step.gameTest,
+			visualReviewDecision: decision,
+			visualReviewEvidence: {
+				decision,
+				prompt: pending.reviewPrompt || pending.message,
+				...(pending.reviewScreenshot ? {
+					screenshotToolId: pending.reviewScreenshot.toolId,
+					capturedAt: pending.reviewScreenshot.capturedAt
+				} : {}),
+				reviewedAt: Date.now()
+			}
+		});
+		if (!updated.ok) throw new Error(`visual_review_persist_failed: ${updated.error}`);
+		step.gameTest = updated.spec;
+		step.status = "running";
+		this.pendingVisualReview = null;
+		this.emitPlanState(this.planTracker);
+
+		if (decision === "rejected") {
+			try {
+				if (typeof window !== "undefined" && window.api?.mcStopAll) await window.api.mcStopAll();
+			} catch {
+				// Product repair remains actionable even if the old client is already down.
+			}
+			this.emitEvent({
+				kind: EventKind.GameTestStatus,
+				gameTestStatus: {
+					...pending,
+					state: "product_repair",
+					code: "VISUAL_REVIEW_REQUIRED",
+					responsibility: "visual_review",
+					reviewDecision: "rejected",
+					message: "视觉审核拒绝，正在进入产品修复；修复后将重建、重启并重新执行客观测试。"
+				}
+			});
+		} else {
+			this.emitEvent({
+				kind: EventKind.GameTestStatus,
+				gameTestStatus: {
+					...pending,
+					reviewDecision: "accepted",
+					message: "视觉审核已接受，已记录 user_confirmation 证据；正在推进当前测试步骤。"
+				}
+			});
+		}
+		return this.retryExecuteTurn();
+	}
+
 	/** GUI 布局预览：触发预览面板并阻塞工具 Promise，等待用户确认/取消。 */
 	private handleGuiLayoutPreview(payload: {
 		id: string;
@@ -1532,6 +1751,7 @@ ${projectInfo}`;
 		}
 
 		return new Promise<string>((resolve) => {
+			this.approvedGuiLayoutIds.add(payload.id);
 			this.pendingGuiLayoutResolvers.set(payload.id, resolve);
 			this.guiLayoutPending = true;
 			this.emitEvent({
@@ -1551,11 +1771,58 @@ ${projectInfo}`;
 	resolveGuiLayout(id: string, layoutJson: string): void {
 		const resolver = this.pendingGuiLayoutResolvers.get(id);
 		if (resolver) {
+			try {
+				const parsed = JSON.parse(layoutJson) as Record<string, unknown>;
+				if (!this.approvedGuiLayoutIds.has(id) || parsed.approvalId !== id) {
+					resolver(JSON.stringify({ cancelled: true, feedback: '布局批准记录缺少不可伪造的 approvalId/layoutFingerprint，请重新确认布局。' }));
+					this.pendingGuiLayoutResolvers.delete(id);
+					this.approvedGuiLayoutIds.delete(id);
+					if (this.pendingGuiLayoutResolvers.size === 0) this.guiLayoutPending = false;
+					return;
+				}
+				// The renderer may include a convenience fingerprint, but the host is
+				// the authority. Recompute it from the approved payload before
+				// persisting or returning the record so a spoofed fingerprint cannot
+				// bind a scenario to a different layout oracle.
+				const hostFingerprint = computeApprovedLayoutFingerprint({
+					layoutType: parsed.layoutType,
+					canvasWidth: parsed.canvasWidth,
+					canvasHeight: parsed.canvasHeight,
+					elements: parsed.elements
+				});
+				const approved = registerApprovedLayoutRecord({
+					approvalId: id,
+					layoutFingerprint: hostFingerprint,
+					layoutType: parsed.layoutType,
+					canvasWidth: parsed.canvasWidth,
+					canvasHeight: parsed.canvasHeight,
+					elements: Array.isArray(parsed.elements) ? parsed.elements : [],
+					approvedAt: Date.now()
+				});
+				if (!approved.ok) {
+					resolver(JSON.stringify({ cancelled: true, feedback: approved.error }));
+					this.pendingGuiLayoutResolvers.delete(id);
+					this.approvedGuiLayoutIds.delete(id);
+					if (this.pendingGuiLayoutResolvers.size === 0) this.guiLayoutPending = false;
+					return;
+				}
+			} catch {
+				resolver(JSON.stringify({ cancelled: true, feedback: '布局批准记录不是有效 JSON，请重新确认布局。' }));
+				this.pendingGuiLayoutResolvers.delete(id);
+				this.approvedGuiLayoutIds.delete(id);
+				if (this.pendingGuiLayoutResolvers.size === 0) this.guiLayoutPending = false;
+				return;
+			}
 			this.pendingGuiLayoutResolvers.delete(id);
+			this.approvedGuiLayoutIds.delete(id);
 			if (this.pendingGuiLayoutResolvers.size === 0) {
 				this.guiLayoutPending = false;
 			}
-			resolver(layoutJson);
+			// Return the canonical host-owned fingerprint to the agent. This is
+			// intentionally a new JSON object rather than the untrusted UI string.
+			const canonical = JSON.parse(layoutJson) as Record<string, unknown>;
+			canonical.layoutFingerprint = getApprovedLayoutRecord(id)?.layoutFingerprint ?? computeApprovedLayoutFingerprint(canonical);
+			resolver(JSON.stringify(canonical));
 		}
 	}
 
@@ -1591,6 +1858,7 @@ ${projectInfo}`;
 			resolver('{"cancelled": true}');
 		}
 		this.pendingGuiLayoutResolvers.clear();
+		this.approvedGuiLayoutIds.clear();
 		this.guiLayoutPending = false;
 		// 通知 UI 将所有 pending 状态的预览条目标记为已取消
 		this.emitEvent({ kind: EventKind.GuiLayoutPreviewCancelled });
@@ -1605,6 +1873,7 @@ ${projectInfo}`;
 		this.classifierDiagnostics = [];
 		this.agent.resetRunState();
 		this.agent.clarificationPending = false;
+		this.pendingVisualReview = null;
 		// 清理 GUI 布局预览 pending 状态
 		for (const [, resolver] of this.pendingGuiLayoutResolvers.entries()) {
 			resolver('{"cancelled": true}');
@@ -1732,10 +2001,24 @@ ${projectInfo}`;
 			this.planTracker = null;
 			return;
 		}
-		for (const step of steps) if (step.gameTest) registerGameTestSpec(step.gameTest);
+		const restoredSteps = steps.map((step) => {
+			if (!step.gameTest) return step;
+			const restored = registerGameTestSpec(step.gameTest);
+			if (restored.ok) return { ...step, gameTest: restored.spec };
+			// Legacy sessions may contain an empty/invalid spec. Do not register a
+			// phantom scenario or resume a completed step with unverifiable evidence;
+			// keep the game_test step runnable so the planner can generate a fresh V2
+			// scenario through the internal Evidence Repair path.
+			return {
+				...step,
+				status: step.status === "completed" ? "running" : step.status,
+				gameTest: undefined,
+				evidence: `${step.evidence || "V2 GameTestSession verdict=PASS"}\n[系统] 已丢弃遗留无效游戏测试规格：${restored.error}`
+			};
+		});
 		// Canonicalization migrates the old inspect/game-test bug before resuming.
 		this.planTracker = PlanTracker.fromSteps(
-			canonicalizePlanSteps(steps.map((step) => ({
+			canonicalizePlanSteps(restoredSteps.map((step) => ({
 				...step,
 				status: step.status === "completed" ? ("completed" as const) : step.status === "running" ? ("running" as const) : step.status === "error" ? ("error" as const) : ("pending" as const)
 			})))

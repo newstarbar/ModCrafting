@@ -33,6 +33,12 @@ export interface WorkflowRunResult {
   needsClarification?: boolean
   clarificationQuestion?: string
   clarificationOptions?: string[]
+  /** Internal game-test recovery states; never route these through the
+   * product-preference clarification dialog. */
+  needsEvidenceRepair?: boolean
+  needsEnvironmentRecovery?: boolean
+  needsVisualReview?: boolean
+  gameTestStatus?: import('./game-test-protocol.ts').GameTestWorkflowStatus
   /** 本次运行收集的 mc_screenshot 截图（供任务总结展示） */
   collectedScreenshots?: Array<{ base64: string; mimeType: string; toolId: string; timestamp: number }>
 }

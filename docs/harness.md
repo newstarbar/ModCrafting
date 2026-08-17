@@ -1,5 +1,26 @@
 # Harness 系统
 
+
+## Game-test INCONCLUSIVE recovery (architecture)
+
+`mc_run_test` never creates a generic clarification request. Its machine-readable
+`inconclusiveCode` and `responsibility` route the same game-test step internally:
+
+- `agent_test_design` -> `evidence_repair`: the Agent must create a new
+  `scenarioId` with `mc_test_scenario`; the old scenario is marked superseded.
+  Three invalid revisions terminate as `REPEATED_INVALID_TEST_SPEC`.
+- `environment` -> `environment_recovery`: the host replays the same scenario
+  after Observer/world recovery, at most twice. It never opens source-edit tools.
+- `visual_review` -> a dedicated status card; it is not an objective verdict.
+- Objective `FAIL` emits a cleanup/replay card on the first failure and a
+  product-repair card only after the same failure repeats.
+- A scenario may declare `requiredPassCount` (1–3). When it is greater than
+  one, the host restarts Minecraft and replays the same scenario from setup;
+  the step advances only after the required independent PASS count.
+
+Only an explicit Agent `ask_clarification` call can set `needsClarification`.
+The UI presents recovery status cards and retains a separate stop-task control;
+it does not offer a “continue assertions” choice for an inconclusive test.
 ## Test Lab 应用自动化
 
 `--automation` 启动隔离的真实 Electron 实例。主进程创建仅回环可访问的认证桥，React 与 `HarnessController` 仍走正式语义命令和生命周期。桥记录单调事件游标、运行/会话 ID 与时间戳，只暴露能力、命令、事件、快照和关闭接口，不允许执行任意 JavaScript。
@@ -14,11 +35,12 @@ stdio 工具、沙箱、报告和回放流程见 [Test Lab MCP](./test-lab-mcp.m
 
 计划必须提交 `AcceptanceContract`。它把用户任务拆为带 `sourceQuote` 的原子 requirement，并为每条 requirement 选择 `build_success`、`game_assertion` 或 `user_confirmation` Oracle。Harness 只校验契约完整性、证据时序和实际结果，绝不从自然语言推断某项功能应该使用哪一个业务类、Mixin、模型或 API。
 
-- `submit_plan` 的客观验收放在 `AcceptanceContract.game_assertion`；`mc_test_scenario` 保持 V2 兼容。断言支持旧 V2 类型以及通用 `snapshot_value` / `snapshot_changed`（来源 + JSON Pointer）、`render_trace` 和 `hud_text`。未知 `type`、旧 `kind`、缺字段和占位符会返回字段级错误。
+- `submit_plan` 的客观验收放在 `AcceptanceContract.game_assertion`；`mc_test_scenario` 保持 V2 兼容。断言支持旧 V2 类型以及通用 `snapshot_value` / `snapshot_changed` / `snapshot_unchanged`（来源 + JSON Pointer）、`render_trace` 和 `hud_text`。未知 `type`、旧 `kind`、缺字段和占位符会返回字段级错误。
 - 提交计划会固定重排为实现 → build → run → `game_test`。恢复旧会话时，误标为 `inspect` 的 `mc_run_test` 步骤会迁移为 `game_test`，并从计划或旧 JSON 工具输出恢复原 `scenarioId`。
 - 宿主固定使用 `ModCrafting Test World` 与 `x/z=-16..16、y=96..112` 测试区，准备阶段会清背包、状态、区域和带 `modcrafting_test` 标签的实体，清理阶段再次回收。
 - 裁决只有 `PASS`、`FAIL`、`INCONCLUSIVE`。桥接缺少能力、导航/世界异常、纯视觉布局或无法查询的状态均为 `INCONCLUSIVE`，禁止自动改代码。相同客观断言在清理后的两个独立会话连续失败，才允许进入修复模式。
 - V2 桥接提供 `/v2/capabilities`、`/v2/command`、`/v2/snapshot` 和 `/v2/query`；快照带客户端/服务端玩家状态、HUD 文本轨迹、实体渲染轨迹、时间戳和世界 tick。能力未提供时结果只能是 `INCONCLUSIVE`。V1 可继续协助操作，但不能产生自动通过。
+- 运行时通过 `McRuntimeReadiness` 公开预期/实际 Fabric 模组、Bridge API 版本、游戏目录与失败代码。只有目标模组、Mod Menu、Observer V2 和桥接均就绪时才产生 `MC_PHASE:ready`；`mc_runtime_status` 可在游戏步骤中诊断环境故障。
 - 每次会话会保存 JSON 报告到应用数据目录的 `game-test-reports/`，其中包含动作、命令、断言、新鲜快照、清理和最终裁决；不写入模组仓库。
 
 Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/harness/`。
@@ -95,7 +117,7 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - 停止任务会取消 GUI 预览、渲染进程工具和主进程命令/Gradle 子进程；Windows 使用进程树终止避免残留 Java/Gradle。
 - 工具结果统一标记 `succeeded`、`failed`、`timed_out` 或 `cancelled`；工具卡会显示超时/取消终态，不会永久停留在运行中。
 
-## 工具集（45）
+## 工具集（46）
 
 工具数量以 `tool-policy.ts` 为准；注册但未声明策略会在启动/测试时失败。
 
@@ -168,6 +190,14 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 | 工具输出 | `MAX_TOOL_OUTPUT = 32 * 1024` 字符 | `...[内容过长，已截断]...` |
 
 不显示原始文件大小/字节数，避免误导。
+
+## 多模型协作路由
+
+每轮先由 `routeUserTurn` 的确定性规则和路由职责生成 `RouteDecision`。路由固定使用十种职责：router、coordinator、explorer、planner、implementer、debugger、codeReviewer、visualReviewer、verifier、summarizer。任务模板可启用或跳过无价值职责；UI/GUI 必须有可用的视觉审查模型，缺失时暂停并引导到设置中心；Minecraft 内容在勘探阶段先要求查询 `minecraft_data_lookup`。
+
+模型选择可为会话级“路由预设”或“固定模型”。路由模式按角色的 primary/fallback 链尝试，不会任意跨链换模型；鉴权、限流、模型不存在和重试耗尽会记录为协作轨迹中的回退。全局上限为 3 路只读并发、12 次职责委派、3 次专家修复交接，预设还能进一步收紧，但不会放宽现有每步 20 模型轮次 / 40 工具调用 / 3 修复循环。
+
+协作轨迹只记录职责、模型、状态、用量、回退、耗时和交接摘要，不记录或展示隐藏推理；它随消息持久化，并可由 Test Lab 快照读取。
 
 ## 数据流
 

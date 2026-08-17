@@ -1,5 +1,5 @@
 import type { Tool } from './tools'
-import { createGameTestSpec, formatGameTestSpec } from './game-test-protocol.ts'
+import { createGameTestSpec, formatGameTestSpec, MAX_GAME_TEST_WAIT_MS } from './game-test-protocol.ts'
 
 /**
  * 功能测试场景模板。
@@ -543,7 +543,7 @@ export const mcTestScenarioTool: Tool = {
     '参数：feature_type（必填）— new_item（新物品）/ new_block（新方块）/ new_recipe（新合成配方）/ ' +
     'entity_behavior（实体行为修改，如苦力怕爆炸改樱花）/ player_interaction（玩家交互功能，如闪电剑）/ hud_gui（HUD或界面）。' +
     '可选：feature_detail、mod_id；若同时提供 subject_id（或 hotkey）和 assertions，本工具返回 scenarioId，可用 mc_run_test 执行。' +
-    '旧调用仍返回说明模板；旧模板不是通过证据。',
+    '旧调用仍返回说明模板；旧模板不是通过证据。若需求要求重启后对同一场景独立复测，可传 required_pass_count=2。',
   schema: {
     type: 'object',
     properties: {
@@ -568,24 +568,47 @@ export const mcTestScenarioTool: Tool = {
         type: 'string',
         description: 'HUD/GUI 的实际触发热键，例如 f6'
       },
-      assertions: {
-        type: 'array',
-        description: 'V2 客观断言列表；至少一项，禁止占位符和纯截图断言',
-        items: { type: 'object' }
+    assertions: {
+      type: 'array',
+      description: 'V2 客观断言列表；至少一项，禁止占位符和纯截图断言',
+      items: { type: 'object' }
+    },
+      acceptanceContract: {
+        type: 'object',
+        additionalProperties: false,
+        description: 'V2 验收契约；必须包含至少一个 requirement，并将客观游戏需求映射到 game_assertion。',
+        properties: {
+          version: { const: 1 },
+          requirements: {
+            type: 'array',
+            minItems: 1,
+            items: { type: 'object' }
+          }
+        },
+        required: ['version', 'requirements']
       },
       actions: {
         type: 'array',
         description: 'Optional deterministic actions; each action is command, input, or wait.',
         items: {
           type: 'object', additionalProperties: false,
-          properties: { type: { type: 'string', enum: ['command', 'input', 'wait'] }, command: { type: 'string' }, action: { type: 'string' }, args: { type: 'object' }, ms: { type: 'number' }, label: { type: 'string' } },
+          properties: { type: { type: 'string', enum: ['command', 'input', 'wait', 'wait_until', 'set_player_state', 'kill_player', 'respawn'] }, command: { type: 'string' }, action: { type: 'string' }, args: { type: 'object' }, state: { type: 'object' }, checkpoint: { type: 'string' }, ms: { anyOf: [{ type: 'number', maximum: MAX_GAME_TEST_WAIT_MS }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] }, condition: { type: 'string', enum: ['death_screen', 'server_player_available', 'screen_not_death'] }, timeoutMs: { anyOf: [{ type: 'number', minimum: 1, maximum: MAX_GAME_TEST_WAIT_MS }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] }, pollMs: { anyOf: [{ type: 'number', minimum: 25, maximum: 5000 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] }, label: { type: 'string' } },
           required: ['type']
         }
       },
       visual_only: {
         type: 'boolean',
-        description: '纯视觉效果；会明确返回 INCONCLUSIVE，等待用户确认'
-      }
+        description: '纯视觉效果；会进入独立视觉审核卡，不会生成通用游戏断言澄清'
+      },
+      required_pass_count: {
+        type: 'integer', minimum: 1, maximum: 3,
+        description: '可选：要求同一场景独立 PASS 的次数；例如重启游戏后完整复测可传 2'
+      },
+      baselineCheckpoint: { type: 'string' },
+      checkpoints: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' } },
+      variables: { type: 'object' },
+      approvedLayoutId: { type: 'string' },
+      approvedLayoutFingerprint: { type: 'string' }
     },
     required: ['feature_type']
   },

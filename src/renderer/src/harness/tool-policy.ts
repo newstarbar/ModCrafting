@@ -51,7 +51,7 @@ export const BUILTIN_TOOL_POLICIES: Record<string, ToolPolicy> = (() => {
   assign(['write_file', 'edit_file', 'delete_file', 'create_recipe', 'fabric_recipe_generate', 'fabric_content_register', 'fabric_data_assets_generate', 'fabric_mixin_scaffold', 'fabric_mixin_register', 'fabric_template_generate'], withCapabilities(FAST, ['project.write']), out)
   assign(['run_command'], PROCESS, out)
   assign(['trigger_build'], BUILD, out)
-  assign(['mc_screenshot', 'mc_inspect', 'mc_inventory', 'mc_world', 'mc_observe_entity'], GAME, out)
+  assign(['mc_runtime_status', 'mc_screenshot', 'mc_inspect', 'mc_inventory', 'mc_world', 'mc_observe_entity'], GAME, out)
   assign(['mc_chat', 'mc_command', 'mc_input'], withCapabilities(GAME, ['game.control']), out)
   assign(['mc_ensure_test_world', 'mc_ensure_cheats', 'mc_run_test'], WORLD, out)
   assign(['gui_layout_preview'], INTERACTIVE, out)
@@ -97,11 +97,11 @@ export function recommendedToolNames(kind: StepKind, repairMode = false): string
       return caps.some((cap) => ['project.read', 'project.write', 'knowledge.read', 'process.shell', 'user.interaction', 'workflow.control'].includes(cap))
     }
     if (kind === 'build') {
-      if (repairMode && caps.includes('project.write')) return true
+      if (repairMode && caps.some((cap) => cap === 'project.write' || cap === 'user.interaction')) return true
       return caps.some((cap) => ['project.read', 'knowledge.read', 'process.build', 'process.shell', 'workflow.control'].includes(cap))
     }
     if (kind === 'run' || kind === 'game_test') {
-      if (repairMode && caps.includes('project.write')) return true
+      if (repairMode && caps.some((cap) => cap === 'project.write' || cap === 'user.interaction')) return true
       return caps.some((cap) => ['project.read', 'knowledge.read', 'process.build', 'process.shell', 'game.observe', 'game.control', 'workflow.control'].includes(cap))
     }
     return caps.some((cap) => ['project.read', 'workflow.control'].includes(cap))

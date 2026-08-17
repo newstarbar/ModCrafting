@@ -3,16 +3,54 @@
   "fixturePath": "resources/_offline_verify_project",
   "mode": "agent",
   "timeoutMs": 3600000,
-  "clarificationResponses": [
-    "Use a top-right HUD, show each event for five seconds, and use deterministic default styling for any unspecified visual details."
-  ],
-  "prompt": "制作一个 Fabric 模组：在 HUD 显示 FPS 风格击杀信息；请完整实现、构建、启动并在专用测试世界验证。",
+  "prompt": "In the same project and Electron session, add an FPS kill-feed HUD. First rerun the complete morph scenario, then capture the current player UUID at H0 and create unique targetToken/targetTag and nonPlayerToken/nonPlayerTag targets. Prove player attribution through combatTrace with attackerUuid equal to the H0 player UUID, show the token at H1 (250ms) and H2 (about 4.25s), prove it is gone at H3 (about 6s), and prove a real non-player kill at H4 has no HUD entry. Use the Luna-approved layout id and fingerprint as an objective layout oracle; check normalized top-right position, color, alpha and shadow. Never use screenshots or user_confirmation as the verdict. Build, launch and repair autonomously.",
   "acceptanceContract": {
     "version": 1,
     "requirements": [
-      { "id": "build", "sourceQuote": "完整实现、构建", "claim": "项目构建成功", "oracle": { "type": "build_success" } },
-      { "id": "hud-event", "sourceQuote": "显示 FPS 风格击杀信息", "claim": "触发事件后 HUD 绘制对应文本", "oracle": { "type": "game_assertion", "assertion": { "type": "hud_text", "text": "击杀", "match": "contains", "afterAction": 1 } } },
-      { "id": "layout", "sourceQuote": "FPS 风格", "claim": "HUD 布局符合视觉设计", "oracle": { "type": "user_confirmation", "prompt": "请确认前台 Minecraft 截图中的 HUD 布局。", "capture": "screenshot" } }
+      { "id": "build", "sourceQuote": "build", "claim": "The project builds", "oracle": { "type": "build_success" } },
+      { "id": "player-combat", "sourceQuote": "player attribution", "claim": "Combat trace proves the current player killed the tagged target", "oracle": { "type": "game_assertion", "assertion": { "type": "combat_event", "victimTag": "{{targetTag}}", "attackerCheckpoint": "H0", "attackerIsPlayer": true, "killed": true, "checkpoint": "H1", "sinceCheckpoint": "H0" } } },
+      { "id": "hud-h1", "sourceQuote": "HUD appears", "claim": "Fresh target token and current player name are drawn at H1 in the approved top-right style", "oracle": { "type": "game_assertion", "assertion": { "type": "hud_text", "text": "{{targetToken}}", "token": "{{targetToken}}", "match": "contains", "exists": true, "checkpoint": "H1", "sinceCheckpoint": "H0", "attackerCheckpoint": "H0", "requireAttackerVictimSemantics": true, "sinceCheckpoint": "H0", "maxAgeMs": 500, "normalizedPosition": { "xMin": 0.65, "yMax": 0.25 }, "alphaMin": 204, "shadow": true, "approvedLayoutElementId": "kill-feed" } } },
+      { "id": "hud-h2", "sourceQuote": "about five seconds", "claim": "The same target token and current player name remain fresh at H2 in the approved top-right style", "oracle": { "type": "game_assertion", "assertion": { "type": "hud_text", "text": "{{targetToken}}", "token": "{{targetToken}}", "match": "contains", "exists": true, "checkpoint": "H2", "attackerCheckpoint": "H0", "requireAttackerVictimSemantics": true, "sinceCheckpoint": "H0", "maxAgeMs": 500, "normalizedPosition": { "xMin": 0.65, "yMax": 0.25 }, "alphaMin": 204, "shadow": true, "approvedLayoutElementId": "kill-feed" } } },
+      { "id": "hud-expiry", "sourceQuote": "disappears", "claim": "The target token is absent at H3", "oracle": { "type": "game_assertion", "assertion": { "type": "hud_text", "text": "{{targetToken}}", "match": "contains", "exists": false, "checkpoint": "H3", "sinceCheckpoint": "H0", "maxAgeMs": 500 } } },
+      { "id": "non-player-combat", "sourceQuote": "non-player kill", "claim": "A real non-player kill is recorded without player attribution", "oracle": { "type": "game_assertion", "assertion": { "type": "combat_event", "victimTag": "{{nonPlayerTag}}", "attackerIsPlayer": false, "killed": true, "checkpoint": "H4", "sinceCheckpoint": "H0" } } },
+      { "id": "non-player-negative", "sourceQuote": "non-player kill", "claim": "The non-player token never creates a player HUD entry", "oracle": { "type": "game_assertion", "assertion": { "type": "hud_text", "text": "{{nonPlayerToken}}", "match": "contains", "exists": false, "checkpoint": "H4", "sinceCheckpoint": "H0", "maxAgeMs": 500 } } }
+    ]
+  },
+  "gameTestContract": {
+    "requiredProjectWrite": true,
+    "requiredBuildTasks": ["build", "runClient"],
+    "requiredCheckpoints": ["M0", "M1", "M1_STABLE", "M2", "M2_STABLE", "H0", "H1", "H2", "H3", "H4"],
+    "requiredActionTypes": ["input", "command", "wait"],
+    "requiredInputKeys": { "g": 2 },
+    "requiredCommandPatterns": ["summon\\s+", "damage[\\s\\S]*by\\s+@s"],
+    "requiredCombatAttribution": true,
+    "requireApprovedLayout": true,
+    "requiredAssertions": [
+      { "type": "combat_event", "victimTag": "{{targetTag}}", "attackerCheckpoint": "H0", "attackerIsPlayer": true, "killed": true, "sinceCheckpoint": "H0" },
+      { "type": "hud_text", "text": "{{targetToken}}", "token": "{{targetToken}}", "checkpoint": "H1", "sinceCheckpoint": "H0", "attackerCheckpoint": "H0", "requireAttackerVictimSemantics": true, "normalizedPosition": { "xMin": 0.65, "yMax": 0.25 }, "alphaMin": 204, "shadow": true, "approvedLayoutElementId": "kill-feed" },
+      { "type": "hud_text", "text": "{{targetToken}}", "token": "{{targetToken}}", "checkpoint": "H2", "sinceCheckpoint": "H0", "attackerCheckpoint": "H0", "requireAttackerVictimSemantics": true, "normalizedPosition": { "xMin": 0.65, "yMax": 0.25 }, "alphaMin": 204, "shadow": true, "approvedLayoutElementId": "kill-feed" },
+      { "type": "hud_text", "text": "{{targetToken}}", "exists": false, "checkpoint": "H3", "sinceCheckpoint": "H0" },
+      { "type": "combat_event", "victimTag": "{{nonPlayerTag}}", "attackerIsPlayer": false, "killed": true, "sinceCheckpoint": "H0" },
+      { "type": "hud_text", "text": "{{nonPlayerToken}}", "exists": false, "checkpoint": "H4", "sinceCheckpoint": "H0" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "operator": "ratio" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "operator": "ratio" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/width" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/height" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "player", "pointer": "/uuid" }, "right": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" }
     ]
   },
   "assertions": [

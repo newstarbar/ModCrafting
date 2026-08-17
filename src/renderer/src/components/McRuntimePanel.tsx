@@ -34,6 +34,7 @@ export interface GameStartWaitResult {
   instanceId: string
   ok: boolean
   error?: string
+  logTail?: string
 }
 
 export interface McRuntimePanelHandle {
@@ -265,7 +266,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
         return {
           instanceId: running.id,
           ok: waitResult.ok,
-          error: waitResult.error
+          error: waitResult.error,
+          logTail: waitResult.logTail
         }
       }
 
@@ -284,7 +286,8 @@ const McRuntimePanel = forwardRef<McRuntimePanelHandle, McRuntimePanelProps>(
       return {
         instanceId,
         ok: waitResult.ok,
-        error: waitResult.error
+        error: waitResult.error,
+        logTail: waitResult.logTail
       }
     }, [projectPath, toolchainReady, projectInstances, clearInstanceUiState])
 

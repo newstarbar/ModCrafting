@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import {
   loadApiConfig,
+  loadApiConfigForProvider,
   saveApiConfig,
   saveApiKey,
   getApiKey,
@@ -56,6 +57,7 @@ import {
   getLastRecentProject
 } from './recent-projects'
 import { loadAgentConfig, saveAgentConfig, type AgentConfig } from './agent-config'
+import { loadModelRoutingConfig, saveModelRoutingConfig } from './model-routing-config'
 import {
   fetchUrlText,
   listKnowledgeFiles,
@@ -633,10 +635,13 @@ export function setupIpcHandlers(): void {
 
   // API config (non-sensitive settings + encrypted API key)
   ipcMain.handle('config:load', async () => loadApiConfig())
+  ipcMain.handle('config:loadProvider', async (_event, providerId: string) => loadApiConfigForProvider(providerId))
 
-  ipcMain.handle('config:save', async (_event, config: { endpoint: string; model: string }) =>
+  ipcMain.handle('config:save', async (_event, config: { endpoint: string; model: string; providerId?: string }) =>
     saveApiConfig(config)
   )
+  ipcMain.handle('modelRouting:load', async () => loadModelRoutingConfig())
+  ipcMain.handle('modelRouting:save', async (_event, config: unknown) => saveModelRoutingConfig(config))
 
   ipcMain.handle('secrets:saveApiKey', async (_event, key: string, providerId?: string) =>
     saveApiKey(key, providerId)

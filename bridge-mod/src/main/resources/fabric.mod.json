@@ -14,6 +14,11 @@
   "mixins": [
     "modcrafting_observer.mixins.json"
   ],
+  "custom": {
+    "modcrafting": {
+      "observerProtocol": 2
+    }
+  },
   "depends": {
     "fabricloader": ">=${loader_version}",
     "minecraft": "~${minecraft_version}",

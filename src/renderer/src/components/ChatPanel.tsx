@@ -5,6 +5,7 @@ import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'
 import { EventKind } from '../harness/events'
 import type { Event } from '../harness/events'
+import { collaborationForAutomation, toolArgsForAutomation, toolOutputForAutomation } from '../harness/automation-event-projection'
 import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
 import { parsePlanSteps, isActionablePlanText } from '../utils/plan-steps'
@@ -64,6 +65,8 @@ import {
 import { buildUserContent } from '../context/user-content'
 import { isVisionCapableModel } from '../harness/chat-message'
 import { ContextChipList, type ContextChipData, getChipLabel } from './ContextChip'
+import type { CollaborationTrace, ModelRef, ModelRoutingConfig, RoutingSelection } from '../../../shared/model-routing.ts'
+import type { GameTestWorkflowStatus } from '../harness/game-test-protocol'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -84,6 +87,10 @@ interface ChatPanelProps {
   onTemplateSelect?: (templateId: string, name: string) => void
   onProviderModelChange?: (selection: { providerId: string; modelId: string; endpoint: string }) => void
   onOpenApiSettings?: () => void
+  routingConfig?: ModelRoutingConfig
+  routingSelection?: RoutingSelection
+  resolveRoutingModel?: (model: ModelRef) => Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string } | null>
+  onRoutingSelectionChange?: (selection: RoutingSelection) => void
 }
 
 const toolRegistry = new Registry()
@@ -323,7 +330,7 @@ interface ChatPanelRef {
   automationRespond: (params: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
-const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextQueue, setContextQueue, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings }, ref) {
+const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextQueue, setContextQueue, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings, routingConfig, routingSelection, resolveRoutingModel, onRoutingSelectionChange }, ref) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
@@ -366,6 +373,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationPending, setClarificationPending] = useState(false)
   const [clarificationQuestion, setClarificationQuestion] = useState('')
   const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
+  const [gameTestStatus, setGameTestStatus] = useState<GameTestWorkflowStatus | null>(null)
   // Automation commands arrive through IPC between React renders. Keep the
   // pending bit in a ref so a just-emitted clarification cannot be rejected
   // merely because the imperative handle still closes over the prior render.
@@ -493,15 +501,17 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const turnRef = useRef({
     msgId: '',
     entries: [] as ChronoEntry[],
-    streamDone: false
+    streamDone: false,
+    collaborationTrace: [] as CollaborationTrace[]
   })
 
   const resetTurnUiState = useCallback(() => {
-    turnRef.current = { msgId: '', entries: [], streamDone: false }
+    turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
     setIsLoading(false)
     setClarificationPending(false)
     setClarificationQuestion('')
     setClarificationOptions([])
+    setGameTestStatus(null)
     setAgentStatus('')
     setPlanReady(false)
     onRunningChangeRef.current?.(false)
@@ -535,7 +545,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   // Init controller once
   useEffect(() => {
     const ctrl = new Controller({
-      registry: toolRegistry, projectPath, apiConfig,
+      registry: toolRegistry, projectPath, apiConfig, routingConfig, routingSelection, resolveModelConfig: resolveRoutingModel,
       onEvent: handleEvent,
       onAgentStatus: (s) => setAgentStatus(s),
       onStreamUpdate: () => {}
@@ -554,6 +564,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   useEffect(() => { controllerRef.current?.setProjectPath(projectPath) }, [projectPath])
   useEffect(() => { controllerRef.current?.setApiConfig(apiConfig) }, [apiConfig])
+  useEffect(() => { controllerRef.current?.setRouting(routingConfig, routingSelection, resolveRoutingModel) }, [routingConfig, routingSelection, resolveRoutingModel])
 
   // Restore UI + controller when switching sessions; wait until session payload is available
   const restoredSessionIdRef = useRef<string | null>(null)
@@ -578,7 +589,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setCollapsedToolIds(new Set())
       setCollapsedExploreGroupKeys(new Set())
       setCollapsedReasoningKeys(new Set())
-      turnRef.current = { msgId: '', entries: [], streamDone: false }
+      turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
       setUsageAccum(EMPTY_USAGE)
       onUsageChangeRef.current?.(EMPTY_USAGE)
       controllerRef.current?.clearSession()
@@ -592,7 +603,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (!session) return
 
     restoredSessionIdRef.current = currentSessionId
-    turnRef.current = { msgId: '', entries: [], streamDone: false }
+    turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
     const display = deserializeToDisplay(session.messages, uid) as DisplayMessage[]
     const restoredPlan = restoreActivePlan(display, session.messages)
     const { toolIds, reasoningKeys, exploreGroupKeys } = buildRestoredCollapseState(display)
@@ -897,17 +908,19 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       tool: event.tool ? {
         id: event.tool.id,
         name: event.tool.name,
-        // submit_plan contains no credentials and is indispensable when the
-        // application-level Test Lab must diagnose provider/schema mismatches.
-        args: event.tool.name === 'submit_plan' && typeof event.tool.args === 'string'
-          ? event.tool.args.slice(0, 16_000)
-          : undefined,
+        args: toolArgsForAutomation(event.tool.name, event.tool.args),
+        output: toolOutputForAutomation(event.tool.name, event.tool.output),
         outcome: event.tool.outcome,
         error: event.tool.error,
         durationMs: event.tool.durationMs,
+        source: event.tool.source,
         validation: event.tool.validation
       } : undefined,
-      planSteps: event.planSteps
+      planSteps: event.planSteps,
+      routeDecision: event.routeDecision,
+      collaboration: event.collaboration ? collaborationForAutomation(event.collaboration) : undefined,
+      modelInvocation: event.modelInvocation,
+      gameTestStatus: event.gameTestStatus
     })
 
     switch (event.kind) {
@@ -920,7 +933,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             setDisplayMessages((prev) => [...prev, {
               id: t.msgId, role: 'assistant',
               entries: [], isStreaming: true, timestamp: Date.now(),
-              model: apiConfig.model, providerId: apiConfig.providerId
+              model: apiConfig.model, providerId: apiConfig.providerId,
+              collaborationTrace: [...t.collaborationTrace]
             }])
           } else {
             t.streamDone = false
@@ -966,6 +980,22 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           }
         }
         break
+
+      case EventKind.Collaboration: {
+        if (event.collaboration) {
+          const trace = event.collaboration
+          const index = t.collaborationTrace.findIndex((item) => item.id === trace.id)
+          if (index >= 0) t.collaborationTrace[index] = trace
+          else t.collaborationTrace.push(trace)
+          if (t.msgId) {
+            setDisplayMessages((prev) => prev.map((message) => message.id === t.msgId
+              ? { ...message, collaborationTrace: [...t.collaborationTrace] }
+              : message))
+          }
+        }
+        if (event.routeDecision) setAgentStatus(`协作路由：${event.routeDecision.reason}`)
+        break
+      }
 
       case EventKind.PlanState:
         if (event.planSteps && event.planSteps.length > 0) {
@@ -1024,6 +1054,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               return next
             })
           }
+        }
+        break
+
+      case EventKind.GameTestStatus:
+        if (event.gameTestStatus) {
+          setGameTestStatus(event.gameTestStatus)
+          setAgentStatus(event.gameTestStatus.message)
         }
         break
 
@@ -1195,6 +1232,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
       case EventKind.ToolResult:
         if (event.tool) {
+          if (event.tool.name === 'mc_run_test' && event.tool.validation?.verdict === 'PASS') {
+            setGameTestStatus(null)
+          }
           recordToolResult(
             event.tool.name || 'unknown',
             event.tool.id,
@@ -1294,8 +1334,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
           }
           setUsageAccum((prev) => {
             const costDelta = estimateCostDelta(pT, cT, hit, miss, {
-              model: apiConfigRef.current.model,
-              providerId: apiConfigRef.current.providerId,
+              model: u.modelId || apiConfigRef.current.model,
+              providerId: u.providerId || apiConfigRef.current.providerId,
             })
             const next = {
               ...prev,
@@ -1541,6 +1581,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       setPlanReady(false)
     }
 
+    setGameTestStatus(null)
     setInput('')
     setAttachments([])
     setContextChips([])
@@ -1561,7 +1602,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       model: apiConfig.model,
       providerId: apiConfig.providerId
     }
-    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false }
+    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false, collaborationTrace: [] }
 
     if (!currentSessionId) {
       const newId = onNewSession(
@@ -1890,7 +1931,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         return next
       })
     }
-    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false }
+    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false, collaborationTrace: [] }
     void ctrl.send(prompt).catch(() => {
       setIsLoading(false)
       setAgentStatus('')
@@ -1911,11 +1952,14 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         [...displayMessages].reverse().find((message) => message.role === 'assistant')?.isStreaming
       ),
       activePlan: activePlanRef.current,
+      guiLayout: [...displayMessages].reverse().flatMap((message) => [...(message.entries || [])].reverse())
+        .find((entry) => entry.kind === 'guiLayoutPreview' && entry.status === 'pending') || null,
       clarification: clarificationPending
         ? { question: clarificationQuestion, options: clarificationOptions }
-        : null
+        : null,
+      gameTestStatus
     }
-  }), [isLoading, agentStatus, composerMode, planReady, displayMessages, clarificationPending, clarificationQuestion, clarificationOptions])
+  }), [isLoading, agentStatus, composerMode, planReady, displayMessages, clarificationPending, clarificationQuestion, clarificationOptions, gameTestStatus])
 
   const automationCancel = useCallback(() => controllerRef.current?.cancel(), [])
 
@@ -1950,6 +1994,24 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (action === 'gui_layout') {
       ctrl.resolveGuiLayout(requestId, String(params.value || '{}'))
       return { accepted: true }
+    }
+    if (action === 'visual_review') {
+      const decision = String(params.decision || params.value || '').toLowerCase()
+      if (decision !== 'accepted' && decision !== 'rejected') throw new Error('invalid_visual_review_decision')
+      bindActiveTurnGeneration()
+      setIsLoading(true)
+      setAgentStatus(decision === 'accepted' ? 'recording user_confirmation...' : 'entering product repair...')
+      onRunningChangeRef.current?.(true)
+      try {
+        const result = await ctrl.resolveVisualReview(requestId, decision)
+        if (decision === 'accepted') setGameTestStatus(null)
+        return { accepted: true, result }
+      } catch (error) {
+        setIsLoading(false)
+        setAgentStatus('')
+        onRunningChangeRef.current?.(false)
+        throw error
+      }
     }
     throw new Error('unsupported_response_action')
   }, [bindActiveTurnGeneration])
@@ -2056,7 +2118,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setAgentStatus('思考中...')
     setActivePlan(planToKeep)
     setCompletionFlash('')
-    turnRef.current = { msgId: '', entries: [], streamDone: false }
+    turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
 
     setDisplayMessages(truncated)
     flushPersist(truncated, planToKeep, { resetSystem: true })
@@ -2587,6 +2649,70 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             构建环境初始化中，AI 开发与构建功能暂时锁定，请等待进度条完成。
           </div>
         )}
+        {gameTestStatus && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              marginBottom: 8,
+              padding: '9px 12px',
+              borderRadius: 8,
+              border: `1px solid ${gameTestStatus.state === 'terminal' ? 'var(--danger, #d55)' : 'var(--border, #3b4350)'}`,
+              background: gameTestStatus.state === 'terminal' ? 'rgba(180, 56, 56, .12)' : 'rgba(75, 110, 160, .12)',
+              color: 'var(--text-primary, #e8edf2)',
+              fontSize: 12,
+              lineHeight: 1.45
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>
+              {gameTestStatus.state === 'evidence_repair' ? '正在修订测试契约并生成新场景' :
+                gameTestStatus.state === 'environment_recovery' ? 'Observer 环境恢复中' :
+                gameTestStatus.code === 'REPLAY_REQUIRED' ? '首次 PASS，正在重启后独立复测' :
+                  gameTestStatus.state === 'replay_cleanup' ? '客观断言首次失败，正在清理复测' :
+                    gameTestStatus.state === 'product_repair' ? '断言确认失败，正在修复产品' :
+                      gameTestStatus.state === 'visual_review' ? '等待专用视觉审核' : '测试环境不可用，已结束为 INCONCLUSIVE'}
+            </div>
+            <div>{gameTestStatus.message}</div>
+            <div style={{ opacity: .72, marginTop: 2 }}>
+              {gameTestStatus.currentCheckpoint ? ` · checkpoint ${gameTestStatus.currentCheckpoint}` : ''}
+              {gameTestStatus.scenarioRevision ? ` · revision ${gameTestStatus.scenarioRevision}` : ''}
+              {gameTestStatus.observerSessionId ? ` · Observer ${gameTestStatus.observerSessionId.slice(0, 8)}` : ''}
+              {gameTestStatus.variantFingerprint ? ` · variant ${gameTestStatus.variantFingerprint.slice(0, 12)}` : ''}
+              {gameTestStatus.code} · scenario {gameTestStatus.scenarioId || 'unknown'}
+              {gameTestStatus.repairAttempt ? ` · 修订 ${gameTestStatus.repairAttempt}/3` : ''}
+              {gameTestStatus.environmentAttempt ? ` · 恢复 ${gameTestStatus.environmentAttempt}/2` : ''}
+              {gameTestStatus.passCount && gameTestStatus.requiredPassCount ? ` · PASS ${gameTestStatus.passCount}/${gameTestStatus.requiredPassCount}` : ''}
+            </div>
+            {gameTestStatus.state === 'visual_review' && gameTestStatus.reviewPrompt && (
+              <div style={{ marginTop: 8, padding: '7px 8px', borderRadius: 6, background: 'rgba(0, 0, 0, .14)', whiteSpace: 'pre-wrap' }}>
+                {gameTestStatus.reviewPrompt}
+              </div>
+            )}
+            {gameTestStatus.state === 'visual_review' && gameTestStatus.reviewScreenshot && (
+              <img
+                src={`data:${gameTestStatus.reviewScreenshot.mimeType};base64,${gameTestStatus.reviewScreenshot.base64}`}
+                alt="游戏测试视觉审核截图"
+                style={{ display: 'block', width: '100%', maxHeight: 260, objectFit: 'contain', marginTop: 8, borderRadius: 6, background: '#101318' }}
+              />
+            )}
+            {gameTestStatus.state === 'visual_review' && !gameTestStatus.reviewDecision && gameTestStatus.reviewId && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => { void automationRespond({ action: 'visual_review', requestId: gameTestStatus.reviewId, decision: 'accepted' }) }}
+                  style={{ padding: '5px 13px', borderRadius: 6, border: '1px solid var(--accent, #4ea1ff)', background: 'var(--accent, #4ea1ff)', color: '#fff', cursor: isLoading ? 'default' : 'pointer' }}
+                >接受</button>
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => { void automationRespond({ action: 'visual_review', requestId: gameTestStatus.reviewId, decision: 'rejected' }) }}
+                  style={{ padding: '5px 13px', borderRadius: 6, border: '1px solid var(--danger, #d55)', background: 'transparent', color: 'var(--danger, #d55)', cursor: isLoading ? 'default' : 'pointer' }}
+                >拒绝并修复</button>
+              </div>
+            )}
+          </div>
+        )}
         {clarificationPending ? (
           <ClarificationOverlay
             question={clarificationQuestion}
@@ -2614,6 +2740,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             modelId={apiConfig.model}
             onProviderModelChange={onProviderModelChange ?? (() => {})}
             onOpenApiSettings={onOpenApiSettings}
+            routingConfig={routingConfig}
+            routingSelection={routingSelection}
+            onRoutingSelectionChange={onRoutingSelectionChange}
             onQuickTemplateSelect={handleTemplateSelect}
             attachments={attachments}
             onRemoveAttachment={handleRemoveAttachment}

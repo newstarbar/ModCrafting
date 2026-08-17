@@ -8,6 +8,7 @@ import type { ComposerAttachment } from '../context/context-ingress'
 import { hasImageAttachment } from '../context/context-ingress'
 import { isVisionCapableModel } from '../harness/chat-message'
 import { ContextChipList, type ContextChipData } from './ContextChip'
+import type { ModelRoutingConfig, RoutingSelection } from '../../../shared/model-routing.ts'
 
 export interface ChatComposerProps {
 	input: string
@@ -27,7 +28,10 @@ export interface ChatComposerProps {
 	providerId: string
 	modelId: string
 	onProviderModelChange: (selection: ProviderModelSelection) => void
-	onOpenApiSettings?: () => void
+  onOpenApiSettings?: () => void
+  routingConfig?: ModelRoutingConfig
+  routingSelection?: RoutingSelection
+  onRoutingSelectionChange?: (selection: RoutingSelection) => void
 	onQuickTemplateSelect?: (templateId: string, name: string) => void
 	attachments?: ComposerAttachment[]
 	onRemoveAttachment?: (id: string) => void
@@ -59,7 +63,10 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 	providerId,
 	modelId,
 	onProviderModelChange,
-	onOpenApiSettings,
+  onOpenApiSettings,
+  routingConfig,
+  routingSelection,
+  onRoutingSelectionChange,
 	onQuickTemplateSelect,
 	attachments = [],
 	onRemoveAttachment,
@@ -77,7 +84,7 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 	const resizeStartRef = useRef<{ startY: number; startH: number } | null>(null)
 
 	const hasImages = hasImageAttachment(attachments)
-	const visionOk = !hasImages || isVisionCapableModel(modelId, providerId)
+  const visionOk = !hasImages || routingSelection?.mode === 'routed' || isVisionCapableModel(modelId, providerId)
 	const hasChips = chips.length > 0
 	const canSend =
 		!disabled &&
@@ -330,6 +337,9 @@ const ChatComposer: React.FC<ChatComposerProps> = ({
 						className="composer-expand-btn"
 						onClick={() => setFullscreen(true)}
 						disabled={disabled}
+						routingConfig={routingConfig}
+						routingSelection={routingSelection}
+						onRoutingSelectionChange={onRoutingSelectionChange}
 						title="全屏编辑（ESC 退出）"
 						aria-label="全屏编辑"
 					>

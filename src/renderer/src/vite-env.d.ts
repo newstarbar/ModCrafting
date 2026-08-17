@@ -100,11 +100,26 @@ interface ModCraftingApi {
   onTerminalData: (callback: (id: string, data: string) => void) => () => void
   mcCreateInstance: (projectPath: string, name?: string) => Promise<{id: string; name: string; status: string}>
   mcStart: (id: string) => Promise<WriteResult>
-  mcStartOrCreate: (projectPath: string, name?: string) => Promise<WriteResult & { id?: string }>
+  mcStartOrCreate: (projectPath: string, name?: string, windowSize?: { width: number; height: number }) => Promise<WriteResult & { id?: string }>
   mcStop: (id: string) => Promise<WriteResult>
   mcStopAll: () => Promise<WriteResult>
   mcGetInstance: (id: string) => Promise<object | null>
   mcListInstances: () => Promise<object[]>
+  mcRuntimeStatus: (instanceId?: string) => Promise<{
+    phase?: 'preparing' | 'loading' | 'menu' | 'ready' | 'error'
+    expectedModIds?: string[]
+    loadedModIds?: string[]
+    missingModIds?: string[]
+    bridgeReady?: boolean
+    bridgeApiVersions?: number[]
+    gameDir?: string | null
+    failureCode?: string | null
+    failureMessage?: string
+    instanceId?: string
+    status?: string
+    ready?: boolean
+    error?: string
+  }>
   mcGetCrashReport: (crashReportPath: string) => Promise<FileResult>
   mcDeleteInstance: (id: string) => Promise<WriteResult>
   mcBridgeStatus: (instanceId?: string) => Promise<{
@@ -202,8 +217,15 @@ interface ModCraftingApi {
   getAppVersion: () => Promise<string>
   openReleasePages: () => Promise<{ success: boolean }>
   onUpdateStatus: (callback: (payload: { phase: string; source?: string; percent?: number; error?: string }) => void) => () => void
-  loadApiConfig: () => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean }>
+  loadApiConfig: () => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean; providerSettings: Record<string, { endpoint: string; model: string }> }>
+  loadApiConfigForProvider: (providerId: string) => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean }>
   saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }) => Promise<{ success: boolean; error?: string }>
+  loadModelRoutingConfig: () => Promise<import('../../shared/model-routing').ModelRoutingConfig>
+  saveModelRoutingConfig: (config: import('../../shared/model-routing').ModelRoutingConfig) => Promise<{
+    success: boolean
+    config?: import('../../shared/model-routing').ModelRoutingConfig
+    error?: string
+  }>
   saveApiKey: (key: string, providerId?: string) => Promise<{ success: boolean; error?: string }>
   getApiKey: (providerId?: string) => Promise<{ success: boolean; apiKey?: string; error?: string }>
   clearApiKey: (providerId?: string) => Promise<{ success: boolean; error?: string }>

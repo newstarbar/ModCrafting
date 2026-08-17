@@ -1,6 +1,6 @@
 import React from 'react'
 
-export type AppView = 'hub' | 'workspace'
+export type AppView = 'hub' | 'workspace' | 'settings'
 
 interface AppChromeProps {
   appView: AppView
@@ -16,7 +16,9 @@ const AppChrome: React.FC<AppChromeProps> = ({
   projectPath
 }) => {
   const hint =
-    appView === 'workspace' && projectPath
+    appView === 'settings'
+      ? '应用设置'
+      : appView === 'workspace' && projectPath
       ? projectName
       : appView === 'workspace'
         ? '尚未打开项目 — 请从首页选择或打开项目'
@@ -44,6 +46,13 @@ const AppChrome: React.FC<AppChromeProps> = ({
           onClick={() => onViewChange('workspace')}
         >
           工作室
+        </button>
+        <button
+          type="button"
+          className={`mc-tab ${appView === 'settings' ? 'active' : ''}`}
+          onClick={() => onViewChange('settings')}
+        >
+          设置
         </button>
       </div>
     </header>

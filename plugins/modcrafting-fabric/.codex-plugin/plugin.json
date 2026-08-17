@@ -1,0 +1,41 @@
+{
+  "name": "modcrafting-fabric",
+  "version": "0.1.0+codex.20260812155641",
+  "description": "Develop and deterministically validate Fabric 1.21.4 mods from Codex.",
+  "author": {
+    "name": "newstarbar",
+    "url": "https://github.com/newstarbar"
+  },
+  "homepage": "https://github.com/newstarbar/ModCrafting",
+  "repository": "https://github.com/newstarbar/ModCrafting",
+  "license": "GPL-3.0",
+  "keywords": [
+    "minecraft",
+    "fabric",
+    "modding",
+    "gradle",
+    "observer"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ModCrafting Fabric",
+    "shortDescription": "Build and validate Fabric 1.21.4 mods.",
+    "longDescription": "Local Fabric development, Minecraft knowledge lookup, Gradle builds, Observer V2 control, and deterministic game validation for Codex.",
+    "developerName": "newstarbar",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Inspect and build this Fabric 1.21.4 mod.",
+      "Look up vanilla data before adding a Fabric block."
+    ],
+    "brandColor": "#5E8C31",
+    "composerIcon": "./assets/modcrafting.png",
+    "logo": "./assets/modcrafting.png",
+    "screenshots": []
+  },
+  "mcpServers": "./.mcp.json"
+}

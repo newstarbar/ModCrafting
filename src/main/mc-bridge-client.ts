@@ -9,6 +9,7 @@ export interface BridgeDiscovery {
   port: number
   token: string
   modVersion?: string
+  apiVersions?: number[]
 }
 
 export interface BridgeCallResult {
@@ -16,6 +17,11 @@ export interface BridgeCallResult {
   status: number
   data: Record<string, unknown>
   error?: string
+}
+
+/** Only versioned Observer APIs are exposed through Electron IPC. */
+export function isAllowedBridgeApiPath(apiPath: string): boolean {
+  return apiPath.startsWith('/v1/') || apiPath.startsWith('/v2/')
 }
 
 export function bridgeDiscoveryPath(gameDirAbs: string): string {
@@ -40,7 +46,10 @@ export function readBridgeDiscovery(gameDirAbs: string): BridgeDiscovery | null 
       version: typeof parsed.version === 'number' ? parsed.version : 1,
       port: parsed.port,
       token: parsed.token,
-      modVersion: typeof parsed.modVersion === 'string' ? parsed.modVersion : undefined
+      modVersion: typeof parsed.modVersion === 'string' ? parsed.modVersion : undefined,
+      apiVersions: Array.isArray(parsed.apiVersions)
+        ? parsed.apiVersions.filter((value): value is number => typeof value === 'number')
+        : undefined
     }
   } catch {
     return null

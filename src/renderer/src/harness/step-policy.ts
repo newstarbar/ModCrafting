@@ -63,6 +63,7 @@ export interface ToolGateOptions {
 
 const REPAIR_WRITE_BLOCKED_TOOLS = new Set(['trigger_build', 'run_command'])
 const REPAIR_OVERRIDE_TOOLS = new Set([
+  'gui_layout_preview',
   'edit_file',
   'write_file',
   'delete_file',
@@ -118,14 +119,18 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
   if (call.name === 'delete_file') {
     // Build/run steps often need to delete misplaced main copies (duplicate class /
     // splitEnvironment migration) before or during repair — allow without waiting for repairMode.
-    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return true
+    if (step.kind === 'game_test') return Boolean(options?.repairMode)
+    if (step.kind === 'build' || step.kind === 'run') return true
     return step.kind === 'write'
   }
   if (call.name === 'run_command') {
     const command = String(call.args.command || '')
     if (step.kind === 'build') return /gradlew|gradle|build/i.test(command) || isFileInspectionCommand(command)
     if (step.kind === 'run') return /runClient/i.test(command) || isFileInspectionCommand(command)
-    if (step.kind === 'game_test') return isFileInspectionCommand(command)
+    if (step.kind === 'game_test') {
+      if (options?.repairMode && /(?:gradlew|gradle|build|runClient)/i.test(command)) return true
+      return isFileInspectionCommand(command)
+    }
     if (step.kind === 'recipe' || step.kind === 'write') {
       return isRecipeCleanupCommand(command) || isProjectFileDeleteCommand(command)
     }
@@ -138,6 +143,8 @@ function commandAllowedForStep(step: WorkflowStep, call: ToolCallWithId, options
     // 此前仅允许 runClient，导致 AI 在 run 步骤中发现编译错误后无法重建，
     // 连续被拒绝 ≥3 次后遭会话级封禁，最终导致会话中断。
     if (step.kind === 'run') return task === 'build' || task === 'runClient'
+    if (step.kind === 'game_test' && options?.repairMode) return task === 'build' || task === 'runClient'
+    if (step.kind === 'game_test') return false
   }
   return true
 }
@@ -153,7 +160,7 @@ export function isToolAllowedForStep(
   const repairOverride = Boolean(options?.repairMode && REPAIR_OVERRIDE_TOOLS.has(call.name))
   // Build/run may delete misplaced files (duplicate class) before repairMode flips on.
   const buildRunDelete =
-    call.name === 'delete_file' && (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test')
+    call.name === 'delete_file' && (step.kind === 'build' || step.kind === 'run' || (step.kind === 'game_test' && options?.repairMode === true))
   if (!explicitlyAllowed && !repairOverride && !buildRunDelete) return false
 
   if (call.name === 'list_directory') return true
@@ -170,7 +177,8 @@ export function isToolAllowedForStep(
   }
 
   if (call.name === 'delete_file') {
-    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return true
+    if (step.kind === 'build' || step.kind === 'run') return true
+    if (step.kind === 'game_test') return Boolean(options?.repairMode)
     return step.kind === 'write' || step.kind === 'mixin'
   }
 

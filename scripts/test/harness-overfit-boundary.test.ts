@@ -14,7 +14,7 @@ test('production Harness does not import Test Lab scenarios or sample semantic v
 
 test('black-box complex scenarios remain outside production source', () => {
   const fixtures = fs.readdirSync(path.join(root, 'scripts', 'test', 'scenarios')).filter((name) => name.endsWith('.json'))
-  assert.deepEqual(fixtures.sort(), ['death-rewind.json', 'kill-feed-hud.json', 'player-morph-toggle.json'])
+  assert.deepEqual(fixtures.sort(), ['complete-project-minimax.json', 'death-rewind.json', 'kill-feed-hud.json', 'player-morph-toggle.json'])
 })
 
 test('current documentation tracks the built-in tool catalogue', () => {

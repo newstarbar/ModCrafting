@@ -4,6 +4,7 @@ import { FileSession } from '../../src/renderer/src/harness/file-session.ts'
 import { compilePlanFromText, parseJsonPlanSteps } from '../../src/renderer/src/harness/plan-compiler.ts'
 import { validateCompiledSteps } from '../../src/renderer/src/harness/plan-validator.ts'
 import { isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
+import { recommendedToolNames } from '../../src/renderer/src/harness/tool-policy.ts'
 import { canToolResultAdvanceStep, patternMatchesPath } from '../../src/renderer/src/harness/step-evidence.ts'
 import { inferToolError } from '../../src/renderer/src/harness/tools.ts'
 import {
@@ -94,6 +95,31 @@ test('repair mode allows edit_file on build steps', () => {
     ),
     true
   )
+})
+
+test('repair mode allows GUI preview needed to repair a build step', () => {
+  const step: WorkflowStep = {
+    id: '9',
+    title: '构建项目',
+    kind: 'build',
+    status: 'running',
+    allowedTools: ['trigger_build', 'read_error_log'],
+    maxAttempts: 6
+  }
+  assert.equal(
+    isToolAllowedForStep(step, { name: 'gui_layout_preview', args: { description: 'HUD' } }),
+    false
+  )
+  assert.equal(
+    isToolAllowedForStep(
+      step,
+      { name: 'gui_layout_preview', args: { description: 'HUD' } },
+      { repairMode: true, repairWriteRequired: true }
+    ),
+    true
+  )
+  assert.equal(recommendedToolNames('build').includes('gui_layout_preview'), false)
+  assert.equal(recommendedToolNames('build', true).includes('gui_layout_preview'), true)
 })
 
 test('repair mode allows delete_file and mixin scaffold for main→client migration', () => {
@@ -223,9 +249,11 @@ test('edit_file miss / gate outputs are treated as tool errors (not write eviden
   const miss = 'Error: 未找到 old_string。文件 src/A.java 共 95 行。请用 read_file 查看后重试。'
   const multi = 'Error: old_string 匹配了多处（至少第 1 行和第 8 行，共 2 处）。请提供更多上下文'
   const gate = 'blocked: [edit_gate] unbalanced braces。编辑未落盘，请修正后重试。'
+  const guiGate = 'blocked: [gui_preview_required]\n请先确认 GUI 布局。'
   assert.equal(inferToolError('edit_file', miss, null), miss)
   assert.equal(inferToolError('edit_file', multi, null), multi)
   assert.equal(inferToolError('edit_file', gate, null), gate)
+  assert.equal(inferToolError('write_file', guiGate, null), guiGate)
   assert.equal(inferToolError('edit_file', '已编辑 src/A.java: 第 1 行已替换（+3 行）', null), undefined)
 
   const step = {

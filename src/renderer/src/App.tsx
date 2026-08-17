@@ -15,6 +15,7 @@ import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import EnvImportDialog from "./components/EnvImportDialog";
 import UpdateBanner from "./components/UpdateBanner";
+import SettingsCenter from "./components/SettingsCenter";
 import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./components/Icon";
 import PanelExpandRail from "./components/PanelExpandRail";
 import PanelResizeHandle from "./components/PanelResizeHandle";
@@ -31,6 +32,8 @@ import { registerPanelBridge, setLastBuildLogText } from "./utils/panel-bridge";
 import type { ApiConfigState, ApiSettingsPayload } from "./types/api-config";
 import { providerDisplayLabel, resolveSelection } from "../../shared/llm-providers.ts";
 import type { ProviderModelSelection } from "./components/ComposerModelMenu";
+import type { ModelRef, ModelRoutingConfig, RoutingSelection } from "../../shared/model-routing.ts";
+import { defaultRoutingConfig, normalizeRoutingConfig } from "../../shared/model-routing.ts";
 
 const DEFAULT_API_CONFIG: ApiConfigState = {
 	endpoint: "https://api.deepseek.com/v1",
@@ -85,6 +88,7 @@ const App: React.FC = () => {
 	currentSessionIdRef.current = currentSessionId;
 	const [fileChanges, setFileChanges] = useState<{ time: string; entry: string }[]>([]);
 	const [apiConfig, setApiConfig] = useState(DEFAULT_API_CONFIG);
+	const [routingConfig, setRoutingConfig] = useState<ModelRoutingConfig>(defaultRoutingConfig());
 	const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
 	const [savedProviderIds, setSavedProviderIds] = useState<string[]>([]);
 	const [encryptionAvailable, setEncryptionAvailable] = useState(true);
@@ -243,6 +247,10 @@ const App: React.FC = () => {
 		});
 	}, []);
 
+	useEffect(() => {
+		void window.api.loadModelRoutingConfig().then(setRoutingConfig).catch((error) => console.warn('model routing config load failed', error));
+	}, []);
+
 	const ensureApiKey = useCallback(async (): Promise<string | null> => {
 		const current = apiConfig.apiKey.trim();
 		if (current) return current;
@@ -264,6 +272,25 @@ const App: React.FC = () => {
 		}
 		return null;
 	}, [apiConfig.apiKey, apiConfig.providerId, hasSavedApiKey]);
+
+	const resolveRoutingModel = useCallback(async (model: ModelRef) => {
+		// Test Lab's replay provider is intentionally a single endpoint which can
+		// deterministically emulate every logical role model without storing keys.
+		if (apiConfig.providerId === 'automation-replay' && apiConfig.apiKey.trim()) {
+			return { endpoint: apiConfig.endpoint, apiKey: apiConfig.apiKey.trim(), model: model.modelId, providerId: model.providerId };
+		}
+		const provider = await window.api.loadApiConfigForProvider(model.providerId);
+		if (!provider.hasApiKey) return null;
+		const key = await window.api.getApiKey(model.providerId);
+		if (!key.success || !key.apiKey?.trim()) return null;
+		return { endpoint: provider.endpoint, apiKey: key.apiKey.trim(), model: model.modelId, providerId: model.providerId };
+	}, [apiConfig.apiKey, apiConfig.endpoint, apiConfig.providerId]);
+
+	const handleRoutingConfigChange = useCallback(async (config: ModelRoutingConfig) => {
+		const saved = await window.api.saveModelRoutingConfig(config);
+		if (!saved.success) { alert(saved.error || '模型路由配置保存失败'); return; }
+		setRoutingConfig(saved.config || config);
+	}, []);
 
 	const handleApiSettingsChange = useCallback(async (config: ApiSettingsPayload) => {
 		setApiConfig((prev) => ({
@@ -295,9 +322,7 @@ const App: React.FC = () => {
 		[handleApiSettingsChange]
 	);
 
-	const openApiSettings = useCallback(() => {
-		window.dispatchEvent(new CustomEvent("modcrafting:open-settings"));
-	}, []);
+	const openApiSettings = useCallback(() => { setAppView('settings'); }, []);
 
 	useEffect(() => {
 		if (apiConfig.providerId !== "deepseek" || !hasSavedApiKey) {
@@ -326,17 +351,20 @@ const App: React.FC = () => {
 	}, [apiConfig.providerId, hasSavedApiKey, apiConfig.apiKey]);
 
 	const handleApiKeySave = useCallback(
-		async (key: string) => {
+		async (key: string, providerIdOverride?: string) => {
 			const trimmed = key.trim();
 			if (!trimmed) return;
 
-			const result = await window.api.saveApiKey(trimmed, apiConfig.providerId);
+			const providerId = providerIdOverride || apiConfig.providerId;
+			const result = await window.api.saveApiKey(trimmed, providerId);
 			if (!result.success) {
 				alert(result.error || "API Key 保存失败");
 				return;
 			}
-			setApiConfig((prev) => ({ ...prev, apiKey: trimmed }));
-			setHasSavedApiKey(true);
+			if (providerId === apiConfig.providerId) {
+				setApiConfig((prev) => ({ ...prev, apiKey: trimmed }));
+				setHasSavedApiKey(true);
+			}
 			const refreshed = await window.api.loadApiConfig();
 			setSavedProviderIds(refreshed.savedProviderIds);
 		},
@@ -396,6 +424,14 @@ const App: React.FC = () => {
 							setApiConfig({ endpoint, model, apiKey, providerId: String(command.params.providerId || 'automation-replay') });
 							setHasSavedApiKey(true);
 							result = { configured: true, endpoint, model };
+							break;
+						}
+						case 'configure_routing': {
+							const next = normalizeRoutingConfig(command.params.config || command.params);
+							const saved = await window.api.saveModelRoutingConfig(next);
+							if (!saved.success) throw new Error(saved.error || 'routing_configuration_failed');
+							setRoutingConfig(saved.config || next);
+							result = { configured: true, selection: (saved.config || next).defaultSelection };
 							break;
 						}
 						case 'open_project': {
@@ -537,11 +573,15 @@ const App: React.FC = () => {
 					ok: false,
 					error: "游戏面板未就绪"
 				};
+				if (!res.ok && res.logTail?.trim()) {
+					setLastBuildLogText(res.logTail);
+				}
 				return {
 					ok: res.ok,
 					instanceId: res.instanceId,
 					phase: res.ok ? ("ready" as const) : ("error" as const),
-					error: res.error
+					error: res.error,
+					logTail: res.logTail
 				};
 			}
 		});
@@ -756,8 +796,13 @@ const App: React.FC = () => {
 		);
 	}, []);
 
-	const handleUpdateSessionMeta = useCallback((sessionId: string, meta: { composerMode?: "agent" | "plan" | "ask"; sessionGoal?: string }) => {
+	const handleUpdateSessionMeta = useCallback((sessionId: string, meta: { composerMode?: "agent" | "plan" | "ask"; sessionGoal?: string; routingSelection?: RoutingSelection }) => {
 		setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, ...meta } : s)));
+	}, []);
+	const handleRoutingSelectionChange = useCallback((selection: RoutingSelection) => {
+		const sid = currentSessionIdRef.current
+		if (!sid) return
+		setSessions((prev) => prev.map((session) => session.id === sid ? { ...session, routingSelection: selection } : session))
 	}, []);
 
 	const handleUsageChange = useCallback((nextUsage: UsageStats, meta?: { costDelta?: number }) => {
@@ -777,9 +822,9 @@ const App: React.FC = () => {
 	const handleNewSession = useCallback(() => {
 		const id = `session-${Date.now()}`;
 		const now = Date.now();
-		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name: nextDefaultSessionName(p.length), messages: [], createdAt: now, updatedAt: now }]));
+		setSessions((p) => sortSessionsByUpdatedAt([...p, { id, name: nextDefaultSessionName(p.length), messages: [], createdAt: now, updatedAt: now, routingSelection: routingConfig.defaultSelection }]));
 		setCurrentSessionId(id);
-	}, []);
+	}, [routingConfig.defaultSelection]);
 
 	const handleDeleteSession = useCallback((id: string) => {
 		setSessions((p) => p.filter((s) => s.id !== id));
@@ -789,6 +834,7 @@ const App: React.FC = () => {
 	}, []);
 
 	const pendingDeleteSession = pendingDeleteSessionId ? (sessions.find((s) => s.id === pendingDeleteSessionId) ?? null) : null;
+	const currentRoutingSelection = sessions.find((session) => session.id === currentSessionId)?.routingSelection || routingConfig.defaultSelection;
 
 	const handleNewSessionFromChat = useCallback((firstMessage?: string, attachments?: PersistedMessage["attachments"]) => {
 		const id = `session-${Date.now()}`;
@@ -808,11 +854,11 @@ const App: React.FC = () => {
 				: [];
 		setSessions((p) => {
 			const sessionName = msg ? sessionTitleFromMessage(msg) : atts ? "（附件）" : nextDefaultSessionName(p.length);
-			return sortSessionsByUpdatedAt([...p, { id, name: sessionName, messages: initialMessages, createdAt: now, updatedAt: now }]);
+			return sortSessionsByUpdatedAt([...p, { id, name: sessionName, messages: initialMessages, createdAt: now, updatedAt: now, routingSelection: routingConfig.defaultSelection }]);
 		});
 		setCurrentSessionId(id);
 		return id;
-	}, []);
+	}, [routingConfig.defaultSelection]);
 	const enqueueContext = useCallback((payload: ContextPayload) => {
 		setState((prev) => ({ ...prev, contextQueue: [...prev.contextQueue, payload] }));
 	}, []);
@@ -944,6 +990,7 @@ const App: React.FC = () => {
 						panelCollapsed={workspaceLayout.leftCollapsed}
 						panelDragging={workspaceLayout.isResizing}
 						onTogglePanelCollapse={() => workspaceLayout.toggleLeftCollapsed()}
+						onOpenSettingsCenter={() => setAppView('settings')}
 					/>
 					<PanelResizeHandle side="left" disabled={workspaceLayout.leftCollapsed} onPointerDown={workspaceLayout.beginLeftResize} />
 					<div className="main-area">
@@ -969,6 +1016,10 @@ const App: React.FC = () => {
 								onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 								onProviderModelChange={handleProviderModelChange}
 								onOpenApiSettings={openApiSettings}
+								routingConfig={routingConfig}
+								routingSelection={currentRoutingSelection}
+								resolveRoutingModel={resolveRoutingModel}
+								onRoutingSelectionChange={handleRoutingSelectionChange}
 							/>
 						) : (
 							<WorkspaceEmpty onGoHub={() => setAppView("hub")} onOpenProject={openProject} onNewProject={createProject} />
@@ -1018,6 +1069,18 @@ const App: React.FC = () => {
 							</div>
 						</div>
 					</div>
+				</div>
+				<div className={`app-shell-view app-shell-view--settings${appView !== 'settings' ? ' app-shell-view--hidden' : ''}`}>
+					<SettingsCenter
+						apiConfig={apiConfig}
+						savedProviderIds={savedProviderIds}
+						encryptionAvailable={encryptionAvailable}
+						onApiSettingsChange={handleApiSettingsChange}
+						onApiKeySave={handleApiKeySave}
+						routingConfig={routingConfig}
+						onRoutingConfigChange={handleRoutingConfigChange}
+						onClose={() => setAppView(state.projectPath ? 'workspace' : 'hub')}
+					/>
 				</div>
 			</div>
 			{pendingDeleteSession && (

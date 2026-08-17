@@ -112,6 +112,12 @@ Test Lab 不随正式安装包发布。它通过 `scripts/mcp/modcrafting-test-m
 
 具体工具、路径和限制见 [Test Lab MCP](./test-lab-mcp.md)。
 
+## 模型路由与设置中心
+
+主进程将不含密钥的路由策略保存为 `model-routing-config.json`；Provider 的端点和默认模型按厂商保存在 `api-settings.json`，密钥仍由 `safeStorage` 分厂商加密保存。渲染进程的 Harness Controller 将每次用户输入先转成可解释的路由决策，再把既有执行阶段映射到固定职责模型。只有 `implementer` 能取得写入工具；其余职责遵守只读工具策略，原有计划门控、20/40/3 预算与验收流程不变。
+
+应用框架的视图包括项目中心、工作区和独立设置中心。设置中心负责模型服务、路由、预设和工具/MCP；会话仅保存路由选择与协作轨迹，不保存 API Key。
+
 ## 默认技术栈
 
 | 组件 | 版本 |
@@ -123,6 +129,12 @@ Test Lab 不随正式安装包发布。它通过 `scripts/mcp/modcrafting-test-m
 | Gradle / Java | 9.5.0 / 21 |
 
 版本锁定见 `resources/fabric-versions.json`。
+
+## Codex Fabric 插件
+
+`plugins/modcrafting-fabric/` 是可独立安装的 Codex 插件，入口为 `.codex-plugin/plugin.json`，由两项 Fabric 技能和本地 stdio MCP 组成。它仅支持 Windows x64、Minecraft/Fabric 1.21.4，并且只使用系统 JDK 21 与目标项目自带的 `gradlew.bat`。
+
+领域契约和 Node 运行时能力放在 `packages/modcrafting-core/`：`domain.ts` 定义版本、Observer V2、专用测试世界以及 `PASS / FAIL / INCONCLUSIVE`；`node.ts` 提供系统工具链检查、知识资产、Gradle/Minecraft 进程、Bridge 和报告管理。插件 MCP 是薄适配层，不依赖 Electron、`window.api` 或仓库根目录 `node_modules`。Electron 的 UI、Provider、IPC 与 Harness 仍保留在应用内，Test Lab MCP 仍仅用于应用开发回归。
 
 ## 维护边界
 

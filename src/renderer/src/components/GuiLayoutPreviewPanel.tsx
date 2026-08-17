@@ -305,14 +305,17 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
     const handleMessage = (e: MessageEvent) => {
       if (!e.data) return
       if (e.data.type === 'gui-layout-update' && Array.isArray(e.data.elements)) {
-        setCurrentElements(e.data.elements.map((el: { id: string; x: number; y: number; width: number; height: number }) => ({
+        setCurrentElements(e.data.elements.map((el: { id: string; x: number; y: number; width: number; height: number; color?: number; alpha?: number; shadow?: boolean }) => ({
           id: String(el.id),
           type: 'custom' as const,
           label: '',
           x: Number(el.x) || 0,
           y: Number(el.y) || 0,
           width: Number(el.width) || 100,
-          height: Number(el.height) || 20
+          height: Number(el.height) || 20,
+          ...(typeof el.color === 'number' ? { color: el.color } : {}),
+          ...(typeof el.alpha === 'number' ? { alpha: el.alpha } : {}),
+          ...(typeof el.shadow === 'boolean' ? { shadow: el.shadow } : {})
         })))
       }
     }
@@ -334,20 +337,25 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
       if (e.data.type === 'gui-layout-data' && Array.isArray(e.data.elements)) {
         window.removeEventListener('message', listener)
         const merged: GuiLayoutElement[] = entry.elements.map((orig) => {
-          const updated = e.data.elements.find((el: { id: string; x: number; y: number; width: number; height: number }) => el.id === orig.id)
+          const updated = e.data.elements.find((el: { id: string; x: number; y: number; width: number; height: number; color?: number; alpha?: number; shadow?: boolean }) => el.id === orig.id)
           if (updated) {
             return {
               ...orig,
               x: Number(updated.x) || orig.x,
               y: Number(updated.y) || orig.y,
               width: Number(updated.width) || orig.width,
-              height: Number(updated.height) || orig.height
+              height: Number(updated.height) || orig.height,
+              ...(typeof updated.color === 'number' ? { color: updated.color } : {}),
+              ...(typeof updated.alpha === 'number' ? { alpha: updated.alpha } : {}),
+              ...(typeof updated.shadow === 'boolean' ? { shadow: updated.shadow } : {})
             }
           }
           return orig
         })
-        const layoutJson = JSON.stringify({
+        const layoutBody = {
           layoutType: entry.layoutType,
+          canvasWidth: CANVAS_WIDTH,
+          canvasHeight: CANVAS_HEIGHT,
           elements: merged.map((el) => ({
             id: el.id,
             type: el.type,
@@ -355,8 +363,20 @@ const GuiLayoutPreviewPanel: React.FC<GuiLayoutPreviewPanelProps> = ({
             x: el.x,
             y: el.y,
             width: el.width,
-            height: el.height
+            height: el.height,
+            color: typeof el.color === 'number' ? el.color : 0xffffffff,
+            alpha: typeof el.alpha === 'number' ? el.alpha : 255,
+            shadow: typeof el.shadow === 'boolean' ? el.shadow : true
           }))
+        }
+        // The approval record is bound to the exact layout JSON so a later
+        // GameTestSpec cannot silently substitute a different HUD geometry.
+        let hash = 2166136261
+        for (const char of JSON.stringify(layoutBody)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+        const layoutJson = JSON.stringify({
+          ...layoutBody,
+          approvalId: entry.id,
+          layoutFingerprint: `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`
         }, null, 2)
         onConfirm(layoutJson)
       }

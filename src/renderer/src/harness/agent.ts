@@ -31,6 +31,7 @@ export { MAX_PLAN_OFFERED_REJECT_ROUNDS, MAX_PLAN_SUBMIT_NUDGE_ROUNDS, MAX_READO
 export { LONG_REASONING_KICK, MAX_REASONING_HARD_CHARS, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
 
 let _toolCallIdCounter = 0;
+let _modelInvocationIdCounter = 0;
 
 export interface AgentOptions {
 	registry: Registry;
@@ -42,6 +43,20 @@ export interface AgentOptions {
 	onGuiLayoutPreview?: (payload: { id: string; title: string; layoutType: import("./events.ts").GuiLayoutType; html: string; elements: import("./events.ts").GuiLayoutElement[] }) => Promise<string>;
 	/** 步骤切换/修复模式进入时清理未确认的 GUI 布局预览 */
 	onCancelPendingGuiLayouts?: () => void;
+	/**
+	 * Audit every outbound model HTTP request, including context-compaction and
+	 * bounded retry requests.  Controller attaches the current role/provider
+	 * identity before forwarding the event to the persistent Harness event log.
+	 */
+	onModelInvocation?: (event: {
+		invocationId: string;
+		modelId: string;
+		phase: "start" | "end";
+		startedAt: number;
+		endedAt?: number;
+		status?: "running" | "completed" | "failed";
+		error?: string;
+	}) => void;
 }
 
 export interface RunOptions {
@@ -84,6 +99,7 @@ export class Agent {
 	onToolResult?: (name: string, id: string, output: string) => void;
 	onGuiLayoutPreview?: (payload: { id: string; title: string; layoutType: import("./events.ts").GuiLayoutType; html: string; elements: import("./events.ts").GuiLayoutElement[] }) => Promise<string>;
 	onCancelPendingGuiLayouts?: () => void;
+	onModelInvocation?: AgentOptions["onModelInvocation"];
 	// Once locked, readonly tools stay removed for the entire run
 	private readonlyLocked = false;
 	/** Plan phase: exploration tools stripped after readonly round cap. */
@@ -130,6 +146,7 @@ export class Agent {
 		this.onToolResult = opts.onToolResult;
 		this.onGuiLayoutPreview = opts.onGuiLayoutPreview;
 		this.onCancelPendingGuiLayouts = opts.onCancelPendingGuiLayouts;
+		this.onModelInvocation = opts.onModelInvocation;
 	}
 
 	setRegistry(registry: Registry): void {
@@ -364,7 +381,13 @@ export class Agent {
 					kind: EventKind.Notice,
 					notice: {
 						level: "warn",
-						text: "部分步骤未完成，已暂停自动执行。发送「继续」可从当前步骤恢复。"
+						text: result.gameTestStatus
+							? (result.gameTestStatus.state === 'terminal'
+								? `游戏测试已结束为 INCONCLUSIVE（${result.gameTestStatus.code}）；无需补充断言或进入通用澄清。`
+								: result.gameTestStatus.state === 'visual_review'
+									? '游戏测试已进入专用视觉审核卡，请在审核卡中接受或拒绝。'
+									: `游戏测试状态：${result.gameTestStatus.message}`)
+							: "部分步骤未完成，已暂停自动执行。发送「继续」可从当前步骤恢复。"
 					}
 				});
 			}
@@ -618,9 +641,12 @@ export class Agent {
 						this.lastRejectedToolSignature = signature;
 						this.consecutiveSameRejectedToolRounds = signature ? 1 : 0;
 					}
-					if (this.consecutiveSameRejectedToolRounds >= 2) {
+					// Some providers need one extra schema-correction round when a
+					// nested object array is first serialized as XML-like strings.
+					// Three identical failures still terminate deterministically.
+					if (this.consecutiveSameRejectedToolRounds >= 3) {
 						const rejectedNames = [...new Set([...validation.rejected.values()].map((item) => item.toolName || "unknown"))].join(", ");
-						finalContent = `相同的非法工具调用已连续出现两次（${rejectedNames}），已停止本轮以避免循环。请依据上方字段级错误重新生成参数。`;
+						finalContent = `相同的非法工具调用已连续出现三次（${rejectedNames}），已停止本轮以避免循环。请依据上方字段级错误重新生成参数。`;
 						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: finalContent } });
 						this.finishRun(emitLifecycle, "repeated_invalid_tool_call");
 						return finalContent;
@@ -1099,9 +1125,15 @@ export class Agent {
 	}> {
 		let lastError: unknown;
 		for (let attempt = 0; attempt < MAX_FETCH_RETRIES; attempt++) {
+			const invocationId = `request_${Date.now().toString(36)}_${++_modelInvocationIdCounter}`;
+			const startedAt = Date.now();
+			this.onModelInvocation?.({ invocationId, modelId: model, phase: "start", startedAt, status: "running" });
 			try {
-				return await this.streamFromAPIOnce(endpoint, apiKey, model, messages, tools, abortSignal, onChunk, maxTokens);
+				const result = await this.streamFromAPIOnce(endpoint, apiKey, model, messages, tools, abortSignal, onChunk, maxTokens);
+				this.onModelInvocation?.({ invocationId, modelId: model, phase: "end", startedAt, endedAt: Date.now(), status: "completed" });
+				return result;
 			} catch (err) {
+				this.onModelInvocation?.({ invocationId, modelId: model, phase: "end", startedAt, endedAt: Date.now(), status: "failed", error: String(err) });
 				lastError = err;
 				if (!isRetryableFetchError(err) || attempt >= MAX_FETCH_RETRIES - 1) throw err;
 				const delay = fetchRetryDelayMs(attempt);

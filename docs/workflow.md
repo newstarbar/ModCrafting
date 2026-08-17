@@ -2,6 +2,18 @@
 
 ## Test Lab regression workflow
 
+### Game-test recovery states
+
+An inconclusive `mc_run_test` is routed by structured code, never by localized
+reason text and never through the product-preference clarification overlay:
+
+`CONTRACT_CHECK -> SCENARIO_READY -> RUNNING -> PASS/FAIL/INCONCLUSIVE`.
+Invalid evidence enters bounded `EVIDENCE_REPAIR` (new scenario ID required),
+Observer/world failures enter two-attempt `ENVIRONMENT_RECOVERY`, and only a
+purely visual claim enters `VISUAL_REVIEW`. A stale or superseded scenario
+cannot advance a game-test step. Only an explicit Agent `ask_clarification`
+call can pause for user input.
+
 修改 Harness 时，优先运行确定性应用场景，不要先要求开发者人工复现并导出诊断。`npm run test:app` 会在独立 profile 中前台启动真实 Electron、复制沙箱夹具、配置内存回放 Provider、发送真实对话并验证 Controller/React/事件账本。`npm run test:app:hidden` 用于无人值守或 CI；`npm run test:mcp` 验证开发专用 stdio MCP。
 
 Standalone runner 的产物位于系统临时目录 `modcrafting-app-test/<runId>/artifacts/`；通过 MCP 启动的运行位于 `%LOCALAPPDATA%/ModCrafting Test Lab/runs/<runId>/artifacts/`。
@@ -12,10 +24,10 @@ Standalone runner 的产物位于系统临时目录 `modcrafting-app-test/<runId
 
 游戏内验收采用确定性测试状态机，而不是“看到截图就算成功”：
 
-1. `runClient` 仅负责启动客户端和桥接。
+1. `runClient` 仅在客户端菜单稳定、目标模组与 `modmenu`/`modcrafting_observer` 都出现在 Fabric 加载清单、并且 Observer V2 capabilities 可连接时完成；`MC_PHASE:menu` 不是通过证据。
 2. `mc_test_scenario` 根据实际功能创建带目标 ID 与断言的测试规格。
 3. `mc_run_test` 在专用 `ModCrafting Test World` 内准备环境、执行动作、采集动作后的快照、逐项断言并清理。
-4. 只有 `PASS` 可结束测试；`FAIL` 需清理后复测一次才会触发修复；`INCONCLUSIVE` 显示缺失证据并暂停，绝不把导航、桥接或视觉问题当成代码错误。
+4. 只有满足场景 `requiredPassCount` 的独立 `PASS` 才可结束客观测试；需要多次 PASS 时主机重启 Minecraft 并从 setup 重放同一场景。`FAIL` 需清理后原样复测一次才会触发产品修复；`INCONCLUSIVE` 由 Harness 按结构化原因自动进入契约修订（最多三次）、环境恢复（最多两次）或专用视觉审核，绝不把导航、桥接或视觉问题当成代码错误，也不弹出通用澄清。
 
 实施计划先提交 `AcceptanceContract`：每条用户需求必须映射到构建成功、游戏断言或用户视觉确认。Harness 不包含样例功能的实现建议；复杂例子仅作为 Test Lab 的黑盒夹具运行。
 
@@ -97,7 +109,7 @@ AcceptanceContract + 实现步骤
 
 - **输入**：Mod ID、包名、作者、版本
 - **自动生成**：`build.gradle`、`fabric.mod.json`、入口类
-- **捆绑 mod**：从 `resources/_base_mods/` 复制 Mod Menu、ModCrafting Observer 等
+- **捆绑 mod**：基础模组同步会验证 Fabric ID 与 Observer V2 元数据，优先使用当前应用内 JAR；运行时下载的旧版双层目录会先自动迁移。同步失败时禁止启动 `runClient`。
 
 ## 模板快速创建
 
@@ -144,6 +156,12 @@ AcceptanceContract + 实现步骤
 - 老旧工具结果微压缩
 - 接近 token 上限触发 LLM 摘要
 - 跨轮诊断保留（近期 5 条用户反馈 + 2 条助手摘要）
+
+## 路由工作流
+
+输入区可在“路由预设”和“固定模型”间切换。路由模式把策略（快速、均衡、深度及更多预设）和任务模板（自动、新功能、Bug 修复、UI/GUI、构建环境、Minecraft 内容、重构、知识/文档）分别作为会话临时选择；未修改时使用全局默认。执行时从路由、协调、只读勘探、规划、实现、诊断/审查、验证到总结逐步推进，且仅实现职责可写文件。
+
+齿轮打开独立设置中心。用户可按厂商配置 Endpoint、默认模型和加密密钥，在“模型路由”查看职责与预算，在“预设”复制、导入或导出不含密钥的自定义策略。
 
 ## API 配置
 

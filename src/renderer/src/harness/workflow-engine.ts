@@ -21,6 +21,7 @@ import { LONG_REASONING_KICK, MAX_REASONING_SOFT_CHARS } from "./reasoning-limit
 import type { VerifyTarget } from "./verify-target.ts";
 import { describeVerifyMismatch, formatVerifyRepairKick, isWrongScreenVerifyFinding, matchesVerifyTarget } from "./verify-target.ts";
 import { isExploreTool, isKnowledgeTool, isProjectWriteTool, recommendedToolNames } from "./tool-policy.ts";
+import { acceptanceContractFingerprint, getGameTestSpec, gameTestScenarioFingerprint, supersedeGameTestSpec, type GameTestInconclusiveCode, type GameTestResponsibility, type GameTestWorkflowStatus } from "./game-test-protocol.ts";
 
 export interface WorkflowModelResult {
 	finishReason?: string;
@@ -174,8 +175,16 @@ function normalizeRepairPath(value: string, projectPath: string | null): string 
 	// Build output is capped and may begin in the middle of a Windows absolute
 	// path (for example "ta/Local/.../workspace/src/main/...").  The repair
 	// boundary is project-relative, so recover from the first known source root.
-	const relativeRoot = normalized.match(/(?:^|\/)((?:src\/(?:main|client|test|generated)\/|data\/|gradle\/).*)$/i);
-	if (relativeRoot?.[1]) normalized = relativeRoot[1];
+	// Prefer a concrete source-set root before the broader data/ fallback. A
+	// truncated AppData path may itself begin with "Data/", which must not be
+	// mistaken for the project's data directory when a later /src/... exists.
+	const sourceRoot = normalized.match(/(?:^|\/)(src\/(?:main|client|test|generated)\/.*)$/i);
+	if (sourceRoot?.[1]) {
+		normalized = sourceRoot[1];
+	} else {
+		const relativeRoot = normalized.match(/(?:^|\/)((?:data\/|gradle\/).*)$/i);
+		if (relativeRoot?.[1]) normalized = relativeRoot[1];
+	}
 	return normalized.replace(/^\/+/, "");
 }
 
@@ -307,7 +316,11 @@ function repairExtraTools(step: WorkflowStep): string[] {
 }
 
 function writeFileRetryInstruction(kind: "build" | "run" | "game_test"): string {
-	const retry = kind === "build" ? "trigger_build build" : "trigger_build runClient";
+	const retry = kind === "build"
+		? "trigger_build build"
+		: kind === "run"
+			? "trigger_build runClient"
+			: "trigger_build build，然后 trigger_build runClient";
 	return `【SYSTEM: 文件已修改，可以重新构建。请调用 ${retry} 验证修复结果。】`;
 }
 
@@ -653,7 +666,7 @@ function resultCompletesStep(
 		case "run":
 			return isRunClientReadyResult(result);
 		case "game_test":
-			return result.toolName === "mc_run_test" && result.validation?.kind === "game" && result.validation.verdict === "PASS" && result.validation.valid;
+			return result.toolName === "mc_run_test" && gameTestResultMatchesCurrentScenario(step, result) && result.validation?.kind === "game" && result.validation.verdict === "PASS" && result.validation.valid;
 		case "answer":
 			return true;
 	}
@@ -665,13 +678,68 @@ export function gameTestFailureSignature(output: unknown): string {
 	try {
 		const parsed = JSON.parse(text) as { scenarioId?: unknown; evidence?: Array<{ passed?: unknown; assertion?: unknown; detail?: unknown }> };
 		const failed = Array.isArray(parsed.evidence)
-			? parsed.evidence.filter((row) => row && row.passed === false).map((row) => ({ assertion: row.assertion, detail: String(row.detail || "").replace(/\d{2,}/g, "#") }))
+			? parsed.evidence.map((row, index) => ({ row, index })).filter(({ row }) => row && row.passed === false).map(({ row, index }) => row.assertion ?? { index })
 			: [];
 		if (failed.length > 0) return JSON.stringify({ scenarioId: parsed.scenarioId, failed });
 	} catch {
 		// Keep a conservative fallback for malformed bridge reports.
 	}
 	return text.replace(/test_[a-z0-9_]+/gi, "test").replace(/\d{10,}/g, "#").slice(0, 600);
+}
+
+function gameTestScenarioIdFromResult(result: ToolResult): string | undefined {
+	if (result.toolName !== "mc_test_scenario" || !result.ok || result.error) return undefined;
+	const matches = String(result.output || "").match(/\bscenario_[a-z0-9_]+\b/gi);
+	return matches?.at(-1);
+}
+
+function gameTestResultMatchesCurrentScenario(step: WorkflowStep, result: ToolResult): boolean {
+	if (step.kind !== "game_test") return true;
+	const expected = step.gameTest?.id;
+	// A game-test step without an active spec is intentionally not completeable:
+	// it must first be repaired/compiled into a fresh scenario. This prevents a
+	// restored or stale PASS from advancing the step by accident.
+	if (!expected) return false;
+	const actual = String(result.args?.scenarioId || "");
+	if (!actual || actual !== expected) return false;
+	if ((step.gameTest?.supersededScenarioIds || []).includes(actual)) return false;
+	const validation = result.validation;
+	if (validation?.scenarioRevision !== undefined && step.gameTest?.scenarioRevision !== undefined && validation.scenarioRevision !== step.gameTest.scenarioRevision) return false;
+	if (validation?.scenarioFingerprint && step.gameTest?.scenarioFingerprint && validation.scenarioFingerprint !== step.gameTest.scenarioFingerprint) return false;
+	if (validation?.acceptanceContractFingerprint && step.gameTest?.acceptanceContractFingerprint && validation.acceptanceContractFingerprint !== step.gameTest.acceptanceContractFingerprint) return false;
+	return true;
+}
+
+function gameTestInconclusiveCode(result: ToolResult): GameTestInconclusiveCode {
+	return result.validation?.inconclusiveCode || (() => {
+		try {
+			const parsed = JSON.parse(String(result.output || "")) as { inconclusiveCode?: GameTestInconclusiveCode }
+			return parsed.inconclusiveCode || 'ASSERTION_CAPABILITY_UNAVAILABLE'
+		} catch {
+			return 'ASSERTION_CAPABILITY_UNAVAILABLE'
+		}
+	})()
+}
+
+function gameTestResponsibility(result: ToolResult, code: GameTestInconclusiveCode): GameTestResponsibility {
+	if (result.validation?.responsibility) return result.validation.responsibility
+	if (code === 'VISUAL_REVIEW_REQUIRED') return 'visual_review'
+	if (code === 'OBSERVER_UNAVAILABLE' || code === 'WORLD_UNAVAILABLE' || code === 'SNAPSHOT_UNAVAILABLE' || code === 'TRACE_CAPABILITY_UNAVAILABLE' || code === 'WORLD_TIME_NOT_ADVANCED' || code === 'INDEPENDENT_REPLAY_NOT_PROVEN') return 'environment'
+	return 'agent_test_design'
+}
+
+function gameTestScenarioIdentity(result: ToolResult): { id: string; fingerprint?: string; revision?: number; acceptanceContractFingerprint?: string; observerSessionId?: string; variantFingerprint?: string; currentCheckpoint?: string } {
+	const id = String(result.args?.scenarioId || '')
+	const spec = id ? getGameTestSpec(id) : undefined
+	return {
+		id,
+		fingerprint: result.validation?.scenarioFingerprint || spec?.scenarioFingerprint || (spec ? gameTestScenarioFingerprint(spec) : undefined),
+		revision: result.validation?.scenarioRevision || spec?.scenarioRevision,
+		acceptanceContractFingerprint: result.validation?.acceptanceContractFingerprint || spec?.acceptanceContractFingerprint || (spec ? acceptanceContractFingerprint(spec.acceptanceContract) : undefined),
+		observerSessionId: result.validation?.observerSessionId,
+		variantFingerprint: result.validation?.variantFingerprint,
+		currentCheckpoint: result.validation?.currentCheckpoint
+	}
 }
 
 /** Only the actual submit_plan call gets execute-phase guidance. */
@@ -714,7 +782,7 @@ export function isInGameVerifyResult(
 export function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boolean {
 	if (!result.ok || result.error) return false;
 	if (step.kind === "game_test") {
-		return result.toolName === "mc_run_test" && result.validation?.kind === "game" && result.validation.verdict === "PASS";
+		return result.toolName === "mc_run_test" && gameTestResultMatchesCurrentScenario(step, result) && result.validation?.kind === "game" && result.validation.verdict === "PASS";
 	}
 	if (step.kind === "recipe") {
 		return result.validation?.kind === "recipe" && result.validation.valid;
@@ -860,6 +928,8 @@ export class WorkflowEngine {
 	private lastVerifyMismatch = "";
 	/** A functional assertion must fail twice in fresh sessions before repair is allowed. */
 	private gameTestFailureCounts = new Map<string, number>();
+	/** Invalid/ unavailable test contracts are repaired by the Agent internally;
+	 * they must never enter the product-preference clarification flow. */
 	/** GUI 布局预览状态：当前步骤是否已完成预览（用户确认过布局 JSON） */
 	private guiPreviewCompletedForStep = false;
 	private lastPreviewStepId: string | null = null;
@@ -891,24 +961,191 @@ export class WorkflowEngine {
 		id: string;
 		description: string;
 		status: string;
-		kind?: "inspect" | "write" | "recipe" | "mixin";
+		kind?: "inspect" | "write" | "recipe" | "mixin" | "build" | "run" | "game_test";
 		targetPath?: string;
 		targetPaths?: string[];
 		evidence?: string;
+		gameTest?: WorkflowStep["gameTest"];
 	}> {
 		return this.steps.map((step) => ({
 			id: step.id,
 			description: step.title,
 			status: statusForPlan(step),
-			...(step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin" ? { kind: step.kind } : {}),
+			...(step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin" || step.kind === "build" || step.kind === "run" || step.kind === "game_test" ? { kind: step.kind } : {}),
 			...(step.targetPath ? { targetPath: step.targetPath } : {}),
 			...(step.targetPaths?.length ? { targetPaths: [...step.targetPaths] } : {}),
-			...(step.evidence ? { evidence: step.evidence } : {})
+			...(step.evidence ? { evidence: step.evidence } : {}),
+			...(step.gameTest ? { gameTest: step.gameTest } : {})
 		}));
 	}
 
 	private emitPlanState(): void {
 		this.emit({ kind: EventKind.PlanState, planSteps: this.planState() });
+	}
+
+	private emitGameTestStatus(status: GameTestWorkflowStatus): void {
+		this.emit({ kind: EventKind.GameTestStatus, gameTestStatus: status, notice: { level: status.state === 'terminal' ? 'error' : 'info', text: status.message } });
+	}
+
+	/**
+	 * Recover only the test host. This path is deliberately owned by the
+	 * workflow engine rather than delegated to the model: inspect the runtime,
+	 * start a missing instance when the host API permits it, then re-enter the
+	 * dedicated test world and restore cheats. No source/build tools are exposed
+	 * or invoked here.
+	 */
+	private async hostRecoverGameTestEnvironment(instanceId?: string): Promise<string | undefined> {
+		let activeInstanceId = instanceId;
+		if (typeof window !== "undefined" && window.api) {
+			try {
+				const runtime = await window.api.mcRuntimeStatus(activeInstanceId);
+				const status = String((runtime as Record<string, unknown>)?.status || "");
+				const phase = String((runtime as Record<string, unknown>)?.phase || "");
+				const running = status === "running" || status === "starting" || phase === "loading" || phase === "menu" || phase === "ready";
+				if (!running && this.projectPath && window.api.mcStartOrCreate) {
+					const started = await window.api.mcStartOrCreate(this.projectPath, "ModCrafting Test World");
+					if (started.id) activeInstanceId = started.id;
+				}
+			} catch {
+				// A missing host API is itself reported by the subsequent bridge/tool
+				// call; recovery must remain bounded and never become a new loop.
+			}
+		}
+
+		const recoveryCalls = ["mc_runtime_status", "mc_ensure_test_world", "mc_ensure_cheats"]
+			.filter((name) => Boolean(this.registry.get(name)))
+			.map((name, index) => ({
+				name,
+				id: `game_test_recovery_${Date.now().toString(36)}_${index}`,
+				args: activeInstanceId ? { instanceId: activeInstanceId } : {}
+			}));
+		if (recoveryCalls.length === 0) return activeInstanceId;
+		const ctx: ToolContext = {
+			projectPath: this.projectPath,
+			callId: `game_test_recovery_${Date.now().toString(36)}`,
+			runId: this.runId,
+			abortSignal: this.abortSignal,
+			planTracker: this.planTracker,
+			fileSession: this.fileSession,
+			onPlanStateChange: () => this.emitPlanState()
+		};
+		await executeBatch(
+			recoveryCalls,
+			this.registry,
+			ctx,
+			(name, id, args) => this.emit({ kind: EventKind.ToolDispatch, tool: { id, name, args: JSON.stringify(args), readOnly: this.registry.get(name)?.readOnly() } }),
+			(name, id, result) => {
+				this.emit({
+					kind: EventKind.ToolResult,
+					tool: {
+						id,
+						name,
+						args: JSON.stringify(result.args || {}),
+						output: result.output,
+						error: result.error,
+						durationMs: result.durationMs,
+						outcome: result.outcome,
+						validation: result.validation
+					}
+				});
+				this.onToolResult?.(name, id, result.output);
+			},
+			(id, chunk) => this.emit({ kind: EventKind.ToolProgress, tool: { id, name: "", args: "", partial: true, output: chunk } })
+		);
+		// Capabilities are checked on the same host-owned recovery pass. The
+		// following mc_run_test still owns the final verdict; this probe only
+		// prevents a stale runtime status from being mistaken for readiness.
+		if (typeof window !== "undefined" && window.api?.mcBridgeCall) {
+			try {
+				await window.api.mcBridgeCall({ method: "GET", path: "/v2/capabilities", instanceId: activeInstanceId });
+			} catch {
+				// The next deterministic run converts an unavailable probe into the
+				// structured environment code and keeps the recovery budget bounded.
+			}
+		}
+		return activeInstanceId;
+	}
+
+	/** Restart the client between required independent PASS runs. The second
+	 * run must not reuse the first process' world/session state. */
+	private async hostRestartGameTestClient(instanceId?: string, windowSize?: { width: number; height: number }): Promise<{ ok: boolean; instanceId?: string; error?: string }> {
+		try {
+			if (typeof window !== "undefined" && window.api?.mcStopAll) {
+				const stopped = await window.api.mcStopAll();
+				if (stopped.success === false) return { ok: false, error: stopped.error || "Minecraft stop failed" };
+			}
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+		let restartedInstanceId = instanceId;
+		try {
+			if (typeof window !== "undefined" && window.api?.mcStartOrCreate && this.projectPath) {
+				const started = await window.api.mcStartOrCreate(this.projectPath, "ModCrafting Test World", windowSize);
+				if (started.success === false) return { ok: false, error: started.error || "Minecraft restart failed" };
+				if (started.id) restartedInstanceId = started.id;
+			}
+			const recovered = await this.hostRecoverGameTestEnvironment(restartedInstanceId);
+			return { ok: true, instanceId: recovered || restartedInstanceId };
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	/**
+	 * Capture a fresh frame for the dedicated visual-review card. This is an
+	 * evidence capture only: it never contributes to the objective mc_run_test
+	 * verdict and it never opens source/build tools.
+	 */
+	private async captureGameTestReviewScreenshot(instanceId?: string): Promise<GameTestWorkflowStatus['reviewScreenshot'] | undefined> {
+		if (!this.registry.get('mc_screenshot')) return undefined;
+		const id = `game_test_visual_review_${Date.now().toString(36)}`;
+		const args = instanceId ? { instanceId } : {};
+		const ctx: ToolContext = {
+			projectPath: this.projectPath,
+			callId: id,
+			runId: this.runId,
+			abortSignal: this.abortSignal,
+			planTracker: this.planTracker,
+			fileSession: this.fileSession,
+			onPlanStateChange: () => this.emitPlanState()
+		};
+		let captured: ToolResult | undefined;
+		await executeBatch(
+			[{ name: 'mc_screenshot', id, args }],
+			this.registry,
+			ctx,
+			(name, callId, callArgs) => this.emit({
+				kind: EventKind.ToolDispatch,
+				tool: { id: callId, name, args: JSON.stringify(callArgs), readOnly: true }
+			}),
+			(name, callId, result) => {
+				captured = result;
+				this.emit({
+					kind: EventKind.ToolResult,
+					tool: {
+						id: callId,
+						name,
+						args: JSON.stringify(result.args || args),
+						output: result.output,
+						error: result.error,
+						durationMs: result.durationMs,
+						outcome: result.outcome,
+						imageBase64: result.imageBase64,
+						imageMimeType: result.imageMimeType,
+						validation: result.validation
+					}
+				});
+				this.onToolResult?.(name, callId, result.output);
+			},
+			(callId, chunk) => this.emit({ kind: EventKind.ToolProgress, tool: { id: callId, name: 'mc_screenshot', args: JSON.stringify(args), partial: true, output: chunk } })
+		);
+		if (!captured?.ok || !captured.imageBase64) return undefined;
+		return {
+			base64: captured.imageBase64,
+			mimeType: captured.imageMimeType || 'image/png',
+			toolId: id,
+			capturedAt: Date.now()
+		};
 	}
 
 	private currentStep(): WorkflowStep | null {
@@ -931,8 +1168,14 @@ export class WorkflowEngine {
 		// Runtime gates (filterToolCallsForStep / isToolAllowedForStep) still block
 		// edit/write until repair, and reject over-limit doc/explore calls.
 		let names: string[];
-		if (step.kind === "build" || step.kind === "run" || step.kind === "game_test") {
+		if (step.kind === "build" || step.kind === "run") {
 			names = repairExtraTools(step);
+		} else if (step.kind === "game_test") {
+			// Evidence/environment recovery must not expose product write/build tools.
+			// They become available only after the second objective FAIL flips repairMode.
+			names = repairMode
+				? repairExtraTools(step)
+				: step.allowedTools.filter((name) => !isProjectWriteTool(name) && name !== "trigger_build" && name !== "run_command");
 		} else {
 			names = [...step.allowedTools];
 			if (repairMode) names = repairExtraTools(step);
@@ -1123,6 +1366,15 @@ export class WorkflowEngine {
 			}
 			this.prevStepWasRun = step.kind === "run";
 			this.emitPlanState();
+			// A visual-review acceptance is a separate user_confirmation oracle. It
+			// completes the current game-test step without replaying objective
+			// assertions or asking the model to invent another scenario.
+			if (step.kind === "game_test" && step.gameTest?.visualReviewDecision === "accepted") {
+				step.status = "completed";
+				this.planTracker.advanceCurrent("user_confirmation");
+				this.emitPlanState();
+				continue;
+			}
 
 			if (step.kind === "write" && this.projectPath && wasResumedRun) {
 				try {
@@ -1145,14 +1397,32 @@ export class WorkflowEngine {
 			}
 
 			let completed = false;
-			let repairMode = false;
-			let repairWriteRequired = false;
+			const visualReviewRejected = step.kind === "game_test" && step.gameTest?.visualReviewDecision === "rejected";
+			let repairMode = visualReviewRejected;
+			let repairWriteRequired = visualReviewRejected;
 			let repairValidationRequired: "recipe" | "mixin" | undefined;
 			let repairRounds = 0;
 			let effectiveMaxRepairRounds = MAX_REPAIR_ROUNDS;
 			let lastErrorCount = 0;
 			let lastFailureOutput = "";
-			const seenRepairSignatures = new Map<string, number>();
+		const seenRepairSignatures = new Map<string, number>();
+		const gameTestPassCounts = new Map<string, number>();
+		const gameTestReplayIdentities = new Map<string, Array<{
+			observerSessionId?: string
+			variantFingerprint?: string
+			minecraftProcessId?: string
+			windowFingerprint?: string
+			scenarioRevision?: number
+			scenarioFingerprint?: string
+			acceptanceContractFingerprint?: string
+		}>>();
+			if (step.gameTest?.runtimeState) {
+				const durable = step.gameTest.runtimeState;
+				const scenarioId = step.gameTest.id;
+				for (const [signature, count] of Object.entries(durable.failureCounts || {})) gameTestFailureCounts.set(signature, Number(count) || 0);
+				gameTestPassCounts.set(scenarioId, durable.formalReplayHistory?.length || 0);
+				gameTestReplayIdentities.set(scenarioId, (durable.formalReplayHistory || []).map((entry) => ({ ...entry })));
+			}
 			const repairScope = new Set<string>();
 			for (const plannedStep of this.steps) {
 				for (const path of plannedStep.targetPaths || (plannedStep.targetPath ? [plannedStep.targetPath] : [])) repairScope.add(path);
@@ -1160,7 +1430,9 @@ export class WorkflowEngine {
 			const seenDiagSignatures = new Set<string>();
 			const seenDocFingerprints = new Set<string>();
 			const pendingMigration = new Set<string>();
-			let pendingEphemeralInstruction: string | undefined;
+			let pendingEphemeralInstruction: string | undefined = visualReviewRejected
+				? "【视觉审核拒绝】用户拒绝了当前视觉表现。请读取相关源码并修复产品代码，然后必须调用 trigger_build build、trigger_build runClient，重新生成同一功能的新测试场景并完成客观断言复测。"
+				: undefined;
 			let pendingReasoningKick = false;
 			let repairDiagRounds = 0;
 			const evidenceResults: ToolResult[] = [];
@@ -1179,6 +1451,9 @@ export class WorkflowEngine {
 			const hardBannedTools = new Set<string>();
 			let notOfferedBrakeEscalated = false;
 			let attempt = 0;
+			let gameTestEvidenceRepairAttempts = step.gameTest?.runtimeState?.evidenceRepairAttempts || 0;
+			let gameTestEnvironmentRecoveryAttempts = step.gameTest?.runtimeState?.environmentRecoveryAttempts || 0;
+			const gameTestRepairFingerprintCounts = new Map<string, number>();
 			let loopIterations = 0;
 			let toolCallCount = 0;
 			let modelNetworkRetries = 0;
@@ -1771,6 +2046,25 @@ export class WorkflowEngine {
 				const lastResult = orderedResults[orderedResults.length - 1];
 				if (lastResult?.toolName) lastToolName = lastResult.toolName;
 
+				// A repaired contract must replace the plan's active scenario before any
+				// PASS/FAIL result from this round is considered. Old scenarios remain
+				// auditable but can never advance the current game_test step.
+				if (step.kind === "game_test") {
+					const previousScenarioId = String(step.gameTest?.id || orderedResults.find((result) => result.toolName === "mc_run_test")?.args?.scenarioId || "");
+					for (const result of orderedResults) {
+						const replacementScenarioId = gameTestScenarioIdFromResult(result);
+						if (!replacementScenarioId || replacementScenarioId === previousScenarioId) continue;
+						const replacement = getGameTestSpec(replacementScenarioId);
+						if (!replacement) continue;
+						if (previousScenarioId) supersedeGameTestSpec(previousScenarioId, replacementScenarioId);
+						step.gameTest = getGameTestSpec(replacementScenarioId) || replacement;
+						const tracked = this.planTracker.steps.find((candidate) => candidate.id === step.id);
+						if (tracked) tracked.gameTest = step.gameTest;
+						this.emitPlanState();
+						break;
+					}
+				}
+
 				fabricDocsSearchCount += orderedResults.filter((result) => result.toolName === "fabric_docs_search" && result.ok && !result.error).length;
 				for (const result of orderedResults) {
 					if (result.toolName !== "fabric_docs_search" || !result.ok || result.error) continue;
@@ -1780,6 +2074,43 @@ export class WorkflowEngine {
 
 				const clarificationResult = orderedResults.find((result) => result.toolName === "ask_clarification" && result.ok && !result.error);
 				if (clarificationResult) {
+					// A game-test INCONCLUSIVE is a Harness-owned evidence, environment,
+					// or visual-review state.  If the Agent tries to pair it with
+					// ask_clarification in the same round, suppress the generic
+					// ClarificationNeeded event and terminate the game step as
+					// INCONCLUSIVE.  Otherwise the UI would offer "continue" and replay
+					// the same invalid scenario indefinitely.
+					const inconclusiveGameResult = step.kind === "game_test"
+						? orderedResults.find((result) => result.toolName === "mc_run_test" && result.validation?.kind === "game" && result.validation.verdict === "INCONCLUSIVE")
+						: undefined;
+					if (inconclusiveGameResult) {
+						const identity = gameTestScenarioIdentity(inconclusiveGameResult);
+						const code = gameTestInconclusiveCode(inconclusiveGameResult);
+						const responsibility = gameTestResponsibility(inconclusiveGameResult, code);
+						step.status = "failed";
+						this.emitPlanState();
+						const status: GameTestWorkflowStatus = {
+							state: 'terminal',
+							code,
+							responsibility,
+							scenarioId: identity.id,
+							scenarioRevision: identity.revision,
+							scenarioFingerprint: identity.fingerprint,
+							acceptanceContractFingerprint: identity.acceptanceContractFingerprint,
+							observerSessionId: identity.observerSessionId,
+							variantFingerprint: identity.variantFingerprint,
+							currentCheckpoint: identity.currentCheckpoint,
+							message: '游戏测试 INCONCLUSIVE 不允许转入通用澄清；已终止当前阶段。'
+						};
+						this.emitGameTestStatus(status);
+						return {
+							finalContent: `INCONCLUSIVE/${code}: game-test clarification request suppressed.`,
+							allDone: false,
+							partial: true,
+							steps: this.steps,
+							gameTestStatus: status
+						};
+					}
 					const used = this.clarificationGate?.count ?? 0;
 					if (used >= MAX_EXECUTE_CLARIFICATIONS) {
 						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
@@ -1833,26 +2164,131 @@ export class WorkflowEngine {
 					runReady: this.runClientReady,
 					inGameVerified: this.inGameVerified
 				};
+				const gameTestResults = step.kind === "game_test"
+					? orderedResults.filter((result) => result.toolName === "mc_run_test" && result.validation?.kind === "game")
+					: [];
 				const gameTestResult = step.kind === "game_test"
-					? orderedResults.find((result) => result.toolName === "mc_run_test" && result.validation?.kind === "game")
+					? (gameTestResults.find((result) => gameTestResultMatchesCurrentScenario(step, result)) || gameTestResults[0])
 					: undefined;
+				if (step.kind === "game_test") {
+					const staleGameResult = gameTestResults.find((result) => !gameTestResultMatchesCurrentScenario(step, result));
+					if (staleGameResult && !gameTestResultMatchesCurrentScenario(step, gameTestResult as ToolResult)) {
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							resultsById,
+							`【过期游戏场景】scenarioId=${String(staleGameResult.args?.scenarioId || "")} 已废弃，不能推进当前步骤。请只使用当前有效 scenarioId=${String(step.gameTest?.id || "")} 调用 mc_run_test；禁止恢复旧场景。`
+						);
+						attempt++;
+						continue;
+					}
+				}
 				if (gameTestResult?.validation?.verdict === "INCONCLUSIVE") {
-					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
-					return {
-						finalContent: `游戏测试结果为 INCONCLUSIVE：${gameTestResult.output}`,
-						allDone: false,
-						partial: false,
-						needsClarification: true,
-						clarificationQuestion: "游戏测试缺少可自动判定的证据。请提供预期的可观察结果，或在界面中确认纯视觉效果。",
-						clarificationOptions: ["补充断言", "确认视觉效果", "停止测试"],
-						steps: this.steps
-					};
+					const code = gameTestInconclusiveCode(gameTestResult);
+					const responsibility = gameTestResponsibility(gameTestResult, code);
+					const identity = gameTestScenarioIdentity(gameTestResult);
+					const statusBase = { code, responsibility, scenarioId: identity.id, scenarioRevision: identity.revision, scenarioFingerprint: identity.fingerprint, acceptanceContractFingerprint: identity.acceptanceContractFingerprint, observerSessionId: identity.observerSessionId, variantFingerprint: identity.variantFingerprint, currentCheckpoint: identity.currentCheckpoint };
+					if (code === 'INDEPENDENT_REPLAY_NOT_PROVEN') {
+						const status: GameTestWorkflowStatus = {
+							...statusBase,
+							state: 'terminal',
+							responsibility: 'environment',
+							message: '独立复测无法取得不同运行变量；已结束为 INCONCLUSIVE，不重放相同变量，也不进入通用澄清。'
+						};
+						this.emitGameTestStatus(status);
+						return { finalContent: `INCONCLUSIVE/INDEPENDENT_REPLAY_NOT_PROVEN: ${gameTestResult.output}`, allDone: false, partial: true, steps: this.steps, gameTestStatus: status };
+					}
+					if (responsibility === 'visual_review' || code === 'VISUAL_REVIEW_REQUIRED') {
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById);
+						const reviewScreenshot = await this.captureGameTestReviewScreenshot(
+							typeof gameTestResult.args?.instanceId === 'string' ? gameTestResult.args.instanceId : undefined
+						);
+						const reviewId = `visual_review_${identity.id || Date.now().toString(36)}_${Date.now().toString(36)}`;
+						const reviewPrompt = `请审核本次游戏测试的纯视觉要求。客观 mc_run_test 结果保持独立，不要补写断言。\n${String(gameTestResult.output || '').slice(0, 2_000)}`;
+						const status: GameTestWorkflowStatus = {
+							...statusBase,
+							state: 'visual_review',
+							reviewId,
+							reviewPrompt,
+							...(reviewScreenshot ? { reviewScreenshot } : {}),
+							message: '游戏测试包含纯视觉验收项，已与客观断言分离；等待专用视觉审核。'
+						};
+						this.emitGameTestStatus(status);
+						return { finalContent: `游戏测试需要视觉审核：${gameTestResult.output}`, allDone: false, partial: true, needsVisualReview: true, gameTestStatus: status, steps: this.steps };
+					}
+					if (responsibility === 'environment') {
+						const recoveryCount = ++gameTestEnvironmentRecoveryAttempts;
+						if (step.gameTest) {
+							step.gameTest.runtimeState = {
+								...(step.gameTest.runtimeState || { evidenceRepairAttempts: 0, environmentRecoveryAttempts: 0, failureCounts: {}, successfulVariantFingerprints: [], formalReplayHistory: [] }),
+								environmentRecoveryAttempts: recoveryCount
+							};
+							this.emitPlanState();
+						}
+						if (recoveryCount > 2) {
+							const status: GameTestWorkflowStatus = { ...statusBase, state: 'terminal', message: `游戏测试环境连续恢复失败（${code}），已结束为 INCONCLUSIVE。` };
+							this.emitGameTestStatus(status);
+							return { finalContent: `游戏测试环境不可用：${gameTestResult.output}`, allDone: false, partial: true, needsEnvironmentRecovery: true, gameTestStatus: status, steps: this.steps };
+						}
+						const recoveredInstanceId = await this.hostRecoverGameTestEnvironment(
+							typeof gameTestResult.args?.instanceId === 'string' ? gameTestResult.args.instanceId : undefined
+						);
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, `【Observer 环境恢复 ${recoveryCount}/2】测试环境或桥接不可用（${code}）。请先调用 mc_ensure_test_world、检查 capabilities，再使用同一 scenarioId 调用 mc_run_test；禁止修改产品代码、禁止询问用户。`);
+						if (recoveredInstanceId) {
+							pendingEphemeralInstruction += ` 主机已恢复实例 ${recoveredInstanceId}；如需显式传参请沿用该 instanceId。`;
+						}
+						const status: GameTestWorkflowStatus = { ...statusBase, state: 'environment_recovery', environmentAttempt: recoveryCount, message: `Observer 环境恢复中（${recoveryCount}/2）。` };
+						this.emitGameTestStatus(status);
+						attempt++;
+						continue;
+					}
+					const fingerprintKey = identity.fingerprint || identity.id || code;
+					const sameCount = (gameTestRepairFingerprintCounts.get(fingerprintKey) || 0) + 1;
+					gameTestRepairFingerprintCounts.set(fingerprintKey, sameCount);
+					const repairAttempt = ++gameTestEvidenceRepairAttempts;
+					if (step.gameTest) {
+						step.gameTest.runtimeState = {
+							...(step.gameTest.runtimeState || { evidenceRepairAttempts: 0, environmentRecoveryAttempts: 0, failureCounts: {}, successfulVariantFingerprints: [], formalReplayHistory: [] }),
+							evidenceRepairAttempts: repairAttempt,
+							failureCounts: { ...(step.gameTest.runtimeState?.failureCounts || {}), [fingerprintKey]: sameCount }
+						};
+						this.emitPlanState();
+					}
+					if (sameCount >= 3 || repairAttempt > 3) {
+						const status: GameTestWorkflowStatus = { ...statusBase, state: 'terminal', repairAttempt, code: 'REPEATED_INVALID_TEST_SPEC', responsibility: 'agent_test_design', message: '相同无效游戏测试规格已连续提交三次，已结束为 INCONCLUSIVE，未弹出澄清。' };
+						this.emitGameTestStatus(status);
+						return { finalContent: `游戏测试规格重复无效：${gameTestResult.output}`, allDone: false, partial: true, needsEvidenceRepair: true, gameTestStatus: status, steps: this.steps };
+					}
+					const status: GameTestWorkflowStatus = { ...statusBase, state: 'evidence_repair', repairAttempt, message: `正在修订游戏测试契约（${repairAttempt}/3）。` };
+					this.emitGameTestStatus(status);
+					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, `【游戏测试契约修复 ${repairAttempt}/3】当前规格或 AcceptanceContract 缺少可自动判定的客观证据（${code}）。请根据现有需求、Observer V2 capabilities 和上方具体错误自行重建测试场景，必须调用 mc_test_scenario 生成新的 scenarioId，并同时提交有效 acceptanceContract（至少一个 requirement；每个客观需求映射到 game_assertion）后再调用 mc_run_test；禁止询问用户、禁止修改产品代码、禁止重复旧场景。`);
+					attempt++;
+					continue;
 				}
 				if (gameTestResult?.validation?.verdict === "FAIL") {
-					const signature = gameTestFailureSignature(gameTestResult.output);
+					const failureIdentity = gameTestScenarioIdentity(gameTestResult);
+					const signature = `${failureIdentity.id}|${failureIdentity.fingerprint || ''}|${gameTestFailureSignature(gameTestResult.output)}`;
 					const count = (this.gameTestFailureCounts.get(signature) || 0) + 1;
 					this.gameTestFailureCounts.set(signature, count);
+					if (step.gameTest) {
+						step.gameTest.runtimeState = {
+							...(step.gameTest.runtimeState || { evidenceRepairAttempts: 0, environmentRecoveryAttempts: 0, failureCounts: {}, successfulVariantFingerprints: [], formalReplayHistory: [] }),
+							failureCounts: { ...(step.gameTest.runtimeState?.failureCounts || {}), [signature]: count }
+						};
+						this.emitPlanState();
+					}
 					if (count < 2) {
+						this.emitGameTestStatus({
+							state: 'replay_cleanup',
+							code: 'ASSERTION_FAILED',
+							responsibility: 'agent_test_design',
+							scenarioId: failureIdentity.id,
+							scenarioRevision: failureIdentity.revision,
+							scenarioFingerprint: failureIdentity.fingerprint,
+							acceptanceContractFingerprint: failureIdentity.acceptanceContractFingerprint,
+							message: '客观断言首次失败，正在清理后原样复测。'
+						});
 						pendingEphemeralInstruction = this.appendToolRound(
 							baseMessages,
 							modelResult.text || streamText,
@@ -1867,6 +2303,16 @@ export class WorkflowEngine {
 					repairMode = true;
 					repairWriteRequired = true;
 					repairRounds++;
+					this.emitGameTestStatus({
+						state: 'product_repair',
+						code: 'ASSERTION_FAILED',
+						responsibility: 'agent_test_design',
+						scenarioId: failureIdentity.id,
+						scenarioRevision: failureIdentity.revision,
+						scenarioFingerprint: failureIdentity.fingerprint,
+						acceptanceContractFingerprint: failureIdentity.acceptanceContractFingerprint,
+						message: '断言确认失败，正在修复产品并准备重建、重启和完整复测。'
+					});
 					pendingEphemeralInstruction = this.appendToolRound(
 						baseMessages,
 						modelResult.text || streamText,
@@ -1876,6 +2322,120 @@ export class WorkflowEngine {
 					);
 					attempt++;
 					continue;
+				}
+				if (gameTestResult?.validation?.verdict === "PASS") {
+					// A PASS produced with the fixed post-repair diagnostic variant is
+					// evidence that the fix addresses the reproduced failure, not a
+					// formal stage PASS.  Force the next run to sample fresh variables.
+					if (gameTestResult.validation?.diagnosticReplay === true) {
+						this.emitGameTestStatus({
+							state: 'replay_cleanup',
+							code: 'ASSERTION_FAILED',
+							responsibility: 'environment',
+							scenarioId: String(gameTestResult.args?.scenarioId || ''),
+							scenarioRevision: gameTestResult.validation?.scenarioRevision,
+							scenarioFingerprint: gameTestResult.validation?.scenarioFingerprint,
+							acceptanceContractFingerprint: gameTestResult.validation?.acceptanceContractFingerprint,
+							message: '产品修复诊断变量已 PASS；该次不计正式次数，下一轮必须从 setup 使用新的随机变量完整复测。'
+						});
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							resultsById,
+							'【产品修复诊断通过】原失败变量已验证修复；本次 PASS 不计正式次数。请保持同一 scenarioId/revision，重新从 setup 执行完整测试，并使用新的随机运行变量。'
+						);
+						attempt++;
+						continue;
+					}
+					const passIdentity = gameTestScenarioIdentity(gameTestResult);
+					const activeSpec = passIdentity.id ? getGameTestSpec(passIdentity.id) : undefined;
+					const requiredPassCount = Math.max(1, Number(activeSpec?.requiredPassCount || 1));
+					const independentReplayRequired = requiredPassCount > 1 && Boolean(activeSpec?.checkpoints || activeSpec?.variables || gameTestResult.validation?.observerSessionId || gameTestResult.validation?.variantFingerprint);
+					const replayIdentity = {
+						observerSessionId: gameTestResult.validation?.observerSessionId,
+						variantFingerprint: gameTestResult.validation?.variantFingerprint,
+						minecraftProcessId: gameTestResult.validation?.minecraftProcessId,
+						windowFingerprint: gameTestResult.validation?.windowFingerprint,
+						scenarioRevision: passIdentity.revision,
+						scenarioFingerprint: passIdentity.fingerprint,
+						acceptanceContractFingerprint: passIdentity.acceptanceContractFingerprint
+					};
+					const replayHistory = gameTestReplayIdentities.get(passIdentity.id) || [];
+					const priorFormalPass = replayHistory[0];
+					if (priorFormalPass && (
+						priorFormalPass.scenarioRevision !== replayIdentity.scenarioRevision ||
+						priorFormalPass.scenarioFingerprint !== replayIdentity.scenarioFingerprint ||
+						priorFormalPass.acceptanceContractFingerprint !== replayIdentity.acceptanceContractFingerprint
+					)) {
+						step.status = "failed";
+						this.emitPlanState();
+						this.emitGameTestStatus({ state: 'terminal', code: 'INDEPENDENT_REPLAY_NOT_PROVEN', responsibility: 'environment', scenarioId: passIdentity.id, scenarioRevision: passIdentity.revision, scenarioFingerprint: passIdentity.fingerprint, acceptanceContractFingerprint: passIdentity.acceptanceContractFingerprint, message: '独立复测更换了场景版本、场景指纹或验收契约指纹；不能累计 PASS。' });
+						return { finalContent: 'INCONCLUSIVE/INDEPENDENT_REPLAY_NOT_PROVEN: scenario identity changed across formal replays.', allDone: false, partial: true, steps: this.steps };
+					}
+					if (independentReplayRequired && replayHistory.some((previous) =>
+						previous.observerSessionId === replayIdentity.observerSessionId ||
+						previous.variantFingerprint === replayIdentity.variantFingerprint ||
+						previous.minecraftProcessId === replayIdentity.minecraftProcessId ||
+						previous.windowFingerprint === replayIdentity.windowFingerprint ||
+						!previous.observerSessionId || !replayIdentity.observerSessionId ||
+						!previous.variantFingerprint || !replayIdentity.variantFingerprint ||
+						!previous.minecraftProcessId || !replayIdentity.minecraftProcessId ||
+						!previous.windowFingerprint || !replayIdentity.windowFingerprint
+					)) {
+						step.status = "failed";
+						this.emitPlanState();
+						this.emitGameTestStatus({ state: 'terminal', code: 'INDEPENDENT_REPLAY_NOT_PROVEN', responsibility: 'environment', scenarioId: passIdentity.id, scenarioRevision: passIdentity.revision, scenarioFingerprint: passIdentity.fingerprint, acceptanceContractFingerprint: passIdentity.acceptanceContractFingerprint, message: '独立复测缺少不同 Observer 启动 ID 或运行变量指纹；已终止，不累计形式 PASS。' });
+						return { finalContent: 'INCONCLUSIVE/INDEPENDENT_REPLAY_NOT_PROVEN: required independent replay evidence was not proven.', allDone: false, partial: true, steps: this.steps };
+					}
+					replayHistory.push(replayIdentity);
+					gameTestReplayIdentities.set(passIdentity.id, replayHistory);
+					if (step.gameTest) {
+						step.gameTest.runtimeState = {
+							...(step.gameTest.runtimeState || { evidenceRepairAttempts: 0, environmentRecoveryAttempts: 0, failureCounts: {}, successfulVariantFingerprints: [], formalReplayHistory: [] }),
+							formalReplayHistory: replayHistory.map((entry) => ({ ...entry, recordedAt: Date.now() })),
+							successfulVariantFingerprints: gameTestResult.validation?.variantFingerprint
+								? [...new Set([...(step.gameTest.runtimeState?.successfulVariantFingerprints || []), gameTestResult.validation.variantFingerprint])].slice(-16)
+								: (step.gameTest.runtimeState?.successfulVariantFingerprints || [])
+						};
+						this.emitPlanState();
+					}
+					const passCount = (gameTestPassCounts.get(passIdentity.id) || 0) + 1;
+					gameTestPassCounts.set(passIdentity.id, passCount);
+					if (passCount < requiredPassCount) {
+						const restart = await this.hostRestartGameTestClient(
+							typeof gameTestResult.args?.instanceId === 'string' ? gameTestResult.args.instanceId : undefined,
+							// The second formal replay deliberately uses a different
+							// Minecraft canvas so fixed-pixel HUD implementations fail.
+							passCount === 1 ? { width: 1024, height: 768 } : undefined
+						);
+						const status: GameTestWorkflowStatus = {
+							state: 'replay_cleanup',
+							code: 'REPLAY_REQUIRED',
+							responsibility: 'environment',
+							scenarioId: passIdentity.id,
+							scenarioRevision: passIdentity.revision,
+							scenarioFingerprint: passIdentity.fingerprint,
+							acceptanceContractFingerprint: passIdentity.acceptanceContractFingerprint,
+							observerSessionId: passIdentity.observerSessionId,
+							variantFingerprint: passIdentity.variantFingerprint,
+							passCount,
+							requiredPassCount,
+							message: restart.ok
+								? `当前场景首次 PASS（${passCount}/${requiredPassCount}），已重启游戏，正在执行独立完整复测。`
+								: `当前场景首次 PASS（${passCount}/${requiredPassCount}），重启游戏失败，正在重试环境恢复。`
+						};
+						this.emitGameTestStatus(status);
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							resultsById,
+							`【独立完整复测 ${passCount}/${requiredPassCount}】当前场景已客观 PASS，但该场景要求重启后的独立 PASS。${restart.instanceId ? `主机已启动实例 ${restart.instanceId}。` : ''}请重新从 setup 开始，使用同一有效 scenarioId=${passIdentity.id} 调用 mc_run_test；禁止改代码、禁止更换场景、禁止询问用户。`
+						);
+						attempt++;
+						continue;
+					}
 				}
 				const decisiveResult = orderedResults.find((result) => isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence, runGate));
 				const success =
@@ -2110,7 +2670,7 @@ export class WorkflowEngine {
 						repairValidationRequired = undefined;
 						roundInstruction = repairValidationRequired
 							? `【SYSTEM: 文件已修改。重新构建前必须调用 fabric_${repairValidationRequired}_validate 取得静态验证证据。】`
-							: writeFileRetryInstruction(step.kind as "build" | "run");
+										: writeFileRetryInstruction(step.kind);
 					}
 					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
 					continue;
@@ -2121,7 +2681,7 @@ export class WorkflowEngine {
 				);
 				if (repairMode && repairValidationRequired && repairValidation) {
 					repairValidationRequired = undefined;
-					roundInstruction = writeFileRetryInstruction(step.kind as "build" | "run");
+					roundInstruction = writeFileRetryInstruction(step.kind);
 					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
 					continue;
 				}

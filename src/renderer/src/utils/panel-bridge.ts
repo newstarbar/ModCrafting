@@ -13,6 +13,12 @@ export interface GamePanelResult {
   instanceId: string
   phase: McPhase
   error?: string
+  logTail?: string
+}
+
+export function formatGamePanelFailure(result: Pick<GamePanelResult, 'error' | 'logTail'>): string {
+  const tail = result.logTail?.trim()
+  return `${result.error || 'unknown error'}${tail ? `\n\n--- runClient / 游戏日志（末尾）---\n${tail}` : ''}`
 }
 
 export type BuildProgressCallback = (chunk: string) => void

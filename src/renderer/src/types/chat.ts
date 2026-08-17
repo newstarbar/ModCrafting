@@ -2,6 +2,7 @@ import type { PlanStep } from '../components/TaskPlan'
 import type { UsageStats } from '../utils/usage'
 import type { MessageAttachment } from '../context/context-ingress'
 import type { GuiLayoutElement, GuiLayoutType } from '../harness/events'
+import type { CollaborationTrace, RoutingSelection } from '../../../shared/model-routing.ts'
 
 export interface PersistedChronoEntry {
   kind: 'reasoning' | 'text' | 'tool' | 'guiLayoutPreview'
@@ -47,6 +48,7 @@ export interface PersistedMessage {
   model?: string
   /** assistant 消息实际使用的 Provider ID */
   providerId?: string
+  collaborationTrace?: CollaborationTrace[]
 }
 
 export interface ChatSession {
@@ -58,4 +60,5 @@ export interface ChatSession {
   usage?: UsageStats
   composerMode?: 'agent' | 'plan' | 'ask'
   sessionGoal?: string
+  routingSelection?: RoutingSelection
 }

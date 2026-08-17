@@ -48,6 +48,7 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
   canRollback = false
 }) => {
   const [feedback, setFeedback] = useState('')
+  const [traceOpen, setTraceOpen] = useState(false)
   const timerRef = useRef<number | null>(null)
 
   const showFeedback = useCallback((text: string) => {
@@ -83,6 +84,7 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
 
   const plan = message.embeddedPlan
   const hasPlan = role === 'assistant' && plan != null && plan.length > 0
+  const trace = role === 'assistant' ? message.collaborationTrace || [] : []
   const doneCount = hasPlan ? plan!.filter(s => s.status === 'completed').length : 0
   const totalCount = hasPlan ? plan!.length : 0
 
@@ -111,6 +113,22 @@ const MessageFooter: React.FC<MessageFooterProps> = ({
             </div>
           </div>
           <div className="bubble-ft__separator" />
+        </>
+      )}
+      {trace.length > 0 && (
+        <>
+          <div className="bubble-ft__separator" />
+          <div className="collaboration-trace">
+            <button type="button" className="collaboration-trace__toggle" onClick={() => setTraceOpen((value) => !value)}>
+              协作轨迹 · {trace.length} 个调度 {traceOpen ? '▾' : '▸'}
+            </button>
+            {traceOpen && <div className="collaboration-trace__rows">{trace.map((item) => (
+              <div key={item.id} className={`collaboration-trace__row collaboration-trace__row--${item.status}`}>
+                <span>{item.roleId}</span><span>{item.modelId}</span><span>{item.status === 'completed' ? '完成' : item.status === 'running' ? '进行中' : item.status === 'fallback' ? '已回退' : item.status === 'failed' ? '失败' : '待命'}</span>
+                {item.fallbackFrom && <small>← {item.fallbackFrom.modelId}</small>}
+              </div>
+            ))}</div>}
+          </div>
         </>
       )}
       <span className="bubble-ft__time">{formatMessageTime(message.timestamp)}</span>

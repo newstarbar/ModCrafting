@@ -3,16 +3,46 @@
   "fixturePath": "resources/_offline_verify_project",
   "mode": "agent",
   "timeoutMs": 3600000,
-  "clarificationResponses": [
-    "Use a single-player integrated-server implementation. Use the requested toggle key, keep the player's identity stable, and choose deterministic default values for unspecified details."
-  ],
-  "prompt": "制作一个 Fabric 模组：玩家按指定快捷键切换形态，再次按键恢复；请完整实现、构建、启动并在专用测试世界验证。",
+  "prompt": "Implement the G-key physical half-size morph and restore feature in Fabric 1.21.4. Build and run it, then submit a deterministic Observer V2 scenario with M0/M1/M1_STABLE/M2/M2_STABLE plus G1_SENT/G2_SENT checkpoints. Use cross-source relation assertions for client/server UUID and width/height/eyeHeight; prove M1 is 0.50 +/- 2% of M0, stable for 1.5 seconds, and M2 exactly restores M0. Do not use snapshot_changed or fixed constants as the objective oracle. Repair implementation or test design autonomously until PASS without asking the user.",
   "acceptanceContract": {
     "version": 1,
     "requirements": [
-      { "id": "build", "sourceQuote": "完整实现、构建", "claim": "项目构建成功", "oracle": { "type": "build_success" } },
-      { "id": "toggle", "sourceQuote": "按指定快捷键切换形态", "claim": "按键后可观测状态发生变化", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_changed", "source": "player", "pointer": "/width", "afterAction": 0, "to": 1 } } },
-      { "id": "visual", "sourceQuote": "切换形态", "claim": "视觉形态符合设计", "oracle": { "type": "user_confirmation", "prompt": "请确认前台 Minecraft 截图中的形态外观。", "capture": "screenshot" } }
+      { "id": "build", "sourceQuote": "build", "claim": "The project builds", "oracle": { "type": "build_success" } },
+      { "id": "server-width-ratio", "sourceQuote": "physical width is 50 percent", "claim": "Server width at M1 is half of M0", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "operator": "ratio", "ratio": 0.5, "tolerance": 0.02 } } },
+      { "id": "server-height-ratio", "sourceQuote": "physical height is 50 percent", "claim": "Server height at M1 is half of M0", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "operator": "ratio", "ratio": 0.5, "tolerance": 0.02 } } },
+      { "id": "client-server-sync", "sourceQuote": "client/server", "claim": "Client and server dimensions match at M1", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/width" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately", "tolerance": 0.01 } } },
+      { "id": "stable", "sourceQuote": "stable", "claim": "M1_STABLE remains equal to M1", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately", "tolerance": 0.01 } } },
+      { "id": "restore", "sourceQuote": "restore", "claim": "M2 restores M0 width, height and eye height", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately", "tolerance": 0.01 } } },
+      { "id": "uuid", "sourceQuote": "UUID does not change", "claim": "Client and server UUID remain identical", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "player", "pointer": "/uuid" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" } } }
+    ]
+  },
+  "gameTestContract": {
+    "requiredProjectWrite": true,
+    "requiredBuildTasks": ["build", "runClient"],
+    "requiredCheckpoints": ["M0", "M1", "M1_STABLE", "M2", "M2_STABLE", "G1_SENT", "G2_SENT"],
+    "requiredActionTypes": ["input", "wait"],
+    "requiredRelationOperators": ["ratio", "approximately", "equals"],
+    "requiredInputKeys": { "g": 2 },
+    "requiredAssertions": [
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "operator": "ratio" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "operator": "ratio" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/width" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/height" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "player", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/width" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/width" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/height" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/height" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/eyeHeight" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/eyeHeight" }, "operator": "approximately" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "player", "pointer": "/uuid" }, "right": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M0", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M1_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "M2", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "M2_STABLE", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" }
     ]
   },
   "assertions": [

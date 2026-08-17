@@ -3,6 +3,7 @@ import type { ComposerMode } from '../harness/turn-intent'
 import type { ChatMessage } from '../harness/chat-message'
 import type { MessageAttachment } from '../context/context-ingress'
 import type { GuiLayoutElement, GuiLayoutType } from '../harness/events'
+import type { CollaborationTrace } from '../../../shared/model-routing.ts'
 
 export interface ActivePlan {
   steps: PlanStep[]
@@ -87,4 +88,5 @@ export interface DisplayMessage {
   model?: string
   /** assistant 消息实际使用的 Provider ID */
   providerId?: string
+  collaborationTrace?: CollaborationTrace[]
 }

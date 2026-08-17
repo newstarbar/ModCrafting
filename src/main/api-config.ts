@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
-import { inferProviderId } from '../shared/llm-providers.ts'
+import { getProvider, inferProviderId } from '../shared/llm-providers.ts'
 
 const DEFAULT_ENDPOINT = 'https://api.deepseek.com/v1'
 const DEFAULT_MODEL = 'deepseek-v4-flash'
@@ -14,6 +14,7 @@ export interface ApiSettings {
   hasApiKey: boolean
   savedProviderIds: string[]
   encryptionAvailable: boolean
+  providerSettings: Record<string, { endpoint: string; model: string }>
 }
 
 function settingsPath(userDataPath = app.getPath('userData')): string {
@@ -62,7 +63,14 @@ function migrateLegacyApiKey(): void {
   }
 }
 
-function readSettingsFile(userDataPath = app.getPath('userData')): { endpoint?: string; model?: string; providerId?: string } {
+interface ApiSettingsFile {
+  endpoint?: string
+  model?: string
+  providerId?: string
+  providers?: Record<string, { endpoint?: string; model?: string }>
+}
+
+function readSettingsFile(userDataPath = app.getPath('userData')): ApiSettingsFile {
   try {
     const p = settingsPath(userDataPath)
     if (!fs.existsSync(p)) return {}
@@ -70,6 +78,23 @@ function readSettingsFile(userDataPath = app.getPath('userData')): { endpoint?: 
   } catch {
     return {}
   }
+}
+
+function providerSettingsFromFile(file: ApiSettingsFile): Record<string, { endpoint: string; model: string }> {
+  const legacyProvider = file.providerId || inferProviderId(file.endpoint || DEFAULT_ENDPOINT, file.model || DEFAULT_MODEL) || DEFAULT_PROVIDER_ID
+  const entries = Object.entries(file.providers || {}).flatMap(([providerId, setting]) => {
+    if (!setting || typeof setting !== 'object') return []
+    const catalog = getProvider(providerId)
+    return [[providerId, {
+      endpoint: setting.endpoint || catalog?.baseUrl || '',
+      model: setting.model || catalog?.models[0]?.id || ''
+    }] as const]
+  })
+  const result = Object.fromEntries(entries)
+  if (!result[legacyProvider]) {
+    result[legacyProvider] = { endpoint: file.endpoint || getProvider(legacyProvider)?.baseUrl || DEFAULT_ENDPOINT, model: file.model || getProvider(legacyProvider)?.models[0]?.id || DEFAULT_MODEL }
+  }
+  return result
 }
 
 export interface LoadedApiConfigWithKey {
@@ -89,11 +114,13 @@ export function loadApiConfigFromUserData(
   requestedProviderId?: string
 ): { success: boolean; config?: LoadedApiConfigWithKey; error?: string } {
   const file = readSettingsFile(userDataPath)
+  const providerSettings = providerSettingsFromFile(file)
   const endpoint = file.endpoint || DEFAULT_ENDPOINT
   const model = file.model || DEFAULT_MODEL
   const providerId = sanitizeProviderId(
     requestedProviderId || file.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
   )
+  const selected = providerSettings[providerId]
   const encrypted = readEncryptedBufferAt(apiKeyPathForProvider(providerId, userDataPath))
     || readEncryptedBufferAt(legacyApiKeyPath(userDataPath))
   if (!encrypted) return { success: false, error: `saved_provider_key_not_found:${providerId}` }
@@ -101,7 +128,7 @@ export function loadApiConfigFromUserData(
   try {
     const apiKey = safeStorage.decryptString(encrypted).trim()
     if (!apiKey) return { success: false, error: `saved_provider_key_empty:${providerId}` }
-    return { success: true, config: { endpoint, model, providerId, apiKey } }
+    return { success: true, config: { endpoint: selected?.endpoint || endpoint, model: selected?.model || model, providerId, apiKey } }
   } catch {
     return { success: false, error: `saved_provider_key_decrypt_failed:${providerId}` }
   }
@@ -146,6 +173,7 @@ export function listSavedProviderIds(): string[] {
 export function loadApiConfig(): ApiSettings {
   migrateLegacyApiKey()
   const file = readSettingsFile()
+  const providerSettings = providerSettingsFromFile(file)
   const endpoint = file.endpoint || DEFAULT_ENDPOINT
   const model = file.model || DEFAULT_MODEL
   const providerId = file.providerId
@@ -157,7 +185,22 @@ export function loadApiConfig(): ApiSettings {
     providerId,
     hasApiKey: savedProviderIds.includes(sanitizeProviderId(providerId)),
     savedProviderIds,
-    encryptionAvailable: safeStorage.isEncryptionAvailable()
+    encryptionAvailable: safeStorage.isEncryptionAvailable(),
+    providerSettings
+  }
+}
+
+export function loadApiConfigForProvider(requestedProviderId: string): { endpoint: string; model: string; providerId: string; hasApiKey: boolean } {
+  const file = readSettingsFile()
+  const providerId = sanitizeProviderId(requestedProviderId)
+  const providerSettings = providerSettingsFromFile(file)
+  const catalog = getProvider(providerId)
+  const setting = providerSettings[providerId]
+  return {
+    providerId,
+    endpoint: setting?.endpoint || catalog?.baseUrl || file.endpoint || DEFAULT_ENDPOINT,
+    model: setting?.model || catalog?.models[0]?.id || file.model || DEFAULT_MODEL,
+    hasApiKey: providerHasSavedKey(providerId)
   }
 }
 
@@ -171,10 +214,14 @@ export function saveApiConfig(config: {
     const endpoint = config.endpoint || DEFAULT_ENDPOINT
     const model = config.model || DEFAULT_MODEL
     const providerId = config.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
+    const existing = readSettingsFile()
+    const providerSettings = providerSettingsFromFile(existing)
+    providerSettings[providerId] = { endpoint, model }
     fs.writeFileSync(settingsPath(), JSON.stringify({
       endpoint,
       model,
       providerId,
+      providers: providerSettings,
     }, null, 2), 'utf-8')
     return { success: true }
   } catch (err) {

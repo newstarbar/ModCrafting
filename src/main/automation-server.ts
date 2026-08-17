@@ -160,8 +160,8 @@ export function startAutomationServer(next: AutomationOptions): void {
       if (!authorized(req)) return send(res, 401, { ok: false, error: 'unauthorized' })
       const pathname = (req.url || '/').split('?')[0]
       if (req.method === 'GET' && pathname === '/v1/capabilities') {
-        const commands = ['configure_provider', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot']
-        if (options.allowSavedProvider) commands.push('use_saved_provider')
+        const commands = ['configure_provider', 'configure_routing', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot']
+        if (options.allowSavedProvider) commands.push('use_saved_provider', 'use_saved_providers')
         return send(res, 200, { ok: true, version: 1, runId, commands })
       }
       if (req.method === 'GET' && pathname === '/v1/events') {
@@ -175,10 +175,10 @@ export function startAutomationServer(next: AutomationOptions): void {
       if (req.method === 'POST' && pathname === '/v1/command') {
         const body = await readBody(req)
         const method = String(body.method || '')
-        if (!['configure_provider', 'use_saved_provider', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot'].includes(method)) {
+        if (!['configure_provider', 'configure_routing', 'use_saved_provider', 'use_saved_providers', 'open_project', 'send_turn', 'snapshot', 'cancel', 'respond', 'screenshot'].includes(method)) {
           return send(res, 400, { ok: false, error: 'unsupported_command' })
         }
-        if (method === 'use_saved_provider') {
+        if (method === 'use_saved_provider' || method === 'use_saved_providers') {
           if (!options.allowSavedProvider || !options.sourceUserDataPath) {
             return send(res, 403, { ok: false, error: 'saved_provider_not_enabled' })
           }

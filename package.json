@@ -18,6 +18,9 @@
 		"test:app:live": "node --experimental-strip-types scripts/test/run-app-automation.ts --live",
 		"test:app:game": "node --experimental-strip-types scripts/test/run-app-automation.ts --game",
 		"test:mcp:serve": "node --experimental-strip-types scripts/mcp/modcrafting-test-mcp.ts",
+		"plugin:build": "node scripts/plugin/build.mjs",
+		"plugin:test": "node scripts/plugin/test.mjs",
+		"plugin:validate": "node scripts/plugin/validate.mjs",
 		"bridge:build": "node scripts/bridge/build-observer.mjs",
 		"build:win": "electron-vite build && node scripts/packaging/run-electron-builder.mjs --win nsis && node scripts/packaging/run-electron-builder.mjs --config electron-builder.portable.json --win portable && node scripts/packaging/verify-windows-artifacts.mjs",
 		"build:win:setup": "electron-vite build && node scripts/packaging/run-electron-builder.mjs --win nsis && node scripts/packaging/verify-windows-artifacts.mjs --setup",
@@ -76,7 +79,8 @@
 		"react": "^19.1.0",
 		"react-dom": "^19.1.0",
 		"react-markdown": "^10.1.0",
-		"remark-gfm": "^4.0.1"
+		"remark-gfm": "^4.0.1",
+		"unzipper": "^0.12.3"
 	},
 	"devDependencies": {
 		"@modelcontextprotocol/node": "2.0.0",

@@ -62,6 +62,20 @@ function optionalInstanceId(args: Record<string, unknown>): string | undefined {
 	return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
+export const mcRuntimeStatusTool: Tool = {
+	name: 'mc_runtime_status',
+	description: '读取 Minecraft 运行时就绪契约：目标/已加载模组、Observer V2、桥接与失败原因。桥接不可用时优先调用此工具诊断，禁止反复重试进入测试世界。',
+	schema: {
+		type: 'object',
+		properties: { instanceId: { type: 'string', description: '可选 Minecraft 实例 ID' } }
+	},
+	readOnly: () => true,
+	async execute(_ctx: ToolContext, args: Record<string, unknown>) {
+		const runtime = await window.api.mcRuntimeStatus(optionalInstanceId(args))
+		return JSON.stringify(runtime, null, 2)
+	}
+}
+
 export const mcScreenshotTool: Tool = {
 	name: "mc_screenshot",
 	description: "截取当前 Minecraft 客户端画面（观测桥）。返回路径/尺寸；视觉模型可能附带 base64。无论模型是否支持视觉，截图都会保存并在任务总结中展示。非视觉模型请配合 mc_inspect 做数据化验证。",
@@ -777,6 +791,7 @@ export const mcEnsureCheatsTool: Tool = {
 // ── 工具注册表（必须在所有工具定义之后，避免 TDZ） ──
 
 export const MC_OBSERVER_TOOLS: Tool[] = [
+	mcRuntimeStatusTool,
 	mcScreenshotTool,
 	mcInspectTool,
 	mcInventoryTool,
@@ -789,6 +804,6 @@ export const MC_OBSERVER_TOOLS: Tool[] = [
 	mcEnsureCheatsTool
 ];
 
-export const MC_READONLY_TOOLS = new Set(["mc_screenshot", "mc_inspect", "mc_inventory", "mc_world", "mc_observe_entity"]);
+export const MC_READONLY_TOOLS = new Set(["mc_runtime_status", "mc_screenshot", "mc_inspect", "mc_inventory", "mc_world", "mc_observe_entity"]);
 
 export const MC_WRITE_TOOLS = new Set(["mc_chat", "mc_command", "mc_input", "mc_ensure_test_world", "mc_ensure_cheats"]);

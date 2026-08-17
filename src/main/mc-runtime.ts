@@ -3,11 +3,13 @@ import { spawn, ChildProcess } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as iconv from 'iconv-lite'
-import { ensureJdkReady, isGradleHomeSeedReady, prepareBuild, purgeGradleEphemeralCaches } from './build-env'
+import { isGradleHomeSeedReady, prepareBuild, purgeGradleEphemeralCaches } from './build-env'
+import { resolveLaunchProjectPath } from './mc-launch-path'
 import {
   clearBridgeDiscovery,
   readBridgeDiscovery,
   requestBridge,
+  isAllowedBridgeApiPath,
   waitForBridgeDiscovery,
   type BridgeDiscovery
 } from './mc-bridge-client'
@@ -78,6 +80,28 @@ function appendLog(instance: McInstance, text: string): void {
   }
 }
 
+function updateLoadedMods(instance: McInstance, text: string): void {
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^\s*-\s+([a-z0-9_.-]+)\s+\S+/i)
+    if (!match) continue
+    const id = match[1]
+    if (!instance.readiness.loadedModIds.includes(id)) instance.readiness.loadedModIds.push(id)
+  }
+  instance.readiness.missingModIds = instance.readiness.expectedModIds.filter(
+    (id) => !instance.readiness.loadedModIds.includes(id)
+  )
+  if (instance.readiness.loadedModIds.length > 0 && instance.readiness.phase === 'preparing') {
+    instance.readiness.phase = 'loading'
+  }
+}
+
+function markReadinessFailure(instance: McInstance, code: Exclude<RuntimeFailureCode, null>, message: string): void {
+  instance.readiness.phase = 'error'
+  instance.readiness.failureCode = code
+  instance.readiness.failureMessage = message
+  notifyInstanceState(instance.id)
+}
+
 /** Per-instance Gradle home so parallel runClient does not stop other instances' daemons. */
 function buildInstanceGradleEnv(baseEnv: NodeJS.ProcessEnv, instanceId: string): NodeJS.ProcessEnv {
   const sharedHome = baseEnv.GRADLE_USER_HOME
@@ -140,6 +164,44 @@ function ensureGameOptions(gameDirAbs: string): void {
 }
 
 type ExitReason = 'none' | 'normal' | 'crash' | 'manual' | 'start_failed'
+type RuntimeFailureCode = 'base_mod_artifact_invalid' | 'runtime_mods_missing' | 'observer_bridge_unavailable' | 'observer_protocol_incompatible' | null
+
+export interface McRuntimeReadiness {
+  phase: 'preparing' | 'loading' | 'menu' | 'ready' | 'error'
+  expectedModIds: string[]
+  loadedModIds: string[]
+  missingModIds: string[]
+  bridgeReady: boolean
+  bridgeApiVersions: number[]
+  gameDir: string | null
+  failureCode: RuntimeFailureCode
+  failureMessage?: string
+}
+
+function readProjectModId(projectPath: string): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(projectPath, 'src', 'main', 'resources', 'fabric.mod.json'), 'utf8')) as { id?: unknown }
+    return typeof parsed.id === 'string' && parsed.id.trim() ? parsed.id : null
+  } catch {
+    return null
+  }
+}
+
+function createReadiness(projectPath: string): McRuntimeReadiness {
+  const projectId = readProjectModId(projectPath)
+  const expectedModIds = [...(projectId ? [projectId] : []), 'modmenu', 'modcrafting_observer']
+  return {
+    phase: 'preparing',
+    expectedModIds,
+    loadedModIds: [],
+    missingModIds: expectedModIds,
+    bridgeReady: false,
+    bridgeApiVersions: [],
+    gameDir: null,
+    failureCode: projectId ? null : 'runtime_mods_missing',
+    failureMessage: projectId ? undefined : '无法从 fabric.mod.json 读取目标模组 ID。'
+  }
+}
 
 interface McInstance {
   id: string
@@ -154,6 +216,7 @@ interface McInstance {
   logBuffer: string[]
   gameDir: string | null
   bridge: BridgeDiscovery | null
+  readiness: McRuntimeReadiness
 }
 
 const instances = new Map<string, McInstance>()
@@ -173,14 +236,27 @@ function createInstanceRecord(projectPath: string, name?: string): McInstance {
     exitReason: 'none',
     logBuffer: [],
     gameDir: null,
-    bridge: null
+    bridge: null,
+    readiness: createReadiness(projectPath)
   }
   instances.set(id, instance)
   notifyInstanceState(id)
   return instance
 }
 
-async function startInstance(id: string): Promise<{ success: boolean; error?: string }> {
+export interface MinecraftWindowSize { width: number; height: number }
+
+function normalizeWindowSize(value: unknown): MinecraftWindowSize | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const width = Number(record.width)
+  const height = Number(record.height)
+  return Number.isInteger(width) && Number.isInteger(height) && width >= 640 && width <= 4096 && height >= 480 && height <= 2160
+    ? { width, height }
+    : undefined
+}
+
+async function startInstance(id: string, windowSize?: MinecraftWindowSize): Promise<{ success: boolean; error?: string }> {
   const instance = instances.get(id)
   if (!instance) return { success: false, error: 'Instance not found' }
   if (instance.status === 'running' || instance.status === 'starting') {
@@ -189,10 +265,9 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
 
   const buildPrep = await prepareBuild(instance.projectPath)
   if (!buildPrep.ok) {
-    const jdkFallback = await ensureJdkReady()
-    if (!jdkFallback.ok) {
-      return { success: false, error: buildPrep.error || jdkFallback.error || 'JDK 未就绪' }
-    }
+    instance.readiness = createReadiness(instance.projectPath)
+    markReadinessFailure(instance, 'base_mod_artifact_invalid', buildPrep.error || '基础模组或构建环境未就绪。')
+    return { success: false, error: buildPrep.error || '构建环境未就绪。' }
   }
 
   instance.status = 'starting'
@@ -202,13 +277,26 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
   instance.exitReason = 'none'
   instance.logBuffer = []
   instance.bridge = null
+  instance.readiness = createReadiness(instance.projectPath)
   notifyInstanceState(id)
 
-  const gradlew = path.join(instance.projectPath, 'gradlew.bat')
+  let launchProjectPath: string
+  try {
+    launchProjectPath = resolveLaunchProjectPath(instance.projectPath)
+  } catch (error) {
+    instance.status = 'crashed'
+    instance.exitReason = 'start_failed'
+    const message = `无法创建 Windows ASCII 游戏启动路径：${error instanceof Error ? error.message : String(error)}`
+    markReadinessFailure(instance, 'observer_bridge_unavailable', message)
+    return { success: false, error: message }
+  }
+
+  const gradlew = path.join(launchProjectPath, 'gradlew.bat')
   const cmd = fs.existsSync(gradlew) ? gradlew : 'gradle'
   const offlineFlags = isGradleHomeSeedReady() ? '--offline' : '-Dorg.gradle.offline=false'
-  const gameDirAbs = instanceGameDirAbs(instance.projectPath, id)
+  const gameDirAbs = instanceGameDirAbs(launchProjectPath, id)
   instance.gameDir = gameDirAbs
+  instance.readiness.gameDir = gameDirAbs
   fs.mkdirSync(path.join(gameDirAbs, 'mods'), { recursive: true })
   ensureGameOptions(gameDirAbs)
   clearBridgeDiscovery(gameDirAbs)
@@ -228,11 +316,12 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
 
   const instanceEnv = buildInstanceGradleEnv(buildPrep.env || process.env, id)
   const gameDirArg = quoteGameDirArg(gameDirAbs)
-  const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirArg}"`
+  const windowArgs = windowSize ? ` --width ${windowSize.width} --height ${windowSize.height}` : ''
+  const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirArg}${windowArgs}"`
 
   try {
     const proc = spawn(fullCmd, {
-      cwd: instance.projectPath,
+      cwd: launchProjectPath,
       shell: true,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: instanceEnv
@@ -242,6 +331,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
 
     const handleOutput = (text: string): void => {
       appendLog(instance, text)
+      updateLoadedMods(instance, text)
       const lines = text.split(/\r?\n/).filter((l) => l.length > 0)
       const payload = lines.length > 0 ? lines : [text]
       for (const line of payload) {
@@ -251,6 +341,7 @@ async function startInstance(id: string): Promise<{ success: boolean; error?: st
       }
       if (instance.status === 'starting' && isClientStarted(text)) {
         instance.status = 'running'
+        instance.readiness.phase = 'menu'
         notifyInstanceState(id)
         void attachBridgeWhenReady(instance, gameDirAbs)
       }
@@ -375,12 +466,12 @@ export function setupMcRuntimeHandlers(): void {
 
   ipcMain.handle('mc:start', async (_event, id: string) => startInstance(id))
 
-  ipcMain.handle('mc:startOrCreate', async (_event, projectPath: string, name?: string) => {
+  ipcMain.handle('mc:startOrCreate', async (_event, projectPath: string, name?: string, requestedWindowSize?: unknown) => {
     const existing = Array.from(instances.values()).find(
       (i) => i.projectPath === projectPath && (i.status === 'stopped' || i.status === 'crashed')
     )
     const instance = existing || createInstanceRecord(projectPath, name)
-    const result = await startInstance(instance.id)
+    const result = await startInstance(instance.id, normalizeWindowSize(requestedWindowSize))
     return { ...result, id: instance.id }
   })
 
@@ -408,6 +499,12 @@ export function setupMcRuntimeHandlers(): void {
 
   ipcMain.handle('mc:listInstances', async () => {
     return Array.from(instances.values()).map(serializeInstance)
+  })
+
+  ipcMain.handle('mc:runtimeStatus', async (_event, instanceId?: string) => {
+    const instance = resolveBridgeInstance(instanceId)
+    if (!instance) return { ready: false, failureCode: 'observer_bridge_unavailable', error: '没有运行中的 Minecraft 实例。' }
+    return { ...instance.readiness, instanceId: instance.id, status: instance.status }
   })
 
   ipcMain.handle('mc:getCrashReport', async (_event, crashReportPath: string) => {
@@ -495,8 +592,8 @@ export function setupMcRuntimeHandlers(): void {
       }
       const method = payload.method === 'POST' ? 'POST' : 'GET'
       const apiPath = String(payload.path || '')
-      if (!apiPath.startsWith('/v1/')) {
-        return { ok: false, status: 0, data: {}, error: 'path 必须以 /v1/ 开头' }
+      if (!isAllowedBridgeApiPath(apiPath)) {
+        return { ok: false, status: 0, data: {}, error: '桥接路径必须以 /v1/ 或 /v2/ 开头。' }
       }
       const timeoutMs =
         typeof payload.timeoutMs === 'number'
@@ -513,10 +610,27 @@ async function attachBridgeWhenReady(instance: McInstance, gameDirAbs: string): 
   const discovery = await waitForBridgeDiscovery(gameDirAbs, 90_000, 500)
   if (instances.get(instance.id) !== instance) return
   if (instance.status !== 'running' && instance.status !== 'starting') return
-  if (discovery) {
-    instance.bridge = discovery
-    notifyInstanceState(instance.id)
+  if (!discovery) {
+    markReadinessFailure(instance, 'observer_bridge_unavailable', 'Observer 未在 90 秒内创建桥接发现文件。')
+    return
   }
+  instance.bridge = discovery
+  instance.readiness.bridgeApiVersions = discovery.apiVersions || []
+  const capabilities = await requestBridge(discovery, 'GET', '/v2/capabilities', undefined, 10_000)
+  if (!capabilities.ok || capabilities.data.protocolVersion !== 2) {
+    markReadinessFailure(instance, 'observer_protocol_incompatible', capabilities.error || 'Observer 未提供 V2 capabilities。')
+    return
+  }
+  instance.readiness.bridgeReady = true
+  instance.readiness.bridgeApiVersions = [1, 2]
+  if (instance.readiness.missingModIds.length > 0) {
+    markReadinessFailure(instance, 'runtime_mods_missing', `Fabric 未加载必需模组: ${instance.readiness.missingModIds.join(', ')}`)
+    return
+  }
+  instance.readiness.phase = 'ready'
+  instance.readiness.failureCode = null
+  instance.readiness.failureMessage = undefined
+  notifyInstanceState(instance.id)
 }
 
 function resolveBridgeInstance(instanceId?: string): McInstance | null {
@@ -546,6 +660,7 @@ function serializeInstance(instance: McInstance): object {
     gameDir: instance.gameDir,
     bridgeReady: Boolean(instance.bridge),
     bridgePort: instance.bridge?.port ?? null,
+    readiness: instance.readiness,
     pid: instance.process?.pid ?? null
   }
 }

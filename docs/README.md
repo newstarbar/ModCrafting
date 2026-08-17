@@ -14,6 +14,11 @@
 - [workflow.md](./workflow.md) — Vibecoding 工作流、三模式路由、Plan → Execute 双阶段
 - [commands.md](./commands.md) — 完整命令清单、脚本目录结构、发布流程
 
+### Codex 插件
+
+- [architecture.md](./architecture.md) - `modcrafting-fabric` 插件与共享核心架构
+- [commands.md](./commands.md) - 插件构建、隔离测试、校验和本地 marketplace 使用方式
+
 ### AI Harness 系统
 - [harness.md](./harness.md) — Harness 模块清单、工具集、计划阶段门控、护栏机制
 - [test-lab-mcp.md](./test-lab-mcp.md) — 真实 Electron 自动化桥、开发专用 MCP、黑盒场景与报告
@@ -37,7 +42,7 @@
 | 常用 npm 命令 | [commands.md](./commands.md) |
 | AI Agent 是怎么工作的 | [harness.md](./harness.md) |
 | 计划阶段为什么会被锁定 | [harness.md](./harness.md#计划阶段门控) |
-| 内置了哪些 AI 工具 | [harness.md](./harness.md#工具集45) |
+| 内置了哪些 AI 工具 | [harness.md](./harness.md#工具集46) |
 | 怎么运行应用级 Harness 回归 | [test-lab-mcp.md](./test-lab-mcp.md) |
 | 游戏内测试如何裁决 | [harness.md](./harness.md#确定性游戏内测试-v2) |
 | 离线工具链怎么工作 | [toolchain.md](./toolchain.md) |

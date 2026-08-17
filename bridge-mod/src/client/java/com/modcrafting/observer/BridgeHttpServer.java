@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
@@ -76,6 +77,7 @@ public final class BridgeHttpServer {
         payload.put("port", port);
         payload.put("token", token);
         payload.put("modVersion", ModCraftingObserverClient.MOD_VERSION);
+        payload.put("apiVersions", List.of(1, 2));
         Files.writeString(file, GSON.toJson(payload), StandardCharsets.UTF_8);
     }
 
@@ -190,6 +192,7 @@ public final class BridgeHttpServer {
             case "/v1/input-guard" -> InputGuard.apply(body);
             case "/v2/command" -> GameTestApi.command(string(body.get("command"), body.get("text")));
             case "/v2/snapshot" -> GameTestApi.snapshot(body);
+            case "/v2/player-state" -> GameTestApi.playerState(body);
             case "/v2/query" -> GameTestApi.query(body);
             default -> Map.of("ok", false, "code", "NOT_FOUND", "error", "未知路径: " + path);
         };

@@ -3,15 +3,48 @@
   "fixturePath": "resources/_offline_verify_project",
   "mode": "agent",
   "timeoutMs": 3600000,
-  "clarificationResponses": [
-    "Restore the player position and state from approximately sixty seconds before death in the dedicated single-player test world; use deterministic defaults for omitted details."
-  ],
-  "prompt": "制作一个 Fabric 模组：玩家死亡后恢复约 60 秒前保存的位置和状态；请完整实现、构建、启动并在专用测试世界验证。",
+  "prompt": "Implement deterministic death rewind in Fabric 1.21.4. Use random P/A/C states, capture P, wait 61000ms with at least 1200 world ticks, set A and C, kill, wait_until DeathScreen, respawn, wait_until serverPlayer.available and capture R. Use full player_state_v1 and inventory_v1 relations; never use fixed values or screenshot evidence. Build, run and repair autonomously.",
   "acceptanceContract": {
     "version": 1,
     "requirements": [
-      { "id": "build", "sourceQuote": "完整实现、构建", "claim": "项目构建成功", "oracle": { "type": "build_success" } },
-      { "id": "rewind", "sourceQuote": "恢复约 60 秒前保存的位置和状态", "claim": "死亡并重生后服务端位置与检查点一致", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_value", "source": "serverPlayer", "pointer": "/x", "equals": 0, "afterAction": 2 } } }
+      { "id": "build", "sourceQuote": "build", "claim": "The project builds", "oracle": { "type": "build_success" } },
+      { "id": "elapsed", "sourceQuote": "61 seconds", "claim": "P to D elapsed time and world ticks are real", "oracle": { "type": "game_assertion", "assertion": { "type": "elapsed_between", "fromCheckpoint": "P", "toCheckpoint": "D", "minMs": 60000, "maxMs": 75000, "minWorldTicks": 1200 } } },
+      { "id": "death-screen", "sourceQuote": "DeathScreen", "claim": "Death screen is observed", "oracle": { "type": "game_assertion", "assertion": { "type": "screen_matches", "screenName": "DeathScreen", "checkpoint": "D" } } },
+      { "id": "death-event", "sourceQuote": "true death", "claim": "Combat trace records a real player death", "oracle": { "type": "game_assertion", "assertion": { "type": "combat_event", "victimType": "minecraft:player", "killed": true, "sinceCheckpoint": "C" } } },
+      { "id": "state", "sourceQuote": "restore state", "claim": "R equals P and differs from A/C", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/x" }, "operator": "equals", "normalizer": "player_state_v1" } } },
+      { "id": "not-A", "sourceQuote": "A differs", "claim": "P and A are distinct complete states", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "A", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" } } },
+      { "id": "not-C", "sourceQuote": "C differs", "claim": "P and C are distinct complete states", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "C", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" } } },
+      { "id": "A-not-C", "sourceQuote": "A and C differ", "claim": "A and C are distinct complete states", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "A", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "C", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" } } },
+      { "id": "restore-not-A", "sourceQuote": "not recent A", "claim": "R is not the recent A state", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "A", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" } } },
+      { "id": "restore-not-C", "sourceQuote": "not death-before C", "claim": "R is not the death-before C state", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "C", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" } } },
+      { "id": "uuid", "sourceQuote": "UUID remains", "claim": "R retains the original player UUID", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" } } },
+      { "id": "inventory", "sourceQuote": "inventory", "claim": "Full normalized inventory is restored", "oracle": { "type": "game_assertion", "assertion": { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/inventory" }, "right": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/inventory" }, "operator": "equals", "normalizer": "inventory_v1" } } }
+    ]
+  },
+  "gameTestContract": {
+    "requiredProjectWrite": true,
+    "requiredBuildTasks": ["build", "runClient"],
+    "minimumPassCount": 2,
+    "requiredCheckpoints": ["P_SET", "P", "P_AGE_61", "A_SET", "A", "C_SET", "C", "D_KILL", "D", "R_REQUEST", "R_READY", "R"],
+    "requiredActionTypes": ["set_player_state", "wait", "kill_player", "wait_until", "respawn"],
+    "requiredWaitUntilConditions": ["death_screen", "server_player_available"],
+    "requiredRelationOperators": ["equals", "not_equals"],
+    "requireIndependentReplay": true,
+    "requireIndependentProcess": true,
+    "requireIndependentWindowSize": true,
+    "minimumWaitMs": 60000,
+    "requiredAssertions": [
+      { "type": "elapsed_between", "fromCheckpoint": "P", "toCheckpoint": "D", "minMs": 60000, "minWorldTicks": 1200 },
+      { "type": "screen_matches", "screenName": "DeathScreen", "checkpoint": "D" },
+      { "type": "combat_event", "victimType": "minecraft:player", "killed": true },
+      { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/x" }, "operator": "equals", "normalizer": "player_state_v1" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "A", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "C", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "A", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "C", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "A", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/x" }, "right": { "checkpoint": "C", "source": "serverPlayer", "pointer": "/x" }, "operator": "not_equals", "normalizer": "player_state_v1" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/uuid" }, "right": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/uuid" }, "operator": "equals" },
+      { "type": "snapshot_relation", "left": { "checkpoint": "P", "source": "serverPlayer", "pointer": "/inventory" }, "right": { "checkpoint": "R", "source": "serverPlayer", "pointer": "/inventory" }, "operator": "equals", "normalizer": "inventory_v1" }
     ]
   },
   "assertions": [

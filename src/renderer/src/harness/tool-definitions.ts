@@ -3,7 +3,7 @@
 
 import { type Tool, type ToolContext, type Previewer, type ToolExecutionPayload } from "./tools";
 import type { FileDiff, GuiLayoutElement, GuiLayoutType } from "./events";
-import { isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
+import { formatGamePanelFailure, isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
 import { waitForMcRunReady } from "../utils/mc-wait-playing";
 import { setMcInputGuard } from "./mc-observer-tools";
 import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, validateRecipeContent, type RecipeKind, type RecipeKey } from "./recipe-utils";
@@ -37,7 +37,7 @@ import {
 	type MixinSide
 } from "./mixin-registration.ts";
 import { listDirectoryEmptyFileMessage, pathBasenameLooksLikeFile } from "./list-directory-guard.ts";
-import { createGameTestSpec, formatGameTestSpec, validateGameAssertions } from "./game-test-protocol.ts";
+import { createGameTestSpec, formatGameTestSpec, MAX_GAME_TEST_WAIT_MS, validateGameAssertions } from "./game-test-protocol.ts";
 import { MAX_IMPLEMENTATION_PLAN_STEPS } from "../utils/plan-steps.ts";
 import { gameAssertionsForContract, validateAcceptanceContract } from "./acceptance-contract.ts";
 
@@ -1045,7 +1045,7 @@ function checkGuiPreviewGuard(
 	if (!isGuiFile && !stepRequiresPreview) return null
 	if (ctx.guiPreviewCompletedForStep === true) return null
 
-	return buildGuiPreviewGuidance(filePath, content)
+	return `blocked: [gui_preview_required]\n${buildGuiPreviewGuidance(filePath, content)}`
 }
 
 // ── read_error_log ──
@@ -1189,12 +1189,12 @@ export const triggerBuildTool: Tool = {
 						return `游戏启动已取消（实例 ${res.instanceId} 已停止）。[MC_PHASE:error]`;
 					}
 					if (!res.ok) {
-						return `游戏启动失败：${res.error || "unknown error"}\n[MC_PHASE:error]`;
+						return `游戏启动失败：${formatGamePanelFailure(res)}\n[MC_PHASE:error]`;
 					}
 					// AI 自测期间显示输入保护覆盖窗口
 					void showInputGuardForInstance(res.instanceId);
 					return [
-						`游戏已启动并进入主菜单（实例 ${res.instanceId}）。[MC_PHASE:menu]`,
+						`游戏已启动，Fabric 模组与 Observer V2 已就绪（实例 ${res.instanceId}）。[MC_PHASE:ready]`,
 						'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
 						'下一步：调用 mc_ensure_test_world 进入游戏世界，再根据功能类型设计测试场景（mc_command/mc_input），最后用 mc_screenshot/mc_inspect 验证效果。'
 					].join('\n');
@@ -1219,7 +1219,7 @@ export const triggerBuildTool: Tool = {
 				// AI 自测期间启用游戏内输入护栏
 				void showInputGuardForInstance(instanceId);
 				return [
-					`游戏已启动并进入主菜单（实例 ${instanceId}）。[MC_PHASE:menu]`,
+					`游戏已启动，Fabric 模组与 Observer V2 已就绪（实例 ${instanceId}）。[MC_PHASE:ready]`,
 					'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
 					'下一步：调用 mc_ensure_test_world 进入游戏世界，再根据功能类型设计测试场景（mc_command/mc_input），最后用 mc_screenshot/mc_inspect 验证效果。'
 				].join('\n');
@@ -2075,11 +2075,24 @@ export const fabricTemplateGenerateTool: Tool = {
 
 // ── submit_plan ──
 const GAME_INPUT_ACTIONS = ['click_at', 'click_widget', 'set_text', 'key_press', 'key_down', 'key_up', 'mouse_click', 'mouse_move', 'scroll', 'forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint', 'use', 'attack', 'inventory', 'drop', 'swap_hands', 'key']
+const NUMERIC_VARIABLE_SCHEMA = { anyOf: [{ type: 'number' }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] }
+const INTEGER_VARIABLE_SCHEMA = { anyOf: [{ type: 'integer' }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] }
+const PLAYER_STATE_SCHEMA = {
+	type: 'object', additionalProperties: false,
+	properties: {
+		x: NUMERIC_VARIABLE_SCHEMA, y: NUMERIC_VARIABLE_SCHEMA, z: NUMERIC_VARIABLE_SCHEMA,
+		health: { anyOf: [{ type: 'number', minimum: 1, maximum: 20 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] },
+		hunger: { anyOf: [{ type: 'integer', minimum: 0, maximum: 20 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] },
+		saturation: { anyOf: [{ type: 'number', minimum: 0, maximum: 20 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] },
+		selectedSlot: { anyOf: [{ type: 'integer', minimum: 0, maximum: 8 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] },
+		inventory: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { slot: { anyOf: [{ type: 'integer', minimum: 0, maximum: 40 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] }, itemId: { type: 'string', minLength: 1 }, count: { anyOf: [{ type: 'integer', minimum: 1, maximum: 64 }, { type: 'string', pattern: '^\\{\\{[A-Za-z][A-Za-z0-9_]{0,31}\\}\\}$' }] } }, required: ['slot', 'itemId', 'count'] } }
+	}, required: ['x', 'y', 'z', 'health', 'hunger']
+}
 const GAME_ACTION_SCHEMA = {
 	type: 'object', additionalProperties: false,
-	properties: { type: { type: 'string', enum: ['command', 'input', 'wait'] }, command: { type: 'string', minLength: 1 }, action: { type: 'string', enum: GAME_INPUT_ACTIONS }, args: { type: 'object' }, ms: { type: 'number', minimum: 0 }, label: { type: 'string', minLength: 1 } },
+	properties: { type: { type: 'string', enum: ['command', 'input', 'wait', 'wait_until', 'set_player_state', 'kill_player', 'respawn'] }, command: { type: 'string', minLength: 1 }, action: { type: 'string', enum: GAME_INPUT_ACTIONS }, args: { type: 'object' }, ms: NUMERIC_VARIABLE_SCHEMA, condition: { type: 'string', enum: ['death_screen', 'server_player_available', 'screen_not_death'] }, timeoutMs: NUMERIC_VARIABLE_SCHEMA, pollMs: NUMERIC_VARIABLE_SCHEMA, state: PLAYER_STATE_SCHEMA, checkpoint: { type: 'string', minLength: 1 }, label: { type: 'string', minLength: 1 } },
 	required: ['type'],
-	allOf: [{ if: { properties: { type: { const: 'command' } } }, then: { required: ['command'] } }, { if: { properties: { type: { const: 'input' } } }, then: { required: ['action'] } }, { if: { properties: { type: { const: 'wait' } } }, then: { required: ['ms'] } }]
+	allOf: [{ if: { properties: { type: { const: 'command' } } }, then: { required: ['command'] } }, { if: { properties: { type: { const: 'input' } } }, then: { required: ['action'] } }, { if: { properties: { type: { const: 'wait' } } }, then: { required: ['ms'] } }, { if: { properties: { type: { const: 'wait_until' } } }, then: { required: ['condition', 'timeoutMs', 'checkpoint'] } }, { if: { properties: { type: { const: 'set_player_state' } } }, then: { required: ['state', 'checkpoint'] } }, { if: { properties: { type: { const: 'kill_player' } } }, then: { required: ['checkpoint'] } }, { if: { properties: { type: { const: 'respawn' } } }, then: { required: ['checkpoint'] } }]
 }
 
 const GAME_ASSERTION_SCHEMA = {
@@ -2089,15 +2102,22 @@ const GAME_ASSERTION_SCHEMA = {
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'main_hand' }, itemId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'itemId'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'block_equals' }, x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, blockId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'x', 'y', 'z', 'blockId'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'entity_exists' }, entityType: { type: 'string', minLength: 1 }, tag: { type: 'string', minLength: 1 }, exists: { type: 'boolean' }, label: { type: 'string' } }, required: ['type'], anyOf: [{ required: ['entityType'] }, { required: ['tag'] }] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'screen_matches' }, screenName: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'screenName'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'screen_matches' }, screenName: { type: 'string', minLength: 1 }, checkpoint: { type: 'string' }, label: { type: 'string' } }, required: ['type', 'screenName'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'widget_state' }, label: { type: 'string', minLength: 1 }, enabled: { type: 'boolean' }, labelText: { type: 'string', minLength: 1 } }, required: ['type', 'label'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'player_state' }, path: { type: 'string', minLength: 1 }, equals: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'path', 'equals'] },
 		{ type: 'object', additionalProperties: false, properties: { type: { const: 'recipe_exists' }, recipeId: { type: 'string', minLength: 1 }, label: { type: 'string' } }, required: ['type', 'recipeId'] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'state_changed' }, path: { type: 'string', minLength: 1 }, from: {}, to: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'path'], anyOf: [{ required: ['from'] }, { required: ['to'] }] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_value' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace'] }, pointer: { type: 'string', pattern: '^/' }, equals: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer', 'equals'] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_changed' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace'] }, pointer: { type: 'string', pattern: '^/' }, from: {}, to: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer'], anyOf: [{ required: ['from'] }, { required: ['to'] }] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'render_trace' }, entityType: { type: 'string' }, rendererClass: { type: 'string' }, modelClass: { type: 'string' }, textureId: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type'], anyOf: [{ required: ['entityType'] }, { required: ['rendererClass'] }, { required: ['modelClass'] }, { required: ['textureId'] }] },
-		{ type: 'object', additionalProperties: false, properties: { type: { const: 'hud_text' }, text: { type: 'string', minLength: 1 }, match: { type: 'string', enum: ['exact', 'contains'] }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'text'] }
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'state_changed' }, path: { type: 'string', minLength: 1 }, from: {}, to: {}, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'path'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_value' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace', 'combatTrace'] }, pointer: { type: 'string', pattern: '^/' }, equals: {}, checkpoint: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer', 'equals'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_changed' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace', 'combatTrace'] }, pointer: { type: 'string', pattern: '^/' }, from: {}, to: {}, checkpoint: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_unchanged' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace', 'combatTrace'] }, pointer: { type: 'string', pattern: '^/' }, checkpoint: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'source', 'pointer'] },
+		{ anyOf: [
+			{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_relation' }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace', 'combatTrace'] }, pointer: { type: 'string', pattern: '^/' }, leftCheckpoint: { type: 'string' }, rightCheckpoint: { type: 'string' }, operator: { type: 'string', enum: ['equals', 'not_equals', 'approximately', 'ratio'] }, expected: {}, tolerance: { type: 'number', minimum: 0 }, ratio: { type: 'number' }, normalizer: { type: 'string', enum: ['inventory_v1', 'player_state_v1'] }, label: { type: 'string' } }, required: ['type', 'source', 'pointer', 'leftCheckpoint', 'rightCheckpoint', 'operator'] },
+			{ type: 'object', additionalProperties: false, properties: { type: { const: 'snapshot_relation' }, left: { type: 'object', additionalProperties: false, properties: { checkpoint: { type: 'string', minLength: 1 }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace', 'combatTrace'] }, pointer: { type: 'string', pattern: '^/' } }, required: ['checkpoint', 'source', 'pointer'] }, right: { type: 'object', additionalProperties: false, properties: { checkpoint: { type: 'string', minLength: 1 }, source: { type: 'string', enum: ['player', 'serverPlayer', 'screen', 'entity', 'renderTrace', 'hudTrace', 'combatTrace'] }, pointer: { type: 'string', pattern: '^/' } }, required: ['checkpoint', 'source', 'pointer'] }, operator: { type: 'string', enum: ['equals', 'not_equals', 'approximately', 'ratio'] }, expected: {}, tolerance: { type: 'number', minimum: 0 }, ratio: { type: 'number' }, normalizer: { type: 'string', enum: ['inventory_v1', 'player_state_v1'] }, label: { type: 'string' } }, required: ['type', 'left', 'right', 'operator'] }
+		] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'elapsed_between' }, fromCheckpoint: { type: 'string' }, toCheckpoint: { type: 'string' }, minMs: { type: 'number', minimum: 0 }, maxMs: { type: 'number', minimum: 0 }, minWorldTicks: { type: 'number', minimum: 0 }, maxWorldTicks: { type: 'number', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'fromCheckpoint', 'toCheckpoint'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'combat_event' }, checkpoint: { type: 'string' }, sinceCheckpoint: { type: 'string' }, victimUuid: { type: 'string' }, victimType: { type: 'string' }, victimName: { type: 'string' }, victimTag: { type: 'string' }, attackerUuid: { type: 'string' }, attackerCheckpoint: { type: 'string' }, attackerIsPlayer: { type: 'boolean' }, damageType: { type: 'string' }, killed: { type: 'boolean' }, exists: { type: 'boolean' }, label: { type: 'string' } }, required: ['type'] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'render_trace' }, entityUuid: { type: 'string' }, entityType: { type: 'string' }, rendererClass: { type: 'string' }, modelClass: { type: 'string' }, textureId: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type'], anyOf: [{ required: ['entityUuid'] }, { required: ['entityType'] }, { required: ['rendererClass'] }, { required: ['modelClass'] }, { required: ['textureId'] }] },
+		{ type: 'object', additionalProperties: false, properties: { type: { const: 'hud_text' }, text: { type: 'string', minLength: 1 }, token: { type: 'string' }, match: { type: 'string', enum: ['exact', 'contains'] }, exists: { type: 'boolean' }, position: { type: 'object', additionalProperties: false, properties: { xMin: { type: 'number' }, xMax: { type: 'number' }, yMin: { type: 'number' }, yMax: { type: 'number' } } }, normalizedPosition: { type: 'object', additionalProperties: false, properties: { xMin: { type: 'number' }, xMax: { type: 'number' }, yMin: { type: 'number' }, yMax: { type: 'number' } } }, maxAgeMs: { type: 'number', minimum: 0 }, sinceCheckpoint: { type: 'string' }, checkpoint: { type: 'string' }, color: { type: 'integer' }, alphaMin: { type: 'number', minimum: 0, maximum: 255 }, shadow: { type: 'boolean' }, approvedLayoutElementId: { type: 'string' }, afterAction: { type: 'integer', minimum: 0 }, label: { type: 'string' } }, required: ['type', 'text'] }
 	]
 }
 
@@ -2167,7 +2187,13 @@ export const submitPlanTool: Tool = {
 					actions: { type: "array", items: GAME_ACTION_SCHEMA },
 					/** Legacy input only. New plans place all objective assertions in acceptanceContract. */
 					assertions: { type: "array", minItems: 1, items: GAME_ASSERTION_SCHEMA },
-					visualOnly: { type: "boolean" }
+					visualOnly: { type: "boolean" },
+					requiredPassCount: { type: "integer", minimum: 1, maximum: 3 },
+					baselineCheckpoint: { type: "string", minLength: 1 },
+					checkpoints: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", minLength: 1 } },
+					variables: { type: "object" },
+					approvedLayoutId: { type: "string", minLength: 1 },
+					approvedLayoutFingerprint: { type: "string", minLength: 1 }
 				},
 				required: ["featureType", "assertions"]
 			}
@@ -2191,8 +2217,18 @@ export const submitPlanTool: Tool = {
 			return /(?:\.java|src\/main\/resources|物品|方块|配方|实体|玩家交互|HUD|GUI|mixin|recipe|minecraft|fabric)/i.test(`${value.kind || ""} ${value.description || ""}`);
 		});
 		const hasGameOracle = contract.contract.requirements.some((requirement) => requirement.oracle.type === 'game_assertion');
+		const hasVisualConfirmation = contract.contract.requirements.some((requirement) => requirement.oracle.type === 'user_confirmation');
 		if (gameRelevant && (!gameTest || !hasGameOracle)) {
 			return "Error: 涉及 Minecraft 游戏行为的计划必须提供 gameTest 与 acceptanceContract.game_assertion。截图、进入世界或命令已发送不能作为验收。";
+		}
+		if (gameTest && !hasGameOracle) {
+			return "Error: gameTest 必须至少关联一条 acceptanceContract.game_assertion；user_confirmation 不能替代客观游戏断言。";
+		}
+		if (gameTest && hasVisualConfirmation) {
+			return "Error: 自动化 gameTest 不能把 user_confirmation 混入客观裁决；请将纯视觉偏好拆为独立视觉审核。";
+		}
+		if (gameTest?.visualOnly === true) {
+			return "Error: 自动化游戏行为测试不能使用 visualOnly=true；纯视觉偏好请进入独立视觉审核。";
 		}
 		if (!gameTest) return `\`\`\`json\n${JSON.stringify({ steps, acceptanceContract: contract.contract }, null, 2)}\n\`\`\``;
 		const created = createGameTestSpec({
@@ -2203,6 +2239,12 @@ export const submitPlanTool: Tool = {
 			assertions: gameAssertionsForContract(contract.contract),
 			actions: gameTest.actions,
 			visual_only: gameTest.visualOnly,
+			required_pass_count: gameTest.requiredPassCount,
+			baselineCheckpoint: gameTest.baselineCheckpoint,
+			checkpoints: gameTest.checkpoints,
+			variables: gameTest.variables,
+			approvedLayoutId: gameTest.approvedLayoutId,
+			approvedLayoutFingerprint: gameTest.approvedLayoutFingerprint,
 			acceptanceContract: contract.contract
 		});
 		if (!created.ok) return `Error: ${created.error}`;
@@ -2294,7 +2336,10 @@ export const guiLayoutPreviewTool: Tool = {
 						x: { type: "number", description: "初始 X 坐标（1280x720 画布内）" },
 						y: { type: "number", description: "初始 Y 坐标（1280x720 画布内）" },
 						width: { type: "number", description: "元素宽度" },
-						height: { type: "number", description: "元素高度" }
+						height: { type: "number", description: "元素高度" },
+						color: { type: "integer", description: "可选 ARGB/RGB 颜色" },
+						alpha: { type: "number", minimum: 0, maximum: 255, description: "可选透明度" },
+						shadow: { type: "boolean", description: "是否绘制阴影" }
 					},
 					required: ["id", "type", "label", "x", "y", "width", "height"]
 				}
@@ -2319,7 +2364,10 @@ export const guiLayoutPreviewTool: Tool = {
 			x: Number(el.x) || 0,
 			y: Number(el.y) || 0,
 			width: Number(el.width) || 100,
-			height: Number(el.height) || 20
+			height: Number(el.height) || 20,
+			...(Number.isFinite(Number(el.color)) ? { color: Number(el.color) } : {}),
+			...(Number.isFinite(Number(el.alpha)) ? { alpha: Number(el.alpha) } : {}),
+			...(typeof el.shadow === "boolean" ? { shadow: el.shadow } : {})
 		}));
 
 		if (!html) return "Error: html is required";

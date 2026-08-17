@@ -9,6 +9,7 @@ export interface WaitForMcPlayingOptions {
   instanceId: string
   timeoutMs?: number
   soakMs?: number
+  failureSettleMs?: number
   abortSignal?: AbortSignal
 }
 
@@ -20,6 +21,7 @@ export interface WaitForMcPlayingResult {
 }
 
 export const MC_RUN_READY_SOAK_MS = 5000
+export const MC_RUN_FAILURE_SETTLE_MS = 750
 const DEFAULT_TIMEOUT_MS = 8 * 60 * 1000
 
 function isFailureStatus(status: string, exitReason?: string): boolean {
@@ -65,12 +67,15 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
     instanceId,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     soakMs = MC_RUN_READY_SOAK_MS,
+    failureSettleMs = MC_RUN_FAILURE_SETTLE_MS,
     abortSignal
   } = options
   const logChunks: string[] = []
   let lastStatus = 'starting'
   let lastExitReason: string | undefined
   let soakTimer: ReturnType<typeof window.setTimeout> | null = null
+  let failureTimer: ReturnType<typeof window.setTimeout> | null = null
+  let pendingFailure: WaitForMcPlayingResult | null = null
 
   return new Promise((resolve) => {
     let settled = false
@@ -88,6 +93,29 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
       }
     }
 
+    const clearFailure = (): void => {
+      if (failureTimer != null) {
+        window.clearTimeout(failureTimer)
+        failureTimer = null
+      }
+      pendingFailure = null
+    }
+
+    const settleFailure = (failure: WaitForMcPlayingResult): void => {
+      pendingFailure = failure
+      if (failureTimer != null) return
+      // Gradle prints "BUILD FAILED" before the actionable "What went wrong"
+      // block. Keep collecting stdout/stderr briefly so the Agent receives the
+      // actual compiler/launch cause instead of an unhelpful terminal marker.
+      failureTimer = window.setTimeout(() => {
+        const result = pendingFailure || failure
+        finish({
+          ...result,
+          logTail: formatMcLogTail(logChunks)
+        })
+      }, failureSettleMs)
+    }
+
     const startSoak = (): void => {
       if (soakTimer != null) return
       soakTimer = window.setTimeout(() => {
@@ -96,7 +124,22 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
           finish(failure)
           return
         }
-        finish({ ok: true, phase: 'ready' })
+        void window.api.mcRuntimeStatus(instanceId).then((runtime) => {
+          if (runtime.phase === 'ready' && runtime.bridgeReady) {
+            finish({ ok: true, phase: 'ready' })
+            return
+          }
+          if (runtime.phase === 'error' || runtime.failureCode) {
+            finish({
+              ok: false,
+              phase: 'error',
+              error: runtime.failureMessage || runtime.error || `游戏运行时未就绪: ${runtime.failureCode || 'unknown'}`,
+              logTail: formatMcLogTail(logChunks)
+            })
+            return
+          }
+          clearSoak()
+        }).catch(() => clearSoak())
       }, soakMs)
     }
 
@@ -104,7 +147,7 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
       const failure = evaluateFailure(logChunks, lastStatus, lastExitReason)
       if (failure) {
         clearSoak()
-        finish(failure)
+        settleFailure(failure)
         return
       }
       if (isMcHarnessReady(logChunks, lastStatus)) {
@@ -153,6 +196,7 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
       unsubState()
       window.clearTimeout(timer)
       clearSoak()
+      clearFailure()
       abortSignal?.removeEventListener('abort', onAbort)
     }
 

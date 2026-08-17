@@ -265,8 +265,8 @@ const api = {
     ipcRenderer.invoke('mc:createInstance', projectPath, name),
   mcStart: (id: string): Promise<WriteResult> =>
     ipcRenderer.invoke('mc:start', id),
-  mcStartOrCreate: (projectPath: string, name?: string): Promise<WriteResult & { id?: string }> =>
-    ipcRenderer.invoke('mc:startOrCreate', projectPath, name),
+  mcStartOrCreate: (projectPath: string, name?: string, windowSize?: { width: number; height: number }): Promise<WriteResult & { id?: string }> =>
+    ipcRenderer.invoke('mc:startOrCreate', projectPath, name, windowSize),
   mcStop: (id: string): Promise<WriteResult> =>
     ipcRenderer.invoke('mc:stop', id),
   mcStopAll: (): Promise<WriteResult> =>
@@ -275,6 +275,8 @@ const api = {
     ipcRenderer.invoke('mc:getInstance', id),
   mcListInstances: (): Promise<object[]> =>
     ipcRenderer.invoke('mc:listInstances'),
+  mcRuntimeStatus: (instanceId?: string): Promise<object> =>
+    ipcRenderer.invoke('mc:runtimeStatus', instanceId),
   mcGetCrashReport: (crashReportPath: string): Promise<FileResult> =>
     ipcRenderer.invoke('mc:getCrashReport', crashReportPath),
   mcDeleteInstance: (id: string): Promise<WriteResult> =>
@@ -503,10 +505,19 @@ const api = {
   },
 
   // API config & secrets
-  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean }> =>
+  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean; providerSettings: Record<string, { endpoint: string; model: string }> }> =>
     ipcRenderer.invoke('config:load'),
+  loadApiConfigForProvider: (providerId: string): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean }> =>
+    ipcRenderer.invoke('config:loadProvider', providerId),
   saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('config:save', config),
+  loadModelRoutingConfig: (): Promise<import('../shared/model-routing.ts').ModelRoutingConfig> =>
+    ipcRenderer.invoke('modelRouting:load'),
+  saveModelRoutingConfig: (config: import('../shared/model-routing.ts').ModelRoutingConfig): Promise<{
+    success: boolean
+    config?: import('../shared/model-routing.ts').ModelRoutingConfig
+    error?: string
+  }> => ipcRenderer.invoke('modelRouting:save', config),
   saveApiKey: (key: string, providerId?: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('secrets:saveApiKey', key, providerId),
   getApiKey: (providerId?: string): Promise<{ success: boolean; apiKey?: string; error?: string }> =>

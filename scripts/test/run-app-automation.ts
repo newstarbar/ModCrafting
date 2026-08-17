@@ -8,7 +8,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { appAutomationLaunchArgs, isHiddenAppAutomationMode } from './app-automation-launch.ts'
+import { appAutomationFixedRoutingConfig, appAutomationLaunchArgs, isAppAutomationTurnDone, isHiddenAppAutomationMode, shouldContinueAppAutomation } from './app-automation-launch.ts'
+import { evaluateAppGameTestContract, type AppGameTestContract } from './app-game-test-contract.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const runDir = path.join(os.tmpdir(), 'modcrafting-app-test', randomUUID())
@@ -79,6 +80,12 @@ async function main(): Promise<void> {
   const electron = process.platform === 'win32'
     ? path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
     : path.join(root, 'node_modules', 'electron', 'dist', 'electron')
+  // Preparing the offline fixture can take several seconds on a cold Windows
+  // disk. Do it before the bridge starts so no live automation connection sits
+  // idle (or is reclaimed) between the capabilities probe and open_project.
+  const sourceProject = process.env.MODCRAFTING_TEST_PROJECT || path.join(root, 'resources', '_offline_verify_project')
+  const projectPath = path.join(runDir, 'workspace')
+  fs.cpSync(sourceProject, projectPath, { recursive: true, filter: (entry) => !entry.includes(`${path.sep}.gradle${path.sep}`) && !entry.includes(`${path.sep}run${path.sep}`) })
   const child = spawn(electron, appAutomationLaunchArgs({
     hidden: hiddenMode,
     liveProvider: liveMode,
@@ -103,9 +110,6 @@ async function main(): Promise<void> {
     const capabilities = await request('/v1/capabilities')
     assert.equal(capabilities.status, 200)
     assert.equal(capabilities.body.ok, true)
-    const sourceProject = process.env.MODCRAFTING_TEST_PROJECT || path.join(root, 'resources', '_offline_verify_project')
-    const projectPath = path.join(runDir, 'workspace')
-    fs.cpSync(sourceProject, projectPath, { recursive: true, filter: (entry) => !entry.includes(`${path.sep}.gradle${path.sep}`) && !entry.includes(`${path.sep}run${path.sep}`) })
     const opened = await request('/v1/command', { method: 'POST', body: JSON.stringify({ method: 'open_project', params: { projectPath } }) })
     assert.equal(opened.status, 200)
     const configured = await request('/v1/command', { method: 'POST', body: JSON.stringify(
@@ -116,18 +120,26 @@ async function main(): Promise<void> {
           : { method: 'configure_provider', params: { endpoint: replay!.endpoint, model: 'automation-replay', apiKey: 'test-key', providerId: 'automation-replay' } }
     ) })
     assert.equal(configured.status, 200, `provider configuration failed: ${JSON.stringify(configured.body)}`)
+    const configuredSelection = envLiveProvider || (liveMode
+      ? { providerId: process.env.MODCRAFTING_TEST_PROVIDER_ID || 'minimax', model: String((((configured.body.result || {}) as Record<string, unknown>).model) || process.env.MODCRAFTING_TEST_MODEL || 'MiniMax-M3') }
+      : { providerId: 'automation-replay', model: 'automation-replay' })
+    const routing = await request('/v1/command', {
+      method: 'POST',
+      body: JSON.stringify({ method: 'configure_routing', params: { config: appAutomationFixedRoutingConfig(configuredSelection) } })
+    })
+    assert.equal(routing.status, 200, `single-model routing configuration failed: ${JSON.stringify(routing.body)}`)
     await wait(250)
     const scenarioId = process.env.MODCRAFTING_TEST_SCENARIO || 'player-morph-toggle'
     const scenarioFile = path.join(root, 'scripts', 'test', 'scenarios', `${scenarioId}.json`)
     const scenario = gameMode && fs.existsSync(scenarioFile)
-      ? JSON.parse(fs.readFileSync(scenarioFile, 'utf8')) as { prompt?: unknown; clarificationResponses?: unknown }
+      ? JSON.parse(fs.readFileSync(scenarioFile, 'utf8')) as { prompt?: unknown; clarificationResponses?: unknown; gameTestContract?: AppGameTestContract }
       : {}
     const scenarioPrompt = String(scenario.prompt || '')
     const clarificationResponses = Array.isArray(scenario.clarificationResponses)
       ? scenario.clarificationResponses.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       : []
     const prompt = gameMode
-      ? (process.env.MODCRAFTING_TEST_PROMPT || scenarioPrompt || '制作一个 Fabric 模组并在专用测试世界使用可重复的客观断言完成真实测试。')
+      ? `规划时调用 submit_plan，steps 必须直接是 JSON 对象数组，每项都包含 kind、description、targetPath（或 targetPaths）和 evidence；禁止把步骤编码成 XML 或字符串。\n${process.env.MODCRAFTING_TEST_PROMPT || scenarioPrompt || '制作一个 Fabric 模组并在专用测试世界使用可重复的客观断言完成真实测试。'}`
       : '请简短介绍当前项目'
     const sent = await request('/v1/command', { method: 'POST', body: JSON.stringify({ method: 'send_turn', params: { text: prompt, mode: 'agent' } }) })
     assert.equal(sent.status, 200)
@@ -148,11 +160,31 @@ async function main(): Promise<void> {
     const turnDeadline = Date.now() + (gameMode ? 60 * 60_000 : liveMode ? 10 * 60_000 : 15_000)
     let done = false
     let clarificationResponseIndex = 0
+    let continuationCount = 0
+    const maximumContinuations = Math.max(0, Math.min(12, Number(process.env.MODCRAFTING_TEST_MAX_CONTINUATIONS || 8)))
     while (Date.now() < turnDeadline) {
       const state = await request('/v1/snapshot')
-      const chat = (state.body.snapshot as Record<string, unknown>).chat as Record<string, unknown>
+      const snapshot = state.body.snapshot as Record<string, unknown>
+      const chat = snapshot.chat as Record<string, unknown>
       const controller = chat.controller as Record<string, unknown>
       const ui = (chat.ui || {}) as Record<string, unknown>
+      const guiLayout = ui.guiLayout && typeof ui.guiLayout === 'object' ? ui.guiLayout as Record<string, unknown> : null
+      if (guiLayout?.id) {
+        const layoutBody = {
+          layoutType: guiLayout.layoutType,
+          elements: Array.isArray(guiLayout.elements) ? guiLayout.elements : []
+        }
+        let hash = 2166136261
+        for (const char of JSON.stringify(layoutBody)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+        const value = JSON.stringify({ ...layoutBody, approvalId: String(guiLayout.id), layoutFingerprint: `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}` })
+        const confirmed = await request('/v1/command', {
+          method: 'POST',
+          body: JSON.stringify({ method: 'respond', params: { action: 'gui_layout', requestId: guiLayout.id, value } })
+        })
+        assert.equal(confirmed.status, 200, 'scenario GUI layout confirmation was rejected')
+        await wait(100)
+        continue
+      }
       if (ui.clarification) {
         const response = clarificationResponses[clarificationResponseIndex]
         if (!response) break
@@ -162,7 +194,19 @@ async function main(): Promise<void> {
         await wait(100)
         continue
       }
-      if (controller.running === false && Array.isArray(controller.messages) && controller.messages.length >= 2) { done = true; break }
+      if (isAppAutomationTurnDone(snapshot)) {
+        // A formal game-test turn is terminal at the first idle result.  If
+        // the Agent needs another user message to continue a partial plan or
+        // recover an INCONCLUSIVE game verdict, that is a harness failure for
+        // the strict Suite—not permission for the host to synthesize a
+        // "continue" message (which used to recreate the clarification loop).
+        if (gameMode && shouldContinueAppAutomation(snapshot, continuationCount, maximumContinuations)) {
+          continuationCount += 1
+          console.warn(JSON.stringify({ verdict: 'INCONCLUSIVE', reason: 'game_test_requires_automatic_continuation', continuationCount }))
+        }
+        done = true
+        break
+      }
       await wait(100)
     }
     assert.equal(done, true, `${gameMode ? 'game' : liveMode ? 'live' : 'replayed'} agent turn did not complete`)
@@ -178,8 +222,22 @@ async function main(): Promise<void> {
       const harnessEvents = eventList.map((entry) => entry.event as Record<string, unknown>)
       const toolEvents = harnessEvents.map((event) => event.tool as Record<string, unknown> | undefined).filter(Boolean) as Array<Record<string, unknown>>
       const toolNames = toolEvents.map((tool) => tool.name).filter(Boolean)
-      const mcResult = harnessEvents.find((event) => event.kind === 'ToolResult' && (event.tool as Record<string, unknown> | undefined)?.name === 'mc_run_test')
+      const collaborationModels = [...new Set(harnessEvents
+        .filter((event) => event.kind === 'Collaboration')
+        .map((event) => event.collaboration as Record<string, unknown> | undefined)
+        .filter(Boolean)
+        .map((collaboration) => `${collaboration!.providerId}/${collaboration!.modelId}`))]
+      const invocationModels = [...new Set(harnessEvents
+        .filter((event) => event.kind === 'ModelInvocation')
+        .map((event) => event.modelInvocation as Record<string, unknown> | undefined)
+        .filter(Boolean)
+        .map((invocation) => `${invocation!.providerId}/${invocation!.modelId}`))]
+      const forbiddenToolSources = [...new Set(toolEvents.map((tool) => String(tool.source || 'core')).filter((source) => source !== 'core'))]
+      const expectedModel = `${configuredSelection.providerId}/${configuredSelection.model}`
+      const singleModelOnly = collaborationModels.length > 0 && collaborationModels.every((model) => model === expectedModel) && invocationModels.length > 0 && invocationModels.every((model) => model === expectedModel) && forbiddenToolSources.length === 0
+      const mcResult = [...harnessEvents].reverse().find((event) => event.kind === 'ToolResult' && (event.tool as Record<string, unknown> | undefined)?.name === 'mc_run_test')
       const mcValidation = (mcResult?.tool as Record<string, unknown> | undefined)?.validation as Record<string, unknown> | undefined
+      const gameTestContract = evaluateAppGameTestContract(harnessEvents, scenario.gameTestContract)
       const notices = harnessEvents
         .filter((event) => event.kind === 'Notice')
         .map((event) => event.notice as Record<string, unknown>)
@@ -188,11 +246,22 @@ async function main(): Promise<void> {
       const report = {
         runId: events.body.runId,
         createdAt: new Date().toISOString(),
-        verdict: mcValidation?.verdict === 'PASS' ? 'PASS' : mcResult ? String(mcValidation?.verdict || 'INCONCLUSIVE') : 'INCONCLUSIVE',
+        verdict: mcValidation?.verdict === 'PASS' && toolNames.includes('trigger_build') && singleModelOnly && gameTestContract.passed
+          ? 'PASS'
+          : mcResult ? String(mcValidation?.verdict || 'INCONCLUSIVE') : 'INCONCLUSIVE',
         checks: {
           triggerBuildCalled: toolNames.includes('trigger_build'),
           gameTestCalled: Boolean(mcResult),
-          gameTestVerdict: mcValidation?.verdict || null
+          gameTestVerdict: mcValidation?.verdict || null,
+          gameTestContractPassed: gameTestContract.passed,
+          gameTestScenarioId: gameTestContract.scenarioId || null,
+          gameTestContractDetails: gameTestContract.details,
+          expectedModel,
+          collaborationModels,
+          invocationModels,
+          forbiddenToolSources,
+          singleModelOnly,
+          continuations: continuationCount
         },
         notices: notices.slice(-10).map((notice) => notice.text),
         artifacts,
@@ -204,7 +273,7 @@ async function main(): Promise<void> {
       // INCONCLUSIVE smoke result, never a fabricated PASS and never a hard
       // failure of the deterministic replay suite.  The report remains the
       // authoritative verdict for a developer to inspect.
-      if (!toolNames.includes('trigger_build') || !mcResult || mcValidation?.verdict !== 'PASS') {
+      if (!toolNames.includes('trigger_build') || !mcResult || mcValidation?.verdict !== 'PASS' || !singleModelOnly || !gameTestContract.passed) {
         console.warn(JSON.stringify({
           verdict: 'INCONCLUSIVE',
           reason: String(diagnosticNotice?.text || 'live_game_scenario_did_not_reach_pass'),

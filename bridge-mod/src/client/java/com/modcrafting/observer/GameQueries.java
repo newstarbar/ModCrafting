@@ -80,6 +80,10 @@ public final class GameQueries {
         out.put("movementSpeed", round(player.getAttributeValue(EntityAttributes.MOVEMENT_SPEED)));
         out.put("scoreboardTags", new ArrayList<>(player.getCommandTags()));
         out.put("food", player.getHungerManager().getFoodLevel());
+        // Keep the semantic alias used by persisted game-test contracts. The
+        // vanilla field is commonly called food, while project requirements
+        // describe the same observable value as hunger.
+        out.put("hunger", player.getHungerManager().getFoodLevel());
         out.put("saturation", player.getHungerManager().getSaturationLevel());
         out.put("air", player.getAir());
         out.put("experienceLevel", player.experienceLevel);
@@ -95,6 +99,11 @@ public final class GameQueries {
         out.put("mainHand", stackSummary(player.getMainHandStack()));
         out.put("offHand", stackSummary(player.getOffHandStack()));
         out.put("selectedSlot", player.getInventory().selectedSlot);
+        // Keep the client inventory as an explicit source.  Server-side
+        // inventory is exposed separately by GameTestApi, so relation
+        // assertions can prove client/server synchronization instead of
+        // accidentally comparing one duplicated object.
+        out.put("inventory", inventory());
         return out;
     }
 
@@ -121,6 +130,12 @@ public final class GameQueries {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("inWorld", client.player != null && client.world != null);
+        // Window dimensions are part of the deterministic replay evidence and
+        // must remain available while the normal HUD has no current Screen.
+        out.put("scaledWidth", client.getWindow().getScaledWidth());
+        out.put("scaledHeight", client.getWindow().getScaledHeight());
+        out.put("windowWidth", client.getWindow().getWidth());
+        out.put("windowHeight", client.getWindow().getHeight());
         if (screen == null) {
             out.put("className", null);
             out.put("title", null);
@@ -146,8 +161,6 @@ public final class GameQueries {
             kind = "pause_or_menu";
         out.put("kind", kind);
         out.put("pausesGame", screen.shouldPause());
-        out.put("scaledWidth", client.getWindow().getScaledWidth());
-        out.put("scaledHeight", client.getWindow().getScaledHeight());
         out.put("widgets", widgetsOf(screen));
         return out;
     }
@@ -583,6 +596,9 @@ public final class GameQueries {
         m.put("name", stack.getName().getString());
         m.put("damage", stack.getDamage());
         m.put("maxDamage", stack.getMaxDamage());
+        // Persist a stable component payload so inventory_v1 relations cannot
+        // pass while custom data/components were silently dropped.
+        m.put("componentFingerprint", stack.getComponents().toString());
         return m;
     }
 

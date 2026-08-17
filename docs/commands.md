@@ -21,7 +21,7 @@ npm run test:app         # 前台 Electron + 本地回放 Provider 的确定性�
 npm run test:app:hidden  # 隐藏 Electron 的无人值守/CI 兼容回归
 npm run test:app:live    # 前台真实 Provider 低频烟测
 npm run test:app:game    # 前台真实 Provider + Minecraft/Observer 烟测
-npm run bridge:build     # 构建 Observer 并复制到 resources/_base_mods/
+npm run bridge:build     # 构建 Observer V2 并复制到 resources/_base_mods/
 ```
 
 `test:app` 与 `test:app:hidden` 是日常可重复门禁。`test:app:live` 和 `test:app:game` 依赖本机 Provider、网络、Minecraft 和 Observer，允许生成 `INCONCLUSIVE` 报告；不得把它转换为自动修复信号。
@@ -105,6 +105,18 @@ npm run clean:local -- --all
 | 应用级回放 | `npm run test:app` | 真实 Electron/React/Controller/IPC 与活跃状态 |
 | Observer | `npm run bridge:build` | Java/Mixin 编译及基础模组 JAR |
 | 真实外部烟测 | `test:app:live` / `test:app:game` | Provider、Minecraft、Observer 和完整报告 |
+
+多模型路由改动的推荐验证顺序为：`npm test`、`npm run test:mcp`、`npm run test:app`；涉及 GUI/游戏视觉审查时再运行 `npm run test:app:game`，发布构建前运行 `npm run build:win`。
+
+## Codex 插件
+
+```bash
+npm run plugin:build       # 打包独立的 stdio MCP，并复制品牌图标
+npm run plugin:test        # 将插件隔离复制后启动 MCP 自检
+npm run plugin:validate    # 校验插件清单、技能和 MCP 配置
+```
+
+本仓库的本地 marketplace 位于 `.agents/plugins/marketplace.json`。在 Codex 中添加该 marketplace 后，可安装 `modcrafting-fabric@modcrafting-local`。安装后的插件将知识资产、Observer 和测试基础模组下载到 `PLUGIN_DATA`，不会使用 Electron 的运行时目录。
 
 ## 脚本目录
 

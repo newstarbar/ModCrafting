@@ -46,7 +46,7 @@ npm run knowledge:download    # 下载所有离线知识库
 | 三模式路由 | Chat / Plan / Execute，每轮独立分类 | [docs/harness.md](./docs/harness.md#三模式路由) |
 | 计划阶段门控 | `MAX_READONLY_ROUNDS = 15`，锁定后仍允许只读工具 | [docs/harness.md](./docs/harness.md#计划阶段门控) |
 | 验收契约 | 每条需求映射到构建、游戏断言或用户确认 | [docs/harness.md](./docs/harness.md#确定性游戏内测试-v2) |
-| 工具集（45） | 文件 / Fabric / 构建 / 游戏 / 用户交互 / 流程控制 | [docs/harness.md](./docs/harness.md#工具集45) |
+| 工具集（46） | 文件 / Fabric / 构建 / 游戏 / 用户交互 / 流程控制 | [docs/harness.md](./docs/harness.md#工具集46) |
 | Test Lab | 隔离 Electron、回放 Provider、MCP、黑盒场景 | [docs/test-lab-mcp.md](./docs/test-lab-mcp.md) |
 | 关键护栏 | 证据推进、修复范围、20/40/3 预算、三态裁决 | [docs/harness.md](./docs/harness.md#关键护栏) |
 | 输出截断 | read_file 默认 400 行；工具输出 32KB；不显示原始大小 | [docs/harness.md](./docs/harness.md#输出截断) |

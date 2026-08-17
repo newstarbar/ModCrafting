@@ -96,12 +96,11 @@ function main() {
   const jars = fs
     .readdirSync(libsDir)
     .filter((f) => f.endsWith('.jar') && !f.includes('-sources') && !f.includes('-dev'))
-    .sort()
+    .sort((a, b) => fs.statSync(path.join(libsDir, b)).mtimeMs - fs.statSync(path.join(libsDir, a)).mtimeMs)
   if (jars.length === 0) {
     throw new Error('未找到 remap 后的 jar')
   }
-  const preferred =
-    jars.find((f) => /^modcrafting-observer-\d/.test(f) && !f.includes('-sources')) || jars[0]
+  const preferred = jars.find((f) => /^modcrafting-observer-\d/.test(f)) || jars[0]
   const src = path.join(libsDir, preferred)
   fs.mkdirSync(path.dirname(outJar), { recursive: true })
   fs.copyFileSync(src, outJar)

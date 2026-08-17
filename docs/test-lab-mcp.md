@@ -118,8 +118,39 @@ MCP 运行保存在：
 - `FAIL`：可重复的产品断言确定失败。
 - `INCONCLUSIVE`：应用、测试桥、Provider、环境、超时、Observer 能力或用户确认阻止裁决。
 
+游戏场景报告会同时保存基础模组来源与哈希、Fabric 已加载模组、Observer 协议版本和实际游戏目录；缺少 `modmenu`、`modcrafting_observer` 或 V2 capabilities 时不进入断言执行。
+
 真实 Provider/Minecraft 烟测的进程退出成功只表示报告已正常生成，不等于功能 PASS；必须读取 `run.json` 的 verdict 和证据。
+
+## 路由自动化
+
+Test Lab 继续兼容既有 `configure_provider`、`use_saved_provider`、`send_turn` 和快照命令，并新增 `configure_routing` 来写入版本化路由配置。启用已保存 Provider 的测试环境也接受 `use_saved_providers` 作为兼容别名。回放 Provider 可用一个端点模拟多个逻辑角色模型；事件与快照会携带路由决策和职责协作状态，且不会包含密钥。
 
 ## 前台与隐藏模式
 
 本地运行默认最大化并聚焦 ModCrafting 窗口，便于观察 Agent 活跃动画、计划推进、工具事件和 Minecraft 交接。`--hidden` 只改变 Electron 窗口可见性；profile、沙箱、认证和断言逻辑不变。测试过程中不要手动操作 UI，以免破坏场景确定性。
+## MiniMax-M3 持久化三阶段 Suite
+
+正式 Luna 实机测试使用以下 Suite 工具，而不是 `modcrafting_run_scenario`：
+
+| 工具 | 作用 |
+|---|---|
+| `modcrafting_suite_start` | 一次复制夹具、一次启动 Electron、固定 `minimax/MiniMax-M3`，保存 `suite.json`。 |
+| `modcrafting_send_turn` | 只接受当前阶段的固定任务句；阶段未 PASS 不允许发送下一阶段。 |
+| `modcrafting_wait` | 等待 Agent；游戏测试出现澄清立即结束为 INCONCLUSIVE，不发送继续。 |
+| `modcrafting_respond` | 持久化 Suite 只允许阶段二的 `gui_layout` 批准；拒绝通用 approve/deny/clarify。 |
+| `modcrafting_suite_evaluate_stage` | 按当前阶段事件游标裁决结构契约、scenarioId、模型和工具来源。 |
+| `modcrafting_suite_get_report` | 返回阶段报告、任务哈希、模型调用、Observer 启动 ID 和 artifacts。 |
+
+三阶段 ID 依次为 `morph_toggle_v1`、`kill_feed_hud_v1`、`death_rewind_combined_v1`。阶段二的 HUD 只能使用 Luna 批准后由主机生成的不可变布局记录。Suite 工作区和 Provider 不可替换；`modcrafting_open_project`、`modcrafting_run_scenario`、Provider 重配置和任何非布局响应在 Suite 中会被拒绝。
+
+报告目录为：
+
+```text
+%LOCALAPPDATA%/ModCrafting Test Lab/runs/<runId>/
+├─ suite.json
+├─ stages/01-morph/report.json
+├─ stages/02-kill-feed/report.json
+├─ stages/03-death-rewind/report.json
+└─ artifacts/events.ndjson
+```

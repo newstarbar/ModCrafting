@@ -30,6 +30,22 @@ export interface ToolValidationEvidence {
   checkedAt: number
   /** Present for deterministic in-game test sessions. */
   verdict?: 'PASS' | 'FAIL' | 'INCONCLUSIVE'
+  inconclusiveCode?: import('./game-test-protocol.ts').GameTestInconclusiveCode
+  responsibility?: import('./game-test-protocol.ts').GameTestResponsibility
+  scenarioRevision?: number
+  scenarioFingerprint?: string
+  acceptanceContractFingerprint?: string
+  requiredPassCount?: number
+  observerSessionId?: string
+  variantFingerprint?: string
+  replayPurpose?: 'first_failure_replay' | 'product_diagnostic'
+  diagnosticReplay?: boolean
+  windowFingerprint?: string
+  instanceId?: string
+  minecraftProcessId?: string
+  resolvedVariables?: Record<string, string | number>
+  independentReplayProven?: boolean
+  currentCheckpoint?: string
 }
 
 export interface ToolExecutionPayload {
@@ -303,8 +319,8 @@ export function isRunClientReadyResult(result: ToolResult): boolean {
   const task = String(result.args?.task || result.args?.command || '')
   if (result.toolName === 'trigger_build' && task === 'runClient') {
     return Boolean(
-      (result.meta?.runClientStarted && (result.meta?.mcPhase === 'ready' || result.meta?.mcPhase === 'menu')) ||
-      /\[MC_PHASE:(ready|menu)\]/i.test(String(result.output))
+      (result.meta?.runClientStarted && result.meta?.mcPhase === 'ready') ||
+      /\[MC_PHASE:ready\]/i.test(String(result.output))
     )
   }
   if (result.toolName === 'run_command' && /runClient/i.test(task)) {

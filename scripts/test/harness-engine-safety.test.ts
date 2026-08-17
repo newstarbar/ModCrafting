@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseEmbeddedPlanStep, validateToolCalls } from '../../src/renderer/src/harness/tool-call-validator.ts'
+import { normalizeToolCallArguments, parseEmbeddedPlanStep, validateToolCalls } from '../../src/renderer/src/harness/tool-call-validator.ts'
 import { executeBatch, inferToolErrorKind, Registry } from '../../src/renderer/src/harness/tools.ts'
 import { PlanTracker } from '../../src/renderer/src/harness/plan-tracker.ts'
 import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
@@ -132,6 +132,123 @@ test('submit_plan string steps receive an actionable field-level example', () =>
   assert.match(result.rejected.get('plan')?.output || '', /targetPath/)
 })
 
+test('submit_plan acceptanceContract.version "1" (string) is coerced to integer 1 for MiniMax native tool_calls', () => {
+  // MiniMax-M3 in native delta.tool_calls serializes `1` as the string `"1"`.
+  // The schema uses `const: 1` (integer), so without coercion the call is
+  // rejected forever in a version-error loop (see diagnostic mc-session-diag-20260811-232128).
+  const args = {
+    acceptanceContract: {
+      version: '1',
+      requirements: [
+        { id: 'R1', sourceQuote: '用户需求', claim: '声称', oracle: { type: 'build_success' } }
+      ]
+    },
+    steps: [
+      { kind: 'write', description: '写入文件', targetPath: 'src/main/java/X.java', evidence: '编译通过' }
+    ]
+  }
+  const normalized = normalizeToolCallArguments({
+    id: 'call_minimax_string_version',
+    name: 'submit_plan',
+    args,
+    rawArguments: JSON.stringify(args)
+  })
+  assert.equal((normalized.args as Record<string, unknown>).acceptanceContract && ((normalized.args as Record<string, unknown>).acceptanceContract as Record<string, unknown>).version, 1)
+  assert.equal(normalized.rawArguments.includes('"version":1'), true)
+})
+
+test('submit_plan acceptanceContract.version integer 1 is left untouched', () => {
+  const args = {
+    acceptanceContract: { version: 1, requirements: [] },
+    steps: []
+  }
+  const call = {
+    id: 'call_ok',
+    name: 'submit_plan',
+    args,
+    rawArguments: JSON.stringify(args)
+  }
+  const normalized = normalizeToolCallArguments(call)
+  // No coercion needed → same reference returned
+  assert.strictEqual(normalized, call, 'no-op returns same call reference')
+})
+
+test('MiniMax nested game-test integer strings and key alias normalize before schema validation', () => {
+  const args = {
+    acceptanceContract: {
+      version: '1', requirements: [{
+        id: 'R1', sourceQuote: '切换', claim: '宽度变化',
+        oracle: { type: 'game_assertion', assertion: { type: 'snapshot_changed', source: 'player', pointer: '/width', afterAction: '1', to: 0.3 } }
+      }]
+    },
+    steps: [{ kind: 'write', description: '实现', targetPath: 'src/main/java/X.java', evidence: '编译通过' }],
+    gameTest: {
+      featureType: 'player_interaction', subjectId: 'example:morph',
+      actions: [{ type: 'input', action: 'key', args: { key: 'g' } }, { type: 'wait', ms: '1500' }],
+      assertions: [{ type: 'snapshot_changed', source: 'player', pointer: '/width', afterAction: '1', to: 0.3 }]
+    }
+  }
+  const normalized = normalizeToolCallArguments({ id: 'nested', name: 'submit_plan', args, rawArguments: JSON.stringify(args) })
+  const value = normalized.args as Record<string, any>
+  assert.equal(value.acceptanceContract.version, 1)
+  assert.equal(value.acceptanceContract.requirements[0].oracle.assertion.afterAction, 1)
+  assert.equal(value.gameTest.actions[0].action, 'key_press')
+  assert.equal(value.gameTest.actions[1].ms, 1500)
+  assert.equal(value.gameTest.assertions[0].afterAction, 1)
+})
+
+test('submit_plan with string version "1" passes full validateToolCalls schema check', () => {
+  const args = {
+    acceptanceContract: {
+      version: '1',
+      requirements: [
+        { id: 'R1', sourceQuote: 'q', claim: 'c', oracle: { type: 'build_success' } }
+      ]
+    },
+    steps: [
+      { kind: 'write', description: 'd', targetPath: 'src/main/java/X.java', evidence: 'e' }
+    ]
+  }
+  const result = validateToolCalls([{
+    id: 'plan_str_version',
+    name: 'submit_plan',
+    args,
+    rawArguments: JSON.stringify(args)
+  }], [{
+    name: 'submit_plan',
+    description: 'plan',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        acceptanceContract: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            version: { const: 1 },
+            requirements: { type: 'array', items: { type: 'object' } }
+          },
+          required: ['version', 'requirements']
+        },
+        steps: {
+          type: 'array', items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string' },
+              description: { type: 'string' },
+              targetPath: { type: 'string' },
+              evidence: { type: 'string' }
+            },
+            required: ['kind', 'description', 'targetPath', 'evidence']
+          }
+        }
+      },
+      required: ['steps']
+    }
+  }])
+  assert.equal(result.rejected.size, 0, `expected no rejections, got: ${[...result.rejected.values()].map(r => r.output).join('; ')}`)
+  assert.equal(result.accepted.length, 1)
+})
+
 test('repeated array-item schema failures share one rejection signature', () => {
   const make = (output: string) => ({
     output,
@@ -162,6 +279,11 @@ test('repair scope recovers project-relative src path from a truncated Windows b
     'ta/Local/Temp/run/workspace/src/main/java/com/example/PigForm.java',
     ['src/main/java/com/example/PigForm.java'],
     'C:/Users/test/AppData/Local/Temp/run/workspace'
+  ), true)
+  assert.equal(isBuildFailureWithinRepairScope(
+    'Data/Local/Temp/modcrafting-app-test/run/workspace/src/main/java/com/example/PigForm.java',
+    ['src/main/java/com/example/PigForm.java'],
+    'C:/Users/test/AppData/Local/Temp/modcrafting-app-test/run/workspace'
   ), true)
   assert.equal(isBuildFailureWithinRepairScope(
     'ta/Local/Temp/run/workspace/src/main/java/com/example/Unrelated.java',

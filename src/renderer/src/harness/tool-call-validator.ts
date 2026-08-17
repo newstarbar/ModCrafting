@@ -54,6 +54,37 @@ function parseEmbeddedObject(value: unknown): Record<string, unknown> | null {
 
 const EMBEDDED_STEP_FIELDS = ['kind', 'description', 'targetPath', 'evidence'] as const
 
+function integerFromProvider(value: unknown): unknown {
+  if (typeof value !== 'string' || !/^-?\d+$/.test(value.trim())) return value
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : value
+}
+
+function normalizeGameAssertion(value: unknown): { value: unknown; changed: boolean } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { value, changed: false }
+  const assertion: Record<string, unknown> = { ...(value as Record<string, unknown>) }
+  let changed = false
+  for (const field of ['afterAction', 'minResult', 'countAtLeast', 'x', 'y', 'z'] as const) {
+    const next = integerFromProvider(assertion[field])
+    if (next !== assertion[field]) { assertion[field] = next; changed = true }
+  }
+  return { value: changed ? assertion : value, changed }
+}
+
+function normalizeGameActions(value: unknown): { value: unknown; changed: boolean } {
+  if (!Array.isArray(value)) return { value, changed: false }
+  let changed = false
+  const actions = value.map((raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+    const action: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+    const ms = integerFromProvider(action.ms)
+    if (ms !== action.ms) { action.ms = ms; changed = true }
+    if (action.action === 'key') { action.action = 'key_press'; changed = true }
+    return action
+  })
+  return { value: changed ? actions : value, changed }
+}
+
 /** MiniMax-compatible fallback for nested step values. Some compatible
  * endpoints keep the outer arguments as JSON but serialize each array item as
  * either XML fields or a comma-separated key=value record. Only known fields
@@ -85,20 +116,75 @@ export function parseEmbeddedPlanStep(value: unknown): Record<string, unknown> |
     : null
 }
 
-/** Some OpenAI-compatible providers encode nested array objects as JSON strings. */
+/** Some OpenAI-compatible providers encode nested array objects as JSON strings.
+ *  Also coerces acceptanceContract.version to the integer 1 required by the schema:
+ *  MiniMax-M3 in native tool_calls serializes `1` as the string `"1"`, which fails
+ *  the `const: 1` check and traps the model in a version-error loop. */
 export function normalizeToolCallArguments(call: ModelToolCall): ModelToolCall {
   if (call.name !== 'submit_plan' || !call.args || typeof call.args !== 'object' || Array.isArray(call.args)) return call
-  const steps = call.args.steps
-  if (!Array.isArray(steps)) return call
+  const args: Record<string, unknown> = { ...call.args }
   let changed = false
-  const normalizedSteps = steps.map((step) => {
-    const parsed = parseEmbeddedPlanStep(step)
-    if (!parsed) return step
-    changed = true
-    return parsed
-  })
+
+  const contract = args.acceptanceContract
+  if (contract && typeof contract === 'object' && !Array.isArray(contract)) {
+    const normalizedContract: Record<string, unknown> = { ...(contract as Record<string, unknown>) }
+    const v = normalizedContract.version
+    if (v === '1' || v === 1) {
+      if (v !== 1) {
+        normalizedContract.version = 1
+        changed = true
+      }
+    }
+    if (Array.isArray(normalizedContract.requirements)) {
+      let requirementsChanged = false
+      normalizedContract.requirements = normalizedContract.requirements.map((raw) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+        const requirement = { ...(raw as Record<string, unknown>) }
+        const oracle = requirement.oracle
+        if (!oracle || typeof oracle !== 'object' || Array.isArray(oracle)) return raw
+        const normalizedOracle = { ...(oracle as Record<string, unknown>) }
+        const assertion = normalizeGameAssertion(normalizedOracle.assertion)
+        if (!assertion.changed) return raw
+        normalizedOracle.assertion = assertion.value
+        requirement.oracle = normalizedOracle
+        requirementsChanged = true
+        return requirement
+      })
+      if (requirementsChanged) changed = true
+    }
+    if (changed) args.acceptanceContract = normalizedContract
+  }
+
+  const gameTest = args.gameTest
+  if (gameTest && typeof gameTest === 'object' && !Array.isArray(gameTest)) {
+    const normalizedGameTest: Record<string, unknown> = { ...(gameTest as Record<string, unknown>) }
+    let gameTestChanged = false
+    const actions = normalizeGameActions(normalizedGameTest.actions)
+    if (actions.changed) { normalizedGameTest.actions = actions.value; gameTestChanged = true }
+    if (Array.isArray(normalizedGameTest.assertions)) {
+      let assertionsChanged = false
+      normalizedGameTest.assertions = normalizedGameTest.assertions.map((assertion) => {
+        const normalized = normalizeGameAssertion(assertion)
+        if (normalized.changed) assertionsChanged = true
+        return normalized.value
+      })
+      if (assertionsChanged) gameTestChanged = true
+    }
+    if (gameTestChanged) { args.gameTest = normalizedGameTest; changed = true }
+  }
+
+  const steps = args.steps
+  if (Array.isArray(steps)) {
+    const normalizedSteps = steps.map((step) => {
+      const parsed = parseEmbeddedPlanStep(step)
+      if (!parsed) return step
+      changed = true
+      return parsed
+    })
+    if (changed) args.steps = normalizedSteps
+  }
+
   if (!changed) return call
-  const args = { ...call.args, steps: normalizedSteps }
   return { ...call, args, rawArguments: JSON.stringify(args) }
 }
 

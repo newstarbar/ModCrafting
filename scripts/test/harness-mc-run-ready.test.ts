@@ -3,8 +3,13 @@ import assert from 'node:assert/strict'
 import { isMcHarnessReady, parseMcLogs } from '../../src/renderer/src/utils/mc-phase-parser.ts'
 import { isRunClientReadyResult, parseTriggerBuildMeta } from '../../src/renderer/src/harness/tools.ts'
 import { canToolResultAdvanceStep } from '../../src/renderer/src/harness/step-evidence.ts'
-import { MC_RUN_READY_SOAK_MS, waitForMcRunReady } from '../../src/renderer/src/utils/mc-wait-playing.ts'
+import {
+  MC_RUN_FAILURE_SETTLE_MS,
+  MC_RUN_READY_SOAK_MS,
+  waitForMcRunReady
+} from '../../src/renderer/src/utils/mc-wait-playing.ts'
 import type { ToolResult } from '../../src/renderer/src/harness/tools.ts'
+import { formatGamePanelFailure } from '../../src/renderer/src/utils/panel-bridge.ts'
 
 function installMcApiMock(): {
   pushLog: (instanceId: string, text: string) => void
@@ -21,7 +26,8 @@ function installMcApiMock(): {
       onMcStateChanged: (cb: (id: string, state: unknown) => void) => {
         stateHandlers.push(cb)
         return () => {}
-      }
+      },
+      mcRuntimeStatus: async () => ({ phase: 'ready', bridgeReady: true })
     },
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis)
@@ -94,6 +100,18 @@ test('step-evidence does not advance run step on MC_PHASE:playing alone', () => 
   )
 })
 
+test('step-evidence does not advance run step on MC_PHASE:menu alone', () => {
+  const menuOnly: ToolResult = {
+    output: '游戏窗口已显示。[MC_PHASE:menu]',
+    durationMs: 1,
+    ok: true,
+    toolName: 'trigger_build',
+    args: { task: 'runClient' },
+    meta: { mcPhase: 'menu', runClientStarted: false }
+  }
+  assert.equal(isRunClientReadyResult(menuOnly), false)
+})
+
 test('step-evidence advances run step on MC_PHASE:ready', () => {
   const ready: ToolResult = {
     output: '游戏已进入主菜单并完成稳定观察。[MC_PHASE:ready]',
@@ -128,7 +146,7 @@ test('waitForMcRunReady completes after soak when stable', async () => {
 test('waitForMcRunReady fails when mixin error appears during soak', async () => {
   const api = installMcApiMock()
   const soakMs = 300
-  const promise = waitForMcRunReady({ instanceId: 'mc-2', soakMs, timeoutMs: 60_000 })
+  const promise = waitForMcRunReady({ instanceId: 'mc-2', soakMs, failureSettleMs: 20, timeoutMs: 60_000 })
   api.pushLog('mc-2', 'Setting user: Dev\n')
   await delay(50)
   api.pushLog('mc-2', 'Mixin apply failed for example\n')
@@ -139,4 +157,33 @@ test('waitForMcRunReady fails when mixin error appears during soak', async () =>
 
 test('MC_RUN_READY_SOAK_MS defaults to 5 seconds', () => {
   assert.equal(MC_RUN_READY_SOAK_MS, 5000)
+})
+
+test('waitForMcRunReady keeps collecting Gradle details after BUILD FAILED', async () => {
+  const api = installMcApiMock()
+  const promise = waitForMcRunReady({
+    instanceId: 'mc-gradle-failure',
+    failureSettleMs: 40,
+    timeoutMs: 60_000
+  })
+  api.pushLog('mc-gradle-failure', 'FAILURE: Build failed with an exception.\n')
+  api.pushLog('mc-gradle-failure', '* What went wrong:\n')
+  api.pushLog('mc-gradle-failure', 'Could not resolve all files for configuration runtimeClasspath.\n')
+  const result = await promise
+  assert.equal(result.ok, false)
+  assert.match(String(result.logTail), /What went wrong/)
+  assert.match(String(result.logTail), /runtimeClasspath/)
+})
+
+test('MC_RUN_FAILURE_SETTLE_MS leaves time for Gradle failure details', () => {
+  assert.equal(MC_RUN_FAILURE_SETTLE_MS, 750)
+})
+
+test('panel runClient failures preserve the fresh Gradle compiler tail for Agent repair', () => {
+  const message = formatGamePanelFailure({
+    error: '游戏崩溃',
+    logTail: 'LivingEntityMixin.java:25: width 在 EntityDimensions 中是 private 访问控制\nBUILD FAILED'
+  })
+  assert.match(message, /LivingEntityMixin\.java:25/)
+  assert.match(message, /BUILD FAILED/)
 })

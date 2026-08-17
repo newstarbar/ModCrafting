@@ -6,7 +6,8 @@
     "MouseMixin",
     "KeyboardMixin",
     "DrawContextMixin",
-    "EntityRenderDispatcherMixin"
+    "EntityRenderDispatcherMixin",
+    "LivingEntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1

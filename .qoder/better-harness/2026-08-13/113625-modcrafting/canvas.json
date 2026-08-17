@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 2,
+  "summary": {
+    "evidenceMode": "session-limited",
+    "evidenceBoundary": {
+      "manifest": {
+        "schemaVersion": 2,
+        "sourceFingerprint": "2dc64829c1ca1f6c",
+        "adapterVersion": "qoder-task-loop-source-v2",
+        "platform": "qoder",
+        "selection": {
+          "strategy": "all-eligible",
+          "eligibleCount": 0,
+          "analyzedCount": 0,
+          "confidence": "Low"
+        }
+      },
+      "episodeCoverage": {
+        "episodeCount": 0,
+        "editedEpisodeCount": 0,
+        "closedEpisodeCount": 0,
+        "recoveredEpisodeCount": 0
+      },
+      "deliveryEvidenceLevels": [],
+      "sourceGaps": []
+    },
+    "semanticFacets": {
+      "schemaVersion": 1,
+      "status": "supplementary",
+      "entries": [
+        {
+          "id": "session-insight:source-coverage",
+          "kind": "redacted-summary",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "source-coverage",
+            "Low"
+          ],
+          "summary": "Analyzed 0 of 0 sessions; 0/6 enabled source roots exist. Use this as the current workspace evidence boundary for final insight cards.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:validation-behavior",
+          "kind": "redacted-summary",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "validation-behavior",
+            "Low"
+          ],
+          "summary": "No validation command category was observed in the analyzed session sample. Inspect more sessions or add explicit validation guidance before claiming validation-after-edit behavior.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:post-edit-validation",
+          "kind": "rework-correction",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "post-edit-validation",
+            "Low"
+          ],
+          "summary": "No edit event was observed in the analyzed sample. Inspect more sessions before making claims about edit or validation habits.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:execution-friction",
+          "kind": "friction-taxonomy",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "execution-friction",
+            "Low"
+          ],
+          "summary": "No strong execution friction signal in the analyzed sample. Keep friction claims narrow unless additional failed commands, rejected actions, or warnings are inspected.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        }
+      ]
+    },
+    "learningCapture": {
+      "schemaVersion": 1,
+      "state": "N/A",
+      "summary": "暂不适用——需要两个可比的观察窗口和一次改进对比。",
+      "interventions": []
+    },
+    "aiAgentPractice": {
+      "inspectedSurfaces": [],
+      "coverageRows": [
+        {
+          "surface": "Rules",
+          "scopes": [
+            "Project"
+          ],
+          "count": 1,
+          "paths": [
+            "AGENTS.md"
+          ]
+        },
+        {
+          "surface": "Skills",
+          "scopes": [
+            "Global"
+          ],
+          "count": 8,
+          "paths": [
+            "~/.agents/skills/agent-reach/SKILL.md",
+            "~/.agents/skills/baoyu-design/SKILL.md",
+            "~/.agents/skills/find-skills/SKILL.md",
+            "~/.agents/skills/karpathy-guidelines/SKILL.md",
+            "~/.agents/skills/kb-retriever/SKILL.md",
+            "~/.agents/skills/planning-with-files/SKILL.md",
+            "~/.agents/skills/web-design-engineer/SKILL.md",
+            "~/.agents/skills/web-video-presentation/SKILL.md"
+          ]
+        },
+        {
+          "surface": "Workflows",
+          "scopes": [
+            "Project"
+          ],
+          "count": 1,
+          "paths": [
+            ".github/workflows/release.yml"
+          ]
+        },
+        {
+          "surface": "Hooks",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Commands",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Custom Agents",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "MCP",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Memories",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Plugins",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 0
+        }
+      ],
+      "repositorySourceRows": [
+        {
+          "surface": "Rules",
+          "provider": "claude",
+          "owner": ".",
+          "count": 1,
+          "paths": [
+            "CLAUDE.md"
+          ]
+        }
+      ],
+      "memoryDetails": {
+        "contentPolicy": "metadata-only",
+        "scanState": "scanned-empty",
+        "scopeCounts": [],
+        "integrity": {
+          "status": "reviewed",
+          "titleCount": 0,
+          "reviewedTitleCount": 0,
+          "truncated": false,
+          "exactCollisionGroups": 0,
+          "similarityCandidates": 0
+        }
+      }
+    },
+    "projectName": "ModCrafting",
+    "locale": "zh-CN",
+    "modelId": "agent-work-loop-v4",
+    "reportContractVersion": 26,
+    "overview": "项目拥有完善的 Harness 测试体系和发布流水线，但 renderer 层（144 文件）零测试覆盖导致核心 UI 变更无验证安全网，且 TypeScript strict 模式未被任何 CI 门控利用。",
+    "dimensions": [
+      {
+        "id": "task-understanding",
+        "label": "任务理解",
+        "score": 68,
+        "summary": "AGENTS.md 提供充分的命令索引、维护红线和架构指引，但无嵌套指令覆盖 8 个建议子作用域。",
+        "findingRefs": []
+      },
+      {
+        "id": "controlled-execution",
+        "label": "可控执行",
+        "score": 65,
+        "summary": "npm run dev 和 toolchain:verify 提供可复现启动，但权限边界和运行时诊断未被观察。",
+        "findingRefs": []
+      },
+      {
+        "id": "change-validation",
+        "label": "改动验证",
+        "score": 45,
+        "summary": "47 个 harness 测试覆盖 AI 引擎核心路径，但 renderer 层 144 个文件零测试，且 TypeScript strict 模式无 CI 门控。",
+        "findingRefs": [
+          "renderer-changes-have-no-test-safety-net",
+          "no-static-analysis-gate-enforces-strict-typescript",
+          "ui-changes-drift-without-visual-regression-detection"
+        ]
+      },
+      {
+        "id": "reliable-delivery",
+        "label": "可靠交付",
+        "score": 55,
+        "summary": "CI 流水线贯穿 test → build → publish 含并发自愈，但 UI 变更的验收范围不完整且无视觉回归检测。",
+        "findingRefs": [
+          "ui-changes-drift-without-visual-regression-detection"
+        ]
+      },
+      {
+        "id": "learning-capture",
+        "label": "经验沉淀",
+        "score": 35,
+        "summary": "无项目 Memory、无重复工作流观察，学习捕获机制尚处于基础阶段。",
+        "findingRefs": []
+      }
+    ],
+    "assignmentSummaries": []
+  },
+  "findings": [
+    {
+      "id": "renderer-changes-have-no-test-safety-net",
+      "title": "Renderer 组件变更无测试安全网，行为正确性无法自动验证",
+      "severity": "High",
+      "reason": "src/renderer 含 144 个源文件（含 52 个 harness 核心模块），全部 45 个测试文件集中在 scripts/test/harness-*.test.ts，renderer 层零覆盖。当前 diff 中 10 个 UI 组件变更（App.tsx、ChatPanel.tsx、ComposerModelMenu.tsx 等）无对应测试共变。harness 测试虽深度覆盖 AI 引擎逻辑，但 UI 层的行为正确性完全依赖人工验证。Owner: src/renderer 模块维护者。修复需在 renderer 层引入组件/集成测试并覆盖核心交互路径。",
+      "dimensionRefs": [
+        "change-validation"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n为 renderer 核心组件添加最小可行的测试覆盖。\n\n## Validation\n\n- 为 src/renderer/src/harness/ 中至少 controller.ts 和 step-policy.ts 添加单元测试\n- 运行 npm test 确认通过\n- 确认新测试覆盖了至少一个核心交互路径",
+      "expectedArtifact": "Test",
+      "expectedOutput": [
+        "Update the existing Test owner identified by the reviewed evidence and retain a focused validation result."
+      ]
+    },
+    {
+      "id": "no-static-analysis-gate-enforces-strict-typescript",
+      "title": "TypeScript strict 模式已配置但无 CI 门控，类型错误可在构建前静默引入",
+      "severity": "Medium",
+      "reason": "tsconfig.json 配置 strict:true 和 noEmit:true，但 package.json 无 typecheck 脚本，CI 流水线（release.yml）未包含 tsc --noEmit 步骤。243 个 TypeScript 源文件无静态分析守护。同时未发现 ESLint、Prettier 或 Biome 配置。这意味着 TypeScript 的类型安全仅在 electron-vite 构建时隐式检查，无法在早期拦截类型错误。Owner: 项目构建/CI 维护者。修复需添加 typecheck 脚本并在 CI 中门控。",
+      "dimensionRefs": [
+        "change-validation"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n添加 typecheck 脚本并在 CI 中门控。\n\n## Validation\n\n- 在 package.json 中添加 \"typecheck\": \"tsc --noEmit\" 脚本\n- 在 .github/workflows/release.yml 的 test 步骤前添加 typecheck 步骤\n- 运行 npm run typecheck 确认当前代码通过",
+      "expectedArtifact": "Gate",
+      "expectedOutput": [
+        "Update the existing Gate owner identified by the reviewed evidence and retain a focused validation result."
+      ]
+    },
+    {
+      "id": "ui-changes-drift-without-visual-regression-detection",
+      "title": "UI 组件持续变更但无视觉回归检测机制，界面偏差无法自动发现",
+      "severity": "Low",
+      "reason": "当前 diff 中 9 个 renderer 组件变更（App.tsx、AppChrome.tsx、ChatComposer.tsx、ChatPanel.tsx、ComposerModelMenu.tsx、McRuntimePanel.tsx、MessageFooter.tsx、SessionSidebar.tsx、SettingsCenter.tsx）无对应 story、snapshot 或 fixture 变更。change-drift 分析标记此为 ui-story-snapshot 类型漂移。项目无 Storybook 或其他视觉回归工具配置。随着 UI 快速迭代，视觉偏差只能通过人工审查发现。Owner: renderer UI 维护者。修复可考虑引入 Storybook 或轻量级 snapshot 机制。",
+      "dimensionRefs": [
+        "change-validation",
+        "reliable-delivery"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n为变更的 UI 组件添加视觉回归检测。\n\n## Validation\n\n- 为至少一个核心 UI 组件（如 ChatPanel 或 App.tsx）添加 story 或 snapshot\n- 运行相关测试确认 snapshot 生成成功\n- 确认后续 UI 变更会触发 snapshot 比对",
+      "expectedArtifact": "Config",
+      "expectedOutput": [
+        "Update the existing Config owner identified by the reviewed evidence and retain a focused validation result."
+      ]
+    }
+  ]
+}
