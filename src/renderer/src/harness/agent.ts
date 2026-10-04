@@ -2,28 +2,33 @@
 // Reasonix-style agent loop: stream → tool calls → execute → loop
 // Features: readonly-tool round limit, clean message history, kick mechanism
 
-import type { Sink, Event } from "./events";
-import { EventKind } from "./events";
-import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from "./tools";
-import { FileSession } from "./file-session";
-import type { PlanTracker } from "./plan-tracker";
-import { normalizeWorkflowSteps } from "./plan-normalizer";
-import { WorkflowEngine } from "./workflow-engine";
-import { finalizeTerminalSteps } from "./finalize-terminal";
+import type { Sink, Event } from "./events.ts";
+import { EventKind } from "./events.ts";
+import { type Registry, executeBatch, parseToolCalls, type ToolContext, type ToolResult } from "./tools.ts";
+import { FileSession } from "./file-session.ts";
+import type { PlanTracker } from "./plan-tracker.ts";
+import { normalizeWorkflowSteps } from "./plan-normalizer.ts";
+import { WorkflowEngine } from "./workflow-engine.ts";
+import { finalizeTerminalSteps } from "./finalize-terminal.ts";
 import type { VerifyTarget } from "./verify-target.ts";
-import { logger } from "../utils/logger";
+import { logger } from "../utils/logger.ts";
 import { isRepeatGuardedToolCall } from "./repeat-guard.ts";
-import { prepareMessages, estimatePromptTokens, warnTokenThreshold, RECENT_WINDOW, type CompactionResult } from "./context-compact";
+import { prepareMessages, estimatePromptTokens, warnTokenThreshold, DEFAULT_CONTEXT_WINDOW, RECENT_WINDOW, type CompactionResult } from "./context-compact.ts";
 import { MAX_EXECUTE_CLARIFICATIONS } from "./clarify-validation.ts";
-import { appendToolRoundHistory, isVisionCapableModel, type ChatMessage, type ModelToolCall } from "./chat-message.ts";
-import { MAX_FETCH_RETRIES, fetchRetryDelayMs, isRetryableFetchError, sleep } from "./fetch-retry.ts";
+import { appendToolRoundHistory, isVisionCapableModel, withoutReasoningEcho, type ChatMessage, type ModelToolCall } from "./chat-message.ts";
+import { MAX_FETCH_RETRIES, fetchRetryDelayMs, isReasoningContinuityError, isRetryableFetchError, sleep } from "./fetch-retry.ts";
 import { validateToolCalls } from "./tool-call-validator.ts";
-import { MAX_PLAN_OFFERED_REJECT_ROUNDS, MAX_READONLY_ROUNDS, PLAN_EXPLORATION_LOCK_KICK, PLAN_SUBMIT_NUDGE, shouldNudgePlanSubmit } from "./plan-phase-gate.ts";
+import { MAX_PLAN_OFFERED_REJECT_ROUNDS, MAX_READONLY_ROUNDS, PLAN_EXPLORATION_LOCK_KICK, PLAN_SUBMIT_NUDGE, isPlanPostLockTool, shouldNudgePlanSubmit } from "./plan-phase-gate.ts";
 import { isExploreTool, planToolNames } from "./tool-policy.ts";
-import { getModelContextWindow, buildProviderThinkingFields } from "../../../shared/llm-providers.ts";
+import { getModelContextWindow } from "../../../shared/llm-providers.ts";
 import { LONG_REASONING_KICK, MAX_REASONING_HARD_CHARS, MAX_REASONING_SOFT_CHARS } from "./reasoning-limits.ts";
 import { stripThinkTags, stripMinimaxProtocolTokens, extractPlanFromXml, buildSubmitPlanArgs, ThinkTagStreamFilter } from "./model-output-normalizer.ts";
 import { rejectedToolCallSignature } from "./tool-rejection-guard.ts";
+import type { BuildReport, ProjectProfile, RepairProposal } from "../../../shared/harness-runtime.ts";
+import type { LlmProtocol, ProviderProtocolDiagnostic } from "../../../shared/harness-runtime.ts";
+import { createModelAdapter } from "./model-adapter.ts";
+import { ToolCallAssembler } from "./tool-call-assembler.ts";
+import { createActiveToolSnapshot } from "./active-tool-snapshot.ts";
 
 export { isRepeatGuardedToolCall } from "./repeat-guard.ts";
 export type { ChatMessage } from "./chat-message.ts";
@@ -57,6 +62,10 @@ export interface AgentOptions {
 		status?: "running" | "completed" | "failed";
 		error?: string;
 	}) => void;
+	/** Host-owned repair accounting; invoked once for each new diagnostic
+	 * proposal, independently of the model/provider that produced it. */
+	onRepairProposal?: (proposal: RepairProposal) => void;
+	onProviderProtocolDiagnostic?: (diagnostic: ProviderProtocolDiagnostic) => void;
 }
 
 export interface RunOptions {
@@ -72,12 +81,16 @@ export interface RunOptions {
 	requireFeatureGuiVerify?: boolean;
 	/** Explicit screen match target for in-game verification. */
 	verifyTarget?: VerifyTarget | null;
+	projectProfile?: ProjectProfile | null;
+	previousBuildReport?: BuildReport | null;
+	knowledgeFacts?: Array<{ key: string; value: string }>;
+	providerId?: string;
+	protocol?: LlmProtocol;
 }
 
 const REPEAT_SUCCESS_THRESHOLD = 2;
 const MAX_FINAL_READINESS_BLOCKS = 3;
 const CONTROL_TOOL_NAMES = ["complete_step"];
-const PLAN_POST_LOCK_TOOL_NAMES = new Set(["submit_plan", "ask_clarification", "grep", "list_directory"]);
 const PLAN_READONLY_TOOL_NAMES = new Set(planToolNames());
 
 function stableStringify(args: Record<string, unknown>): string {
@@ -100,6 +113,14 @@ export class Agent {
 	onGuiLayoutPreview?: (payload: { id: string; title: string; layoutType: import("./events.ts").GuiLayoutType; html: string; elements: import("./events.ts").GuiLayoutElement[] }) => Promise<string>;
 	onCancelPendingGuiLayouts?: () => void;
 	onModelInvocation?: AgentOptions["onModelInvocation"];
+	onRepairProposal?: AgentOptions["onRepairProposal"];
+	onProviderProtocolDiagnostic?: AgentOptions["onProviderProtocolDiagnostic"];
+	private activeProviderId?: string;
+	private activeProtocol?: LlmProtocol;
+	private protocolFailureSignature = "";
+	private protocolFailureStreak = 0;
+	private xmlFallbackActive = false;
+	private xmlFallbackUsed = false;
 	// Once locked, readonly tools stay removed for the entire run
 	private readonlyLocked = false;
 	/** Plan phase: exploration tools stripped after readonly round cap. */
@@ -147,6 +168,8 @@ export class Agent {
 		this.onGuiLayoutPreview = opts.onGuiLayoutPreview;
 		this.onCancelPendingGuiLayouts = opts.onCancelPendingGuiLayouts;
 		this.onModelInvocation = opts.onModelInvocation;
+		this.onRepairProposal = opts.onRepairProposal;
+		this.onProviderProtocolDiagnostic = opts.onProviderProtocolDiagnostic;
 	}
 
 	setRegistry(registry: Registry): void {
@@ -170,11 +193,80 @@ export class Agent {
 		this.consecutiveStepDoneOnlyRounds = 0;
 		this.consecutiveReasoningOnlyRounds = 0;
 		this.consecutiveIdleRounds = 0;
+		this.protocolFailureSignature = "";
+		this.protocolFailureStreak = 0;
+		this.xmlFallbackActive = false;
+		this.xmlFallbackUsed = false;
 		this.clarificationPending = false;
 		this.clarificationCount = 0;
 		this.assistantTurnCount = 0;
 		this.compactionTranscripts = [];
 		this.fileSession.clear();
+	}
+
+	/** Clear only transport/protocol recovery state when Controller switches to
+	 * another configured provider; plan, file-session and repair state remain. */
+	resetProviderProtocolState(): void {
+		this.protocolFailureSignature = "";
+		this.protocolFailureStreak = 0;
+		this.xmlFallbackActive = false;
+		this.xmlFallbackUsed = false;
+	}
+
+	private updateProtocolRecovery(
+		apiModel: string,
+		rawToolCalls: ModelToolCall[],
+		protocolDiagnostics: ProviderProtocolDiagnostic[]
+	): {
+		protocolOnlyFailure: boolean;
+		fallbackActivated: boolean;
+		paused: boolean;
+		reason?: string;
+	} {
+		const protocolOnlyFailure = protocolDiagnostics.length > 0 && rawToolCalls.length > 0 && rawToolCalls.every((call) => Boolean(call.failureKind));
+		if (!protocolOnlyFailure) {
+			// A valid native call or a text/XML call closes the previous protocol
+			// failure streak.  A later failure must earn its own two retries.
+			if (protocolDiagnostics.length === 0 || rawToolCalls.some((call) => !call.failureKind)) {
+				this.protocolFailureSignature = "";
+				this.protocolFailureStreak = 0;
+			}
+			return { protocolOnlyFailure, fallbackActivated: false, paused: false };
+		}
+
+		const signature = protocolDiagnostics
+			.map((diagnostic) => `${diagnostic.kind}:${diagnostic.providerIndex ?? diagnostic.providerCallId ?? diagnostic.toolName ?? ''}`)
+			.sort()
+			.join('|');
+		this.protocolFailureStreak = signature === this.protocolFailureSignature ? this.protocolFailureStreak + 1 : 1;
+		this.protocolFailureSignature = signature;
+
+		if (this.protocolFailureStreak >= 2 && !this.xmlFallbackActive && !this.xmlFallbackUsed) {
+			this.xmlFallbackActive = true;
+			this.xmlFallbackUsed = true;
+			const fallbackDiagnostic: ProviderProtocolDiagnostic = {
+				id: `fallback:xml:${Date.now()}`,
+				providerId: this.activeProviderId,
+				modelId: apiModel,
+				protocol: this.activeProtocol,
+				kind: 'fallback',
+				message: 'native tool stream failed twice; XML fallback activated',
+				fallback: 'xml',
+				createdAt: Date.now()
+			};
+			this.onProviderProtocolDiagnostic?.(fallbackDiagnostic);
+			return { protocolOnlyFailure, fallbackActivated: true, paused: false };
+		}
+
+		if (this.xmlFallbackActive && this.xmlFallbackUsed && this.protocolFailureStreak >= 3) {
+			return {
+				protocolOnlyFailure,
+				fallbackActivated: false,
+				paused: true,
+				reason: protocolDiagnostics.map((diagnostic) => diagnostic.message).join('; ')
+			};
+		}
+		return { protocolOnlyFailure, fallbackActivated: false, paused: false };
 	}
 
 	private checkRepeatedSuccessBlock(name: string, args: Record<string, unknown>): string | null {
@@ -207,11 +299,20 @@ export class Agent {
 		this.sink.emit(e);
 	}
 
+	/**
+	 * Working context window for the active model. The provider id must participate:
+	 * without it a catalog model misses the registry and fell back to 128k, which set
+	 * the auto-compact threshold to ~64k and compacted the history almost every round.
+	 */
+	private contextWindowFor(model: string): number {
+		return getModelContextWindow(model, this.activeProviderId) ?? DEFAULT_CONTEXT_WINDOW;
+	}
+
 	private async prepareApiMessages(messages: ChatMessage[], endpoint: string, apiKey: string, model: string, abortSignal?: AbortSignal): Promise<{ messages: ChatMessage[]; compacted: boolean }> {
 		const prepared = await prepareMessages(
 			messages,
 			this.assistantTurnCount,
-			{ contextWindow: getModelContextWindow(model) ?? 128_000 },
+			{ contextWindow: this.contextWindowFor(model) },
 			async (summaryMessages) => {
 				let text = "";
 				await this.streamFromAPI(
@@ -269,7 +370,10 @@ export class Agent {
 		requireInGameVerify = false,
 		requireFeatureGuiVerify = false,
 		verifyTarget: VerifyTarget | null = null,
-		runId?: string
+		runId?: string,
+		projectProfile?: ProjectProfile | null,
+		previousBuildReport?: BuildReport | null,
+		knowledgeFacts?: Array<{ key: string; value: string }>
 	): Promise<string> {
 		const clarificationGate = { count: this.clarificationCount };
 		const engine = new WorkflowEngine({
@@ -289,6 +393,10 @@ export class Agent {
 			requireInGameVerify,
 			requireFeatureGuiVerify,
 			verifyTarget,
+			projectProfile,
+			previousBuildReport,
+			knowledgeFacts,
+			onRepairProposal: this.onRepairProposal,
 			runId,
 			modelCall: async (workflowMessages, tools, onChunk) => {
 				// Last message is the per-step workflow prompt; compact/persist history only.
@@ -324,6 +432,8 @@ export class Agent {
 					},
 					4096
 				);
+				const protocolDiagnostics = result.protocolDiagnostics || [];
+				const protocolRecovery = this.updateProtocolRecovery(apiModel, result.toolCalls, protocolDiagnostics);
 				this.emit({ kind: EventKind.Message, text, reasoning: reasoningText });
 				if (result.usage && (result.usage.promptTokens || result.usage.totalTokens || result.usage.completionTokens)) {
 					const u = result.usage;
@@ -344,6 +454,8 @@ export class Agent {
 					toolCalls: result.toolCalls,
 					text,
 					reasoning: reasoningText,
+					protocolDiagnostics,
+					protocolRecovery,
 					usage: result.usage,
 					replaceBaseMessages: prepared.compacted ? prepared.messages : undefined
 				};
@@ -430,6 +542,8 @@ export class Agent {
 		const emitLifecycle = options.emitLifecycle ?? true;
 		const planTracker = options.planTracker ?? null;
 		const opsOnlyPlan = options.opsOnlyPlan ?? false;
+		this.activeProviderId = options.providerId;
+		this.activeProtocol = options.protocol;
 		this.runLifecycleMeta = {
 			turnMode: options.turnMode,
 			composerMode: options.composerMode
@@ -458,7 +572,10 @@ export class Agent {
 				Boolean(options.requireInGameVerify),
 				Boolean(options.requireFeatureGuiVerify),
 				options.verifyTarget ?? null,
-				runId
+				runId,
+				options.projectProfile ?? null,
+				options.previousBuildReport ?? null,
+				options.knowledgeFacts
 			);
 		}
 
@@ -507,7 +624,7 @@ export class Agent {
 
 			// Token budget warning (effective working window, not vendor 1M claim)
 			const estimatedTokens = estimatePromptTokens(apiMessages);
-			const warnAt = warnTokenThreshold(getModelContextWindow(apiModel) ?? 128_000);
+			const warnAt = warnTokenThreshold(this.contextWindowFor(apiModel));
 			if (estimatedTokens > warnAt) {
 				this.emit({
 					kind: EventKind.Notice,
@@ -537,13 +654,11 @@ export class Agent {
 					logger.agent("KICK: plan phase exploration cap reached");
 				}
 				if (this.planForceSubmitOnly) {
-				availableTools = availableTools.filter((t) =>
-					PLAN_POST_LOCK_TOOL_NAMES.has(t.name) || t.name === "read_file"
-				);
-			} else if (this.planExplorationLocked) {
-				availableTools = this.filterExplorationTools(availableTools);
-			}
-		} else if (phase === "execute") {
+					availableTools = availableTools.filter((t) => isPlanPostLockTool(t.name));
+				} else if (this.planExplorationLocked) {
+					availableTools = this.filterExplorationTools(availableTools);
+				}
+			} else if (phase === "execute") {
 				if (this.readonlyLocked) {
 					availableTools = this.filterExplorationTools(availableTools);
 				} else if (readonlyRounds >= MAX_READONLY_ROUNDS) {
@@ -557,6 +672,29 @@ export class Agent {
 					logger.agent("KICK: exploration tools permanently removed");
 				}
 			}
+
+			// Resolve capabilities once for this model turn. The snapshot is what the
+			// response validator enforces; it is no longer what the provider is shown.
+			const activeToolSnapshot = createActiveToolSnapshot({
+				registry: this.registry,
+				phase,
+				turnId: `${phase}:${step + 1}`,
+				candidateTools: availableTools,
+				...(this.runLifecycleMeta.turnMode === "chat" ? { chatToolNames: new Set(["read_file", "explain_code", "fabric_docs_search"]) } : {})
+			});
+
+			// Plan and execute advertise the immutable full catalog so the serialized
+			// request prefix is byte-identical between rounds. Advertising the per-round
+			// gated subset churned `tools` every turn, which is what held prompt-cache hits
+			// at ~60% while DeepSeek re-billed the whole context as a cache miss.
+			// Chat keeps its small fixed surface (no churn to remove), and a grace round
+			// still gets no tools at all.
+			const advertisedTools = this.graceRound
+				? []
+				: this.runLifecycleMeta.turnMode === "chat"
+					? activeToolSnapshot.tools
+					: this.registry.schemas();
+			availableTools = advertisedTools;
 
 			// 1. Stream
 			let streamContent = "";
@@ -606,7 +744,21 @@ export class Agent {
 				}
 
 				const rawToolCalls = result.toolCalls;
-				const validation = validateToolCalls(rawToolCalls, availableTools, { phase });
+				const validation = validateToolCalls(rawToolCalls, activeToolSnapshot, { phase });
+				const protocolDiagnostics = result.protocolDiagnostics || [];
+				const protocolRecovery = this.updateProtocolRecovery(apiModel, rawToolCalls, protocolDiagnostics);
+				const protocolOnlyFailure = protocolRecovery.protocolOnlyFailure;
+				if (protocolRecovery.fallbackActivated) {
+					messages.push({ role: 'user', content: '【系统】Provider 原生工具参数流连续两次不完整。下一轮暂时关闭 native tools，请使用文本 XML 格式：<tool_call>{"name":"工具名","args":{...}}</tool_call>。只提交完整 JSON。' });
+					this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: '原生工具协议连续失败，已降级到 XML fallback；不计入代码修复预算。' } });
+					continue;
+				}
+				if (protocolRecovery.paused) {
+					finalContent = `[HARNESS_PAUSED:protocol] Provider 工具协议连续失败，已保存当前检查点。${protocolRecovery.reason || ''}`;
+					this.emit({ kind: EventKind.Notice, notice: { level: 'warn', text: 'Provider 协议降级仍失败，任务已暂停；可发送「继续」切换已配置 fallback。' } });
+					this.finishRun(emitLifecycle, 'provider_protocol_stalled');
+					return finalContent;
+				}
 				for (const [id, rejected] of validation.rejected) {
 					this.emit({
 						kind: EventKind.ToolDispatch,
@@ -628,12 +780,18 @@ export class Agent {
 				const toolCalls = validation.accepted;
 				const cleanText = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").trim();
 				finalContent = cleanText || streamContent;
+				if (protocolOnlyFailure && rawToolCalls.length > 0 && toolCalls.length === 0) {
+					messages.push({ role: 'user', content: '【系统】工具参数流未完整结束（arguments_incomplete），请重新提交同一个工具调用的完整参数；这不是白名单拒绝，也不需要知识库查询。' });
+					continue;
+				}
 
 				if (rawToolCalls.length > 0 && toolCalls.length === 0) {
 					// Preserve the exact rejected call and field-level result in model history.
 					// Previously the model only received a generic "tool rejected" nudge and
 					// therefore repeated the same malformed submit_plan forever.
-					appendToolRoundHistory(messages, streamContent, rawToolCalls, validation.rejected);
+					appendToolRoundHistory(messages, streamContent, rawToolCalls, validation.rejected, undefined, {
+						reasoningContent: streamReasoning
+					});
 					const signature = rejectedToolCallSignature(validation.rejected.values());
 					if (signature && signature === this.lastRejectedToolSignature) {
 						this.consecutiveSameRejectedToolRounds++;
@@ -669,14 +827,20 @@ export class Agent {
 						} else {
 							messages.push({
 								role: "user",
-								content: `【系统】工具未执行（${rejectedNames}）：探索工具已锁定或不在白名单。` + "请调用 submit_plan 提交计划，或用 ask_clarification 提问（须带 options）。"
+								content: `【系统】工具未执行（${rejectedNames}）：探索工具已锁定或不在本轮工具快照。` + "请调用 submit_plan 提交计划，或用 ask_clarification 提问（须带 options）。"
 							});
 						}
 					} else {
 						this.planOfferedRejectRounds = 0;
+						const failureKinds = [...validation.rejected.values()].map((item) => item.failureKind || item.errorKind || 'execution_failed');
+						const guidance = failureKinds.every((kind) => kind === 'arguments_invalid' || kind === 'invalid_tool_arguments')
+							? '参数已接收但不符合 Schema，请只修正具体字段。'
+							: failureKinds.every((kind) => kind === 'tool_inactive' || kind === 'tool_not_offered' || kind === 'tool_not_allowed')
+								? '工具存在但本轮未激活，请使用本轮工具快照中的工具。'
+								: '请依据每个调用返回的具体错误码执行唯一修正动作。';
 						messages.push({
 							role: "user",
-							content: "【系统】刚才的工具调用未执行：工具不在当前阶段白名单中，或参数不符合 Schema。" + "请只使用本轮公开工具并修正参数。"
+							content: `【系统】刚才的工具调用未执行。${guidance}不要把参数错误当作白名单错误，也不要重复读取相同日志。`
 						});
 					}
 					continue;
@@ -877,7 +1041,7 @@ export class Agent {
 							if (call) this.recordRepeatSuccess(name, call.args, Boolean(result.error));
 							this.emit({
 								kind: EventKind.ToolResult,
-								tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff, outcome: result.outcome, runId: result.runId, executionId: result.executionId, validation: result.validation }
+							tool: { id, name, args: JSON.stringify(result.args || {}), output: result.output, error: result.error, durationMs: result.durationMs, fileDiff: result.fileDiff, outcome: result.outcome, runId: result.runId, executionId: result.executionId, validation: result.validation, buildReport: result.buildReport, validationResult: result.validationResult }
 							});
 							this.onToolResult?.(name, id, result.output);
 						},
@@ -896,7 +1060,8 @@ export class Agent {
 					const submittedPlan = [...results.values()].find((r) => r.toolName === "submit_plan" && r.ok);
 					if (submittedPlan) {
 						appendToolRoundHistory(messages, streamContent, callsWithIds, results, undefined, {
-							visionModel: isVisionCapableModel(apiModel)
+							visionModel: isVisionCapableModel(apiModel),
+							reasoningContent: streamReasoning
 						});
 						finalContent = submittedPlan.output;
 						messages.push({ role: "assistant", content: finalContent });
@@ -912,7 +1077,8 @@ export class Agent {
 						const options = Array.isArray(r.args?.options) ? (r.args.options as string[]).map(String) : undefined;
 						const text = streamContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").trim();
 						appendToolRoundHistory(messages, text, callsWithIds, results, undefined, {
-							visionModel: isVisionCapableModel(apiModel)
+							visionModel: isVisionCapableModel(apiModel),
+							reasoningContent: streamReasoning
 						});
 						this.clarificationPending = true;
 						this.clarificationCount++;
@@ -978,7 +1144,7 @@ export class Agent {
 					}
 
 					const pushRoundHistory = (instruction: string): void => {
-						const ephemeral = appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction, { visionModel: isVisionCapableModel(apiModel) });
+						const ephemeral = appendToolRoundHistory(messages, streamContent, executedCalls, results, instruction, { visionModel: isVisionCapableModel(apiModel), reasoningContent: streamReasoning });
 						if (ephemeral) {
 							messages.push({ role: "user", content: ephemeral });
 						}
@@ -1122,19 +1288,48 @@ export class Agent {
 		finishReason?: string;
 		toolCalls: ModelToolCall[];
 		usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number };
+		protocolDiagnostics?: ProviderProtocolDiagnostic[];
 	}> {
 		let lastError: unknown;
+		let requestMessages = messages;
+		let reasoningRetried = false;
 		for (let attempt = 0; attempt < MAX_FETCH_RETRIES; attempt++) {
 			const invocationId = `request_${Date.now().toString(36)}_${++_modelInvocationIdCounter}`;
 			const startedAt = Date.now();
 			this.onModelInvocation?.({ invocationId, modelId: model, phase: "start", startedAt, status: "running" });
 			try {
-				const result = await this.streamFromAPIOnce(endpoint, apiKey, model, messages, tools, abortSignal, onChunk, maxTokens);
+				const result = await this.streamFromAPIOnce(endpoint, apiKey, model, requestMessages, tools, abortSignal, onChunk, maxTokens);
 				this.onModelInvocation?.({ invocationId, modelId: model, phase: "end", startedAt, endedAt: Date.now(), status: "completed" });
 				return result;
 			} catch (err) {
 				this.onModelInvocation?.({ invocationId, modelId: model, phase: "end", startedAt, endedAt: Date.now(), status: "failed", error: String(err) });
+				const protocolMessage = String(err)
+					.replace(/Bearer\s+[^\s]+/gi, 'Bearer [redacted]')
+					.replace(/(sk-|key|token|api[_-]?key)[=: ]+[^\s,;]+/gi, '$1=[redacted]')
+					.slice(0, 320);
+				this.onProviderProtocolDiagnostic?.({
+					id: `transport:${Date.now().toString(36)}:${attempt}`,
+					providerId: this.activeProviderId,
+					modelId: model,
+					protocol: this.activeProtocol,
+					kind: 'transport',
+					message: protocolMessage,
+					retryCount: attempt,
+					createdAt: Date.now()
+				});
 				lastError = err;
+				// Thinking continuity is a history-shape problem, not a capacity problem:
+				// retry it in place with the field dropped, and never let the caller
+				// "solve" it by switching to another model.
+				if (isReasoningContinuityError(err) && !reasoningRetried) {
+					reasoningRetried = true;
+					requestMessages = withoutReasoningEcho(requestMessages);
+					this.emit({
+						kind: EventKind.Notice,
+						notice: { level: "warn", text: "Provider 拒绝了回传的 reasoning_content，已按无推理历史就地重试同一模型（不切换备用模型）。" }
+					});
+					continue;
+				}
 				if (!isRetryableFetchError(err) || attempt >= MAX_FETCH_RETRIES - 1) throw err;
 				const delay = fetchRetryDelayMs(attempt);
 				logger.agent("API fetch retry", { attempt: attempt + 1, delay, error: String(err) });
@@ -1164,21 +1359,10 @@ export class Agent {
 		finishReason?: string;
 		toolCalls: ModelToolCall[];
 		usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number };
+		protocolDiagnostics?: ProviderProtocolDiagnostic[];
 	}> {
-		const body: Record<string, unknown> = {
-			model,
-			messages: messages.map(({ origin: _origin, taskId: _taskId, phase: _phase, ...message }) => message),
-			stream: true,
-			max_tokens: maxTokens,
-			stream_options: { include_usage: true },
-			...buildProviderThinkingFields(model)
-		};
-		if (tools.length > 0) {
-			body.tools = tools.map((t) => ({
-				type: "function",
-				function: { name: t.name, description: t.description, parameters: t.parameters }
-			}));
-		}
+		const adapter = createModelAdapter({ endpoint, model, providerId: this.activeProviderId, protocol: this.activeProtocol });
+		const request = adapter.buildRequest({ endpoint, apiKey, model, providerId: this.activeProviderId, protocol: this.activeProtocol, messages, tools: this.xmlFallbackActive ? [] : tools, maxTokens });
 
 		// Create a timeout signal that aborts after 120s of no response
 		const API_TIMEOUT_MS = 120_000;
@@ -1191,12 +1375,7 @@ export class Agent {
 
 		let response: Response;
 		try {
-			response = await fetch(`${endpoint}/chat/completions`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey.trim()}` },
-				body: JSON.stringify(body),
-				signal: timeoutController.signal
-			});
+			response = await fetch(request.url, { ...request.init, signal: timeoutController.signal });
 		} catch (error) {
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onUserAbort);
@@ -1219,7 +1398,11 @@ export class Agent {
 		let buffer = "";
 		let finishReason: string | undefined;
 		let usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number } = {};
-		const collected: Array<{ index: number; id: string; name: string; args: string }> = [];
+		const assembler = new ToolCallAssembler({
+			protocol: adapter.capabilities.protocol,
+			modelId: model,
+			providerId: this.activeProviderId
+		});
 		let fullText = "";
 		let extraReasoning = "";
 		let reasoningChars = 0;
@@ -1229,6 +1412,7 @@ export class Agent {
 		// 内容路由到 reasoning 字段，避免泄露到用户可见的正文。
 		const thinkFilter = new ThinkTagStreamFilter();
 
+		let servedModelMismatchLogged = false;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
@@ -1240,25 +1424,36 @@ export class Agent {
 					if (!line.startsWith("data: ")) continue;
 					const data = line.slice(6).trim();
 					if (data === "[DONE]") continue;
+					let parsed: any;
 					try {
-						const parsed = JSON.parse(data);
-						if (parsed.usage) {
-							const u = parsed.usage;
-							usage = {
-								promptTokens: u.prompt_tokens ?? u.promptTokens ?? usage.promptTokens,
-								completionTokens: u.completion_tokens ?? u.completionTokens ?? usage.completionTokens,
-								totalTokens: u.total_tokens ?? u.totalTokens ?? usage.totalTokens,
-								cacheHitTokens: u.prompt_cache_hit_tokens ?? u.cacheHitTokens ?? usage.cacheHitTokens,
-								cacheMissTokens: u.prompt_cache_miss_tokens ?? u.cacheMissTokens ?? usage.cacheMissTokens
-							};
-						}
-						const choice = parsed.choices?.[0];
-						if (!choice) continue;
-						const delta = choice.delta || {};
-						if (choice.finish_reason) finishReason = choice.finish_reason;
-						if (delta.reasoning_content) {
-							reasoningChars += String(delta.reasoning_content).length;
-							onChunk?.("", delta.reasoning_content);
+						parsed = JSON.parse(data);
+					} catch {
+						// Providers occasionally emit keep-alive/non-JSON SSE lines.
+						continue;
+					}
+					// A gateway may serve a different id than we requested (retired DeepSeek
+					// names resolve to V4.1 Flash). Cost is billed against the requested id, so
+					// log the first divergence once per request instead of silently trusting it.
+					if (!servedModelMismatchLogged && typeof parsed.model === "string" && parsed.model && parsed.model !== model) {
+						servedModelMismatchLogged = true;
+						logger.agent("Provider served a different model id than requested", { requested: model, served: parsed.model });
+					}
+					for (const event of adapter.normalizeEvent(parsed)) {
+							if (event.type === "usage" && event.usage) {
+								usage = {
+									promptTokens: event.usage.promptTokens ?? usage.promptTokens,
+									completionTokens: event.usage.completionTokens ?? usage.completionTokens,
+									totalTokens: event.usage.totalTokens ?? usage.totalTokens,
+									cacheHitTokens: (parsed.usage?.prompt_cache_hit_tokens ?? parsed.usage?.cacheHitTokens ?? usage.cacheHitTokens),
+									cacheMissTokens: (parsed.usage?.prompt_cache_miss_tokens ?? parsed.usage?.cacheMissTokens ?? usage.cacheMissTokens)
+								};
+								continue;
+							}
+							if (event.type === "done" && event.finishReason) finishReason = event.finishReason;
+							if (event.type === "error") throw new Error(event.error || "Provider stream error");
+							if (event.type === "reasoning_delta" && event.reasoning) {
+								reasoningChars += event.reasoning.length;
+								onChunk?.("", event.reasoning);
 							// Soft-abort endless GLM CoT before tool_calls arrive (max_tokens does not cap thinking).
 							if (!sawToolCallDelta && !fullText && reasoningChars >= MAX_REASONING_HARD_CHARS) {
 								reasoningCapped = true;
@@ -1271,37 +1466,26 @@ export class Agent {
 								}
 								break;
 							}
-						}
-						if (delta.tool_calls) {
-							sawToolCallDelta = true;
-							for (const tc of delta.tool_calls) {
-								let entry = collected.find((e) => e.index === (tc.index ?? 0));
-								if (!entry) {
-									entry = { index: tc.index ?? 0, id: tc.id || `call_${tc.index ?? 0}`, name: "", args: "" };
-									collected.push(entry);
+							}
+							if ((event.type === "tool_call_start" || event.type === "tool_call_delta" || event.type === "tool_call_end") && event.toolCall) {
+								sawToolCallDelta = true;
+								assembler.add(event);
+							}
+							if (event.type === "text_delta" && event.text) {
+								// 通过 thinkFilter 过滤 `<think>` 标签：
+								// - 标签内内容 → reasoning（不显示给用户）
+								// - 标签外内容 → text（正常显示）
+								const filtered = thinkFilter.process(event.text);
+								if (filtered.text) {
+									fullText += filtered.text;
+									onChunk?.(filtered.text, "");
 								}
-								if (tc.id) entry.id = tc.id;
-								if (tc.function?.name) entry.name = tc.function.name;
-								if (tc.function?.arguments) entry.args += tc.function.arguments;
+								if (filtered.reasoning) {
+									extraReasoning += filtered.reasoning;
+									reasoningChars += filtered.reasoning.length;
+									onChunk?.("", filtered.reasoning);
+								}
 							}
-						}
-						if (delta.content) {
-							// 通过 thinkFilter 过滤 `<think>` 标签：
-							// - 标签内内容 → reasoning（不显示给用户）
-							// - 标签外内容 → text（正常显示）
-							const filtered = thinkFilter.process(delta.content);
-							if (filtered.text) {
-								fullText += filtered.text;
-								onChunk?.(filtered.text, "");
-							}
-							if (filtered.reasoning) {
-								extraReasoning += filtered.reasoning;
-								reasoningChars += filtered.reasoning.length;
-								onChunk?.("", filtered.reasoning);
-							}
-						}
-					} catch {
-						/* skip */
 					}
 				}
 				if (reasoningCapped) break;
@@ -1325,16 +1509,19 @@ export class Agent {
 			reasoningChars += flushed.reasoning.length;
 		}
 
-		const nativeCalls: ModelToolCall[] = collected
-			.filter((tc) => tc.name)
-			.map((tc) => {
-				const rawArguments = tc.args || "{}";
-				try {
-					return { id: tc.id, name: tc.name, args: JSON.parse(rawArguments), rawArguments };
-				} catch {
-					return { id: tc.id, name: tc.name, args: {}, rawArguments };
-				}
-			});
+		const finalizedNativeCalls = assembler.finish(finishReason);
+		const protocolDiagnostics = assembler.getDiagnostics();
+		for (const diagnostic of protocolDiagnostics) this.onProviderProtocolDiagnostic?.(diagnostic);
+		const nativeCalls: ModelToolCall[] = finalizedNativeCalls.map((call) => ({
+			id: call.id,
+			name: call.name,
+			args: call.args,
+			rawArguments: call.rawArguments,
+			protocol: call.protocol,
+			providerIndex: call.providerIndex,
+			providerId: call.providerId,
+			...(call.failureKind ? { failureKind: call.failureKind } : {})
+		}));
 
 		// 后处理：清理残留的 `<think>` 标签（防御性，处理 thinkFilter 遗漏的边界情况）
 		if (extraReasoning || /<think>/i.test(fullText)) {
@@ -1383,6 +1570,6 @@ export class Agent {
 		}
 
 		const allCalls = nativeCalls.length > 0 ? nativeCalls : textCalls.length > 0 ? textCalls : planCall;
-		return { finishReason, toolCalls: allCalls, usage };
+		return { finishReason, toolCalls: allCalls, usage, protocolDiagnostics };
 	}
 }

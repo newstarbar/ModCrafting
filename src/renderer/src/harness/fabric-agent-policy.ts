@@ -115,7 +115,7 @@ const COMMON_GUARDRAILS = [
   '功能测试的客观证据标准：必须执行 mc_test_scenario 返回的测试步骤中的"验证"步骤（如 mc_screenshot 截图、mc_world 检查实体、mc_observe_entity 对比状态、mc_inventory 检查物品）。仅"进入世界"不构成功能验证通过的证据。任务总结中必须列出实际执行的验证工具调用和结果，禁止虚构验证结果。',
   '若 mc_inspect/screen 显示 kind=loading（或 LevelLoading/Progress/DownloadingTerrain），必须等待加载完成：继续用 mc_inspect / mc_ensure_test_world 轮询，禁止 click_widget，禁止因此重新 trigger_build runClient（会导致双开实例或程序卡死）。加载超时后向用户报告，等待指导。',
   '若用户描述了游戏内症状（bug/修复场景），进入世界后必须用 mc_inspect / mc_screenshot（必要时 mc_inventory / mc_world / mc_command）做客观校验，禁止仅凭 menu 宣称修复。',
-  '测试-修复循环：mc_screenshot/mc_inspect 客观校验后若发现功能未生效或有 bug，必须进入修复模式——用 edit_file/write_file 修改源码 → trigger_build build 重新构建 → trigger_build runClient 重启游戏 → mc_ensure_test_world 重新进入世界 → 再次 mc_screenshot/mc_inspect 验证。禁止在测试发现 bug 后直接结束会话；必须循环直到验证通过才能 complete_step。最多允许 3 轮修复-再测试循环，超出后向用户报告问题并请求指导。仅在确认需要改代码并重建时才重启游戏；点不到按钮、加载中、无存档等环境问题不得用重启游戏硬闯。',
+  '测试-修复循环：mc_screenshot/mc_inspect 客观校验后若发现功能未生效或有 bug，必须进入诊断修复状态——用最小 PatchProposal 修改源码，由宿主执行结构化 BuildReport 和增量验证，再按需要 trigger_build runClient 与确定性测试。相同 diagnostic ID 的两个不同候选均无推进时暂停并切换已配置 fallback；达到全局预算后保留影子工程和检查点，禁止异常结束会话。仅在确认需要改代码并重建时才重启游戏；点不到按钮、加载中、无存档等环境问题进入环境恢复，不得用重启游戏硬闯。',
   '编写 Fabric 方块/物品/实体/附魔注册代码前，必须先调用 minecraft_data_lookup 查询标准 ID（minecraft:diamond_ore）与原版属性（硬度、爆炸抗性、堆叠、工具、耐久、生命值、附魔等级等），禁止凭记忆填写原版参数。',
   '用户输入模糊、不专业的游戏描述（"会爆炸的绿色怪物"、"挖矿掉的红色石头"）时，必须先用 mc_wiki_search 检索中文 MC 百科向量知识库解析需求，再结合 minecraft_data_lookup 生成 Fabric 代码。',
   '原版机制/红石/生物/术语解释优先用 mc_wiki_search 或 vanilla_mc_wiki_query；Fabric API/注册/事件/迁移用 fabric_docs_search；标准 ID 与属性参数用 minecraft_data_lookup。',

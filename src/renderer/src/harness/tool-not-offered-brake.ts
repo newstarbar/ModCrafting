@@ -3,12 +3,13 @@ import type { ToolResult } from './tools.ts'
 /** Same tool blocked this many consecutive rounds (or ≥ this many in one batch) → hard brake. */
 export const MAX_SAME_TOOL_NOT_OFFERED = 3
 
-const NOT_OFFERED_KINDS = new Set(['tool_not_offered', 'tool_not_allowed'])
+const NOT_OFFERED_KINDS = new Set(['tool_not_offered', 'tool_not_allowed', 'tool_inactive'])
 
-export function isWhitelistReject(result: Pick<ToolResult, 'errorKind' | 'output' | 'error'>): boolean {
+export function isWhitelistReject(result: Pick<ToolResult, 'errorKind' | 'failureKind' | 'output' | 'error'>): boolean {
   if (result.errorKind && NOT_OFFERED_KINDS.has(result.errorKind)) return true
+  if (result.failureKind === 'tool_inactive') return true
   const text = `${result.output || ''}\n${result.error || ''}`
-  return /\[tool_not_offered\]|\[tool_not_allowed\]/.test(text)
+  return /\[tool_inactive\]|\[tool_not_offered\]|\[tool_not_allowed\]/.test(text)
 }
 
 /**

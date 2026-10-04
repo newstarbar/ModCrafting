@@ -1,11 +1,11 @@
 import type { PlanStepState } from './plan-tracker.ts'
 import type { GameTestSpec } from './game-test-protocol.ts'
 
-export type StepKind = 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test' | 'answer'
+export type StepKind = 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'test_design' | 'game_test' | 'answer'
 export type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed'
 
 export interface StepValidation {
-  type: 'file_exists' | 'recipe_validated' | 'mixin_validated' | 'build_success' | 'run_started' | 'game_test_passed' | 'tool_success'
+  type: 'file_exists' | 'recipe_validated' | 'mixin_validated' | 'build_success' | 'run_started' | 'test_design_ready' | 'game_test_passed' | 'tool_success'
   path?: string
 }
 
@@ -19,10 +19,16 @@ export interface WorkflowStep {
   evidence?: string
   gameTest?: GameTestSpec
   allowedTools: string[]
+  /** New name: prompt ordering/recommendations. `allowedTools` is retained
+   * for checkpoints and old replay fixtures; capability snapshots are the
+   * actual per-turn active set. */
+  recommendedTools?: string[]
   maxAttempts: number
   validation?: StepValidation
   /** 步骤是否涉及GUI布局变更，需要先调用 gui_layout_preview 预览 */
   requiresGuiPreview?: boolean
+  /** Host-owned incremental validation gate; never exposed as a user plan step. */
+  validationGate?: 'compile_unit'
 }
 
 export interface WorkflowRunResult {
@@ -48,7 +54,7 @@ export function workflowStepToPlanStep(step: WorkflowStep): PlanStepState {
     id: step.id,
     description: step.title,
     status: step.status === 'failed' ? 'pending' : step.status,
-    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' || step.kind === 'game_test' ? step.kind : undefined,
+    kind: step.kind === 'inspect' || step.kind === 'write' || step.kind === 'recipe' || step.kind === 'mixin' || step.kind === 'test_design' || step.kind === 'game_test' ? step.kind : undefined,
     targetPath: step.targetPath,
     targetPaths: step.targetPaths,
     evidence: step.evidence,

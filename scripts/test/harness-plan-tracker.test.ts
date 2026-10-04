@@ -1305,7 +1305,7 @@ test('normalizeSessionUsage fills defaults and clears turn-level fields', async 
     turnTokens: 999,
     turnCacheHitTokens: 111,
     turnCacheMissTokens: 222
-  }, 'deepseek-v4-flash')
+  }, 'deepseek-flash')
 
   assert.equal(restored.sessionTokens, 12_000)
   assert.equal(restored.cost, 0.045)

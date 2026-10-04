@@ -1,4 +1,4 @@
-import type { Tool, ToolContext } from "./tools";
+import type { Tool, ToolContext } from "./tools.ts";
 
 export type BridgeCallResult = {
 	ok: boolean;
@@ -243,13 +243,13 @@ export const mcCommandTool: Tool = {
 export const mcInputTool: Tool = {
 	name: "mc_input",
 	description:
-		'模拟客户端输入。GUI：click_at {x,y} 或 click_widget {index|label} 点按钮；key_press {key:"f6"} 热键。世界：前进/跳跃/使用/攻击等。验证 GUI 时必须点进待测界面，不能停在 TitleScreen。',
+		'模拟客户端输入。GUI：click_at {x,y}、click_widget {index|label}、click_slot {slot}（容器自动化，合成/背包/熔炉）；key_press {key:"f6"} 热键。世界：前进/跳跃/使用/攻击等。验证 GUI 时必须点进待测界面，不能停在 TitleScreen。',
 	schema: {
 		type: "object",
 		properties: {
 			action: {
 				type: "string",
-				description: "click_at|click_widget|set_text|key_press|key_down|key_up|mouse_click|mouse_move|scroll|forward|back|left|right|jump|sneak|sprint|use|attack|inventory|drop|swap_hands"
+				description: "click_at|click_widget|click_slot|set_text|key_press|key_down|key_up|mouse_click|mouse_move|scroll|forward|back|left|right|jump|sneak|sprint|use|attack|inventory|drop|swap_hands"
 			},
 			key: { type: "string", description: "key_* 用按键（w/e/space/f6/esc/…）" },
 			button: { type: "string", description: "left|right|middle" },
@@ -257,6 +257,8 @@ export const mcInputTool: Tool = {
 			y: { type: "number", description: "click_at 的缩放 GUI Y" },
 			index: { type: "number", description: "click_widget 的控件序号（来自 inspect/widgets）" },
 			label: { type: "string", description: "click_widget 的按钮文案子串" },
+			slot: { type: "number", description: "click_slot 的槽位索引（来自 screen/containerSlots），0=第1格" },
+			shift: { type: "boolean", description: "click_slot：true=shift+click（快速移动，如从背包到合成格）" },
 			dx: { type: "number", description: "mouse_move 偏航增量" },
 			dy: { type: "number", description: "mouse_move 俯仰增量" },
 			delta: { type: "number", description: "滚轮增量" },
@@ -275,6 +277,8 @@ export const mcInputTool: Tool = {
 			y: args.y,
 			index: args.index,
 			label: args.label,
+			slot: args.slot,
+			shift: args.shift,
 			message: args.label,
 			dx: args.dx,
 			dy: args.dy,

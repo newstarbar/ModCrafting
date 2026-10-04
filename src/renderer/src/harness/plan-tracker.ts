@@ -10,7 +10,7 @@ export interface PlanStepState {
   description: string
   status: PlanStepStatus
   /** Preserved from structured plan compile; used by workflow normalizer when set. */
-  kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test'
+  kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'test_design' | 'game_test'
   targetPath?: string
   targetPaths?: string[]
   evidence?: string

@@ -44,9 +44,14 @@ public final class GameTestApi {
         out.put("snapshotFields", Map.of(
                 "player", List.of("uuid", "name", "x", "y", "z", "width", "height", "eyeHeight", "health", "food", "hunger", "saturation", "selectedSlot", "inventory", "dimension"),
                 "serverPlayer", List.of("uuid", "name", "x", "y", "z", "width", "height", "eyeHeight", "health", "hunger", "saturation", "selectedSlot", "inventory", "dimension", "worldTick"),
-                "screen", List.of("ok", "inWorld", "className", "simpleName", "title", "kind", "pausesGame", "scaledWidth", "scaledHeight", "windowWidth", "windowHeight", "widgets")
+                "screen", List.of("ok", "inWorld", "className", "simpleName", "title", "kind", "pausesGame", "scaledWidth", "scaledHeight", "windowWidth", "windowHeight", "widgets", "containerSlots", "containerHandlerType", "containerSyncId", "cursorStack")
         ));
         out.put("queryKinds", List.of("registry", "block", "entities", "recipe"));
+        out.put("containerAutomation", Map.of(
+                "containerSlots", true,
+                "slotClick", true,
+                "slotClickFields", List.of("slot", "button", "shift")
+        ));
         out.put("observation", Map.of(
                 "clientPlayer", true,
                 "serverPlayer", client != null && client.getServer() != null,
@@ -120,6 +125,14 @@ public final class GameTestApi {
         out.put("serverPlayer", serverPlayerSnapshot(client));
         out.put("inventory", GameQueries.inventory());
         out.put("screen", GameQueries.screen());
+        // Expose container at top level for snapshot_value assertions (source=screen -> slots)
+        Object screenObj = out.get("screen");
+        if (screenObj instanceof Map<?, ?> screenMap) {
+            out.put("containerSlots", screenMap.get("containerSlots"));
+            out.put("containerHandlerType", screenMap.get("containerHandlerType"));
+            out.put("containerSyncId", screenMap.get("containerSyncId"));
+            out.put("cursorStack", screenMap.get("cursorStack"));
+        }
         Map<String, Object> widgetState = GameQueries.widgets();
         out.put("widgets", widgetState.getOrDefault("widgets", List.of()));
 

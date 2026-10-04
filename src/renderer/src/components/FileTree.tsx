@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { IconFile, IconFolder, IconFolderOpen, IconLoader } from './Icon'
-import type { FileEntry } from '../vite-env'
 
 interface FileTreeProps {
   rootPath: string

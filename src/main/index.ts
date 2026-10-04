@@ -62,8 +62,16 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (!mainWindow) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow) {
+      createWindow()
+      return
+    }
+    if (!mainWindow.isVisible()) {
+      mainWindow.show()
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
     mainWindow.focus()
   })
 }
@@ -160,12 +168,26 @@ function createWindow(): void {
 
   setupWindowKeyboardShortcuts(mainWindow)
 
+  let windowShown = false
+  const showMainWindow = (): void => {
+    if (automationHidden || !mainWindow || mainWindow.isDestroyed() || windowShown) return
+    windowShown = true
+    mainWindow.show()
+    mainWindow.maximize()
+    mainWindow.focus()
+  }
+
   mainWindow.on('ready-to-show', () => {
-    if (automationHidden) return
-    mainWindow?.maximize()
-    mainWindow?.show()
-    mainWindow?.focus()
+    showMainWindow()
   })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    showMainWindow()
+  })
+
+  const fallbackShowTimer = setTimeout(() => {
+    showMainWindow()
+  }, 2500)
 
   mainWindow.on('focus', () => {
     clearBadge()
@@ -177,6 +199,15 @@ function createWindow(): void {
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     console.error(`Failed to load: ${errorDescription} (${errorCode})`)
     writeDiagnostic('renderer-did-fail-load', { errorCode, errorDescription })
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']!)
+        }
+      }, 1000)
+    } else {
+      showMainWindow()
+    }
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => writeDiagnostic('render-process-gone', details))
@@ -205,6 +236,7 @@ function createWindow(): void {
   }
 
   mainWindow.on('closed', () => {
+    clearTimeout(fallbackShowTimer)
     mainWindow = null
   })
 
@@ -231,28 +263,39 @@ app.whenReady().then(async () => {
     createWindow()
     return
   }
-  // Gitee 等下载源按客户端 TLS/请求指纹限速（undici 60KB/s vs Chromium 44MB/s），
-  // 应用内所有下载（JRE/Gradle/Fabric 种子/知识库）切换到 Chromium 网络栈
-  await enableElectronNetFetch()
 
-  // 测速选优结构化事件 → 渲染层专门测速面板（env:sourceProbe）
-  setProbeListener((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      win.webContents.send('env:sourceProbe', event)
+  try {
+    // Gitee 等下载源按客户端 TLS/请求指纹限速（undici 60KB/s vs Chromium 44MB/s），
+    // 应用内所有下载（JRE/Gradle/Fabric 种子/知识库）切换到 Chromium 网络栈
+    await enableElectronNetFetch().catch((err) => {
+      console.warn('enableElectronNetFetch error:', err)
     })
-  })
 
-  setupMenu()
-  setupIpcHandlers()
-  setupAutomationHandlers()
-  setupContextIngressHandlers()
-  startContextIngressServer()
-  setupTerminalHandlers()
-  setupMcRuntimeHandlers()
-  startAutomationServer(automationOptions)
-  createWindow()
-  // Test Lab must not check for or apply updates from its isolated test profile.
-  if (!smokeTest && !automationOptions.enabled) initUpdater()
+    // 测速选优结构化事件 → 渲染层专门测速面板（env:sourceProbe）
+    setProbeListener((event) => {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        win.webContents.send('env:sourceProbe', event)
+      })
+    })
+
+    setupMenu()
+    setupIpcHandlers()
+    setupAutomationHandlers()
+    setupContextIngressHandlers()
+    startContextIngressServer()
+    setupTerminalHandlers()
+    setupMcRuntimeHandlers()
+    startAutomationServer(automationOptions)
+  } catch (err) {
+    console.error('Error during app initialization:', err)
+    writeDiagnostic('app-initialization-error', err instanceof Error ? err.stack || err.message : String(err))
+  } finally {
+    if (!mainWindow) {
+      createWindow()
+    }
+    // Test Lab must not check for or apply updates from its isolated test profile.
+    if (!smokeTest && !automationOptions.enabled) initUpdater()
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -35,9 +35,15 @@ export const TOOL_LABELS_ZH: Record<string, string> = {
   mc_inspect: '游戏内检视',
   mc_inventory: '查看背包',
   mc_world: '查看附近世界',
+  mc_observe_entity: '观察实体',
   mc_chat: '游戏聊天',
   mc_command: '执行游戏命令',
-  mc_input: '游戏输入'
+  mc_input: '游戏输入',
+  mc_runtime_status: '运行时就绪',
+  mc_ensure_test_world: '进入测试世界',
+  mc_ensure_cheats: '确保作弊权限',
+  mc_test_scenario: '生成测试场景',
+  mc_run_test: '执行游戏测试'
 }
 
 export function getToolLabelZh(name: string, args?: Record<string, unknown>): string {

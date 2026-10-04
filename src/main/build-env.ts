@@ -1052,7 +1052,7 @@ function findJarFiles(dir: string): string[] {
 async function readBaseModMetadata(jarPath: string): Promise<BaseModMetadata | null> {
   try {
     const archive = await unzipper.Open.file(jarPath)
-    const entry = archive.files.find((file) => file.path === 'fabric.mod.json')
+    const entry = archive.files.find((file: { path: string }) => file.path === 'fabric.mod.json')
     if (!entry) return null
     const parsed = JSON.parse((await entry.buffer()).toString('utf8')) as {
       id?: unknown
@@ -1409,6 +1409,8 @@ async function ensureGradleHomeFromSeedImpl(
   // Dev: point GRADLE_USER_HOME at resources/gradle-home-seed (no copy)
   if (!app.isPackaged) {
     if (seedSrc) {
+      // Daemon must not be running when we touch ephemeral cache dirs.
+      await stopGradleDaemons(resolveJdkPath())
       purgeGradleEphemeralCaches(seedSrc)
       onProgress({ phase: 'deps', message: '离线 Fabric 依赖已就绪', percent: 100 })
       return { ok: true }
@@ -1416,6 +1418,7 @@ async function ensureGradleHomeFromSeedImpl(
     // resolveBundledGradleHomeSeedPath may fail because transient dirs
     // (transforms, mc-instances) left by an unclean runClient exit make
     // validateSeedContent reject the seed. Purge them and re-validate.
+    await stopGradleDaemons(resolveJdkPath())
     for (const p of bundledGradleHomeSeedPaths()) {
       if (fs.existsSync(p)) purgeGradleEphemeralCaches(p)
     }
@@ -1968,7 +1971,6 @@ if exist "%MC_BUNDLED_GRADLE%\\bin\\gradle.bat" (
   if not "%JAVA_HOME%"=="" (
     set "GRADLE_OPTS=-Dorg.gradle.java.home=%JAVA_HOME%"
   )
-  "%MC_BUNDLED_GRADLE%\\bin\\gradle.bat" --stop 2>nul
   "%JAVA_HOME%\\bin\\java" -Dorg.gradle.appname=gradlew -classpath "%MC_BUNDLED_GRADLE%\\lib\\${GRADLE_LAUNCHER_JAR}" org.gradle.launcher.GradleMain %*
   exit /b !ERRORLEVEL!
 )
@@ -2229,7 +2231,10 @@ function formatGradleCommand(
   const hasBat = fs.existsSync(path.join(projectPath, 'gradlew.bat'))
   const hasSh = fs.existsSync(path.join(projectPath, 'gradlew'))
   const flags = offline ? '--offline' : '-Dorg.gradle.offline=false'
-  const gradleTask = `${flags} ${task} --no-daemon`
+  // Daemon is left enabled so the JVM startup cost and Loom configuration phase
+  // are paid once per ModCrafting run instead of on every trigger_build / runClient.
+  // The host stops the daemon on `before-quit` (index.ts:runShutdownCleanup).
+  const gradleTask = `${flags} ${task}`
   if (hasBat) return `${cmdPrefix}.\\gradlew ${gradleTask}`
   if (hasSh) return `${cmdPrefix}./gradlew ${gradleTask}`
   return `${cmdPrefix}gradle ${gradleTask}`
@@ -2340,6 +2345,9 @@ export async function runGradleTask(
   if (result.cancelled) return { ...result, usedOnlineFallback: false }
 
   if (result.exitCode !== 0 && isRecoverableGradleCacheError(result.output)) {
+    // Stop the daemon BEFORE purging caches so we don't delete files out from
+    // under a running daemon process (now that --no-daemon is gone).
+    await stopGradleDaemons(resolveJdkPath())
     const gradleHome = getGradleUserHome()
     const purged = purgeGradleEphemeralCaches(gradleHome)
     if (purged > 0) {

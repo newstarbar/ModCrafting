@@ -1,19 +1,11 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import FileTree from './FileTree'
 import FileViewer from './FileViewer'
-import ToolsPanel from './ToolsPanel'
-import SettingsSelect from './SettingsSelect'
-import { IconFile, IconMessage, IconPanelLeftClose, IconPlus, IconSettings, IconTrash, IconWrench } from './Icon'
-
+import BridgeGuidePanel from './BridgeGuidePanel'
+import { IconFile, IconGamepad, IconMessage, IconPanelLeftClose, IconPlus, IconSettings, IconTrash } from './Icon'
 import type { ChatSession } from '../types/chat'
 import { sortSessionsByUpdatedAt } from '../utils/session-sort'
-import {
-  CUSTOM_PROVIDER_ID,
-  getAllProviders,
-  getProvider,
-  resolveSelection,
-} from '../../../shared/llm-providers.ts'
-import type { ApiConfigState, ApiSettingsPayload } from '../types/api-config'
+import { SessionRuntimeManager } from '../harness/session-runtime'
 
 interface FileChange {
   time: string
@@ -30,14 +22,6 @@ interface SessionSidebarProps {
   onDeleteSession: (id: string) => void
   onRenameSession: (id: string, name: string) => void
   fileChanges: FileChange[]
-  apiConfig: ApiConfigState
-  hasSavedApiKey?: boolean
-  savedProviderIds?: string[]
-  encryptionAvailable?: boolean
-  onApiSettingsChange: (config: ApiSettingsPayload) => void
-  onApiKeySave: (key: string) => void | Promise<void>
-  onOpenProject: () => void
-  onCreateProject: () => void
   fileTreeRefreshKey?: number
   selectedFilePath?: string | null
   selectedFile?: { path: string; name: string } | null
@@ -49,38 +33,12 @@ interface SessionSidebarProps {
   onOpenSettingsCenter?: () => void
 }
 
-type SidebarTab = 'sessions' | 'files' | 'tools' | 'settings'
-
-function pickApiSettings(config: ApiConfigState, patch: Partial<ApiSettingsPayload>): ApiSettingsPayload {
-  return {
-    endpoint: patch.endpoint ?? config.endpoint,
-    model: patch.model ?? config.model,
-    providerId: patch.providerId ?? config.providerId,
-  }
-}
-
-function providerUsesManualModel(providerId: string): boolean {
-  if (providerId === CUSTOM_PROVIDER_ID) return true
-  const provider = getProvider(providerId)
-  return (provider?.models.length ?? 0) === 0
-}
-
-function modelIdForProviderSwitch(targetProviderId: string, currentModel: string): string {
-  const provider = getProvider(targetProviderId)
-  const preset = provider?.models[0]?.id
-  if (preset) return preset
-  if (targetProviderId === 'doubao' && /^ep-[a-z0-9-]+$/i.test(currentModel) && currentModel !== 'ep-xxxxxxxx') {
-    return currentModel
-  }
-  return ''
-}
+type SidebarTab = 'sessions' | 'files' | 'bridge'
 
 const SessionSidebar: React.FC<SessionSidebarProps> = ({
   projectPath, projectName, sessions, currentSessionId,
   onOpenSession, onNewSession, onDeleteSession, onRenameSession,
-  fileChanges, apiConfig, hasSavedApiKey = false, savedProviderIds = [], encryptionAvailable = true,
-  onApiSettingsChange, onApiKeySave,
-  onOpenProject, onCreateProject,
+  fileChanges,
   fileTreeRefreshKey = 0, selectedFilePath, selectedFile, fileContent, onSelectFile,
   panelCollapsed = false, panelDragging = false, onTogglePanelCollapse, onOpenSettingsCenter
 }) => {
@@ -88,37 +46,21 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [expandedChanges, setExpandedChanges] = useState(false)
-  const [apiKeyDraft, setApiKeyDraft] = useState('')
-  const [keySaveHint, setKeySaveHint] = useState('')
-  const [deepseekBalance, setDeepseekBalance] = useState<{
-    loading: boolean
-    text: string
-    detail?: string
-    error?: string
-  } | null>(null)
-  const [runtimePath, setRuntimePath] = useState<string>('')
-  const [runtimePathLoading, setRuntimePathLoading] = useState(false)
-  const [runtimeMigrating, setRuntimeMigrating] = useState(false)
-  const [runtimeMessage, setRuntimeMessage] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null)
-  const [isPortable, setIsPortable] = useState(false)
-  const [updateChecking, setUpdateChecking] = useState(false)
-  const [updateResult, setUpdateResult] = useState<{
-    ok: boolean
-    currentVersion: string
-    latestVersion?: string
-    hasUpdate?: boolean
-    source?: 'github' | 'github-proxy'
-    error?: string
-  } | null>(null)
-  const [updateStatus, setUpdateStatus] = useState<{
-    phase: string
-    source?: string
-    percent?: number
-    error?: string
-  } | null>(null)
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() =>
+    SessionRuntimeManager.getInstance().getRunningSessionIds()
+  )
+  const [clarificationSessionIds, setClarificationSessionIds] = useState<Set<string>>(() =>
+    SessionRuntimeManager.getInstance().getClarificationPendingSessionIds()
+  )
   const activeSessionItemRef = useRef<HTMLDivElement | null>(null)
-
   const sortedSessions = sortSessionsByUpdatedAt(sessions)
+
+  useEffect(() => {
+    return SessionRuntimeManager.getInstance().subscribeGlobal(() => {
+      setRunningSessionIds(new Set(SessionRuntimeManager.getInstance().getRunningSessionIds()))
+      setClarificationSessionIds(new Set(SessionRuntimeManager.getInstance().getClarificationPendingSessionIds()))
+    })
+  }, [])
 
   useEffect(() => {
     activeSessionItemRef.current?.scrollIntoView({ block: 'nearest' })
@@ -129,134 +71,10 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   }, [selectedFilePath])
 
   useEffect(() => {
-    const openSettings = () => setActiveTab('settings')
+    const openSettings = () => onOpenSettingsCenter?.()
     window.addEventListener('modcrafting:open-settings', openSettings)
     return () => window.removeEventListener('modcrafting:open-settings', openSettings)
-  }, [])
-
-  // 订阅更新下载进度状态
-  useEffect(() => {
-    const unsubscribe = window.api.onUpdateStatus((payload) => {
-      setUpdateStatus(payload)
-    })
-    return unsubscribe
-  }, [])
-
-  useEffect(() => {
-    setApiKeyDraft('')
-    setKeySaveHint('')
-    setDeepseekBalance(null)
-  }, [apiConfig.providerId])
-
-  // 加载当前 runtime 数据目录路径（用于设置页展示与修改）
-  const refreshRuntimePath = useCallback(async () => {
-    setRuntimePathLoading(true)
-    try {
-      const p = await window.api.appConfigGetEffectiveRuntimePath()
-      setRuntimePath(p)
-    } catch (err) {
-      setRuntimeMessage({ kind: 'error', text: `读取数据目录失败：${String(err)}` })
-    } finally {
-      setRuntimePathLoading(false)
-    }
-  }, [])
-
-  // 检查应用更新：调用主进程 updater:check，结果存入 updateResult
-  const handleCheckForUpdates = useCallback(async () => {
-    if (updateChecking) return
-    setUpdateChecking(true)
-    setUpdateResult(null)
-    setUpdateStatus(null)
-    try {
-      const result = await window.api.checkForUpdates()
-      setUpdateResult(result)
-    } catch (err) {
-      setUpdateResult({ ok: false, currentVersion: '', error: String(err) })
-    } finally {
-      setUpdateChecking(false)
-    }
-  }, [updateChecking])
-
-  useEffect(() => {
-    void refreshRuntimePath()
-    window.api.getEdition().then((ed) => setIsPortable(ed === 'portable')).catch(() => {})
-  }, [refreshRuntimePath])
-
-  const handleChangeRuntimeDir = useCallback(async () => {
-    if (runtimeMigrating) return
-    setRuntimeMessage(null)
-    try {
-      const picked = await window.api.appConfigSelectDirectory()
-      if (!picked) return
-      // 在用户选择的目录下追加 ModCrafting-Data/runtime 子目录
-      const target = `${picked.replace(/[\\/]+$/, '')}\\ModCrafting-Data\\runtime`
-      if (target === runtimePath) {
-        setRuntimeMessage({ kind: 'info', text: '选择的目录与当前路径相同' })
-        return
-      }
-      setRuntimeMigrating(true)
-      setRuntimeMessage({ kind: 'info', text: '正在停止 Gradle 并迁移数据，请稍候…' })
-      const result = await window.api.appConfigMigrateRuntime(target)
-      if (!result.success) {
-        setRuntimeMessage({ kind: 'error', text: result.error || '迁移失败' })
-        return
-      }
-      setRuntimePath(target)
-      if (result.migrated) {
-        setRuntimeMessage({
-          kind: 'success',
-          text: `数据已迁移到新位置。${result.requireRestart ? '请重启应用以使新路径完全生效。' : ''}`
-        })
-      } else {
-        setRuntimeMessage({ kind: 'success', text: '数据目录已更新。请重启应用以使新路径完全生效。' })
-      }
-    } catch (err) {
-      setRuntimeMessage({ kind: 'error', text: `操作失败：${String(err)}` })
-    } finally {
-      setRuntimeMigrating(false)
-    }
-  }, [runtimeMigrating, runtimePath])
-
-  const refreshDeepSeekBalance = useCallback(async (opts?: { useDraftKey?: boolean }) => {
-    if (apiConfig.providerId !== 'deepseek') return
-    setDeepseekBalance({ loading: true, text: '查询中…' })
-    try {
-      const draft = opts?.useDraftKey ? apiKeyDraft.trim() : ''
-      const result = await window.api.fetchDeepSeekBalance(draft || undefined)
-      if (!result.success) {
-        setDeepseekBalance({ loading: false, text: '—', error: result.error || '查询失败' })
-        return
-      }
-      const preferred = result.balances?.find((b) => b.currency === result.displayCurrency)
-        ?? result.balances?.[0]
-      const symbol = result.displayCurrency === 'USD' ? '$' : '￥'
-      const total = result.displayTotal ?? preferred?.totalBalance ?? '0'
-      const detail = preferred
-        ? `赠送 ${symbol}${preferred.grantedBalance} · 充值 ${symbol}${preferred.toppedUpBalance}`
-          + (result.isAvailable === false ? ' · 余额暂不可用于 API' : '')
-        : undefined
-      setDeepseekBalance({
-        loading: false,
-        text: `${symbol}${total}`,
-        detail
-      })
-    } catch (err) {
-      setDeepseekBalance({
-        loading: false,
-        text: '—',
-        error: err instanceof Error ? err.message : String(err)
-      })
-    }
-  }, [apiConfig.providerId, apiKeyDraft])
-
-  useEffect(() => {
-    if (activeTab !== 'settings' || apiConfig.providerId !== 'deepseek') return
-    if (!hasSavedApiKey) {
-      setDeepseekBalance({ loading: false, text: '—', error: '请先保存 API Key' })
-      return
-    }
-    void refreshDeepSeekBalance()
-  }, [activeTab, apiConfig.providerId, hasSavedApiKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onOpenSettingsCenter])
 
   const handleStartRename = useCallback((id: string, currentName: string) => {
     setRenamingId(id)
@@ -264,9 +82,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   }, [])
 
   const handleFinishRename = useCallback((id: string) => {
-    if (renameValue.trim()) {
-      onRenameSession(id, renameValue.trim())
-    }
+    if (renameValue.trim()) onRenameSession(id, renameValue.trim())
     setRenamingId(null)
   }, [renameValue, onRenameSession])
 
@@ -275,96 +91,26 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
     return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
   }
 
-  const handleSaveApiKey = useCallback(async () => {
-    const trimmed = apiKeyDraft.trim()
-    if (!trimmed) return
-    if (trimmed.length < 8) {
-      alert('API Key 长度过短，请检查是否完整复制')
-      return
-    }
-
-    await onApiKeySave(trimmed)
-    setApiKeyDraft('')
-    setKeySaveHint('密钥已保存')
-    window.setTimeout(() => setKeySaveHint(''), 2000)
-    if (apiConfig.providerId === 'deepseek') {
-      window.setTimeout(() => { void refreshDeepSeekBalance() }, 100)
-    }
-  }, [apiKeyDraft, onApiKeySave, apiConfig.providerId, refreshDeepSeekBalance])
-
-  const handleOpenDocsUrl = useCallback(async (url: string) => {
-    const result = await window.api.openExternalUrl(url)
-    if (!result.success) {
-      alert(result.error || '无法打开链接')
-    }
-  }, [])
-
   const tabLabels: Record<SidebarTab, string> = {
     sessions: '对话',
     files: '项目',
-    tools: '工具',
-    settings: '设置'
+    bridge: '测试桥接'
   }
-
-  const providerOptions = useMemo(() => [
-    ...getAllProviders().map((provider) => ({
-      value: provider.id,
-      label: provider.label,
-      saved: savedProviderIds.includes(provider.id),
-    })),
-    {
-      value: CUSTOM_PROVIDER_ID,
-      label: '自定义',
-      saved: savedProviderIds.includes(CUSTOM_PROVIDER_ID),
-    },
-  ], [savedProviderIds])
-
-  const modelOptions = useMemo(() => {
-    const models = getProvider(apiConfig.providerId)?.models ?? []
-    const options = models.map((model) => ({
-      value: model.id,
-      label: model.label,
-    }))
-    if (apiConfig.model && !models.some((m) => m.id === apiConfig.model)) {
-      options.push({ value: apiConfig.model, label: apiConfig.model })
-    }
-    return options
-  }, [apiConfig.providerId, apiConfig.model])
 
   return (
     <div className={`sidebar${panelCollapsed ? ' sidebar--collapsed' : ''}${panelDragging ? ' sidebar--dragging' : ''}`}>
       <nav className="activity-bar">
-        <button
-          type="button"
-          className={`activity-item ${activeTab === 'sessions' ? 'active' : ''}`}
-          title="对话"
-          onClick={() => setActiveTab('sessions')}
-        >
+        <button type="button" className={`activity-item ${activeTab === 'sessions' ? 'active' : ''}`} title="对话" onClick={() => setActiveTab('sessions')}>
           <IconMessage size="lg" />
         </button>
-        <button
-          type="button"
-          className={`activity-item ${activeTab === 'files' ? 'active' : ''}`}
-          title="项目"
-          onClick={() => setActiveTab('files')}
-        >
+        <button type="button" className={`activity-item ${activeTab === 'files' ? 'active' : ''}`} title="项目" onClick={() => setActiveTab('files')}>
           <IconFile size="lg" />
         </button>
-        <button
-          type="button"
-          className={`activity-item ${activeTab === 'tools' ? 'active' : ''}`}
-          title="工具"
-          onClick={() => setActiveTab('tools')}
-        >
-          <IconWrench size="lg" />
+        <button type="button" className={`activity-item ${activeTab === 'bridge' ? 'active' : ''}`} title="测试桥接" onClick={() => setActiveTab('bridge')}>
+          <IconGamepad size="lg" />
         </button>
         <div className="activity-spacer" />
-        <button
-          type="button"
-          className={`activity-item ${activeTab === 'settings' ? 'active' : ''}`}
-          title="设置"
-          onClick={() => onOpenSettingsCenter?.() ?? setActiveTab('settings')}
-        >
+        <button type="button" className="activity-item" title="设置" onClick={() => onOpenSettingsCenter?.()}>
           <IconSettings size="lg" />
         </button>
       </nav>
@@ -383,420 +129,123 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             </button>
           )}
           {onTogglePanelCollapse && (
-            <button
-              type="button"
-              className="sidebar-panel-collapse-btn"
-              onClick={onTogglePanelCollapse}
-              title="收起左侧面板"
-              aria-label="收起左侧面板"
-            >
+            <button type="button" className="sidebar-panel-collapse-btn" onClick={onTogglePanelCollapse} title="收起左侧面板" aria-label="收起左侧面板">
               <IconPanelLeftClose size="sm" />
             </button>
           )}
         </div>
 
         <div className="sidebar-panel-body">
-        {activeTab === 'sessions' && (
-          <>
-            <div className="session-list">
-              {sortedSessions.length === 0 ? (
-                <div style={{ padding: '24px 12px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '12px' }}>
-                  暂无对话记录
-                </div>
-              ) : (
-                sortedSessions.map((s) => (
-                  <div
-                    key={s.id}
-                    ref={s.id === currentSessionId ? activeSessionItemRef : undefined}
-                    className={`session-item mc-inset ${s.id === currentSessionId ? 'active' : ''}`}
-                    onClick={() => onOpenSession(s.id)}
-                  >
-                    {renamingId === s.id ? (
-                      <input
-                        className="chat-input"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={() => handleFinishRename(s.id)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleFinishRename(s.id) }}
-                        autoFocus
-                        style={{ fontSize: '12px', minHeight: '24px', padding: '2px 6px' }}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    ) : (
-                      <div
-                        className="session-name"
-                        onDoubleClick={() => handleStartRename(s.id, s.name)}
-                      >
-                        {s.name}
-                      </div>
-                    )}
-                    <div className="session-time">
-                      {formatTime(s.updatedAt)}
-                      <button
-                        type="button"
-                        className="session-delete-btn"
-                        onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id) }}
-                        title="删除"
-                      >
-                        <IconTrash size="sm" />
-                      </button>
-                    </div>
+          {activeTab === 'sessions' && (
+            <>
+              <div className="session-list">
+                {sortedSessions.length === 0 ? (
+                  <div style={{ padding: '24px 12px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '12px' }}>
+                    暂无对话记录
                   </div>
-                ))
-              )}
-            </div>
-
-            {/* File changes */}
-            {fileChanges.length > 0 && (
-              <div style={{ borderTop: '1px solid var(--border-color)' }}>
-                <div
-                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}
-                  onClick={() => setExpandedChanges(!expandedChanges)}
-                >
-                  <span>文件改动 ({fileChanges.length})</span>
-                  <span>{expandedChanges ? '▲' : '▼'}</span>
-                </div>
-                {expandedChanges && (
-                  <div style={{ maxHeight: '200px', overflow: 'auto' }}>
-                    {fileChanges.map((fc, i) => (
-                      <div key={i} className="file-change-entry">{fc.time} {fc.entry}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
-        {activeTab === 'files' && (
-          <div className="sidebar-files-layout">
-            <div className="sidebar-file-tree">
-              {projectPath ? (
-                <FileTree
-                  key={fileTreeRefreshKey}
-                  rootPath={projectPath}
-                  selectedFile={selectedFilePath || null}
-                  onSelectFile={onSelectFile || (() => {})}
-                />
-              ) : (
-                <div style={{ padding: '24px 12px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '12px' }}>
-                  请先打开或新建项目
-                </div>
-              )}
-            </div>
-            <div className="sidebar-file-preview">
-              {selectedFile ? (
-                <>
-                  <div className="sidebar-file-preview-header">
-                    <span className="filename"><IconFile size="sm" /> {selectedFile.name}</span>
-                  </div>
-                  <div className="sidebar-file-preview-body">
-                    <FileViewer fileName={selectedFile.name} content={fileContent || ''} />
-                  </div>
-                </>
-              ) : (
-                <div className="sidebar-file-preview-empty">选择文件以预览</div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'tools' && (
-          <div style={{ flex: 1, overflow: 'auto', padding: '8px' }}>
-            <ToolsPanel onConfigSaved={() => window.dispatchEvent(new CustomEvent('agent-config-saved'))} />
-          </div>
-        )}
-
-        {activeTab === 'settings' && (
-          <div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 600 }}>
-              API 配置
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>厂商</label>
-              <SettingsSelect
-                value={apiConfig.providerId}
-                options={providerOptions}
-                onChange={(providerId) => {
-                  if (providerId === CUSTOM_PROVIDER_ID) {
-                    onApiSettingsChange(pickApiSettings(apiConfig, { providerId: CUSTOM_PROVIDER_ID }))
-                    return
-                  }
-                  const provider = getProvider(providerId)
-                  const nextModel = modelIdForProviderSwitch(providerId, apiConfig.model)
-                  const resolved = resolveSelection(providerId, nextModel)
-                  onApiSettingsChange(pickApiSettings(apiConfig, {
-                    providerId: resolved.providerId,
-                    endpoint: resolved.endpoint,
-                    model: resolved.modelId,
-                  }))
-                }}
-              />
-              {savedProviderIds.length > 0 && (
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                  ✓ 表示该厂商已保存 API Key
-                </div>
-              )}
-
-              {apiConfig.providerId === CUSTOM_PROVIDER_ID ? (
-                <>
-                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>API 地址</label>
-                  <input
-                    className="mc-input"
-                    placeholder="https://api.example.com/v1"
-                    value={apiConfig.endpoint}
-                    onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { endpoint: e.target.value }))}
-                    style={{ fontSize: '12px', minHeight: '32px' }}
-                  />
-                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型名称</label>
-                  <input
-                    className="mc-input"
-                    placeholder="model-id"
-                    value={apiConfig.model}
-                    onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { model: e.target.value }))}
-                    style={{ fontSize: '12px', minHeight: '32px' }}
-                  />
-                </>
-              ) : providerUsesManualModel(apiConfig.providerId) ? (
-                <>
-                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>推理接入点 ID</label>
-                  <input
-                    className="mc-input"
-                    placeholder="ep-2024xxxxxxxx-xxxxx"
-                    value={apiConfig.model === 'ep-xxxxxxxx' ? '' : apiConfig.model}
-                    onChange={(e) => onApiSettingsChange(pickApiSettings(apiConfig, { model: e.target.value.trim() }))}
-                    style={{ fontSize: '12px', minHeight: '32px' }}
-                  />
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    API 地址：{apiConfig.endpoint}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>模型</label>
-                  <SettingsSelect
-                    value={apiConfig.model}
-                    options={modelOptions}
-                    onChange={(modelId) => {
-                      const resolved = resolveSelection(apiConfig.providerId, modelId)
-                      onApiSettingsChange(pickApiSettings(apiConfig, {
-                        providerId: resolved.providerId,
-                        endpoint: resolved.endpoint,
-                        model: resolved.modelId,
-                      }))
-                    }}
-                  />
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    API 地址：{apiConfig.endpoint}
-                  </div>
-                </>
-              )}
-
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                API 密钥
-                {hasSavedApiKey && (
-                  <span style={{ fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>已保存</span>
-                )}
-              </label>
-              <input className="mc-input" type="password"
-                placeholder={hasSavedApiKey ? '已保存密钥（输入新值可覆盖）' : 'API 密钥'}
-                value={apiKeyDraft}
-                onChange={(e) => setApiKeyDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && apiKeyDraft.trim()) void handleSaveApiKey() }}
-                style={{ fontSize: '12px', minHeight: '32px' }} />
-              <button
-                type="button"
-                className="mc-btn mc-btn--primary"
-                style={{ padding: '4px 10px', fontSize: '11px', alignSelf: 'flex-start' }}
-                disabled={!apiKeyDraft.trim() || !encryptionAvailable}
-                onClick={() => void handleSaveApiKey()}
-              >
-                保存密钥
-              </button>
-              {keySaveHint && (
-                <div style={{ fontSize: '11px', color: 'var(--success)' }}>{keySaveHint}</div>
-              )}
-              {apiConfig.providerId === 'deepseek' && (
-                <div style={{
-                  marginTop: '4px',
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  background: 'var(--bg-elevated, rgba(255,255,255,0.04))',
-                  border: '1px solid var(--border-color, rgba(255,255,255,0.08))'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>账户余额</div>
-                    <button
-                      type="button"
-                      className="mc-btn"
-                      style={{ padding: '2px 8px', fontSize: '10px' }}
-                      disabled={deepseekBalance?.loading}
-                      onClick={() => void refreshDeepSeekBalance({ useDraftKey: true })}
+                ) : (
+                  sortedSessions.map((s) => (
+                    <div
+                      key={s.id}
+                      ref={s.id === currentSessionId ? activeSessionItemRef : undefined}
+                      className={`session-item mc-inset ${s.id === currentSessionId ? 'active' : ''}`}
+                      onClick={() => onOpenSession(s.id)}
                     >
-                      {deepseekBalance?.loading ? '查询中…' : '刷新'}
-                    </button>
-                  </div>
-                  <div style={{ fontSize: '16px', fontWeight: 600, marginTop: '4px', color: 'var(--text-primary)' }}>
-                    {deepseekBalance?.text ?? '—'}
-                  </div>
-                  {deepseekBalance?.detail && (
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.4 }}>
-                      {deepseekBalance.detail}
-                    </div>
-                  )}
-                  {deepseekBalance?.error && (
-                    <div style={{ fontSize: '10px', color: 'var(--error)', marginTop: '2px', lineHeight: 1.4 }}>
-                      {deepseekBalance.error}
-                    </div>
-                  )}
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
-                    费用按 API token × 中文官网人民币单价估算（Flash/Pro 分价）。余额按接口返回币种显示。
-                  </div>
-                </div>
-              )}
-              {!encryptionAvailable && (
-                <div style={{ fontSize: '11px', color: 'var(--error)', lineHeight: 1.5 }}>
-                  当前系统不支持加密存储，无法安全保存 API Key。请配置系统密钥环（Windows/macOS 通常可用）。
-                </div>
-              )}
-              {(() => {
-                const provider = getProvider(apiConfig.providerId)
-                if (!provider?.keyHint) return null
-                return (
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '4px' }}>
-                    {provider.keyHint}
-                    {provider.docsUrl && (
-                      <>
-                        {' '}
-                        <button
-                          type="button"
-                          className="settings-docs-link"
-                          onClick={() => void handleOpenDocsUrl(provider.docsUrl)}
-                        >
-                          获取 API Key
+                      {renamingId === s.id ? (
+                        <input
+                          className="chat-input"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onBlur={() => handleFinishRename(s.id)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleFinishRename(s.id) }}
+                          autoFocus
+                          style={{ fontSize: '12px', minHeight: '24px', padding: '2px 6px' }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0 }}>
+                          <div className="session-name" onDoubleClick={() => handleStartRename(s.id, s.name)}>
+                            {s.name}
+                          </div>
+                          {runningSessionIds.has(s.id) && (
+                            <span className="session-status-badge session-status-badge--running" title="Agent 正在执行中">运行中</span>
+                          )}
+                          {clarificationSessionIds.has(s.id) && (
+                            <span className="session-status-badge session-status-badge--clarify" title="等待用户回复">待确认</span>
+                          )}
+                        </div>
+                      )}
+                      <div className="session-time">
+                        {formatTime(s.updatedAt)}
+                        <button type="button" className="session-delete-btn" onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id) }} title="删除">
+                          <IconTrash size="sm" />
                         </button>
-                      </>
-                    )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {fileChanges.length > 0 && (
+                <div style={{ borderTop: '1px solid var(--border-color)' }}>
+                  <div
+                    style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}
+                    onClick={() => setExpandedChanges(!expandedChanges)}
+                  >
+                    <span>文件改动 ({fileChanges.length})</span>
+                    <span>{expandedChanges ? '▲' : '▼'}</span>
                   </div>
-                )
-              })()}
-            </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
-              数据目录
-            </div>
-            <div style={{
-              padding: '8px 10px',
-              borderRadius: 6,
-              background: 'var(--bg-elevated, rgba(255,255,255,0.04))',
-              border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-              marginBottom: '8px'
-            }}>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                {isPortable ? '便携版数据目录（跟随 exe 位置）' : '当前位置（JDK / Gradle / 依赖缓存，约 1-2 GB）'}
-              </div>
-              <div style={{
-                fontSize: '11px',
-                color: 'var(--text-primary)',
-                fontFamily: 'monospace',
-                wordBreak: 'break-all',
-                lineHeight: 1.4,
-                marginBottom: '6px'
-              }}>
-                {runtimePathLoading ? '加载中…' : (runtimePath || '—')}
-              </div>
-              {!isPortable && (
-                <button
-                  type="button"
-                  className="mc-btn"
-                  style={{ padding: '3px 8px', fontSize: '10px' }}
-                  disabled={runtimeMigrating}
-                  onClick={() => void handleChangeRuntimeDir()}
-                >
-                  {runtimeMigrating ? '迁移中…' : '修改数据目录'}
-                </button>
-              )}
-              {runtimeMessage && (
-                <div style={{
-                  marginTop: '6px',
-                  fontSize: '10px',
-                  lineHeight: 1.4,
-                  color: runtimeMessage.kind === 'success'
-                    ? 'var(--success)'
-                    : runtimeMessage.kind === 'error'
-                      ? 'var(--error)'
-                      : 'var(--text-muted)',
-                  whiteSpace: 'pre-wrap'
-                }}>
-                  {runtimeMessage.text}
+                  {expandedChanges && (
+                    <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+                      {fileChanges.map((fc, i) => (
+                        <div key={i} className="file-change-entry">{fc.time} {fc.entry}</div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
-                修改后会自动迁移已下载的数据；迁移前会停止 Gradle daemon。
+            </>
+          )}
+
+          {activeTab === 'files' && (
+            <div className="sidebar-files-layout">
+              <div className="sidebar-file-tree">
+                {projectPath ? (
+                  <FileTree
+                    key={fileTreeRefreshKey}
+                    rootPath={projectPath}
+                    selectedFile={selectedFilePath || null}
+                    onSelectFile={onSelectFile || (() => {})}
+                  />
+                ) : (
+                  <div style={{ padding: '24px 12px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '12px' }}>
+                    请先打开或新建项目
+                  </div>
+                )}
+              </div>
+              <div className="sidebar-file-preview">
+                {selectedFile ? (
+                  <>
+                    <div className="sidebar-file-preview-header">
+                      <span className="filename"><IconFile size="sm" /> {selectedFile.name}</span>
+                    </div>
+                    <div className="sidebar-file-preview-body">
+                      <FileViewer fileName={selectedFile.name} content={fileContent || ''} />
+                    </div>
+                  </>
+                ) : (
+                  <div className="sidebar-file-preview-empty">选择文件以预览</div>
+                )}
               </div>
             </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
-              项目
+          )}
+
+          {activeTab === 'bridge' && (
+            <div className="sidebar-bridge-layout">
+              <BridgeGuidePanel />
             </div>
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
-              <button type="button" className="mc-btn" style={{ flex: 1, fontSize: '11px' }} onClick={onOpenProject}>打开项目</button>
-              <button type="button" className="mc-btn mc-btn--primary" style={{ flex: 1, fontSize: '11px' }} onClick={onCreateProject}>新建项目</button>
-            </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
-              检查更新
-            </div>
-            <button
-              type="button"
-              className="mc-btn"
-              style={{ width: '100%', fontSize: '11px' }}
-              onClick={handleCheckForUpdates}
-              disabled={updateChecking}
-            >
-              {updateChecking ? '检查中…' : '检查更新'}
-            </button>
-            {updateResult && (
-              <div style={{
-                fontSize: '10px',
-                marginTop: '6px',
-                lineHeight: 1.5,
-                color: updateResult.ok
-                  ? (updateResult.hasUpdate ? 'var(--success)' : 'var(--text-muted)')
-                  : 'var(--error)',
-                whiteSpace: 'pre-wrap'
-              }}>
-                {updateResult.ok
-                  ? updateResult.hasUpdate
-                    ? `发现新版本：v${updateResult.latestVersion}（当前 v${updateResult.currentVersion}）`
-                    : `已是最新版本（v${updateResult.currentVersion}）`
-                  : `检查失败：${updateResult.error || '未知错误'}`}
-              </div>
-            )}
-            {updateStatus && (
-              <div style={{
-                fontSize: '10px',
-                marginTop: '6px',
-                lineHeight: 1.5,
-                color: updateStatus.phase === 'error' ? 'var(--error)' : 'var(--text-muted)',
-                whiteSpace: 'pre-wrap'
-              }}>
-                {updateStatus.phase === 'downloading' && typeof updateStatus.percent === 'number'
-                  ? `下载中… ${updateStatus.percent}%${updateStatus.source ? `（源：${updateStatus.source}）` : ''}`
-                  : updateStatus.phase === 'downloaded'
-                    ? '下载完成，等待安装…'
-                    : updateStatus.phase === 'error'
-                      ? `更新出错：${updateStatus.error || '未知错误'}`
-                      : updateStatus.phase}
-              </div>
-            )}
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '16px', marginBottom: '8px', fontWeight: 600 }}>
-              关于 ModCrafting
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-              AI 驱动的我的世界 Fabric 模组开发环境
-              <br />
-              核心功能：AI 智能体对话 / 代码生成 / 编译终端 / MC 运行管理
-            </div>
-          </div>
-        )}
+          )}
+
         </div>
       </div>
     </div>

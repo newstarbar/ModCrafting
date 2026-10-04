@@ -50,12 +50,14 @@ test('hasImageAttachment gates vision send', () => {
   assert.equal(hasImageAttachment([{ kind: 'image' }]), true)
   // Catalog models use explicit vision flags
   assert.equal(isVisionCapableModel('qwen3.7-plus', 'dashscope'), true)
-  assert.equal(isVisionCapableModel('qwen3.7-max', 'dashscope'), true)
-  assert.equal(isVisionCapableModel('kimi-k2.5', 'moonshot'), true)
+  assert.equal(isVisionCapableModel('qwen3.8-max', 'dashscope'), true)
+  assert.equal(isVisionCapableModel('kimi-k3', 'moonshot'), true)
   assert.equal(isVisionCapableModel('glm-5.2', 'zhipu'), false)
   assert.equal(isVisionCapableModel('glm-5-turbo', 'zhipu'), false)
   assert.equal(isVisionCapableModel('glm-5v-turbo', 'zhipu'), true)
-  assert.equal(isVisionCapableModel('deepseek-chat', 'deepseek'), false)
+  assert.equal(isVisionCapableModel('glm-5.3-flash', 'zhipu'), true)
+  assert.equal(isVisionCapableModel('deepseek-flash', 'deepseek'), true)
+  assert.equal(isVisionCapableModel('deepseek-v4-pro', 'deepseek'), false)
   assert.equal(isVisionCapableModel('MiniMax-M3', 'minimax'), true)
   assert.equal(isVisionCapableModel('MiniMax-M2.7', 'minimax'), false)
   // Custom / unknown still use heuristics

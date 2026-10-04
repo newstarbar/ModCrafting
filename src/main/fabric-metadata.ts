@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { gunzipSync } from 'zlib'
 import { loadFabricVersions, getRuntimeRoot } from './build-env'
+import { nestedClassMemberHints } from './fabric-symbol-hints'
 
 export type FabricSide = 'common' | 'client'
 
@@ -86,7 +87,7 @@ export function loadFabricSymbolIndex(): FabricSymbolIndex {
 }
 
 function normalizeClassName(value: string): string {
-  return value.trim().replaceAll('/', '.').replace(/\.class$/, '')
+  return value.trim().split('/').join('.').replace(/\.class$/, '')
 }
 
 function classSuggestions(classes: FabricClassRecord[], requested: string): string[] {
@@ -141,6 +142,13 @@ export function lookupFabricSymbol(request: FabricSymbolLookupRequest): FabricSy
   const candidates = [...methods, ...fields]
   const ambiguous = Boolean(memberName && !descriptor && candidates.length > 1)
   const missing = Boolean(memberName && candidates.length === 0)
+  const ownSuggestions = missing
+    ? [...classRecord.methods, ...classRecord.fields]
+        .filter((entry) => entry.name.toLowerCase().includes(memberName!.toLowerCase()))
+        .slice(0, 8)
+        .map((entry) => `${entry.name}${entry.descriptor}`)
+    : []
+  const nestedHints = missing ? nestedClassMemberHints(index.classes, classRecord, memberName!) : []
 
   return {
     ok: !ambiguous && !missing,
@@ -149,12 +157,7 @@ export function lookupFabricSymbol(request: FabricSymbolLookupRequest): FabricSy
     class: { name: classRecord.name, side: classRecord.side },
     methods,
     fields,
-    suggestions: missing
-      ? [...classRecord.methods, ...classRecord.fields]
-          .filter((entry) => entry.name.toLowerCase().includes(memberName!.toLowerCase()))
-          .slice(0, 8)
-          .map((entry) => `${entry.name}${entry.descriptor}`)
-      : [],
+    suggestions: [...ownSuggestions, ...nestedHints],
     ambiguous,
     error: ambiguous
       ? 'member is overloaded; descriptor is required'
@@ -164,10 +167,10 @@ export function lookupFabricSymbol(request: FabricSymbolLookupRequest): FabricSy
   }
 }
 
-export function verifyFabricSymbolIndex(): { ok: boolean; error?: string; classes?: number } {
+export function verifyFabricSymbolIndex(): { ok: boolean; error?: string; classes?: number; minecraftVersion?: string; yarnMappings?: string } {
   try {
     const index = loadFabricSymbolIndex()
-    return { ok: true, classes: index.classes.length }
+    return { ok: true, classes: index.classes.length, minecraftVersion: index.minecraftVersion, yarnMappings: index.yarnMappings }
   } catch (error) {
     return { ok: false, error: String(error) }
   }

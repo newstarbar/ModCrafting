@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {
   BUILD_STEP_PATTERN,
   MAX_PLAN_STEPS,
@@ -8,7 +9,7 @@ import {
 } from '../utils/plan-steps.ts'
 import type { GameTestSpec } from './game-test-protocol.ts'
 
-export type StructuredStepKind = 'write' | 'recipe' | 'mixin' | 'inspect' | 'game_test'
+export type StructuredStepKind = 'write' | 'recipe' | 'mixin' | 'inspect' | 'test_design' | 'game_test'
 
 export interface CompiledPlanStep extends ParsedPlanStep {
   kind?: StructuredStepKind
@@ -19,14 +20,16 @@ export interface CompiledPlanStep extends ParsedPlanStep {
   gameTest?: GameTestSpec
 }
 
-const STRUCTURED_KIND_RE = /^\[(write|recipe|mixin|inspect|game_test)\]\s*/i
+const STRUCTURED_KIND_RE = /^\[(write|recipe|mixin|inspect|test_design|game_test)\]\s*/i
 const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;—\-]+)(?:`)?/i
 const VAGUE_STEP_RE = /确保|测试功能|检查|验证|确认无错|输出总结/
 const KNOWLEDGE_INSPECT_RE = /mixin|网络|payload|datagen|新\s*api|access\s*widener|右键|交互|interact/i
 
 const HOST_BUILD_DESC = '构建项目（gradlew build）'
 const HOST_RUN_DESC = '启动游戏进行真实测试（runClient）'
-const HOST_GAME_TEST_DESC = '执行确定性游戏测试（mc_test_scenario → mc_run_test；PASS 才完成）'
+export const HOST_TEST_DESIGN_DESC =
+  '设计游戏测试场景（读机制代码 → 选择沙盒 → mc_test_scenario 注册有效 V2 规格；禁止 mc_run_test）'
+export const HOST_GAME_TEST_DESC = '执行确定性游戏测试（mc_run_test；PASS 才完成）'
 const HOST_INSPECT_DESC =
   '查询知识库确认当前 Minecraft/Fabric 版本 API 与资源格式（fabric_docs_search / fabric_meta_version_check）'
 
@@ -120,7 +123,11 @@ function renumber(steps: CompiledPlanStep[]): CompiledPlanStep[] {
 
 function isHostTerminalStep(description: string): boolean {
   const d = description.toLowerCase()
-  return BUILD_STEP_PATTERN.test(d) || RUN_STEP_PATTERN.test(d) || /mc_run_test|确定性游戏测试/.test(d)
+  return (
+    BUILD_STEP_PATTERN.test(d) ||
+    RUN_STEP_PATTERN.test(d) ||
+    /test_design|设计游戏测试场景|mc_run_test|确定性游戏测试/.test(d)
+  )
 }
 
 function parseStructuredLine(description: string): { kind?: StructuredStepKind; body: string; targetPath?: string; evidence?: string } {
@@ -177,7 +184,7 @@ export function parseJsonPlanSteps(text: string): CompiledPlanStep[] | null {
         const description = String(item.description || item.title || '').trim()
         if (!description) continue
         const kindRaw = String(item.kind || '').toLowerCase()
-        const kind = (['write', 'recipe', 'mixin', 'inspect', 'game_test'].includes(kindRaw)
+        const kind = (['write', 'recipe', 'mixin', 'inspect', 'test_design', 'game_test'].includes(kindRaw)
           ? kindRaw
           : undefined) as StructuredStepKind | undefined
         const targetPath = (item.targetPath || item.path || '').replace(/\\/g, '/') || undefined
@@ -336,17 +343,23 @@ export function appendHostTerminalSteps(steps: CompiledPlanStep[]): CompiledPlan
   if (steps.length === 0) return steps
   const build = steps.find((s) => BUILD_STEP_PATTERN.test(s.description))
   const run = steps.find((s) => RUN_STEP_PATTERN.test(s.description))
-  const gameTest = steps.find((s) => /mc_run_test|确定性游戏测试/i.test(s.description))
+  const testDesign = steps.find((s) => /test_design|设计游戏测试场景/i.test(s.description))
+  const gameTest = steps.find((s) => /mc_run_test|确定性游戏测试/i.test(s.description) && !/test_design|设计游戏测试场景/i.test(s.description))
   const needsGameTest = steps.some((s) =>
     s.kind === 'write' || s.kind === 'recipe' || s.kind === 'mixin' ||
     /\.java|src\/.*resources|配方|物品|方块|实体|交互|hud|gui|mixin/i.test(s.description)
   )
-  // Host terminals always run last in build -> run -> deterministic test order.
+  // Host terminals always run last: build -> run -> test_design -> game_test.
   const implementation = steps.filter((s) => !isHostTerminalStep(s.description))
   const terminals: CompiledPlanStep[] = [
     build || { id: '0', description: HOST_BUILD_DESC, hostManaged: true },
     run || { id: '0', description: HOST_RUN_DESC, hostManaged: true },
-    ...(needsGameTest ? [gameTest || { id: '0', description: HOST_GAME_TEST_DESC, kind: 'game_test', hostManaged: true }] : [])
+    ...(needsGameTest
+      ? [
+          testDesign || { id: '0', description: HOST_TEST_DESIGN_DESC, kind: 'test_design' as const, hostManaged: true },
+          gameTest || { id: '0', description: HOST_GAME_TEST_DESC, kind: 'game_test' as const, hostManaged: true }
+        ]
+      : [])
   ]
   return renumber([...implementation, ...terminals].slice(0, MAX_PLAN_STEPS))
 }

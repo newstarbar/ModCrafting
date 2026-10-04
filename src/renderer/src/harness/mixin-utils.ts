@@ -87,16 +87,32 @@ export function parseAtTarget(value: string): { className: string; memberName: s
   return null
 }
 
+function topLevelImport(type: string): string {
+  const bare = type.replace(/\[\]$/, '')
+  const nested = bare.indexOf('$')
+  // `import a.b.Outer.Inner;` only compiles while Inner is accessible, and the
+  // rendered reference `Outer.Inner` needs Outer imported anyway.
+  return nested < 0 ? bare : bare.slice(0, nested)
+}
+
 function collectImports(types: string[]): { imports: string[]; render: (type: string) => string } {
   const imports = [...new Set(types
-    .map((type) => type.replace(/\[\]$/, ''))
-    .filter((type) => type.includes('.') && !type.startsWith('java.lang.'))
-    .map((type) => type.replaceAll('$', '.')))]
+    .map(topLevelImport)
+    .filter((type) => type.includes('.') && !type.startsWith('java.lang.')))]
     .sort()
   return {
     imports,
     render: (type) => simpleJavaName(type)
   }
+}
+
+/**
+ * A `$`-nested target is often private in the mapped class, so the class literal
+ * `@Mixin(Outer.Inner.class)` cannot compile. `targets=` takes the binary name and
+ * works for nested classes regardless of their visibility.
+ */
+export function mixinAnnotationForm(targetClass: string, simpleName: string): string {
+  return targetClass.includes('$') ? `targets = "${targetClass}"` : `${simpleName}.class`
 }
 
 export function buildMixinScaffold(input: {
@@ -113,7 +129,7 @@ export function buildMixinScaffold(input: {
   const atTarget = metadata.atTarget ? parseAtTarget(metadata.atTarget) : null
   const atMethod = atTarget?.kind === 'method' ? parseMethodDescriptor(atTarget.descriptor) : null
   const atField = atTarget?.kind === 'field' ? parseFieldDescriptor(atTarget.descriptor) : null
-  const allTypes = [metadata.targetClass, ...target.parameters, target.returnType]
+  const allTypes = [metadata.targetClass.includes('$') ? [] : [metadata.targetClass], ...target.parameters, target.returnType].flat()
   if (atTarget) allTypes.push(atTarget.className)
   if (atMethod) allTypes.push(...atMethod.parameters, atMethod.returnType)
   if (atField) allTypes.push(atField)
@@ -195,7 +211,7 @@ export function buildMixinScaffold(input: {
   }
 
   const renderedImports = [...new Set(importsBlock)].sort().map((entry) => `import ${entry};`).join('\n')
-  return `package ${input.packageName};\n\n${renderedImports}\n\n${marker}\n@Mixin(${targetSimple}.class)\n${declaration} {\n${body}\n}\n`
+  return `package ${input.packageName};\n\n${renderedImports}\n\n${marker}\n@Mixin(${mixinAnnotationForm(metadata.targetClass, targetSimple)})\n${declaration} {\n${body}\n}\n`
 }
 
 export function readMixinMetadata(source: string): MixinScaffoldMetadata | null {

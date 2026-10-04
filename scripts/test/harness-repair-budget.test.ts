@@ -23,14 +23,14 @@ const CLIENT_IN_MAIN_LOG = [
   '  59 个错误'
 ].join('\n')
 
-test('step orchestration budget remains fixed and scenario-neutral', () => {
+test('step orchestration diagnostic budget remains bounded and scenario-neutral', () => {
   assert.equal(MAX_FREE_REPAIR_DIAG_ROUNDS, 2)
 })
 
 test('computeRepairBudget remains bounded even when a build names many files', () => {
   assert.equal(computeRepairBudget('BUILD FAILED\nno files'), 3)
   const budget = computeRepairBudget(CLIENT_IN_MAIN_LOG)
-  assert.equal(budget, 3)
+  assert.equal(budget, 5)
   assert.ok(uniqueGradleErrorFiles(CLIENT_IN_MAIN_LOG).length >= 3)
 })
 

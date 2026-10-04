@@ -154,7 +154,7 @@ export async function loadSessionsWithMeta(projectPath: string | null): Promise<
       const disk = await window.api.sessionsLoad(projectPath)
       const diskSessions = (disk.sessions || [])
         .map(normalizeSession)
-        .filter((s): s is ChatSession => s !== null)
+        .filter((s: ChatSession | null): s is ChatSession => s !== null)
       const diskCost = typeof disk.projectCost === 'number' && Number.isFinite(disk.projectCost)
         ? Math.max(0, disk.projectCost)
         : 0

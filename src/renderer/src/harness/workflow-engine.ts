@@ -1,14 +1,14 @@
 import { EventKind, type Event } from "./events.ts";
 import type { PlanTracker } from "./plan-tracker.ts";
-import { isToolAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from "./step-policy.ts";
-import { executeBatch, isRunClientReadyResult, type Registry, type ToolContext, type ToolResult } from "./tools.ts";
+import { isToolSemanticallyAllowedForStep, createRejectedToolResult, isRepairWriteBlocked, type ToolCallWithId, type ToolGateOptions } from "./step-policy.ts";
+import { executeBatch, inferToolError, isRunClientReadyResult, type Registry, type ToolContext, type ToolResult } from "./tools.ts";
 import type { WorkflowRunResult, WorkflowStep } from "./workflow-types.ts";
 import { assistantToolCallMessage, type ChatMessage, type ModelToolCall, toolResultMessage } from "./chat-message.ts";
 import { isRetryableFetchError, sleep, fetchRetryDelayMs } from "./fetch-retry.ts";
 import { formatGradleErrorsForPrompt, gradleErrorSignature, parseGradleErrors } from "./gradle-error-parser.ts";
 import { classifyFabricLog } from "./fabric-utils.ts";
 import { canToolResultAdvanceStep, patternMatchesPath, sourceSetPathAliases } from "./step-evidence.ts";
-import { extractCompileApiHints, hasSimilarDocSearch, normalizeDocSearchFingerprint } from "./doc-search-dedup.ts";
+import { extractCompileApiHints, hasSimilarDocSearch, knowledgeQueryFingerprint, normalizeDocSearchFingerprint } from "./doc-search-dedup.ts";
 import { FileSession } from "./file-session.ts";
 import { workflowStepToPlanStep } from "./workflow-types.ts";
 import { validateToolCalls } from "./tool-call-validator.ts";
@@ -22,12 +22,23 @@ import type { VerifyTarget } from "./verify-target.ts";
 import { describeVerifyMismatch, formatVerifyRepairKick, isWrongScreenVerifyFinding, matchesVerifyTarget } from "./verify-target.ts";
 import { isExploreTool, isKnowledgeTool, isProjectWriteTool, recommendedToolNames } from "./tool-policy.ts";
 import { acceptanceContractFingerprint, getGameTestSpec, gameTestScenarioFingerprint, supersedeGameTestSpec, type GameTestInconclusiveCode, type GameTestResponsibility, type GameTestWorkflowStatus } from "./game-test-protocol.ts";
+import { compareDiagnosticProgress, diagnosticSetKey, stableTextHash } from "../../../shared/harness-diagnostics.ts";
+import type { BuildReport, Diagnostic, ProjectProfile, ProviderProtocolDiagnostic, RepairProposal, ValidationResult } from "../../../shared/harness-runtime.ts";
+import { KnowledgeFactCache } from "./knowledge-fact-cache.ts";
+import { createActiveToolSnapshot } from "./active-tool-snapshot.ts";
 
 export interface WorkflowModelResult {
 	finishReason?: string;
 	toolCalls: ModelToolCall[];
 	text: string;
 	reasoning: string;
+	protocolDiagnostics?: ProviderProtocolDiagnostic[];
+	protocolRecovery?: {
+		protocolOnlyFailure: boolean;
+		fallbackActivated?: boolean;
+		paused?: boolean;
+		reason?: string;
+	};
 	usage?: {
 		promptTokens?: number;
 		completionTokens?: number;
@@ -75,18 +86,33 @@ export interface WorkflowEngineOptions {
 	/** Explicit screen/hotkey target; when set, inspect must match it. */
 	verifyTarget?: import("./verify-target.ts").VerifyTarget | null;
 	runId?: string;
+	/** Deterministic host profile used to select split/common compile tasks. */
+	projectProfile?: ProjectProfile | null;
+	/** Last structured failure from a previous provider invocation/fallback. */
+	previousBuildReport?: BuildReport | null;
+	/** Version-scoped knowledge facts restored from a persisted checkpoint. */
+	knowledgeFacts?: Array<{ key: string; value: string }>;
+	/** Receives each new diagnostic repair proposal for task-level accounting. */
+	onRepairProposal?: (proposal: RepairProposal) => void;
 }
 
 let workflowToolId = 0;
 
 const MAX_REPAIR_ROUNDS = 3;
-const MAX_REPAIR_ROUNDS_CAP = 3;
-const MAX_STEP_MODEL_ROUNDS = 20;
-const MAX_STEP_TOOL_CALLS = 40;
+const MAX_REPAIR_ROUNDS_CAP = 12;
+const MAX_STEP_MODEL_ROUNDS = 40;
+const MAX_STEP_TOOL_CALLS = 120;
 /** Free repair-diagnostic rounds (read_error_log / fabric_log_debugger only). */
 export const MAX_FREE_REPAIR_DIAG_ROUNDS = 2;
 const MAX_MODEL_NETWORK_RETRIES = 2;
 const REPAIR_DIAG_DEDUP_TOOLS = new Set(["read_error_log", "fabric_log_debugger"]);
+const COMPILER_REPAIR_WIKI_TOOLS = new Set(["mc_wiki_search", "vanilla_mc_wiki_query", "minecraft_data_lookup"]);
+
+function isCompilerRepairContext(repairMode: boolean, diagnostics: Diagnostic[], output: string): boolean {
+	if (!repairMode) return false;
+	if (diagnostics.some((diagnostic) => ["configuration", "dependency", "java_compile", "resource", "mixin"].includes(diagnostic.stage))) return true;
+	return /cannot find symbol|找不到符号|package .* does not exist|程序包 .* 不存在|invalid injection|mixin.*target|依赖.*无法解析/i.test(output);
+}
 
 /**
  * 停止所有运行中的 MC 实例并关闭游戏内输入护栏。
@@ -162,8 +188,11 @@ export function uniqueGradleErrorFiles(output: string): string[] {
  * n unique error files → max(3, n+2), capped at MAX_REPAIR_ROUNDS_CAP.
  */
 export function computeRepairBudget(failureOutput: string): number {
-	void failureOutput;
-	return MAX_REPAIR_ROUNDS;
+	const files = uniqueGradleErrorFiles(failureOutput);
+	// A single root error still receives the conservative historical budget.
+	// Multiple independent files need room to expose downstream compiler
+	// errors, but the global cap prevents an endless repair loop.
+	return Math.min(MAX_REPAIR_ROUNDS_CAP, Math.max(MAX_REPAIR_ROUNDS, files.length + 2));
 }
 
 function normalizeRepairPath(value: string, projectPath: string | null): string {
@@ -312,10 +341,14 @@ export function isTerminalFailure(step: WorkflowStep, result: ToolResult): boole
 }
 
 function repairExtraTools(step: WorkflowStep): string[] {
-	return [...new Set([...step.allowedTools, ...recommendedToolNames(step.kind, true)])];
+	return [...new Set([...(step.recommendedTools ?? step.allowedTools), ...recommendedToolNames(step.kind, true)])];
 }
 
-function writeFileRetryInstruction(kind: "build" | "run" | "game_test"): string {
+function recommendedToolsForStep(step: WorkflowStep): string[] {
+	return step.recommendedTools ?? step.allowedTools;
+}
+
+function writeFileRetryInstruction(kind: string): string {
 	const retry = kind === "build"
 		? "trigger_build build"
 		: kind === "run"
@@ -458,6 +491,9 @@ export function isNonBurningRejectionRound(results: Iterable<ToolResult>): boole
 			result.errorKind === "repair_doc_dedup" ||
 			result.errorKind === "policy_deferred" ||
 			result.errorKind === "tool_not_offered" ||
+			result.errorKind === "invalid_tool_arguments" ||
+			result.failureKind === "arguments_incomplete" ||
+			result.failureKind === "arguments_invalid" ||
 			result.errorKind === "tool_call_limit" ||
 			result.errorKind === "after_control_barrier" ||
 			// ACI write-gate rejections are guidance, not a write/build attempt. The
@@ -532,8 +568,17 @@ export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
 	if (step.kind === "game_test") {
 		return (
 			`【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
-			`本步为确定性游戏测试：先 mc_test_scenario 提供实际 subject_id、hotkey（如适用）和至少一条 assertions；再调用 mc_run_test。` +
+			`本步为确定性游戏测试回放：使用 test_design 已注册的 scenarioId 调用 mc_run_test。` +
 			`只有 PASS 可完成；截图、进入世界、任意 Screen 或“命令已发送”均不能通过。INCONCLUSIVE 必须报告缺失证据，禁止改代码。`
+		);
+	}
+	if (step.kind === "test_design") {
+		return (
+			`【系统】当前步骤尚未完成：#${step.id} ${step.title}。\n` +
+			`本步为测试设计：① 用 read_file/grep 阅读刚实现的机制代码，抽出可观测效应；` +
+			`② 选择 sandbox（实体默认 enclosed_arena；配方用 crafting_station）；` +
+			`③ 设计刺激 actions 与客观 assertions/acceptanceContract；` +
+			`④ 调用 mc_test_scenario 注册有效 V2 场景。禁止 mc_run_test、禁止写产品代码、禁止 complete_step。`
 		);
 	}
 	const targetHint = step.targetPath ? `write_file("${step.targetPath}", ...) 或 edit_file("${step.targetPath}", ...)` : "write_file(<新文件路径>, ...) 或 edit_file(<目标路径>, ...)";
@@ -541,11 +586,12 @@ export function buildEmptyToolCallInstruction(step: WorkflowStep): string {
 }
 
 /** List target paths still lacking write evidence (for complete_step rejection hints). */
-export function missingWriteEvidencePaths(step: WorkflowStep, results: ToolResult[]): string[] {
+export function missingWriteEvidencePaths(step: WorkflowStep, results: ToolResult[], adoptedWritePaths: string[] = []): string[] {
 	if (step.kind !== "write") return [];
 	const required = step.targetPaths?.length ? step.targetPaths : step.targetPath ? [step.targetPath] : [];
 	if (required.length === 0) return [];
 	return required.filter((targetPath) => {
+		if (adoptedWritePaths.some((path) => patternMatchesPath(targetPath, path))) return false;
 		const planStep = {
 			...workflowStepToPlanStep(step),
 			kind: "write" as const,
@@ -597,9 +643,17 @@ export function buildWriteForceInstruction(step: WorkflowStep): string {
 	return `【强制写入】探索轮次已用尽。禁止 list_directory/grep/文档查询漫游。` + `${target}。可对目标路径 read_file 一次后 edit_file；或 write_file / fabric_mixin_scaffold 写出代码。`;
 }
 
-export function buildStepFailureMessage(step: WorkflowStep, attempt: number, maxIterations: number, lastToolName: string, repairNote: string, remaining: string): string {
+export function buildStepFailureMessage(
+	step: WorkflowStep,
+	attempt: number,
+	maxIterations: number,
+	lastToolName: string,
+	repairNote: string,
+	remaining: string,
+	budgetNote?: string
+): string {
 	return (
-		`步骤 #${step.id}「${step.title}」未能自动完成（已用 ${attempt}/${maxIterations} 轮）。` +
+		`步骤 #${step.id}「${step.title}」未能自动完成（${budgetNote || `已用 ${attempt}/${maxIterations} 轮`}）。` +
 		`最后工具：${lastToolName || "无"}。\n\n` +
 		repairNote +
 		`建议：发送「继续」恢复执行，或根据日志用 edit_file 修复后重试。\n\n` +
@@ -620,12 +674,25 @@ function statusForPlan(step: WorkflowStep): string {
 	return step.status;
 }
 
-function normalizeModelToolCalls(toolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; rawArguments?: string }>): ModelToolCall[] {
+function normalizeModelToolCalls(toolCalls: Array<{
+	id?: string;
+	name: string;
+	args: Record<string, unknown>;
+	rawArguments?: string;
+	protocol?: ModelToolCall['protocol'];
+	providerIndex?: number;
+	providerId?: string;
+	failureKind?: ModelToolCall['failureKind'];
+}>): ModelToolCall[] {
 	return toolCalls.map((call) => ({
 		id: call.id || `workflow_call_${++workflowToolId}`,
 		name: call.name,
 		args: call.args,
-		rawArguments: call.rawArguments || JSON.stringify(call.args)
+		rawArguments: call.rawArguments || JSON.stringify(call.args),
+		...(call.protocol ? { protocol: call.protocol } : {}),
+		...(call.providerIndex == null ? {} : { providerIndex: call.providerIndex }),
+		...(call.providerId ? { providerId: call.providerId } : {}),
+		...(call.failureKind ? { failureKind: call.failureKind } : {})
 	}));
 }
 
@@ -642,7 +709,7 @@ function resultCompletesStep(
 ): boolean {
 	if (!result.ok || result.error) return false;
 	if (result.toolName === "complete_step") {
-		if (step.kind === "build" || step.kind === "run" || step.kind === "game_test") return false;
+		if (step.kind === "build" || step.kind === "run" || step.kind === "test_design" || step.kind === "game_test") return false;
 		if (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin") {
 			return stepHasEvidence;
 		}
@@ -665,6 +732,8 @@ function resultCompletesStep(
 			);
 		case "run":
 			return isRunClientReadyResult(result);
+		case "test_design":
+			return isValidTestDesignScenarioResult(result);
 		case "game_test":
 			return result.toolName === "mc_run_test" && gameTestResultMatchesCurrentScenario(step, result) && result.validation?.kind === "game" && result.validation.verdict === "PASS" && result.validation.valid;
 		case "answer":
@@ -691,6 +760,20 @@ function gameTestScenarioIdFromResult(result: ToolResult): string | undefined {
 	if (result.toolName !== "mc_test_scenario" || !result.ok || result.error) return undefined;
 	const matches = String(result.output || "").match(/\bscenario_[a-z0-9_]+\b/gi);
 	return matches?.at(-1);
+}
+
+/** test_design advances only after a registered V2 scenario with contract + actions + assertions. */
+function isValidTestDesignScenarioResult(result: ToolResult): boolean {
+	const scenarioId = gameTestScenarioIdFromResult(result);
+	if (!scenarioId) return false;
+	const spec = getGameTestSpec(scenarioId);
+	if (!spec) return false;
+	if (!spec.actions?.length) return false;
+	if (!spec.assertions?.length) return false;
+	const contract = spec.acceptanceContract;
+	if (!contract?.requirements?.length) return false;
+	const hasGameAssertion = contract.requirements.some((requirement) => requirement.oracle?.type === "game_assertion");
+	return hasGameAssertion || Boolean(spec.visualOnly);
 }
 
 function gameTestResultMatchesCurrentScenario(step: WorkflowStep, result: ToolResult): boolean {
@@ -800,7 +883,7 @@ export function recordsStepEvidence(step: WorkflowStep, result: ToolResult): boo
 	return canToolResultAdvanceStep(planStep, result).ok;
 }
 
-export function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[]): boolean {
+export function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[], adoptedWritePaths: string[] = []): boolean {
 	const successful = results.filter((result) => result.ok && !result.error);
 	if (step.kind === "inspect") {
 		return successful.some((result) => recordsStepEvidence(step, result));
@@ -815,6 +898,10 @@ export function stepEvidenceSatisfied(step: WorkflowStep, results: ToolResult[])
 		return successful.some((result) => recordsStepEvidence(step, result));
 	}
 	return requiredPaths.every((targetPath) =>
+		// A helper tool already wrote this path in an earlier step of the same run
+		// (e.g. fabric_mixin_register landing in the mixin step). Only real tool
+		// artifacts are admissible — a file merely existing on disk is not.
+		adoptedWritePaths.some((path) => patternMatchesPath(targetPath, path)) ||
 		successful.some((result) => {
 			const artifacts = result.artifactPaths?.length ? result.artifactPaths : [result.artifactPath || String(result.args?.path || "")].filter(Boolean);
 			return artifacts.some((artifactPath) => {
@@ -920,6 +1007,10 @@ export class WorkflowEngine {
 	private requireInGameVerify: boolean;
 	private requireFeatureGuiVerify: boolean;
 	private verifyTarget: VerifyTarget | null;
+	private projectProfile: ProjectProfile | null;
+	private previousBuildReport: BuildReport | null;
+	private onRepairProposal?: (proposal: RepairProposal) => void;
+	private knowledgeFactCache: KnowledgeFactCache;
 	private runClientReady = false;
 	private inGameVerified = false;
 	/** 前一个步骤是否为 run 类型（连续 run 步骤间不重置 runClientReady） */
@@ -955,13 +1046,292 @@ export class WorkflowEngine {
 		this.requireInGameVerify = Boolean(options.requireInGameVerify);
 		this.requireFeatureGuiVerify = Boolean(options.requireFeatureGuiVerify);
 		this.verifyTarget = options.verifyTarget ?? null;
+		this.projectProfile = options.projectProfile ?? null;
+		this.previousBuildReport = options.previousBuildReport ?? null;
+		this.onRepairProposal = options.onRepairProposal;
+		this.knowledgeFactCache = new KnowledgeFactCache();
+		for (const fact of options.knowledgeFacts || []) {
+			if (fact?.key && typeof fact.value === "string") this.knowledgeFactCache.set(fact.key, fact.value);
+		}
+	}
+
+	private validationTask(): string {
+		return this.projectProfile?.splitEnvironment
+			? "compileJava compileClientJava processResources"
+			: "compileJava processResources";
+	}
+
+	/**
+	 * Reasoning produced by the model round that is about to be written to history.
+	 * Thinking-capable providers demand it back on the following turns, so it is
+	 * stored per assistant turn and consumed exactly once.
+	 */
+	private roundReasoning = "";
+
+	private takeRoundReasoning(): string | undefined {
+		const reasoning = this.roundReasoning;
+		this.roundReasoning = "";
+		return reasoning || undefined;
+	}
+
+	/**
+	 * Host-owned validation gate for a coherent implementation step. It runs
+	 * after the step's writes, before the model is allowed to move on. The
+	 * structured BuildReport is attached to the synthetic result so repair mode
+	 * sees compiler diagnostics directly and never has to tail the same log.
+	 */
+	private async runValidationGate(step: WorkflowStep, writes: ToolResult[]): Promise<ToolResult | undefined> {
+		if (!this.projectPath || !["write", "recipe", "mixin"].includes(step.kind)) return undefined;
+		const id = `validation_${step.id}_${Date.now().toString(36)}`;
+		const outputFor = (value: string | { output: string; buildReport?: BuildReport; validationResult?: ValidationResult }): { output: string; report?: BuildReport; validationResult?: ValidationResult } =>
+			typeof value === "string" ? { output: value } : { output: value.output || "", report: value.buildReport, validationResult: value.validationResult };
+		const artifactPaths = [...new Set(writes.flatMap((result) => {
+			const paths = result.artifactPaths || [];
+			const one = result.artifactPath || (typeof result.args?.path === "string" ? result.args.path : "");
+			return [...paths, one].filter(Boolean).map((item) => String(item).replace(/\\/g, "/"));
+		}))];
+
+		// Static gate: malformed JSON, unsafe paths, resource namespaces and Java
+		// package/source-set mismatches are deterministic and cheaper to report
+		// than starting Gradle. Compiler-owned API/type errors remain in the
+		// subsequent incremental BuildReport.
+		const staticErrors: string[] = [];
+		const artifactContents = new Map<string, string>();
+		const readShadowFile = async (relative: string): Promise<string | null> => {
+			const normalized = relative.replace(/\\/g, "/").replace(/^\.\//, "");
+			const cached = artifactContents.get(normalized);
+			if (cached !== undefined) return cached;
+			if (typeof window === "undefined" || !window.api?.readFile) return null;
+			try {
+				const file = await window.api.readFile(`${this.projectPath}/${normalized}`);
+				if (!file.success || !file.content) return null;
+				artifactContents.set(normalized, file.content);
+				return file.content;
+			} catch { return null; }
+		};
+		const existsShadowFile = async (relative: string): Promise<boolean> => {
+			if (typeof window === "undefined" || !window.api?.exists) return true;
+			try { return await window.api.exists(`${this.projectPath}/${relative.replace(/\\/g, "/")}`); } catch { return false; }
+		};
+		for (const relative of artifactPaths) {
+			const normalized = relative.replace(/\\/g, "/").replace(/^\.\//, "");
+			if (!normalized || normalized.startsWith("/") || normalized.split("/").includes("..")) {
+				staticErrors.push(`${relative}: 路径必须是项目内的相对路径`);
+				continue;
+			}
+			try {
+				if (typeof window === "undefined" || !window.api?.readFile) continue;
+				const file = await window.api.readFile(`${this.projectPath}/${normalized}`);
+				if (!file.success || !file.content) {
+					staticErrors.push(`${normalized}: 写入后无法读取文件${file.error ? `（${file.error}）` : ""}`);
+					continue;
+				}
+				artifactContents.set(normalized, file.content);
+				if (/\.json$/i.test(normalized)) {
+					try { JSON.parse(file.content); } catch (error) {
+						staticErrors.push(`${normalized}: 不是有效 JSON（${error instanceof Error ? error.message : String(error)}）`);
+					}
+					const resourceMatch = normalized.match(/(?:assets|data)\/([^/]+)\//i);
+					if (resourceMatch && !/^[a-z0-9_.-]+$/.test(resourceMatch[1])) staticErrors.push(`${normalized}: 资源 namespace 不符合 Minecraft 命名规则`);
+				}
+				if (/\.(?:java|kt)$/i.test(normalized)) {
+					const packageMatch = file.content.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;?/m);
+					const sourceMatch = normalized.match(/^src\/(?:main|client|server)\/java\/(.+)\.(?:java|kt)$/i);
+					if (packageMatch && sourceMatch) {
+						const expected = sourceMatch[1].replace(/\\/g, "/").replace(/\//g, ".");
+						if (packageMatch[1] !== expected.slice(0, expected.lastIndexOf("."))) staticErrors.push(`${normalized}: package ${packageMatch[1]} 与 source-set 路径不一致`);
+					}
+				}
+			} catch (error) {
+				staticErrors.push(`${normalized}: 静态校验异常（${error instanceof Error ? error.message : String(error)}）`);
+			}
+		}
+		// Registration-chain checks are intentionally limited to files touched by
+		// this compile unit. They catch malformed Mixin/entrypoint wiring without
+		// turning an unrelated pre-existing project warning into a blocker.
+		for (const relative of artifactPaths.filter((item) => /(?:fabric\.mod\.json|\.mixins?\.json)$/i.test(item))) {
+			const normalized = relative.replace(/\\/g, "/").replace(/^\.\//, "");
+			const content = await readShadowFile(normalized);
+			if (!content) continue;
+			let parsed: Record<string, unknown>;
+			try { parsed = JSON.parse(content) as Record<string, unknown>; } catch { continue; }
+			if (/fabric\.mod\.json$/i.test(normalized)) {
+				const entrypoints = parsed.entrypoints && typeof parsed.entrypoints === "object" ? parsed.entrypoints as Record<string, unknown> : {};
+				for (const [side, value] of Object.entries(entrypoints)) {
+					const values = Array.isArray(value) ? value : [value];
+					for (const item of values) {
+						const name = typeof item === "string" ? item : item && typeof item === "object" && typeof (item as { value?: unknown }).value === "string" ? (item as { value: string }).value : "";
+						if (!name || name.startsWith("#")) continue;
+						const relativeJava = `${side === "client" ? "src/client/java" : side === "server" ? "src/server/java" : "src/main/java"}/${name.replace(/\./g, "/")}.java`;
+						const fallbackJava = `src/main/java/${name.replace(/\./g, "/")}.java`;
+						const relativeKotlin = relativeJava.replace(/\.java$/, ".kt");
+						const fallbackKotlin = fallbackJava.replace(/\.java$/, ".kt");
+						if (!(await existsShadowFile(relativeJava)) && !(await existsShadowFile(relativeKotlin)) && !(await existsShadowFile(fallbackJava)) && !(await existsShadowFile(fallbackKotlin))) staticErrors.push(`${normalized}: entrypoint ${name}（${side}）未找到对应源码`);
+					}
+				}
+			}
+			if (/\.mixins?\.json$/i.test(normalized)) {
+				const packageName = typeof parsed.package === "string" ? parsed.package : "";
+				const names = ["mixins", "client", "server"].flatMap((key) => Array.isArray(parsed[key]) ? parsed[key] as unknown[] : []).filter((item): item is string => typeof item === "string");
+				if (!packageName || names.length === 0) staticErrors.push(`${normalized}: Mixin 配置必须包含 package 及至少一个 mixins/client/server 条目`);
+				for (const name of names) {
+					const relativeJava = `src/main/java/${packageName.replace(/\./g, "/")}/${name}.java`;
+					const clientJava = `src/client/java/${packageName.replace(/\./g, "/")}/${name}.java`;
+					const relativeKotlin = relativeJava.replace(/\.java$/, ".kt");
+					const clientKotlin = clientJava.replace(/\.java$/, ".kt");
+					if (!(await existsShadowFile(relativeJava)) && !(await existsShadowFile(relativeKotlin)) && !(await existsShadowFile(clientJava)) && !(await existsShadowFile(clientKotlin))) staticErrors.push(`${normalized}: Mixin ${name} 未找到对应源码`);
+				}
+			}
+		}
+		if (staticErrors.length > 0) {
+			const message = `静态校验失败：\n${staticErrors.slice(0, 16).map((item) => `- ${item}`).join("\n")}`;
+			const report = typeof window !== "undefined" && window.api?.createBuildReport
+				? await window.api.createBuildReport({ projectPath: this.projectPath, task: "static_validate", output: message, exitCode: 1 })
+				: undefined;
+			const validationResult: ValidationResult = { verdict: "FAIL", stage: "static", checkedAt: Date.now(), diagnosticIds: report?.diagnostics.map((diagnostic) => diagnostic.id), message };
+			const result: ToolResult = { output: message, error: message, durationMs: 0, ok: false, toolName: "static_validate", args: { stepId: step.id }, exitCode: 1, errorKind: "static_validation", buildReport: report, validationResult };
+			this.emit({ kind: EventKind.ToolDispatch, tool: { id, name: "static_validate", args: JSON.stringify(result.args), readOnly: true } });
+			this.emit({ kind: EventKind.ToolResult, tool: { id, name: "static_validate", args: JSON.stringify(result.args), output: message, error: message, durationMs: 0, buildReport: report, validationResult } });
+			return result;
+		}
+
+		// Fast-path: try the bundled javac via fast_compile first. It's 10-50x faster
+		// than spinning up Gradle and catches the common "wrong API / missing import /
+		// wrong arity" mistakes. We only fall back to Gradle when the fast path is
+		// unavailable, degraded (classpath missing user deps), or the soft/hard split
+		// has unresolved hard errors that the harness should repair.
+		const fastTool = this.registry.get("fast_compile");
+		if (fastTool && typeof window !== "undefined" && window.api?.fastCompile && this.fileSession?.workspaceId) {
+			const fastStartedAt = Date.now();
+			const fastId = `${id}_fast`;
+			this.emit({ kind: EventKind.ToolDispatch, tool: { id: fastId, name: "fast_compile", args: JSON.stringify({}), readOnly: false } });
+			this.onToolDispatch?.("fast_compile", fastId);
+			let fastReport: BuildReport | undefined;
+			try {
+				fastReport = await window.api.fastCompile(this.fileSession.workspaceId, { timeoutMs: 60_000 });
+			} catch (err) {
+				fastReport = undefined;
+				this.emit({ kind: EventKind.ToolProgress, tool: { id: fastId, name: "fast_compile", args: JSON.stringify({}), partial: true, output: `[fast_compile 不可用，回退 trigger_build] ${String(err)}` } });
+			}
+			const fastOk = fastReport?.ok === true;
+			const fastDegraded = (fastReport as { degraded?: boolean })?.degraded === true;
+			const fastOutput = fastReport
+				? (fastOk
+						? `【快速编译通过】${(fastReport as { fast?: { durationMs?: number; sourceFiles?: number; classpathEntries?: number } }).fast?.durationMs ?? 0}ms`
+						: `【快速编译失败：${fastReport.diagnostics.filter((d) => d.severity !== "soft").length} 个硬错误】`)
+				: "[fast_compile unavailable]";
+			if (fastReport) {
+				this.onToolResult?.("fast_compile", fastId, fastOutput);
+			}
+			if (fastOk) {
+				const validationResult: ValidationResult = { verdict: "PASS", stage: "compile", checkedAt: Date.now(), diagnosticIds: fastReport?.diagnostics.map((d) => d.id), message: "快速编译通过（跳过 Gradle）" };
+				const result: ToolResult = {
+					output: fastOutput,
+					error: undefined,
+					durationMs: Date.now() - fastStartedAt,
+					ok: true,
+					toolName: "fast_compile",
+					args: {},
+					exitCode: 0,
+					buildReport: fastReport,
+					validationResult
+				};
+				this.emit({ kind: EventKind.ToolResult, tool: { id: fastId, name: "fast_compile", args: JSON.stringify(result.args), output: result.output, error: "", durationMs: result.durationMs, buildReport: result.buildReport, validationResult } });
+				return result;
+			}
+			// Hard errors or degraded: surface them via the validation gate so the
+			// existing repair loop handles them. We do NOT skip the Gradle build
+			// when degraded because javac might have missed real errors.
+			if (fastReport && !fastDegraded && fastReport.diagnostics.some((d) => d.severity !== "soft")) {
+				const validationResult: ValidationResult = { verdict: "FAIL", stage: "compile", checkedAt: Date.now(), diagnosticIds: fastReport.diagnostics.map((d) => d.id), message: "快速编译失败" };
+				const hardLines = fastReport.diagnostics.filter((d) => d.severity !== "soft").slice(0, 16).map((d) => `- ${d.file || "?"}:${d.line || "?"} ${d.message}`).join("\n");
+				const result: ToolResult = {
+					output: `${fastOutput}\n${hardLines}`,
+					error: fastOutput,
+					durationMs: Date.now() - fastStartedAt,
+					ok: false,
+					toolName: "fast_compile",
+					args: {},
+					exitCode: fastReport.exitCode ?? 1,
+					buildReport: fastReport,
+					validationResult
+				};
+				this.emit({ kind: EventKind.ToolResult, tool: { id: fastId, name: "fast_compile", args: JSON.stringify(result.args), output: result.output, error: result.output, durationMs: result.durationMs, buildReport: result.buildReport, validationResult } });
+				return result;
+			}
+			// Degraded or no report: fall through to Gradle below.
+		}
+
+		const tool = this.registry.get("trigger_build");
+		if (!tool) return undefined;
+		const startedAt = Date.now();
+		this.emit({ kind: EventKind.ToolDispatch, tool: { id, name: "trigger_build", args: JSON.stringify({ task: this.validationTask(), validationGate: true }), readOnly: false } });
+		this.onToolDispatch?.("trigger_build", id);
+		try {
+			const raw = await tool.execute({
+				projectPath: this.projectPath,
+				callId: id,
+				runId: this.runId,
+				abortSignal: this.abortSignal,
+				planTracker: this.planTracker,
+				fileSession: this.fileSession,
+				validationGate: true,
+				onProgress: (chunk) => this.emit({ kind: EventKind.ToolProgress, tool: { id, name: "trigger_build", args: JSON.stringify({ task: this.validationTask() }), partial: true, output: chunk } })
+			}, { task: this.validationTask() });
+			let normalized = outputFor(raw as string | { output: string; buildReport?: BuildReport; validationResult?: ValidationResult });
+			let report = normalized.report || (typeof window !== "undefined" && window.api?.createBuildReport
+				? await window.api.createBuildReport({ projectPath: this.projectPath, task: this.validationTask(), output: normalized.output, exitCode: 0 })
+				: undefined);
+			// Some older Loom templates do not expose compileClientJava. Fall back
+			// to the aggregate classes task instead of turning a missing task into a
+			// product diagnostic.
+			if (report && !report.ok && this.validationTask() !== "classes" && /task .*not found|unknown task|找不到任务|任务 .*不存在/i.test(normalized.output)) {
+				const fallbackRaw = await tool.execute({ projectPath: this.projectPath, callId: `${id}_fallback`, runId: this.runId, abortSignal: this.abortSignal, planTracker: this.planTracker, fileSession: this.fileSession, validationGate: true }, { task: "classes" });
+				normalized = outputFor(fallbackRaw as string | { output: string; buildReport?: BuildReport; validationResult?: ValidationResult });
+				report = normalized.report || (typeof window !== "undefined" && window.api?.createBuildReport
+					? await window.api.createBuildReport({ projectPath: this.projectPath, task: "classes", output: normalized.output, exitCode: 0 })
+					: undefined);
+			}
+			const error = report && !report.ok ? normalized.output : inferToolError("trigger_build", normalized.output, report?.exitCode ?? 0);
+			const validationResult: ValidationResult = {
+				verdict: report?.ok ? "PASS" : "FAIL",
+				stage: "compile",
+				checkedAt: Date.now(),
+				diagnosticIds: report?.diagnostics.map((diagnostic) => diagnostic.id),
+				message: report?.ok ? "增量编译单元通过" : "增量编译单元失败"
+			};
+			const result: ToolResult = {
+				output: normalized.output || (report?.ok ? "增量编译单元通过。" : "增量编译单元失败。"),
+				error,
+				durationMs: Date.now() - startedAt,
+				ok: !error && (report?.ok ?? true),
+				toolName: "trigger_build",
+				args: { task: this.validationTask(), validationGate: true },
+				exitCode: report?.exitCode ?? (error ? 1 : 0),
+				buildReport: report,
+				validationResult
+			};
+				this.emit({ kind: EventKind.ToolResult, tool: { id, name: "trigger_build", args: JSON.stringify(result.args), output: result.output, error: result.error, durationMs: result.durationMs, validation: undefined, buildReport: result.buildReport, validationResult } });
+			this.onToolResult?.("trigger_build", id, result.output);
+			return result;
+		} catch (error) {
+			const message = `增量编译门异常：${error instanceof Error ? error.message : String(error)}`;
+			const report = typeof window !== "undefined" && window.api?.createBuildReport
+				? await window.api.createBuildReport({ projectPath: this.projectPath, task: this.validationTask(), output: message, exitCode: 1 })
+				: undefined;
+			const validationResult: ValidationResult = { verdict: "FAIL", stage: "compile", checkedAt: Date.now(), diagnosticIds: report?.diagnostics.map((diagnostic) => diagnostic.id), message };
+			const result: ToolResult = { output: message, error: message, durationMs: Date.now() - startedAt, ok: false, toolName: "trigger_build", args: { task: this.validationTask(), validationGate: true }, exitCode: 1, buildReport: report, validationResult };
+			this.emit({ kind: EventKind.ToolResult, tool: { id, name: "trigger_build", args: JSON.stringify(result.args), output: message, error: message, durationMs: result.durationMs, buildReport: report, validationResult } });
+			this.onToolResult?.("trigger_build", id, message);
+			return result;
+		}
 	}
 
 	private planState(): Array<{
 		id: string;
 		description: string;
 		status: string;
-		kind?: "inspect" | "write" | "recipe" | "mixin" | "build" | "run" | "game_test";
+		kind?: "inspect" | "write" | "recipe" | "mixin" | "build" | "run" | "test_design" | "game_test";
 		targetPath?: string;
 		targetPaths?: string[];
 		evidence?: string;
@@ -971,7 +1341,7 @@ export class WorkflowEngine {
 			id: step.id,
 			description: step.title,
 			status: statusForPlan(step),
-			...(step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin" || step.kind === "build" || step.kind === "run" || step.kind === "game_test" ? { kind: step.kind } : {}),
+			...(step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin" || step.kind === "build" || step.kind === "run" || step.kind === "test_design" || step.kind === "game_test" ? { kind: step.kind } : {}),
 			...(step.targetPath ? { targetPath: step.targetPath } : {}),
 			...(step.targetPaths?.length ? { targetPaths: [...step.targetPaths] } : {}),
 			...(step.evidence ? { evidence: step.evidence } : {}),
@@ -1045,7 +1415,9 @@ export class WorkflowEngine {
 						error: result.error,
 						durationMs: result.durationMs,
 						outcome: result.outcome,
-						validation: result.validation
+										validation: result.validation,
+										buildReport: result.buildReport,
+										validationResult: result.validationResult
 					}
 				});
 				this.onToolResult?.(name, id, result.output);
@@ -1132,7 +1504,9 @@ export class WorkflowEngine {
 						outcome: result.outcome,
 						imageBase64: result.imageBase64,
 						imageMimeType: result.imageMimeType,
-						validation: result.validation
+						validation: result.validation,
+						buildReport: result.buildReport,
+						validationResult: result.validationResult
 					}
 				});
 				this.onToolResult?.(name, callId, result.output);
@@ -1165,8 +1539,8 @@ export class WorkflowEngine {
 	): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
 		// Stable tools set within a step: always offer the repair superset for build/run
 		// so entering repairMode does not change the tools array (prompt-cache friendly).
-		// Runtime gates (filterToolCallsForStep / isToolAllowedForStep) still block
-		// edit/write until repair, and reject over-limit doc/explore calls.
+		// The ActiveToolSnapshot is the capability gate; the semantic policy below
+		// handles task/path/repair timing and rejects over-limit doc/explore calls.
 		let names: string[];
 		if (step.kind === "build" || step.kind === "run") {
 			names = repairExtraTools(step);
@@ -1175,9 +1549,18 @@ export class WorkflowEngine {
 			// They become available only after the second objective FAIL flips repairMode.
 			names = repairMode
 				? repairExtraTools(step)
-				: step.allowedTools.filter((name) => !isProjectWriteTool(name) && name !== "trigger_build" && name !== "run_command");
+				: recommendedToolsForStep(step).filter((name) => !isProjectWriteTool(name) && name !== "trigger_build" && name !== "run_command");
+		} else if (step.kind === "test_design") {
+			names = recommendedToolsForStep(step).filter(
+				(name) =>
+					!isProjectWriteTool(name) &&
+					name !== "trigger_build" &&
+					name !== "run_command" &&
+					name !== "mc_run_test" &&
+					name !== "complete_step"
+			);
 		} else {
-			names = [...step.allowedTools];
+			names = [...recommendedToolsForStep(step)];
 			if (repairMode) names = repairExtraTools(step);
 		}
 		const exploreExhausted = isExploreLimitedStep(step, repairMode) && (limits?.exploreRounds ?? 0) >= MAX_FREE_EXPLORE_ROUNDS;
@@ -1196,7 +1579,7 @@ export class WorkflowEngine {
 		ephemeralInstruction?: string,
 		pendingMigration?: Set<string>
 	): ChatMessage {
-		const tools = offeredToolNames ?? (repairMode ? repairExtraTools(step) : step.allowedTools);
+		const tools = offeredToolNames ?? (repairMode ? repairExtraTools(step) : recommendedToolsForStep(step));
 		const prefix = repairMode ? "【修复模式】" : "【工作流步骤】";
 		const migrationPending = Boolean(pendingMigration && pendingMigration.size > 0);
 		const repairGate =
@@ -1216,8 +1599,12 @@ export class WorkflowEngine {
 					? '本步先 trigger_build({"task":"build"})，不要先 edit_file。构建失败后才会进入修复模式。\n'
 					: '本步先 trigger_build({"task":"runClient"})，不要先 edit_file。运行失败后才会进入修复模式。\n' +
 						"【禁止 complete_step】run 步不提供 complete_step；请用 mc_inspect/mc_screenshot 验收，验证成功后等待系统自动推进，或继续 mc_* 操作。\n"
+				: step.kind === "test_design"
+					? "本步为测试设计：先 read_file/grep 读机制代码，再选 sandbox 并用 mc_test_scenario 注册含 actions/assertions/acceptanceContract 的 V2 场景。禁止 mc_run_test、禁止写产品代码、禁止 complete_step；注册成功后系统自动推进。\n"
 				: step.kind === "game_test" && !repairMode
-					? "本步不得 trigger_build 或 complete_step。使用 mc_test_scenario 生成带实际 ID 与 assertions 的规格，再调用 mc_run_test；只有 PASS 会推进。\n"
+					? "本步不得 trigger_build 或 complete_step。使用 test_design 已注册的 scenarioId 调用 mc_run_test；只有 PASS 会推进。若需修订契约，可再调用 mc_test_scenario 生成新 scenarioId。\n"
+					: ["write", "recipe", "mixin"].includes(step.kind)
+						? "本步骤写入一个连贯编译单元后，主机会自动执行静态校验和增量 compileJava/compileClientJava/processResources；不要自行重复 trigger_build。若门返回 BuildReport，直接按 diagnostic ID 修改。\n"
 					: "";
 		const migrationHint = migrationPending && pendingMigration ? formatMigrationChecklist(pendingMigration) : "";
 		const ephemeral = ephemeralInstruction?.trim() ? `\n${ephemeralInstruction.trim()}\n` : "";
@@ -1303,6 +1690,7 @@ export class WorkflowEngine {
 						runId: result.runId,
 						executionId: result.executionId,
 						validation: result.validation,
+						buildReport: result.buildReport,
 						// 始终携带截图数据供 UI 展示（不依赖 visionModel）
 						imageBase64: result.imageBase64,
 						imageMimeType: result.imageMimeType
@@ -1326,8 +1714,14 @@ export class WorkflowEngine {
 	}
 
 	private appendToolRound(baseMessages: ChatMessage[], streamContent: string, calls: ModelToolCall[], resultsById: Map<string, ToolResult>, instruction?: string): string | undefined {
-		baseMessages.push(assistantToolCallMessage(streamContent, calls));
-		for (const call of calls) {
+		// A provider protocol failure can leave malformed/incomplete raw JSON.
+		// Do not persist that call as an assistant tool_calls message: the next
+		// OpenAI-compatible request may reject the entire history before the
+		// recovery instruction is seen. Schema-invalid but syntactically complete
+		// calls have no ModelToolCall.failureKind and remain auditable here.
+		const historyCalls = calls.filter((call) => !call.failureKind);
+		baseMessages.push(assistantToolCallMessage(streamContent, historyCalls, this.takeRoundReasoning()));
+		for (const call of historyCalls) {
 			const result = resultsById.get(call.id);
 			const image = this.visionModel && result?.imageBase64 ? { base64: result.imageBase64, mimeType: result.imageMimeType } : undefined;
 			baseMessages.push(toolResultMessage(call, result?.output ?? "", image));
@@ -1344,10 +1738,23 @@ export class WorkflowEngine {
 		// Fix 3: run-level guard — did any real write happen anywhere this run?
 		// Used to detect no-op builds (all UP-TO-DATE + zero writes) → surface instead of silent success.
 		let anyWriteThisRun = false;
+		// Run-scoped write artifacts, so a later step targeting a path an earlier step
+		// already wrote through a project.write tool is not unsatisfiable.
+		const runWriteArtifacts: Array<{ path: string; stepId: string }> = [];
+		const runKnowledgeFingerprints = new Set<string>();
 		const planHasWriteSteps = this.steps.some((s) => s.kind === "write" || s.kind === "recipe" || s.kind === "mixin");
 		this.emitPlanState();
+		const globalBudget = { startedAt: Date.now(), repairProposals: 0, modelRounds: 0, toolCalls: 0 };
+		let globalBudgetExceeded = "";
 
 		while (!this.abortSignal?.aborted) {
+			if (Date.now() - globalBudget.startedAt >= 90 * 60_000) globalBudgetExceeded = "90 分钟任务预算已用尽";
+			if (globalBudget.modelRounds >= 40) globalBudgetExceeded = "模型轮次预算（40）已用尽";
+			if (globalBudget.toolCalls >= 120) globalBudgetExceeded = "工具调用预算（120）已用尽";
+			if (globalBudgetExceeded) {
+				this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `${globalBudgetExceeded}。已保存影子工程和当前检查点，发送「继续」可原地恢复。` } });
+				break;
+			}
 			const step = this.currentStep();
 			if (!step) break;
 			// Fix 2: only a genuinely resumed step (persisted 'running') may treat pre-existing
@@ -1398,13 +1805,19 @@ export class WorkflowEngine {
 
 			let completed = false;
 			const visualReviewRejected = step.kind === "game_test" && step.gameTest?.visualReviewDecision === "rejected";
-			let repairMode = visualReviewRejected;
-			let repairWriteRequired = visualReviewRejected;
+			let repairMode = visualReviewRejected || Boolean(this.previousBuildReport && !this.previousBuildReport.ok);
+			let repairWriteRequired = repairMode;
 			let repairValidationRequired: "recipe" | "mixin" | undefined;
 			let repairRounds = 0;
 			let effectiveMaxRepairRounds = MAX_REPAIR_ROUNDS;
 			let lastErrorCount = 0;
-			let lastFailureOutput = "";
+			let lastFailureDiagnostics: Diagnostic[] = this.previousBuildReport?.diagnostics || [];
+			let lastBuildReport: BuildReport | undefined = this.previousBuildReport || undefined;
+			let sourceMutationRevision = 0;
+			let lastBuildMutationRevision = this.previousBuildReport ? 0 : -1;
+			let lastBuildTask = this.previousBuildReport?.task || "";
+			let lastBuildOutputFingerprint = this.previousBuildReport?.outputFingerprint || "";
+			let lastFailureOutput = this.previousBuildReport && !this.previousBuildReport.ok ? this.previousBuildReport.output : "";
 		const seenRepairSignatures = new Map<string, number>();
 		const gameTestPassCounts = new Map<string, number>();
 		const gameTestReplayIdentities = new Map<string, Array<{
@@ -1419,7 +1832,7 @@ export class WorkflowEngine {
 			if (step.gameTest?.runtimeState) {
 				const durable = step.gameTest.runtimeState;
 				const scenarioId = step.gameTest.id;
-				for (const [signature, count] of Object.entries(durable.failureCounts || {})) gameTestFailureCounts.set(signature, Number(count) || 0);
+				for (const [signature, count] of Object.entries(durable.failureCounts || {})) this.gameTestFailureCounts.set(signature, Number(count) || 0);
 				gameTestPassCounts.set(scenarioId, durable.formalReplayHistory?.length || 0);
 				gameTestReplayIdentities.set(scenarioId, (durable.formalReplayHistory || []).map((entry) => ({ ...entry })));
 			}
@@ -1428,15 +1841,26 @@ export class WorkflowEngine {
 				for (const path of plannedStep.targetPaths || (plannedStep.targetPath ? [plannedStep.targetPath] : [])) repairScope.add(path);
 			}
 			const seenDiagSignatures = new Set<string>();
+			const seenLogReads = new Map<string, { fingerprint: string; sourceRevision: number }>();
 			const seenDocFingerprints = new Set<string>();
+			const seenKnowledgeFingerprints = runKnowledgeFingerprints;
+			const knowledgeKeyFor = (toolName: string, args: Record<string, unknown> | undefined): string => {
+				const raw = knowledgeQueryFingerprint(toolName, args);
+				if (raw === `${toolName}:`) return raw;
+				return this.knowledgeFactCache.key(this.projectProfile?.fingerprint || this.projectPath || "unknown", toolName, raw);
+			};
 			const pendingMigration = new Set<string>();
 			let pendingEphemeralInstruction: string | undefined = visualReviewRejected
 				? "【视觉审核拒绝】用户拒绝了当前视觉表现。请读取相关源码并修复产品代码，然后必须调用 trigger_build build、trigger_build runClient，重新生成同一功能的新测试场景并完成客观断言复测。"
 				: undefined;
 			let pendingReasoningKick = false;
 			let repairDiagRounds = 0;
+			let diagnosticStalled = false;
+			let evidenceDeadlocked = false;
 			const evidenceResults: ToolResult[] = [];
-			let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
+			/** Write artifacts produced by other steps of this run, admissible for the current step. */
+			const adoptedWritePaths = (): string[] => runWriteArtifacts.filter((entry) => entry.stepId !== step.id).map((entry) => entry.path);
+			let stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults, adoptedWritePaths());
 			let evidenceIdleRounds = 0;
 			/** Stop models from repeatedly requesting completion without adding evidence. */
 			let evidenceCompletionRejections = 0;
@@ -1451,6 +1875,8 @@ export class WorkflowEngine {
 			const hardBannedTools = new Set<string>();
 			let notOfferedBrakeEscalated = false;
 			let attempt = 0;
+			/** A brake that consumed the whole budget at once; the real round count is loopIterations. */
+			let forcedStepStop = false;
 			let gameTestEvidenceRepairAttempts = step.gameTest?.runtimeState?.evidenceRepairAttempts || 0;
 			let gameTestEnvironmentRecoveryAttempts = step.gameTest?.runtimeState?.environmentRecoveryAttempts || 0;
 			const gameTestRepairFingerprintCounts = new Map<string, number>();
@@ -1465,6 +1891,7 @@ export class WorkflowEngine {
 
 			while (!completed && attempt < maxIterations && loopIterations < maxLoopIterations) {
 				loopIterations++;
+				globalBudget.modelRounds++;
 				const migrationPending = pendingMigration.size > 0;
 				const policyOptions: ToolGateOptions | undefined = repairMode
 					? {
@@ -1473,14 +1900,25 @@ export class WorkflowEngine {
 							repairValidationRequired
 						}
 					: undefined;
-				const allowedTools = this.toolSchemasFor(step, repairMode, {
+				const recommendedTools = this.toolSchemasFor(step, repairMode, {
 					fabricDocsSearchCount,
 					knowledgeQueries,
 					exploreRounds,
 					stepHasEvidence,
 					stripKnowledge: stripKnowledgeForTruncation
 				});
-				const offeredNames = allowedTools.map((tool) => tool.name);
+				const activeToolSnapshot = createActiveToolSnapshot({
+					registry: this.registry,
+					phase: 'execute',
+					turnId: `step:${step.id}:round:${loopIterations}`,
+					stepId: Number(step.id),
+					stepKind: step.kind,
+					repairMode,
+					exploreExhausted: isExploreLimitedStep(step, repairMode) && exploreRounds >= MAX_FREE_EXPLORE_ROUNDS,
+					stripKnowledge: stripKnowledgeForTruncation,
+					candidateTools: this.registry.schemas()
+				});
+				const offeredNames = activeToolSnapshot.tools.map((tool) => tool.name);
 				const ephemeral = [pendingEphemeralInstruction, pendingReasoningKick ? LONG_REASONING_KICK : ""].filter(Boolean).join("\n\n") || undefined;
 				pendingEphemeralInstruction = undefined;
 				pendingReasoningKick = false;
@@ -1489,10 +1927,11 @@ export class WorkflowEngine {
 				let streamReasoning = "";
 				let modelResult: WorkflowModelResult;
 				try {
-					modelResult = await this.modelCall(modelMessages, allowedTools, (text, reasoning) => {
+					modelResult = await this.modelCall(modelMessages, activeToolSnapshot.tools, (text, reasoning) => {
 						if (text) streamText = text;
 						if (reasoning) streamReasoning = reasoning;
 					});
+					this.roundReasoning = modelResult.reasoning || streamReasoning;
 					if (modelResult.replaceBaseMessages) {
 						baseMessages.length = 0;
 						baseMessages.push(...modelResult.replaceBaseMessages);
@@ -1523,6 +1962,21 @@ export class WorkflowEngine {
 						steps: this.steps
 					};
 				}
+				if (modelResult.protocolRecovery?.paused) {
+					const reason = modelResult.protocolRecovery.reason || modelResult.protocolDiagnostics?.map((diagnostic) => diagnostic.message).join('; ') || '未知协议错误';
+					return {
+						finalContent: `[HARNESS_PAUSED:protocol] Provider 工具协议连续失败，已保存当前检查点。${reason}`,
+						allDone: false,
+						partial: true,
+						steps: this.steps
+					};
+				}
+				if (modelResult.protocolRecovery?.fallbackActivated) {
+					baseMessages.push({
+						role: 'user',
+						content: '【系统】Provider 原生工具参数流连续两次不完整。下一轮暂时关闭 native tools，请使用文本 XML 格式：<tool_call>{"name":"工具名","args":{...}}</tool_call>。只提交完整 JSON。'
+					});
+				}
 				finalContent = modelResult.text || streamText || finalContent;
 
 				const reasoningLen = (modelResult.reasoning || streamReasoning || "").length;
@@ -1532,6 +1986,7 @@ export class WorkflowEngine {
 
 				const allCalls = normalizeModelToolCalls(modelResult.toolCalls);
 				toolCallCount += allCalls.length;
+				globalBudget.toolCalls += allCalls.length;
 				if (toolCallCount > MAX_STEP_TOOL_CALLS) {
 					this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `Step #${step.id} reached the ${MAX_STEP_TOOL_CALLS}-tool safety limit; stopping as INCONCLUSIVE.` } });
 					break;
@@ -1558,7 +2013,7 @@ export class WorkflowEngine {
 					continue;
 				}
 
-				const validation = validateToolCalls(allCalls, allowedTools, {
+				const validation = validateToolCalls(allCalls, activeToolSnapshot, {
 					phase: 'execute',
 					stepTitle: step.title
 				});
@@ -1623,7 +2078,7 @@ export class WorkflowEngine {
 					// inspect/write/recipe/mixin 步骤的 complete_step 被拒绝（缺少证据）时，
 					// 必须给 AI 明确的反馈，避免 AI 反复调用 complete_step 陷入循环
 					if (rejected.toolName === "complete_step" && (step.kind === "inspect" || step.kind === "write" || step.kind === "recipe" || step.kind === "mixin")) {
-						const missingPaths = step.kind === "write" ? missingWriteEvidencePaths(step, [...resultsById.values()]) : [];
+							const missingPaths = step.kind === "write" ? missingWriteEvidencePaths(step, [...validation.rejected.values()]) : [];
 						let evidenceHint: string;
 						if (step.kind === "inspect") {
 							const readHint = step.targetPath ? `read_file("${step.targetPath}")` : "read_file / grep";
@@ -1718,6 +2173,7 @@ export class WorkflowEngine {
 						});
 						if (notOfferedBrakeEscalated) {
 							attempt = maxIterations;
+							forcedStepStop = true;
 							break;
 						}
 						notOfferedBrakeEscalated = true;
@@ -1749,21 +2205,37 @@ export class WorkflowEngine {
 						[...validation.rejected.values()].some((r) => r.toolName === "complete_step" && !r.ok)
 							? "run 步禁止 complete_step：请用 mc_inspect/mc_screenshot 验收，满足后系统自动推进。"
 							: undefined;
-					pendingEphemeralInstruction = this.appendToolRound(
-						baseMessages,
-						modelResult.text || streamText,
-						allCalls,
-						validation.rejected,
-						[
-							onlyKnowledgeRejected
-								? buildEmptyToolCallInstruction(step)
-								: "所有工具调用均被当前步骤白名单或参数 Schema 拒绝。请根据错误修正调用。",
-							completeStepHint,
-							truncHint
-						]
-							.filter(Boolean)
-							.join("\n\n")
-					);
+					const rejectedResults = [...validation.rejected.values()];
+					const hasArgumentFailure = rejectedResults.some((result) => result.failureKind === "arguments_invalid" || result.failureKind === "arguments_incomplete" || result.errorKind === "invalid_tool_arguments");
+					const hasInactiveFailure = rejectedResults.some((result) => result.failureKind === "tool_inactive" || result.errorKind === "tool_not_offered" || result.errorKind === "tool_not_allowed");
+					const rejectionGuidance = hasArgumentFailure && !hasInactiveFailure
+						? "工具调用已到达 Harness，但参数不完整或不符合 Schema。请只修正报错字段后重新提交；这不是工具未启用，也不需要白名单重试。"
+						: hasInactiveFailure && !hasArgumentFailure
+							? "工具存在但本轮未启用。请改用当前快照中的工具，或等待进入允许该能力的步骤。"
+							: "请按每条工具结果中的具体错误码分别修正参数或阶段策略，不要重复同一调用。";
+					const rejectionInstruction = [
+						onlyKnowledgeRejected
+							? buildEmptyToolCallInstruction(step)
+							: rejectionGuidance,
+						completeStepHint,
+						truncHint
+					]
+						.filter(Boolean)
+						.join("\n\n");
+					if (modelResult.protocolRecovery?.protocolOnlyFailure) {
+						// Never put a truncated/non-JSON provider tool call back into the
+						// assistant history: OpenAI-compatible gateways reject that history
+						// before the next recovery request can be made.
+						pendingEphemeralInstruction = rejectionInstruction;
+					} else {
+						pendingEphemeralInstruction = this.appendToolRound(
+							baseMessages,
+							modelResult.text || streamText,
+							allCalls,
+							validation.rejected,
+							rejectionInstruction
+						);
+					}
 					if (!onlyKnowledgeRejected && !isNonBurningRejectionRound(validation.rejected.values())) attempt++;
 					continue;
 				}
@@ -1772,7 +2244,96 @@ export class WorkflowEngine {
 				const executableAllowed: ToolCallWithId[] = [];
 				let controlBarrierReached = false;
 				let projectedDocSearchCount = fabricDocsSearchCount;
+				const projectedKnowledgeFingerprints = new Set(seenKnowledgeFingerprints);
+				const projectedLogReads = new Set([...seenLogReads].filter(([, value]) => value.sourceRevision === sourceMutationRevision).map(([key]) => key));
 				for (const call of calls) {
+					const buildLike = call.name === "trigger_build" || (call.name === "run_command" && /(?:gradlew|gradle|build|runClient)/i.test(String(call.args?.command || "")));
+					const requestedBuildTask = call.name === "trigger_build" ? String(call.args?.task || "build") : String(call.args?.command || "");
+					if (buildLike && lastBuildReport && lastBuildMutationRevision === sourceMutationRevision && requestedBuildTask === lastBuildTask) {
+						const rejected: ToolResult = {
+							output: `blocked: [no_source_change] ${requestedBuildTask} 上次构建后没有新的源码或配置变更；禁止重复构建。请修改目标文件或推进到下一个验证阶段。`,
+							error: "no_source_change",
+							durationMs: 0,
+							ok: false,
+							toolName: call.name,
+							args: call.args,
+							exitCode: null,
+							errorKind: "no_source_change"
+						};
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					const sameBatchBuild = calls.some((candidate) => candidate.name === "trigger_build" || (candidate.name === "run_command" && /(?:gradlew|gradle|build|runClient)/i.test(String(candidate.args?.command || ""))));
+					if (call.name === "read_error_log" && ((lastBuildReport && !lastBuildReport.ok && lastBuildMutationRevision === sourceMutationRevision) || sameBatchBuild)) {
+						const rejected: ToolResult = {
+							output: lastBuildReport
+								? `blocked: [duplicate_build_report] 本轮构建已经返回结构化诊断（${lastBuildReport.diagnostics.length} 条）；请直接依据 BuildReport 修复，不要重复读取相同日志。`
+								: "blocked: [duplicate_build_report] 本轮已请求构建；构建完成后宿主会返回结构化 BuildReport，不要并行读取同一日志。",
+							error: "duplicate_build_report",
+							durationMs: 0,
+							ok: false,
+							toolName: call.name,
+							args: call.args,
+							exitCode: null,
+							errorKind: "duplicate_build_report"
+						};
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					if (call.name === "read_error_log") {
+						const logType = String(call.args?.logType || "last-build");
+						const previousRead = seenLogReads.get(logType);
+						if ((previousRead && previousRead.sourceRevision === sourceMutationRevision) || projectedLogReads.has(logType)) {
+							const rejected: ToolResult = {
+								output: `blocked: [duplicate_log_read] ${logType} 日志在当前源码修订下已经读取过；请使用已有证据或先修改文件再验证。`,
+								error: "duplicate_log_read",
+								durationMs: 0,
+								ok: false,
+								toolName: call.name,
+								args: call.args,
+								exitCode: null,
+								errorKind: "duplicate_log_read"
+							};
+							this.emitRejected(call.id, rejected);
+							resultsById.set(call.id, rejected);
+							continue;
+						}
+					}
+					if (isKnowledgeTool(call.name)) {
+						const fingerprint = knowledgeKeyFor(call.name, call.args);
+						const cachedFact = fingerprint !== `${call.name}:` ? this.knowledgeFactCache.get(fingerprint) : undefined;
+						if (cachedFact !== undefined) {
+							const cached: ToolResult = {
+								output: `[KnowledgeFactCache hit]\n${cachedFact}`,
+								durationMs: 0,
+								ok: true,
+								toolName: call.name,
+								args: call.args,
+								exitCode: 0,
+								cacheHit: true,
+								outcome: "succeeded"
+							};
+							resultsById.set(call.id, cached);
+							continue;
+						}
+						if (fingerprint !== `${call.name}:` && projectedKnowledgeFingerprints.has(fingerprint)) {
+							const rejected: ToolResult = {
+								output: `blocked: [duplicate_knowledge_query] 已执行相同知识查询（${call.name}），但本轮缓存不可用；请继续使用已返回事实，不要再次检索。`,
+								error: "duplicate_knowledge_query",
+								durationMs: 0,
+								ok: false,
+								toolName: call.name,
+								args: call.args,
+								exitCode: null,
+								errorKind: "duplicate_knowledge_query"
+							};
+							this.emitRejected(call.id, rejected);
+							resultsById.set(call.id, rejected);
+							continue;
+						}
+					}
 					if (hardBannedTools.has(call.name)) {
 						const brakeOut = formatNotOfferedBrakeInstruction([call.name], offeredNames);
 						const rejected: ToolResult = {
@@ -1819,8 +2380,23 @@ export class WorkflowEngine {
 						resultsById.set(call.id, rejected);
 						continue;
 					}
-					if (!isToolAllowedForStep(step, call, policyOptions)) {
+					if (!isToolSemanticallyAllowedForStep(step, call, policyOptions)) {
 						const rejected = createRejectedToolResult(step, call, policyOptions);
+						this.emitRejected(call.id, rejected);
+						resultsById.set(call.id, rejected);
+						continue;
+					}
+					if (isCompilerRepairContext(repairMode, lastFailureDiagnostics, lastFailureOutput) && COMPILER_REPAIR_WIKI_TOOLS.has(call.name)) {
+						const rejected: ToolResult = {
+							output: `blocked: [knowledge_scope] 当前诊断属于编译/配置修复；${call.name} 只用于游戏语义或原版标准属性。请绑定当前 diagnostic ID，使用 fabric_javadoc_lookup 精确核对符号，或在索引无法回答概念时使用 fabric_docs_search。`,
+							error: "knowledge_scope",
+							durationMs: 0,
+							ok: false,
+							toolName: call.name,
+							args: call.args,
+							exitCode: null,
+							errorKind: "knowledge_scope"
+						};
 						this.emitRejected(call.id, rejected);
 						resultsById.set(call.id, rejected);
 						continue;
@@ -1868,7 +2444,12 @@ export class WorkflowEngine {
 						}
 					}
 					executableAllowed.push(call);
+					if (call.name === "read_error_log") projectedLogReads.add(String(call.args?.logType || "last-build"));
 					if (call.name === "fabric_docs_search") projectedDocSearchCount++;
+					if (isKnowledgeTool(call.name)) {
+						const fingerprint = knowledgeKeyFor(call.name, call.args);
+						if (fingerprint !== `${call.name}:`) projectedKnowledgeFingerprints.add(fingerprint);
+					}
 					if (call.name === "complete_step" || call.name === "ask_clarification") {
 						controlBarrierReached = true;
 					}
@@ -1893,6 +2474,7 @@ export class WorkflowEngine {
 					});
 					if (notOfferedBrakeEscalated) {
 						attempt = maxIterations;
+						forcedStepStop = true;
 						break;
 					}
 					notOfferedBrakeEscalated = true;
@@ -1959,6 +2541,7 @@ export class WorkflowEngine {
 					const policyDeferOnly = [...resultsById.values()].every((result) => result.errorKind === "policy_deferred");
 					if (consecutiveIdenticalRejections >= (policyDeferOnly ? 2 : MAX_IDENTICAL_REJECTIONS)) {
 						attempt = maxIterations;
+						forcedStepStop = true;
 					} else if (consecutiveIdenticalRejections >= 2) {
 						attempt += 2;
 					} else if (!repairWriteBlockedOnly && !docSearchBlockedOnly && !nonBurningRejection) {
@@ -1978,6 +2561,9 @@ export class WorkflowEngine {
 					resultsById.set(id, result);
 					if (result.ok && !result.error && isProjectWriteTool(result.toolName || "")) {
 						anyWriteThisRun = true;
+						for (const path of successfulWriteArtifacts([result])) {
+							if (!runWriteArtifacts.some((entry) => entry.path === path)) runWriteArtifacts.push({ path, stepId: step.id });
+						}
 						writeTruncationStreak = 0;
 						writeTruncationPath = "";
 						stripKnowledgeForTruncation = false;
@@ -1995,7 +2581,7 @@ export class WorkflowEngine {
 					}
 					evidenceResults.push(result);
 				}
-				stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults);
+				stepHasEvidence = stepEvidenceSatisfied(step, evidenceResults, adoptedWritePaths());
 
 				let completionEvidenceRejectedThisRound = false;
 				if (completionCalls.length > 0) {
@@ -2004,18 +2590,32 @@ export class WorkflowEngine {
 					// plan listed the wrong helper path.
 					const mayAdoptOrphanWrite = step.kind === "write" && orphanWriteArtifacts(step, evidenceResults).length > 0;
 					if (stepHasEvidence || mayAdoptOrphanWrite) {
+						const adoptedUnblocked = !stepEvidenceSatisfied(step, evidenceResults) && stepEvidenceSatisfied(step, evidenceResults, adoptedWritePaths());
 						const completionResults = await this.executeAllowedCalls(step, completionCalls);
 						for (const [id, result] of completionResults) resultsById.set(id, result);
 						evidenceCompletionRejections = 0;
+						if (adoptedUnblocked) {
+							this.emit({
+								kind: EventKind.Notice,
+								notice: {
+									level: "info",
+									text: `步骤 #${step.id} 的目标文件已由本轮早前步骤的工具写入（${adoptedWritePaths().join(", ")}），按实际写入推进。`
+								}
+							});
+						}
 					} else {
 						completionEvidenceRejectedThisRound = true;
 						evidenceCompletionRejections++;
+						const missing = missingWriteEvidencePaths(step, evidenceResults, adoptedWritePaths());
+						const remedy = missing.length
+							? `缺少写入证据：${missing.join(", ")}。请对目标路径执行 edit_file/write_file（仅确认文件已存在不够），或调用 fabric_mixin_register("${missing[0]}")。`
+							: `请先使用与验收标准匹配的工具取得新证据，再调用 complete_step。`;
 						for (const call of completionCalls) {
 							const rejected: ToolResult = {
 								output:
 									`blocked: [step_evidence_required] 步骤 #${step.id}（${step.title}）尚未满足验收证据，不能完成。` +
 									`验收标准：${step.evidence || "先完成当前步骤要求的客观验证"}。` +
-									`允许工具：${step.allowedTools.filter((name) => name !== "complete_step").join(", ") || "无"}。`,
+									remedy,
 								error: "step_evidence_required",
 								durationMs: 0,
 								ok: false,
@@ -2045,11 +2645,43 @@ export class WorkflowEngine {
 				const orderedResults = executableAllowed.map((call) => resultsById.get(call.id)).filter((result): result is ToolResult => Boolean(result));
 				const lastResult = orderedResults[orderedResults.length - 1];
 				if (lastResult?.toolName) lastToolName = lastResult.toolName;
+				const writesThisRound = orderedResults.filter((result) => result.ok && !result.error && isProjectWriteTool(result.toolName || ""));
+				let validationGateResult: ToolResult | undefined;
+			if (writesThisRound.length > 0) {
+				if (["write", "recipe", "mixin"].includes(step.kind)) step.validationGate = "compile_unit";
+				if (repairMode) globalBudget.repairProposals += 1;
+					if (globalBudget.repairProposals > 12) globalBudgetExceeded = "修复候选预算（12）已用尽";
+					sourceMutationRevision++;
+					// A source mutation invalidates the previous log and knowledge
+					// assumptions for the next validation attempt.
+					lastBuildReport = undefined;
+					lastBuildOutputFingerprint = "";
+					lastBuildTask = "";
+					if (["write", "recipe", "mixin"].includes(step.kind)) {
+						validationGateResult = await this.runValidationGate(step, writesThisRound);
+						if (validationGateResult) {
+							resultsById.set(`validation_${step.id}`, validationGateResult);
+							orderedResults.push(validationGateResult);
+						}
+					}
+				}
+				for (const result of orderedResults) {
+					// Static and incremental validation gates use the same host-owned
+					// report contract as trigger_build. Keep the report as the current
+					// source of truth regardless of which validator produced it.
+					if (!result.buildReport) continue;
+					lastBuildReport = result.buildReport;
+					lastBuildOutputFingerprint = result.buildReport.outputFingerprint;
+					lastBuildMutationRevision = sourceMutationRevision;
+					lastBuildTask = result.toolName === "trigger_build"
+						? String(result.args?.task || "build")
+						: result.toolName === "run_command"
+							? String(result.args?.command || "")
+							: String(result.args?.task || result.args?.stepId || result.toolName || "");
+				}
 
-				// A repaired contract must replace the plan's active scenario before any
-				// PASS/FAIL result from this round is considered. Old scenarios remain
-				// auditable but can never advance the current game_test step.
-				if (step.kind === "game_test") {
+				// Attach/replace the active scenario when test_design or game_test registers one.
+				if (step.kind === "game_test" || step.kind === "test_design") {
 					const previousScenarioId = String(step.gameTest?.id || orderedResults.find((result) => result.toolName === "mc_run_test")?.args?.scenarioId || "");
 					for (const result of orderedResults) {
 						const replacementScenarioId = gameTestScenarioIdFromResult(result);
@@ -2060,16 +2692,38 @@ export class WorkflowEngine {
 						step.gameTest = getGameTestSpec(replacementScenarioId) || replacement;
 						const tracked = this.planTracker.steps.find((candidate) => candidate.id === step.id);
 						if (tracked) tracked.gameTest = step.gameTest;
+						// Propagate the designed scenario onto the following game_test step.
+						if (step.kind === "test_design") {
+							const gameTestStep = this.steps.find((candidate) => candidate.kind === "game_test" && candidate.status !== "completed");
+							if (gameTestStep) {
+								gameTestStep.gameTest = step.gameTest;
+								const trackedGame = this.planTracker.steps.find((candidate) => candidate.id === gameTestStep.id);
+								if (trackedGame) trackedGame.gameTest = step.gameTest;
+							}
+						}
 						this.emitPlanState();
 						break;
 					}
 				}
 
-				fabricDocsSearchCount += orderedResults.filter((result) => result.toolName === "fabric_docs_search" && result.ok && !result.error).length;
+				fabricDocsSearchCount += orderedResults.filter((result) => result.toolName === "fabric_docs_search" && result.ok && !result.error && !result.cacheHit).length;
 				for (const result of orderedResults) {
+					if (result.toolName === "read_error_log" && result.ok && !result.error) {
+						const logType = String(result.args?.logType || "last-build");
+						seenLogReads.set(logType, { fingerprint: stableTextHash(String(result.output || "")), sourceRevision: sourceMutationRevision });
+					}
 					if (result.toolName !== "fabric_docs_search" || !result.ok || result.error) continue;
 					const fp = normalizeDocSearchFingerprint(String(result.args?.keyword || result.args?.query || ""));
 					if (fp) seenDocFingerprints.add(fp);
+				}
+				for (const result of orderedResults) {
+					if (!isKnowledgeTool(result.toolName || "") || !result.ok || result.error) continue;
+					const rawFingerprint = knowledgeQueryFingerprint(result.toolName || "", result.args);
+					if (rawFingerprint !== `${result.toolName}:`) {
+						const fingerprint = knowledgeKeyFor(result.toolName || "", result.args);
+						seenKnowledgeFingerprints.add(fingerprint);
+						this.knowledgeFactCache.set(fingerprint, String(result.output || ""));
+					}
 				}
 
 				const clarificationResult = orderedResults.find((result) => result.toolName === "ask_clarification" && result.ok && !result.error);
@@ -2437,7 +3091,10 @@ export class WorkflowEngine {
 						continue;
 					}
 				}
-				const decisiveResult = orderedResults.find((result) => isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence, runGate));
+				const decisiveResult = (validationGateResult && !validationGateResult.ok)
+					? validationGateResult
+					: orderedResults.find((result) => isTerminalFailure(step, result) || resultCompletesStep(step, result, stepHasEvidence, runGate)) || validationGateResult;
+				const validationFailed = Boolean(validationGateResult && !validationGateResult.ok);
 				const success =
 					(decisiveResult ? resultCompletesStep(step, decisiveResult, stepHasEvidence, runGate) : false);
 				let roundInstruction: string | undefined;
@@ -2516,7 +3173,7 @@ export class WorkflowEngine {
 				// auto-complete if the model keeps stalling without complete_step.
 				// Run: once in-game verify gates are satisfied, auto-advance if the model
 				// keeps calling tools / complete_step instead of waiting for host advance.
-				if (stepHasEvidence && (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin")) {
+				if (!validationFailed && stepHasEvidence && (step.kind === "write" || step.kind === "inspect" || step.kind === "recipe" || step.kind === "mixin")) {
 					evidenceIdleRounds++;
 					roundInstruction = [roundInstruction, `【验收证据已满足】请立即调用 complete_step({"stepId":"${step.id}"}) 推进下一步，禁止继续重复 read_file/edit_file。`]
 						.filter(Boolean)
@@ -2568,10 +3225,16 @@ export class WorkflowEngine {
 					evidenceIdleRounds = 0;
 				}
 
-				if (decisiveResult && isTerminalFailure(step, decisiveResult)) {
-					const signature = repairErrorSignature(decisiveResult.output, step.kind as "build" | "run");
-					const errorCount = countGradleErrorEntries(decisiveResult.output);
-					const failureFiles = uniqueGradleErrorFiles(decisiveResult.output);
+				if (decisiveResult && (validationFailed || isTerminalFailure(step, decisiveResult))) {
+					const report = decisiveResult.buildReport;
+					const diagnostics = report?.diagnostics || [];
+					const signature = report && diagnostics.length > 0
+						? `report|${diagnosticSetKey(diagnostics)}`
+						: repairErrorSignature(decisiveResult.output, validationFailed ? "build" : step.kind as "build" | "run");
+					const errorCount = diagnostics.length > 0 ? diagnostics.length : countGradleErrorEntries(decisiveResult.output);
+					const failureFiles = diagnostics.length > 0
+						? [...new Set(diagnostics.map((diagnostic) => diagnostic.file).filter((file): file is string => Boolean(file)))]
+						: uniqueGradleErrorFiles(decisiveResult.output);
 					if (failureFiles.length > 0 && !failureFiles.some((file) => isBuildFailureWithinRepairScope(file, repairScope, this.projectPath))) {
 						step.status = "failed";
 						this.emitPlanState();
@@ -2580,7 +3243,11 @@ export class WorkflowEngine {
 					}
 					const signatureCount = seenRepairSignatures.get(signature) || 0;
 					if (signatureCount >= 2) {
-						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `Identical ${step.kind} failure repeated twice without a successful build; stopping as INCONCLUSIVE.` } });
+						this.emit({ kind: EventKind.Notice, notice: { level: "warn", text: `Identical ${step.kind} diagnostic repeated twice without progress; pausing with a repair checkpoint instead of rebuilding the same source.` } });
+						lastFailureOutput = decisiveResult.output;
+						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, "【诊断停滞】相同诊断在不同候选后仍未变化。禁止重复构建；必须换用不同根因假设，或保存检查点等待 fallback/继续。");
+						diagnosticStalled = true;
+						attempt = maxIterations;
 						break;
 					}
 					if (signatureCount > 0) {
@@ -2600,14 +3267,28 @@ export class WorkflowEngine {
 					repairValidationRequired = undefined;
 					lastFailureOutput = decisiveResult.output;
 					effectiveMaxRepairRounds = Math.max(effectiveMaxRepairRounds, computeRepairBudget(lastFailureOutput));
-					// Progressive: error count decreased → do not burn a repairRound.
-					const progressed = lastErrorCount > 0 && errorCount > 0 && errorCount < lastErrorCount;
+					// Progress is based on diagnostic identity and validation stage. A
+					// downstream error exposed after fixing a root error is progress even
+					// when the raw error count increases.
+					const progress = diagnostics.length > 0 && lastFailureDiagnostics.length > 0
+						? compareDiagnosticProgress(lastFailureDiagnostics, diagnostics)
+						: undefined;
+					const progressed = Boolean(progress?.progressed) || (lastErrorCount > 0 && errorCount > 0 && errorCount < lastErrorCount);
 					if (!progressed) repairRounds++;
 					lastErrorCount = errorCount || lastErrorCount;
+					lastFailureDiagnostics = diagnostics;
 					for (const main of extractClientInMainMigrations(lastFailureOutput)) {
 						pendingMigration.add(main.replace(/\\/g, "/"));
 					}
-					roundInstruction = buildRepairInstruction(lastFailureOutput, step.kind as "build" | "run");
+					const repairProposalContract: RepairProposal = {
+						id: `repair_${step.id}_${signature.slice(0, 8)}`,
+						diagnosticIds: diagnostics.map((diagnostic) => diagnostic.id),
+						hypothesis: "（模型必须在下一轮说明根因假设）",
+						files: failureFiles,
+						expectedResolution: "消除上述 diagnostic IDs 或推进到下一个验证阶段"
+					};
+					this.onRepairProposal?.(repairProposalContract);
+					roundInstruction = `RepairProposal（必须绑定诊断，不得只读日志）：${JSON.stringify(repairProposalContract)}\n` + buildRepairInstruction(lastFailureOutput, validationFailed ? "build" : step.kind as "build" | "run");
 					if (pendingMigration.size > 0) {
 						roundInstruction += formatMigrationChecklist(pendingMigration);
 					}
@@ -2634,6 +3315,7 @@ export class WorkflowEngine {
 					pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
 					if (repairRounds > effectiveMaxRepairRounds) {
 						attempt = maxIterations;
+						forcedStepStop = true;
 						break;
 					}
 					continue;
@@ -2692,7 +3374,7 @@ export class WorkflowEngine {
 				}
 
 				// Track knowledge queries and limit per step
-				const successfulKnowledge = orderedResults.filter((result) => result.ok && !result.error && isKnowledgeTool(result.toolName || ""));
+				const successfulKnowledge = orderedResults.filter((result) => result.ok && !result.error && !result.cacheHit && isKnowledgeTool(result.toolName || ""));
 				if (successfulKnowledge.length > 0) {
 					knowledgeQueries += successfulKnowledge.length;
 					if (knowledgeQueries > MAX_FREE_KNOWLEDGE_ROUNDS) {
@@ -2729,16 +3411,22 @@ export class WorkflowEngine {
 
 				const requestedCompletion = orderedResults.some((result) => result.toolName === "complete_step" && result.ok);
 				if (completionEvidenceRejectedThisRound) {
+					const missingEvidence = missingWriteEvidencePaths(step, evidenceResults, adoptedWritePaths());
 					roundInstruction = [
 						roundInstruction,
-						`【缺少验收证据】不能完成步骤 #${step.id}。请先使用与验收标准匹配的工具取得新证据，再调用 complete_step。`
+						`【缺少验收证据】不能完成步骤 #${step.id}。` +
+							(missingEvidence.length
+								? `缺少写入证据：${missingEvidence.join(", ")}。请对目标路径 write_file/edit_file，或调用 fabric_mixin_register("${missingEvidence[0]}")；重复调用校验器不会产生新证据。`
+								: "请先使用与验收标准匹配的工具取得新证据，再调用 complete_step。")
 					]
 						.filter(Boolean)
 						.join("\n\n");
 					if (evidenceCompletionRejections >= 2) {
-						pendingEphemeralInstruction = this.appendToolRound(baseMessages, modelResult.text || streamText, allCalls, resultsById, roundInstruction);
-						attempt = maxIterations;
-						continue;
+						// Two identical refusals with no admissible way to produce evidence is a
+						// gate contradiction, not a model failure — stop and ask the user instead
+						// of faking an exhausted attempt budget.
+						evidenceDeadlocked = true;
+						break;
 					}
 				}
 				if (requestedCompletion && !success) {
@@ -2770,7 +3458,7 @@ export class WorkflowEngine {
 
 				const repairDiagnosticRound =
 					repairMode && orderedResults.length > 0 && orderedResults.every((result) => isRepairDiagnosticResult(step, result, repairMode)) && repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS;
-				const freeKnowledgeRound = successfulKnowledge.length === orderedResults.length && knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS;
+				const freeKnowledgeRound = orderedResults.length > 0 && orderedResults.every((result) => isKnowledgeTool(result.toolName || "") && result.ok && !result.error) && knowledgeQueries <= MAX_FREE_KNOWLEDGE_ROUNDS;
 				const freeExploreRound = pureExplore && isExploreLimitedStep(step, repairMode) && !stepHasEvidence && exploreRounds <= MAX_FREE_EXPLORE_ROUNDS;
 				const freeRepairExplore = repairExploreOnly && repairDiagRounds <= MAX_FREE_REPAIR_DIAG_ROUNDS;
 				const readOnlyAfterEvidence =
@@ -2780,6 +3468,15 @@ export class WorkflowEngine {
 				if (!repairDiagnosticRound && !freeKnowledgeRound && !freeExploreRound && !freeRepairExplore && !readOnlyAfterEvidence) {
 					attempt++;
 				}
+			}
+
+			if (globalBudgetExceeded) {
+				return {
+					finalContent: finalContent.trim() || `${globalBudgetExceeded}。候选工程已暂停，发送「继续」可从当前步骤恢复。`,
+					allDone: false,
+					partial: true,
+					steps: this.steps
+				};
 			}
 
 			if (!completed && step.status !== "completed") {
@@ -2807,8 +3504,25 @@ export class WorkflowEngine {
 					repairRounds > effectiveMaxRepairRounds
 						? `已尝试 ${repairRounds}/${effectiveMaxRepairRounds} 轮自动修复仍未成功。\n\n最后错误：\n${lastFailureOutput.trim().split("\n").slice(-40).join("\n")}\n\n`
 						: "";
+				const deadlockMissing = evidenceDeadlocked ? missingWriteEvidencePaths(step, evidenceResults, adoptedWritePaths()) : [];
 				return {
-					finalContent: finalContent.trim() || buildStepFailureMessage(step, attempt, maxIterations, lastToolName, repairNote, remaining),
+					finalContent: diagnosticStalled
+						? `[HARNESS_PAUSED:diagnostic_stalled] 当前诊断簇连续两个不同候选均未推进。已保存候选工程，系统将尝试已配置的 fallback；若没有 fallback，请发送「继续」。\n\n${lastFailureOutput.trim().slice(-2400)}`
+						: evidenceDeadlocked
+							? `[HARNESS_PAUSED:evidence_deadlock] 步骤 #${step.id}「${step.title}」连续两次被判定缺少验收证据（实际消耗 ${loopIterations} 轮，步骤预算 ${maxIterations} 轮）。` +
+								`验收标准：${step.evidence || "未声明"}。` +
+								(deadlockMissing.length ? `缺少写入证据：${deadlockMissing.join(", ")}。` : "") +
+								`目标文件可能已由本轮更早的工具写入完成。发送「继续」重试，或回复「跳过」直接推进计划。`
+							: finalContent.trim() ||
+								buildStepFailureMessage(
+									step,
+									attempt,
+									maxIterations,
+									lastToolName,
+									repairNote,
+									remaining,
+									forcedStepStop ? `实际消耗 ${loopIterations} 轮后触发提前终止护栏，步骤预算 ${maxIterations} 轮` : undefined
+								),
 					allDone: false,
 					partial: true,
 					steps: this.steps

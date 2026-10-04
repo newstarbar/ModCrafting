@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import test from 'node:test'
 import zlib from 'node:zlib'
 import { buildRecipeContent, validateRecipeContent } from '../../src/renderer/src/harness/recipe-utils.ts'
-import { buildMixinScaffold, parseMethodDescriptor, type MixinScaffoldMetadata } from '../../src/renderer/src/harness/mixin-utils.ts'
+import { buildMixinScaffold, mixinAnnotationForm, parseMethodDescriptor, type MixinScaffoldMetadata } from '../../src/renderer/src/harness/mixin-utils.ts'
 import { normalizeWorkflowSteps } from '../../src/renderer/src/harness/plan-normalizer.ts'
 import { isToolAllowedForStep } from '../../src/renderer/src/harness/step-policy.ts'
 import { recordsStepEvidence } from '../../src/renderer/src/harness/workflow-engine.ts'
@@ -67,6 +67,29 @@ test('Mixin scaffold covers supported injection families', () => {
     const source = buildMixinScaffold({ packageName: 'com.example.mixin', className: 'GeneratedMixin', metadata: entry.meta, targetStatic: false, atTargetStatic: false })
     assert.match(source, entry.expected)
   }
+})
+
+test('$-nested Mixin target uses @Mixin(targets=) and imports no nested class', () => {
+  const nested = metadata({ targetClass: 'net.minecraft.entity.mob.ShulkerEntity$ShootBulletGoal', selector: 'start' })
+  const source = buildMixinScaffold({ packageName: 'com.example.mixin', className: 'ShulkerCreeperMixin', metadata: nested, targetStatic: false })
+  assert.match(source, /@Mixin\(targets = "net\.minecraft\.entity\.mob\.ShulkerEntity\$ShootBulletGoal"\)/)
+  assert.doesNotMatch(source, /@Mixin\(ShulkerEntity\.ShootBulletGoal\.class\)/)
+  assert.doesNotMatch(source, /import net\.minecraft\.entity\.mob\.ShulkerEntity\.ShootBulletGoal;/)
+  // targets= is a binary-name string, so the scaffold needs no import for the target at all.
+  assert.doesNotMatch(source, /import .*ShulkerEntity/)
+  assert.equal(mixinAnnotationForm(nested.targetClass, 'ShulkerEntity.ShootBulletGoal'), 'targets = "net.minecraft.entity.mob.ShulkerEntity$ShootBulletGoal"')
+  assert.equal(mixinAnnotationForm('net.minecraft.entity.LivingEntity', 'LivingEntity'), 'LivingEntity.class')
+})
+
+test('nested parameter types import the outer class, not the nested binary name', () => {
+  const source = buildMixinScaffold({
+    packageName: 'com.example.mixin',
+    className: 'MoveEffectMixin',
+    metadata: metadata({ selector: 'getMoveEffect', descriptor: '()Lnet/minecraft/entity/Entity$MoveEffect;' }),
+    targetStatic: false
+  })
+  assert.match(source, /import net\.minecraft\.entity\.Entity;/)
+  assert.doesNotMatch(source, /import net\.minecraft\.entity\.Entity\.MoveEffect;/)
 })
 
 test('workflow classifies Mixin separately and allows write/delete for client migration', () => {

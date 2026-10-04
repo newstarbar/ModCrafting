@@ -1,0 +1,72 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`WorkspaceEmpty > renders default empty state 1`] = `
+<div
+  class="workspace-empty"
+>
+  <div
+    class="workspace-empty-inner mc-inset"
+  >
+    <h2
+      class="workspace-empty-title mc-y"
+    >
+      工作室
+    </h2>
+    <p
+      class="workspace-empty-desc mc-dim"
+    >
+      尚未打开 Fabric 项目。可从首页继续上次项目，或在此新建/打开。
+    </p>
+    <div
+      class="workspace-empty-actions"
+    >
+      <button
+        class="mc-btn mc-btn--primary"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="icon icon-sm"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="1.75"
+          viewBox="0 0 24 24"
+        >
+          <path
+            d="M12 5v14M5 12h14"
+          />
+        </svg>
+         新建项目
+      </button>
+      <button
+        class="mc-btn"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="icon icon-sm"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="1.75"
+          viewBox="0 0 24 24"
+        >
+          <path
+            d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+          />
+        </svg>
+         打开项目
+      </button>
+      <button
+        class="mc-btn"
+        type="button"
+      >
+        返回首页
+      </button>
+    </div>
+  </div>
+</div>
+`;

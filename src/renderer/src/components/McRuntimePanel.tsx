@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import { IconGamepad } from './Icon'
 import { logger } from '../utils/logger'

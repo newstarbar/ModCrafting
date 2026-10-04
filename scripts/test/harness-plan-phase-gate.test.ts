@@ -12,6 +12,7 @@ import {
 test('plan exploration lock kick demands submit_plan', () => {
   assert.match(PLAN_EXPLORATION_LOCK_KICK, /submit_plan/)
   assert.match(PLAN_EXPLORATION_LOCK_KICK, /建议尽快提交/)
+  assert.match(PLAN_EXPLORATION_LOCK_KICK, /知识库/)
   assert.equal(MAX_READONLY_ROUNDS, 15)
 })
 
@@ -23,11 +24,20 @@ test('text-only plan replies are nudged up to MAX then stop', () => {
   assert.equal(shouldNudgePlanSubmit(MAX_PLAN_SUBMIT_NUDGE_ROUNDS), false)
 })
 
-test('post-lock tools include plan-closing plus read-only exploration', () => {
+test('post-lock tools keep plan-closing, read-only exploration and knowledge bases', () => {
   assert.equal(isPlanPostLockTool('submit_plan'), true)
   assert.equal(isPlanPostLockTool('ask_clarification'), true)
   assert.equal(isPlanPostLockTool('grep'), true)
   assert.equal(isPlanPostLockTool('list_directory'), true)
-  assert.equal(isPlanPostLockTool('read_file'), false)
-  assert.equal(isPlanPostLockTool('fabric_docs_search'), false)
+  assert.equal(isPlanPostLockTool('read_file'), true)
+  assert.equal(isPlanPostLockTool('fabric_docs_search'), true)
+  assert.equal(isPlanPostLockTool('fabric_mixin_target_lookup'), true)
+  assert.equal(isPlanPostLockTool('minecraft_data_lookup'), true)
+  assert.equal(isPlanPostLockTool('mc_wiki_search'), true)
+})
+
+test('post-lock tools still forbid writes, builds and game control', () => {
+  for (const name of ['write_file', 'edit_file', 'delete_file', 'fabric_mixin_scaffold', 'fabric_mixin_register', 'trigger_build', 'fast_compile', 'run_command', 'complete_step', 'mc_run_test', 'mc_command']) {
+    assert.equal(isPlanPostLockTool(name), false, `${name} must stay blocked after the plan lock`)
+  }
 })

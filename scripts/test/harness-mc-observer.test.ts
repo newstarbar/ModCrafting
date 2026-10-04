@@ -73,7 +73,8 @@ describe('mc-observer helpers', () => {
   it('detects vision-capable models', () => {
     assert.equal(isVisionCapableModel('gpt-4o'), true)
     assert.equal(isVisionCapableModel('claude-sonnet-4'), true)
-    assert.equal(isVisionCapableModel('deepseek-chat'), false)
+    assert.equal(isVisionCapableModel('deepseek-v4-pro'), false)
+    assert.equal(isVisionCapableModel('deepseek-flash'), true)
     assert.equal(isVisionCapableModel('qwen3.7-plus'), true)
     assert.equal(isVisionCapableModel('glm-5.2'), false)
     assert.equal(isVisionCapableModel('glm-5-turbo', 'zhipu'), false)

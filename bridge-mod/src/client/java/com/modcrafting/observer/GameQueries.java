@@ -141,6 +141,8 @@ public final class GameQueries {
             out.put("title", null);
             out.put("kind", client.player != null ? "ingame" : "none");
             out.put("widgets", List.of());
+            out.put("containerSlots", List.of());
+            out.put("containerHandlerType", null);
             return out;
         }
         out.put("className", screen.getClass().getName());
@@ -162,7 +164,73 @@ public final class GameQueries {
         out.put("kind", kind);
         out.put("pausesGame", screen.shouldPause());
         out.put("widgets", widgetsOf(screen));
+        // Export container slot data for HandledScreen (inventory, crafting, hopper, etc.)
+        Map<String, Object> container = containerOf(screen);
+        out.put("containerSlots", container.getOrDefault("slots", List.of()));
+        out.put("containerHandlerType", container.get("handlerType"));
+        out.put("containerSyncId", container.get("syncId"));
+        out.put("cursorStack", container.get("cursorStack"));
         return out;
+    }
+
+    /**
+     * Export structured slot data from a HandledScreen (PlayerScreenHandler, CraftingScreenHandler, etc.).
+     * Returns: { slots, handlerType, syncId, cursorStack } or empty slots if not a HandledScreen.
+     */
+    private static Map<String, Object> containerOf(Screen screen) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (!(screen instanceof net.minecraft.client.gui.screen.ingame.AbstractContainerScreen<?> containerScreen)) {
+            out.put("slots", List.of());
+            out.put("handlerType", null);
+            out.put("syncId", null);
+            out.put("cursorStack", null);
+            return out;
+        }
+        try {
+            net.minecraft.client.gui.screen.ingame.AbstractContainerScreen<?> abs = containerScreen;
+            net.minecraft.screenhansync.PlayerScreenHandlerInterface handler = abs.getScreenHandler();
+            if (handler == null) {
+                out.put("slots", List.of());
+                out.put("handlerType", null);
+                out.put("syncId", null);
+                out.put("cursorStack", null);
+                return out;
+            }
+            out.put("handlerType", handler.getType().toString());
+            out.put("syncId", handler.getSyncId());
+            // Cursor stack
+            net.minecraft.item.ItemStack cursor = handler.getCursorStack();
+            out.put("cursorStack", cursor.isEmpty() ? null : stackSummary(cursor));
+            // Slot list
+            List<Map<String, Object>> slots = new ArrayList<>();
+            for (int i = 0; i < handler.slots.size(); i++) {
+                net.minecraft.screenhansync.Slot s = handler.slots.get(i);
+                net.minecraft.item.ItemStack stack = s.getStack();
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("index", i);
+                row.put("itemId", stack.isEmpty() ? null : Registries.ITEM.getId(stack.getItem()).toString());
+                row.put("count", stack.getCount());
+                row.put("componentFingerprint", stack.isEmpty() ? null : stackFingerprint(stack));
+                slots.add(row);
+            }
+            out.put("slots", slots);
+        } catch (Exception e) {
+            out.put("slots", List.of());
+            out.put("handlerType", null);
+            out.put("syncId", null);
+            out.put("cursorStack", null);
+        }
+        return out;
+    }
+
+    private static String stackFingerprint(net.minecraft.item.ItemStack stack) {
+        // Deterministic fingerprint: item id + components that affect crafting outcome
+        StringBuilder sb = new StringBuilder();
+        sb.append(Registries.ITEM.getId(stack.getItem()).toString());
+        if (stack.getCount() != 1) sb.append(" x").append(stack.getCount());
+        if (stack.hasNbt()) sb.append(" nbt:").append(stack.getNbt().toString());
+        if (stack.getDamage() != 0) sb.append(" d:").append(stack.getDamage());
+        return sb.toString();
     }
 
     public static Map<String, Object> widgets() {

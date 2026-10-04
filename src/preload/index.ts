@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { BuildReport, BuildReportOptions, ExecutionWorkspace, ProjectProfile, TaskCheckpoint, WorkspaceManifestEntry, WorkspacePatchEntry } from '../shared/harness-runtime'
 
 const automationEnabled = process.argv.includes('--automation')
 
@@ -188,8 +189,47 @@ const api = {
     ipcRenderer.invoke('project:getFabricVersions'),
   lookupFabricSymbol: (request: FabricSymbolLookupRequest): Promise<FabricSymbolLookupResult> =>
     ipcRenderer.invoke('fabric:lookupSymbol', request),
-  verifyFabricSymbolIndex: (): Promise<{ ok: boolean; error?: string; classes?: number }> =>
+  verifyFabricSymbolIndex: (): Promise<{ ok: boolean; error?: string; classes?: number; minecraftVersion?: string; yarnMappings?: string }> =>
     ipcRenderer.invoke('fabric:verifySymbolIndex'),
+  inspectProjectProfile: (projectPath: string): Promise<ProjectProfile> =>
+    ipcRenderer.invoke('harness:inspectProjectProfile', projectPath),
+  createWorkspace: (projectPath: string, taskId?: string): Promise<ExecutionWorkspace> =>
+    ipcRenderer.invoke('harness:createWorkspace', projectPath, taskId),
+  getWorkspace: (workspaceId: string): Promise<ExecutionWorkspace> =>
+    ipcRenderer.invoke('harness:getWorkspace', workspaceId),
+  diffWorkspace: (workspaceId: string): Promise<{ changedPaths: string[]; current: WorkspaceManifestEntry[]; patchJournal: WorkspacePatchEntry[] }> =>
+    ipcRenderer.invoke('harness:diffWorkspace', workspaceId),
+  promoteWorkspace: (workspaceId: string): Promise<{ ok: boolean; status: ExecutionWorkspace['status']; changedPaths: string[]; conflictPaths: string[]; error?: string }> =>
+    ipcRenderer.invoke('harness:promoteWorkspace', workspaceId),
+  markWorkspace: (workspaceId: string, status: ExecutionWorkspace['status'], fields?: { changedPaths?: string[]; conflictPaths?: string[] }): Promise<ExecutionWorkspace> =>
+    ipcRenderer.invoke('harness:markWorkspace', workspaceId, status, fields),
+  rollbackWorkspace: (workspaceId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('harness:rollbackWorkspace', workspaceId),
+  discardWorkspace: (workspaceId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('harness:discardWorkspace', workspaceId),
+  createBuildReport: (options: BuildReportOptions): Promise<BuildReport> =>
+    ipcRenderer.invoke('harness:createBuildReport', options),
+  getBaselineBuildCache: (projectPath: string, profileFingerprint: string, task: string): Promise<BuildReport | null> =>
+    ipcRenderer.invoke('harness:getBaselineBuildCache', projectPath, profileFingerprint, task),
+  putBaselineBuildCache: (projectPath: string, profileFingerprint: string, task: string, report: BuildReport): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('harness:putBaselineBuildCache', projectPath, profileFingerprint, task, report),
+  saveHarnessCheckpoint: (checkpoint: TaskCheckpoint): Promise<TaskCheckpoint> =>
+    ipcRenderer.invoke('harness:saveCheckpoint', checkpoint),
+  loadHarnessCheckpoint: (taskId: string): Promise<TaskCheckpoint | null> =>
+    ipcRenderer.invoke('harness:loadCheckpoint', taskId),
+  listHarnessCheckpoints: (): Promise<TaskCheckpoint[]> =>
+    ipcRenderer.invoke('harness:listCheckpoints'),
+  removeHarnessCheckpoint: (taskId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('harness:removeCheckpoint', taskId),
+  runStagedBuild: (workspaceId: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean; report?: BuildReport }> =>
+    ipcRenderer.invoke('harness:runStagedBuild', workspaceId, task, options),
+  /**
+   * Fast semantic compile: returns a BuildReport with hard/soft-tagged diagnostics
+   * (severity field). When `degraded` is true, the renderer must fall back to a
+   * full Gradle build because javac couldn't see every dependency.
+   */
+  fastCompile: (workspaceId: string, options?: { timeoutMs?: number }): Promise<BuildReport & { fast: { durationMs: number; classpathEntries: number; sourceFiles: number; degraded: boolean } }> =>
+    ipcRenderer.invoke('harness:fastCompile', workspaceId, options),
 
   // Window
   setTitle: (title: string): Promise<void> =>
@@ -426,7 +466,7 @@ const api = {
     powershellEnv: string
     error?: string
   }> => ipcRenderer.invoke('env:prepareBuild', projectPath),
-  runGradleTask: (projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean }> =>
+  runGradleTask: (projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }): Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean; report?: BuildReport }> =>
     ipcRenderer.invoke('env:runGradleTask', projectPath, task, options),
   getToolchainStatus: (): Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean }> =>
     ipcRenderer.invoke('env:getToolchainStatus'),
@@ -505,11 +545,11 @@ const api = {
   },
 
   // API config & secrets
-  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean; providerSettings: Record<string, { endpoint: string; model: string }> }> =>
+  loadApiConfig: (): Promise<{ endpoint: string; model: string; providerId: string; protocol?: import('../shared/harness-runtime.ts').LlmProtocol; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean; providerSettings: Record<string, { endpoint: string; model: string; protocol?: import('../shared/harness-runtime.ts').LlmProtocol }> }> =>
     ipcRenderer.invoke('config:load'),
-  loadApiConfigForProvider: (providerId: string): Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean }> =>
+  loadApiConfigForProvider: (providerId: string): Promise<{ endpoint: string; model: string; providerId: string; protocol?: import('../shared/harness-runtime.ts').LlmProtocol; hasApiKey: boolean }> =>
     ipcRenderer.invoke('config:loadProvider', providerId),
-  saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }): Promise<{ success: boolean; error?: string }> =>
+  saveApiConfig: (config: { endpoint: string; model: string; providerId?: string; protocol?: import('../shared/harness-runtime.ts').LlmProtocol }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('config:save', config),
   loadModelRoutingConfig: (): Promise<import('../shared/model-routing.ts').ModelRoutingConfig> =>
     ipcRenderer.invoke('modelRouting:load'),

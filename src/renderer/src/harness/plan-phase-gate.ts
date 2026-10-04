@@ -1,5 +1,7 @@
 /** Plan-phase gates: exploration cap → force submit_plan (no prose-only exit). */
 
+import { getBuiltinToolPolicy } from './tool-policy.ts'
+
 export const MAX_READONLY_ROUNDS = 15
 export const MAX_PLAN_OFFERED_REJECT_ROUNDS = 2
 /** Text-only replies after lock before giving up (controller may still format-retry). */
@@ -8,7 +10,8 @@ export const MAX_PLAN_SUBMIT_NUDGE_ROUNDS = 3
 export const PLAN_EXPLORATION_LOCK_KICK =
   '【系统】计划阶段勘探轮次较多，建议尽快提交。' +
   '请调用 submit_plan 提交结构化计划；信息仍不足时用 ask_clarification（须带 options）。' +
-  '只读工具（list_directory/read_file/grep）仍可用，但请聚焦关键文件。'
+  '只读工具（list_directory/read_file/grep）与知识库查询工具（fabric_docs_search、' +
+  'fabric_mixin_target_lookup、minecraft_data_lookup、mc_wiki_search 等）仍可用，但请聚焦关键文件。'
 
 export const PLAN_SUBMIT_NUDGE =
   '【系统】计划阶段禁止仅用文字结束。请立即调用 submit_plan 提交结构化计划' +
@@ -19,8 +22,13 @@ export function shouldNudgePlanSubmit(nudgeRoundsCompleted: number): boolean {
   return nudgeRoundsCompleted < MAX_PLAN_SUBMIT_NUDGE_ROUNDS
 }
 
-/** After exploration lock, allow plan-closing tools plus read-only exploration tools. */
+/**
+ * After exploration lock, the plan must still be closeable and still provable:
+ * writing code before checking the knowledge bases is forbidden by the prompt,
+ * so locking the knowledge tools out would make a compliant plan impossible.
+ */
 export function isPlanPostLockTool(name: string): boolean {
-  return name === 'submit_plan' || name === 'ask_clarification'
-    || name === 'grep' || name === 'list_directory'
+  if (name === 'submit_plan' || name === 'ask_clarification') return true
+  const capabilities = getBuiltinToolPolicy(name)?.capabilities ?? []
+  return capabilities.includes('project.read') || capabilities.includes('knowledge.read')
 }

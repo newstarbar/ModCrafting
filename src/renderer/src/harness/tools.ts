@@ -4,6 +4,7 @@
 import { logger } from '../utils/logger.ts'
 import type { McPhase } from '../utils/mc-phase-parser.ts'
 import type { FileDiff, GuiLayoutElement, GuiLayoutType } from './events.ts'
+import type { BuildReport, ToolFailureKind, ValidationResult } from '../../../shared/harness-runtime.ts'
 import type { PlanTracker, PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
 import type { FileSession } from './file-session.ts'
@@ -21,7 +22,7 @@ export interface Tool {
 }
 
 export interface ToolValidationEvidence {
-  kind: 'recipe' | 'mixin' | 'game'
+  kind: 'recipe' | 'mixin' | 'game' | 'mod_json'
   valid: boolean
   version: '1.21.4'
   /** What this tool actually proved. Mixin validation is structural, not compilation. */
@@ -51,6 +52,9 @@ export interface ToolValidationEvidence {
 export interface ToolExecutionPayload {
   output: string
   artifactPaths?: string[]
+  buildReport?: BuildReport
+  validationResult?: ValidationResult
+  cacheHit?: boolean
   validation?: ToolValidationEvidence
   /** Optional PNG/JPEG base64 for vision-capable models (e.g. mc_screenshot). */
   imageBase64?: string
@@ -92,6 +96,8 @@ export interface ToolContext {
   guiPreviewCompletedForStep?: boolean
   /** 当前步骤是否需要 GUI 布局预览（由 plan-normalizer 语义检测设置） */
   currentStepRequiresGuiPreview?: boolean
+  /** Marks a host-owned validation invocation so it is not treated as model work. */
+  validationGate?: boolean
 }
 
 const MAX_TOOL_OUTPUT = 32 * 1024 // 32KB max output
@@ -290,8 +296,13 @@ export interface ToolResult {
   /** All artifacts affected by this call. artifactPath remains for v1 compatibility. */
   artifactPaths?: string[]
   validation?: ToolValidationEvidence
+  buildReport?: BuildReport
+  validationResult?: ValidationResult
   exitCode?: number | null
   errorKind?: string
+  /** New mutually-exclusive host/tool protocol classification. `errorKind` is
+   * retained as a legacy wire field for old replay fixtures/checkpoints. */
+  failureKind?: ToolFailureKind
   fileDiff?: FileDiff
   meta?: {
     mcPhase?: McPhase
@@ -300,6 +311,7 @@ export interface ToolResult {
   imageBase64?: string
   imageMimeType?: string
   outcome?: 'succeeded' | 'failed' | 'timed_out' | 'cancelled'
+  cacheHit?: boolean
   runId?: string
   executionId?: string
 }
@@ -501,7 +513,10 @@ export async function executeTool(
     const duration = Date.now() - start
     const truncated = truncateOutput(output)
     const exitCode = parseExitCode(output)
-    const inferredError = inferToolError(tool.name, output, exitCode)
+    const reportError = payload?.buildReport && !payload.buildReport.ok
+      ? `BuildReport failed at ${payload.buildReport.stage}: ${payload.buildReport.diagnostics.map((diagnostic) => diagnostic.id).join(', ') || payload.buildReport.outputFingerprint}`
+      : undefined
+    const inferredError = reportError || inferToolError(tool.name, output, exitCode)
     const inferredErrorKind = inferToolErrorKind(inferredError)
     const meta = tool.name === 'trigger_build' ? parseTriggerBuildMeta(output) : undefined
 
@@ -535,6 +550,9 @@ export async function executeTool(
       artifactPath,
       artifactPaths,
       validation: payload?.validation,
+      buildReport: payload?.buildReport,
+      validationResult: payload?.validationResult,
+      ...(payload?.cacheHit ? { cacheHit: true } : {}),
       exitCode,
       fileDiff,
       meta,
@@ -542,6 +560,10 @@ export async function executeTool(
       imageMimeType: payload?.imageMimeType,
       outcome: inferredError ? 'failed' : 'succeeded',
       errorKind: inferredErrorKind,
+      // The call passed schema and host policy and reached the tool. Any
+      // returned error is therefore an execution failure (policy rejections
+      // are produced before executeTool by the step/snapshot middleware).
+      failureKind: inferredError ? 'execution_failed' : undefined,
       runId: ctx.runId,
       executionId: ctx.executionId
     }
@@ -550,6 +572,7 @@ export async function executeTool(
     let errMsg = err instanceof Error ? err.message : String(err)
     const cancelled = controller.signal.aborted && !timedOut
     const errorKind = timedOut ? 'tool_timeout' : cancelled ? 'tool_cancelled' : 'exception'
+    const failureKind: ToolFailureKind = timedOut || cancelled ? 'execution_failed' : 'execution_failed'
     if (timedOut) errMsg = `工具 ${tool.name} 超时：${errMsg}`
     if (cancelled) errMsg = `工具 ${tool.name} 已取消：${errMsg}`
     logger.tool(`Error: ${tool.name}`, errMsg)
@@ -572,6 +595,7 @@ export async function executeTool(
       artifactPaths: artifactPath ? [artifactPath] : [],
       exitCode: null,
       errorKind,
+      failureKind,
       outcome: timedOut ? 'timed_out' : cancelled ? 'cancelled' : 'failed',
       runId: ctx.runId,
       executionId: ctx.executionId
@@ -614,6 +638,7 @@ export async function executeBatch(
         args: call.args,
         exitCode: null,
         errorKind: 'tool_cancelled',
+        failureKind: 'execution_failed',
         outcome: 'cancelled',
         runId: ctx.runId,
         executionId: ctx.runId ? `${ctx.runId}:${call.id}` : call.id
@@ -633,7 +658,8 @@ export async function executeBatch(
         toolName: call.name,
         args: call.args,
         exitCode: null,
-        errorKind: 'unknown_tool'
+        errorKind: 'unknown_tool',
+        failureKind: 'tool_unknown'
       }
       results.set(call.id, result)
       onResult?.(call.name, call.id, result)

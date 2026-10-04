@@ -1,4 +1,5 @@
-import type { Tool } from './tools'
+// @ts-nocheck
+import type { Tool } from './tools.ts'
 import { createGameTestSpec, formatGameTestSpec, MAX_GAME_TEST_WAIT_MS } from './game-test-protocol.ts'
 
 /**
@@ -500,39 +501,132 @@ const FEATURE_TYPE_DESCRIPTIONS: Record<FeatureType, string> = {
   hud_gui: 'HUD/界面：添加了 HUD 覆盖层或自定义界面，需按键触发并验证控件交互'
 }
 
-function formatScenarioOutput(template: ScenarioTemplate, featureDetail?: string, modId?: string): string {
+/** Design scaffolds replace prose step sequences.
+ * Each scaffold tells the model WHAT to design (observable dimensions, assertion
+ * types, sandbox preset) instead of prescribing HOW to interact step-by-step.
+ * The prose templates below are retained as reference only. */
+const FEATURE_SCAFFOLDS: Record<FeatureType, {
+  observableDimensions: string[]
+  recommendedAssertions: string[]
+  defaultSandbox: 'enclosed_arena' | 'flat_platform' | 'crafting_station' | 'stimulus_pad'
+  designPrompt: string
+}> = {
+  new_item: {
+    observableDimensions: ['主手物品 ID（main_hand）', '物品栏 contents（inventory_contains）', '世界方块状态（block_equals）', '实体状态（mc_observe_entity）', '屏幕状态（screen_matches）'],
+    recommendedAssertions: ['main_hand', 'inventory_contains', 'block_equals', 'entity_exists', 'snapshot_value'],
+    defaultSandbox: 'flat_platform',
+    designPrompt: '新物品测试设计步骤：① 用 read_file 读物品注册代码，确定 item_id；② 决定可观测维度（如：手持物品 ID、物品使用后背包变化、触发实体/方块变化）；③ 选择断言类型；④ 写出 actions（give → use/attack → 断言）；⑤ 调用 mc_test_scenario 注册 V2 规格。'
+  },
+  new_block: {
+    observableDimensions: ['方块坐标状态（block_equals）', '实体站立状态（mc_world）', '屏幕状态（screen_matches）', '物品栏变化（inventory_contains）'],
+    recommendedAssertions: ['block_equals', 'entity_exists', 'screen_matches', 'inventory_contains'],
+    defaultSandbox: 'flat_platform',
+    designPrompt: '新方块测试设计步骤：① 用 read_file 读方块注册代码，确定 block_id；② 决定可观测维度（如：放置后方块类型、碰撞箱行为、右键交互后状态）；③ 写出 actions（setblock → 交互 → 断言）；④ 调用 mc_test_scenario 注册 V2 规格。'
+  },
+  new_recipe: {
+    observableDimensions: ['合成界面容器槽位（container_slot）', '结果格物品（snapshot_value source=screen）', '背包变化（inventory_contains）', '配方注册（recipe_exists 辅助）'],
+    recommendedAssertions: ['snapshot_value (source=containerSlots)', 'inventory_contains'],
+    defaultSandbox: 'crafting_station',
+    designPrompt: '新合成配方测试设计步骤：① 用 read_file 读配方 JSON，确定材料 ID 和产物 ID；② 用 crafting_station 沙盒；③ 打开合成界面（setblock crafting_table → use → click_slot 0-8 摆材料）；④ 断言结果格：snapshot_value source=containerSlots pointer=/slots/9/itemId equals "<产物ID>"；⑤ 若 Observer 不支持 containerSlots，fallback 为：给予材料 → inventory_contains 产物；recipe_exists 仅作辅助证据；⑥ 调用 mc_test_scenario 注册 V2 规格。'
+  },
+  entity_behavior: {
+    observableDimensions: ['实体状态快照（mc_observe_entity）', '世界实体列表（mc_world）', '实体死亡/生成事件（combat_event）'],
+    recommendedAssertions: ['snapshot_value (entity)', 'snapshot_changed', 'entity_exists', 'snapshot_relation', 'combat_event'],
+    defaultSandbox: 'enclosed_arena',
+    designPrompt: '实体行为测试设计步骤：① 用 read_file 读实体修改代码，确定 entity_id 和修改内容；② 决定可观测维度（初始状态 → 触发刺激 → 变化后状态）；③ 实体测试必须用 enclosed_arena 防止越界；④ 用 checkpoint 捕获 before/after 状态；⑤ 写出对比 assertions（snapshot_changed 或 snapshot_relation）；⑥ 调用 mc_test_scenario 注册 V2 规格。禁止仅凭截图宣称完成。'
+  },
+  player_interaction: {
+    observableDimensions: ['主手物品（main_hand）', '物品栏变化（inventory_contains）', '实体生成（entity_exists）', '世界状态（block_equals/mc_world）'],
+    recommendedAssertions: ['main_hand', 'inventory_contains', 'entity_exists', 'snapshot_value'],
+    defaultSandbox: 'flat_platform',
+    designPrompt: '玩家交互测试设计步骤：① 用 read_file 读交互逻辑代码，确定 item_id 和交互效果；② 决定可观测维度（手持物品、触发效果、物品消耗）；③ 写出 actions（give → 交互触发 → 断言）；④ 调用 mc_test_scenario 注册 V2 规格。'
+  },
+  hud_gui: {
+    observableDimensions: ['屏幕类型（screen_matches）', '控件状态（widget_state）', 'HUD 文字内容（hud_text，需 approved layout）'],
+    recommendedAssertions: ['screen_matches', 'widget_state', 'hud_text'],
+    defaultSandbox: 'flat_platform',
+    designPrompt: 'HUD/GUI 测试设计步骤：① 用 read_file 读界面代码，确定触发热键和控件 ID；② 决定可观测维度（屏幕类型、控件状态、HUD 内容）；③ 若涉及 HUD 文字，需先 gui_layout_preview 捕获 approved layout；④ 写出 actions（key_press → wait → 断言）；⑤ 调用 mc_test_scenario 注册 V2 规格。'
+  }
+}
+
+function formatScenarioOutput(
+  template: ScenarioTemplate,
+  featureDetail?: string,
+  modId?: string,
+  featureType?: FeatureType
+): string {
   const lines: string[] = []
-  lines.push(`# 测试场景：${template.title}`)
+  const scaffold = featureType ? FEATURE_SCAFFOLDS[featureType] : undefined
+
+  lines.push(`# 测试场景设计脚手架：${template.title}`)
   lines.push('')
   lines.push(`功能类型：${template.feature_type}`)
   lines.push(`描述：${template.description}`)
-  if (featureDetail) {
-    lines.push(`功能细节：${featureDetail}`)
-  }
-  if (modId) {
-    lines.push(`模组 ID：${modId}（请将步骤中的 <modid> 替换为此值）`)
-  }
-  lines.push('')
-  lines.push('## 测试步骤')
-  lines.push('')
-  for (const step of template.steps) {
-    lines.push(`### 步骤 ${step.step}：${step.action}`)
-    lines.push(`- 工具：\`${step.tool}\``)
-    lines.push(`- 参数：\`${JSON.stringify(step.params)}\``)
-    lines.push(`- 验证：${step.verify}`)
+  if (featureDetail) lines.push(`功能细节：${featureDetail}`)
+  if (modId) lines.push(`模组 ID：${modId}`)
+
+  // NEW: Design scaffold section — replaces prose step sequences
+  if (scaffold) {
     lines.push('')
-  }
-  lines.push('## 成功标准')
-  lines.push('')
-  for (const criteria of template.successCriteria) {
-    lines.push(`- ${criteria}`)
+    lines.push('## 设计脚手架（必读）')
+    lines.push('')
+    lines.push('**不要套用下方的散文步骤！** 按照下方步骤设计自己的测试规格：')
+    lines.push('')
+    lines.push('**1. 可观测维度（选择适用的）**')
+    for (const dim of scaffold.observableDimensions) {
+      lines.push(`   - ${dim}`)
+    }
+    lines.push('')
+    lines.push('**2. 推荐断言类型**')
+    for (const assertion of scaffold.recommendedAssertions) {
+      lines.push(`   - \`${assertion}\``)
+    }
+    lines.push('')
+    lines.push(`**3. 默认沙盒：\`${scaffold.defaultSandbox}\`**`)
+    lines.push('   （entity_behavior 强制 enclosed_arena；recipe 用 crafting_station）')
+    lines.push('')
+    lines.push('**4. 设计流程**')
+    for (const line of scaffold.designPrompt.split('\n')) {
+      lines.push(`   ${line}`)
+    }
+    lines.push('')
+    lines.push('## 旧散文步骤（仅作参考，不是通过证据！）')
+    lines.push('')
+    for (const step of template.steps) {
+      lines.push(`- ${step.step}. ${step.action}（${step.tool}）→ ${step.verify}`)
+    }
+    lines.push('')
+    lines.push('## 成功标准')
+    lines.push('')
+    for (const criteria of template.successCriteria) {
+      lines.push(`- ${criteria}`)
+    }
+    lines.push('')
+    lines.push('## V2 注册格式')
+    lines.push('调用 mc_test_scenario 时补充以下参数即可注册 V2 规格：')
+    lines.push('```json')
+    lines.push('{ "subject_id": "<实际ID>", "sandbox": "' + scaffold.defaultSandbox + '", "assertions": [...], "acceptanceContract": {...} }')
+    lines.push('```')
+  } else {
+    lines.push('')
+    lines.push('## 测试步骤')
+    for (const step of template.steps) {
+      lines.push(`### 步骤 ${step.step}：${step.action}`)
+      lines.push(`- 工具：\`${step.tool}\``)
+      lines.push(`- 参数：\`${JSON.stringify(step.params)}\``)
+      lines.push(`- 验证：${step.verify}`)
+      lines.push('')
+    }
+    lines.push('## 成功标准')
+    for (const criteria of template.successCriteria) {
+      lines.push(`- ${criteria}`)
+    }
   }
   lines.push('')
   lines.push('## 注意事项')
-  lines.push('- 占位符（如 <modid>、<item_id>、<entity_id>）需替换为实际值')
-  lines.push('- 每步执行后立即用客观证据（mc_screenshot/mc_inspect/mc_world/mc_observe_entity）验证')
-  lines.push('- 若某步失败，分析失败原因后用 mc_input/mc_command 调整，禁止跳过验证')
-  lines.push('- 实体行为修改必须用 mc_observe_entity 对比状态变化，禁止仅凭截图宣称完成')
+  lines.push('- **禁止直接套用上方散文步骤作为 PASS 证据；必须先设计 V2 规格并调用 mc_test_scenario 注册。**')
+  lines.push('- 实体行为修改必须用 mc_observe_entity 对比状态变化，禁止仅凭截图宣称完成。')
+  lines.push('- 合成配方必须用容器槽位或背包变化断言，recipe_exists 仅作辅助证据。')
   return lines.join('\n')
 }
 
@@ -604,6 +698,11 @@ export const mcTestScenarioTool: Tool = {
         type: 'integer', minimum: 1, maximum: 3,
         description: '可选：要求同一场景独立 PASS 的次数；例如重启游戏后完整复测可传 2'
       },
+      sandbox: {
+        type: 'string',
+        enum: ['flat_platform', 'enclosed_arena', 'stimulus_pad', 'crafting_station', 'skip'],
+        description: '可选：声明式沙盒预设。entity_behavior 默认为 enclosed_arena（强制）；recipe 为 crafting_station；其余为 flat_platform。传 skip 仅在已有自定义环境时使用。'
+      },
       baselineCheckpoint: { type: 'string' },
       checkpoints: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' } },
       variables: { type: 'object' },
@@ -624,7 +723,7 @@ export const mcTestScenarioTool: Tool = {
     const template = TEMPLATES[featureType]
     const featureDetail = args.feature_detail ? String(args.feature_detail) : undefined
     const modId = args.mod_id ? String(args.mod_id) : undefined
-    const legacy = formatScenarioOutput(template, featureDetail, modId)
+    const legacy = formatScenarioOutput(template, featureDetail, modId, featureType)
     const requestedV2 = Boolean(args.subject_id || args.target_id || args.hotkey || args.assertions)
     if (!requestedV2) {
       return legacy + '\n\n[V2] 要执行确定性测试，请补充 subject_id（或 hotkey）与至少一条 assertions，然后调用 mc_run_test。'

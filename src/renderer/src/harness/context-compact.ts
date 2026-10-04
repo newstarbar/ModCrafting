@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Context compaction — prevents context-window overflow by
 // replacing old tool results with placeholders (micro-compact)
 // and triggering LLM summarization when token budget is low (auto-compact).

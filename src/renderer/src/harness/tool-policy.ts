@@ -50,7 +50,7 @@ export const BUILTIN_TOOL_POLICIES: Record<string, ToolPolicy> = (() => {
   assign(['fabric_docs_search', 'fabric_javadoc_lookup', 'vanilla_mc_wiki_query', 'minecraft_data_lookup', 'mc_wiki_search', 'fabric_meta_version_check', 'fabric_mod_json_validate', 'fabric_log_debugger', 'fabric_mixin_target_lookup', 'fabric_recipe_validate', 'fabric_mixin_validate', 'mc_test_scenario'], KNOWLEDGE, out)
   assign(['write_file', 'edit_file', 'delete_file', 'create_recipe', 'fabric_recipe_generate', 'fabric_content_register', 'fabric_data_assets_generate', 'fabric_mixin_scaffold', 'fabric_mixin_register', 'fabric_template_generate'], withCapabilities(FAST, ['project.write']), out)
   assign(['run_command'], PROCESS, out)
-  assign(['trigger_build'], BUILD, out)
+  assign(['trigger_build', 'fast_compile'], BUILD, out)
   assign(['mc_runtime_status', 'mc_screenshot', 'mc_inspect', 'mc_inventory', 'mc_world', 'mc_observe_entity'], GAME, out)
   assign(['mc_chat', 'mc_command', 'mc_input'], withCapabilities(GAME, ['game.control']), out)
   assign(['mc_ensure_test_world', 'mc_ensure_cheats', 'mc_run_test'], WORLD, out)
@@ -103,6 +103,27 @@ export function recommendedToolNames(kind: StepKind, repairMode = false): string
     if (kind === 'run' || kind === 'game_test') {
       if (repairMode && caps.some((cap) => cap === 'project.write' || cap === 'user.interaction')) return true
       return caps.some((cap) => ['project.read', 'knowledge.read', 'process.build', 'process.shell', 'game.observe', 'game.control', 'workflow.control'].includes(cap))
+    }
+    if (kind === 'test_design') {
+      // Design only: read code/world, register scenario. No product writes, no mc_run_test.
+      return (
+        name === 'mc_test_scenario' ||
+        name === 'ask_clarification' ||
+        (
+          caps.some((cap) => ['project.read', 'knowledge.read', 'game.observe', 'workflow.control'].includes(cap)) &&
+          name !== 'mc_run_test' &&
+          name !== 'mc_ensure_test_world' &&
+          name !== 'mc_ensure_cheats' &&
+          name !== 'mc_command' &&
+          name !== 'mc_input' &&
+          name !== 'mc_chat' &&
+          name !== 'mc_screenshot' &&
+          name !== 'trigger_build' &&
+          name !== 'run_command' &&
+          name !== 'complete_step' &&
+          name !== 'submit_plan'
+        )
+      )
     }
     return caps.some((cap) => ['project.read', 'workflow.control'].includes(cap))
   })

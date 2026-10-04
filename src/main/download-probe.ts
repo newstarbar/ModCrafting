@@ -34,7 +34,7 @@ const probeCache = new Map<string, number | null>()
  * 抽出来是为了支持并发用不同网络栈测速。
  */
 async function probeWith(
-  fetchImpl: typeof globalThis.fetch,
+  fetchImpl: (input: string | URL, init?: RequestInit) => Promise<Response>,
   url: string
 ): Promise<number | null> {
   const controller = new AbortController()

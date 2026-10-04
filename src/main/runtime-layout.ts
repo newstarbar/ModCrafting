@@ -82,7 +82,7 @@ export function migrateRuntimeToPath(
   isValid: (root: string) => boolean
 ): { success: boolean; error?: string; migrated: boolean } {
   if (!sourceRoot || !targetRoot) {
-    return { success: false, error: '源路径或目标路径为空' }
+    return { success: false, error: '源路径或目标路径为空', migrated: false }
   }
   if (path.normalize(sourceRoot) === path.normalize(targetRoot)) {
     return { success: true, migrated: false }
@@ -103,7 +103,7 @@ export function migrateRuntimeToPath(
     const sourceValid = isValid(sourceRoot)
     if (sourceValid && !isValid(staging)) {
       fs.rmSync(staging, { recursive: true, force: true })
-      return { success: false, error: '复制后校验失败，已回滚' }
+      return { success: false, error: '复制后校验失败，已回滚', migrated: false }
     }
     // 清理目标位置（可能存在残留空目录或旧残留），然后 rename staging → target
     fs.rmSync(targetRoot, { recursive: true, force: true })
@@ -114,6 +114,6 @@ export function migrateRuntimeToPath(
   } catch (err) {
     // 回滚 staging
     try { fs.rmSync(staging, { recursive: true, force: true }) } catch { /* ignore */ }
-    return { success: false, error: String(err) }
+    return { success: false, error: String(err), migrated: false }
   }
 }

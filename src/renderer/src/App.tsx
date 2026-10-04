@@ -15,7 +15,7 @@ import OpenProjectDialog from "./components/OpenProjectDialog";
 import ToolchainInitOverlay, { type ToolchainInitState } from "./components/ToolchainInitOverlay";
 import EnvImportDialog from "./components/EnvImportDialog";
 import UpdateBanner from "./components/UpdateBanner";
-import SettingsCenter from "./components/SettingsCenter";
+import SettingsCenter, { type SettingsFocus } from "./components/SettingsCenter";
 import { IconCode, IconGamepad, IconPanelRightClose, IconSquare } from "./components/Icon";
 import PanelExpandRail from "./components/PanelExpandRail";
 import PanelResizeHandle from "./components/PanelResizeHandle";
@@ -34,11 +34,12 @@ import { providerDisplayLabel, resolveSelection } from "../../shared/llm-provide
 import type { ProviderModelSelection } from "./components/ComposerModelMenu";
 import type { ModelRef, ModelRoutingConfig, RoutingSelection } from "../../shared/model-routing.ts";
 import { defaultRoutingConfig, normalizeRoutingConfig } from "../../shared/model-routing.ts";
+import { SessionRuntimeManager } from "./harness/session-runtime";
 
 const DEFAULT_API_CONFIG: ApiConfigState = {
 	endpoint: "https://api.deepseek.com/v1",
 	apiKey: "",
-	model: "deepseek-v4-flash",
+	model: "deepseek-flash",
 	providerId: "deepseek"
 };
 
@@ -126,6 +127,7 @@ const App: React.FC = () => {
 	const [openDialogInitialPath, setOpenDialogInitialPath] = useState<string | null>(null);
 	const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
 	const [appView, setAppView] = useState<AppView>("hub");
+	const [settingsFocus, setSettingsFocus] = useState<SettingsFocus>({ section: 'models' });
 	const bottomPanelRef = useRef<BottomPanelHandle>(null);
 	const mcRuntimeRef = useRef<McRuntimePanelHandle>(null);
 	const chatPanelRef = useRef<{
@@ -238,6 +240,7 @@ const App: React.FC = () => {
 				endpoint: settings.endpoint,
 				model: settings.model,
 				providerId: settings.providerId,
+				protocol: settings.protocol,
 				apiKey
 			});
 		}
@@ -283,7 +286,7 @@ const App: React.FC = () => {
 		if (!provider.hasApiKey) return null;
 		const key = await window.api.getApiKey(model.providerId);
 		if (!key.success || !key.apiKey?.trim()) return null;
-		return { endpoint: provider.endpoint, apiKey: key.apiKey.trim(), model: model.modelId, providerId: model.providerId };
+		return { endpoint: provider.endpoint, apiKey: key.apiKey.trim(), model: model.modelId, providerId: model.providerId, protocol: provider.protocol };
 	}, [apiConfig.apiKey, apiConfig.endpoint, apiConfig.providerId]);
 
 	const handleRoutingConfigChange = useCallback(async (config: ModelRoutingConfig) => {
@@ -293,22 +296,29 @@ const App: React.FC = () => {
 	}, []);
 
 	const handleApiSettingsChange = useCallback(async (config: ApiSettingsPayload) => {
+		// SettingsCenter predates the optional protocol field. Preserve an
+		// explicitly saved protocol when a provider/model/key-only edit omits it.
+		const persistedConfig: ApiSettingsPayload = {
+			...config,
+			protocol: config.protocol ?? apiConfig.protocol
+		};
 		setApiConfig((prev) => ({
 			...prev,
-			endpoint: config.endpoint,
-			model: config.model,
-			providerId: config.providerId
+			endpoint: persistedConfig.endpoint,
+			model: persistedConfig.model,
+			providerId: persistedConfig.providerId,
+			protocol: persistedConfig.protocol
 		}));
-		await window.api.saveApiConfig(config);
+		await window.api.saveApiConfig(persistedConfig);
 
-		const keyResult = await window.api.getApiKey(config.providerId);
+		const keyResult = await window.api.getApiKey(persistedConfig.providerId);
 		const apiKey = keyResult.success && keyResult.apiKey?.trim() ? keyResult.apiKey.trim() : "";
 		setApiConfig((prev) => ({ ...prev, apiKey }));
 		setHasSavedApiKey(Boolean(apiKey));
 
 		const refreshed = await window.api.loadApiConfig();
 		setSavedProviderIds(refreshed.savedProviderIds);
-	}, []);
+	}, [apiConfig.protocol]);
 
 	const handleProviderModelChange = useCallback(
 		(selection: ProviderModelSelection) => {
@@ -316,13 +326,25 @@ const App: React.FC = () => {
 			void handleApiSettingsChange({
 				endpoint: selection.endpoint || resolved.endpoint,
 				model: resolved.modelId,
-				providerId: resolved.providerId
+				providerId: resolved.providerId,
+				protocol: resolved.protocol
 			});
 		},
 		[handleApiSettingsChange]
 	);
 
-	const openApiSettings = useCallback(() => { setAppView('settings'); }, []);
+	const openApiSettings = useCallback(() => {
+		setSettingsFocus({ section: 'models', advanced: false });
+		setAppView('settings');
+	}, []);
+	const openAdvancedRouting = useCallback(() => {
+		setSettingsFocus({ section: 'models', advanced: true });
+		setAppView('settings');
+	}, []);
+	const openSettingsCenter = useCallback(() => {
+		setSettingsFocus({ section: 'models' });
+		setAppView('settings');
+	}, []);
 
 	useEffect(() => {
 		if (apiConfig.providerId !== "deepseek" || !hasSavedApiKey) {
@@ -827,6 +849,7 @@ const App: React.FC = () => {
 	}, [routingConfig.defaultSelection]);
 
 	const handleDeleteSession = useCallback((id: string) => {
+		SessionRuntimeManager.getInstance().destroyRuntime(id);
 		setSessions((p) => p.filter((s) => s.id !== id));
 		setCurrentSessionId((cur) => (cur === id ? null : cur));
 		localStorage.removeItem(`modcrafting-changelog-${id}`);
@@ -974,14 +997,6 @@ const App: React.FC = () => {
 						onDeleteSession={(id) => setPendingDeleteSessionId(id)}
 						onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 						fileChanges={fileChanges}
-						apiConfig={apiConfig}
-						hasSavedApiKey={hasSavedApiKey}
-						savedProviderIds={savedProviderIds}
-						encryptionAvailable={encryptionAvailable}
-						onApiSettingsChange={handleApiSettingsChange}
-						onApiKeySave={handleApiKeySave}
-						onOpenProject={openProject}
-						onCreateProject={createProject}
 						fileTreeRefreshKey={state.fileTreeRefreshKey}
 						selectedFilePath={state.selectedFile?.path}
 						selectedFile={state.selectedFile}
@@ -990,7 +1005,7 @@ const App: React.FC = () => {
 						panelCollapsed={workspaceLayout.leftCollapsed}
 						panelDragging={workspaceLayout.isResizing}
 						onTogglePanelCollapse={() => workspaceLayout.toggleLeftCollapsed()}
-						onOpenSettingsCenter={() => setAppView('settings')}
+						onOpenSettingsCenter={openSettingsCenter}
 					/>
 					<PanelResizeHandle side="left" disabled={workspaceLayout.leftCollapsed} onPointerDown={workspaceLayout.beginLeftResize} />
 					<div className="main-area">
@@ -1016,6 +1031,8 @@ const App: React.FC = () => {
 								onRenameSession={(id, name) => setSessions((p) => p.map((s) => (s.id === id ? { ...s, name } : s)))}
 								onProviderModelChange={handleProviderModelChange}
 								onOpenApiSettings={openApiSettings}
+								onOpenAdvancedRouting={openAdvancedRouting}
+								savedProviderIds={savedProviderIds}
 								routingConfig={routingConfig}
 								routingSelection={currentRoutingSelection}
 								resolveRoutingModel={resolveRoutingModel}
@@ -1072,6 +1089,7 @@ const App: React.FC = () => {
 				</div>
 				<div className={`app-shell-view app-shell-view--settings${appView !== 'settings' ? ' app-shell-view--hidden' : ''}`}>
 					<SettingsCenter
+						key={`settings-${settingsFocus.section || 'models'}-${settingsFocus.advanced ? 'adv' : 'basic'}`}
 						apiConfig={apiConfig}
 						savedProviderIds={savedProviderIds}
 						encryptionAvailable={encryptionAvailable}
@@ -1079,6 +1097,7 @@ const App: React.FC = () => {
 						onApiKeySave={handleApiKeySave}
 						routingConfig={routingConfig}
 						onRoutingConfigChange={handleRoutingConfigChange}
+						initialFocus={settingsFocus}
 						onClose={() => setAppView(state.projectPath ? 'workspace' : 'hub')}
 					/>
 				</div>

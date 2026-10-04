@@ -13,7 +13,7 @@ type FabricVersions = {
 }
 
 export type PrefetchProgressPayload = {
-  phase: 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error'
+  phase: 'checking' | 'jdk' | 'gradle' | 'fabric' | 'minecraft' | 'assets' | 'verify' | 'optional' | 'project' | 'ready' | 'degraded' | 'error' | 'deps'
   message: string
   percent: number
   error?: string
@@ -381,6 +381,10 @@ export async function ensureGradleHomeOnline(
       // 成功后写标记文件，重启或换源重试时跳过此步骤
       if (isPrefetchStepDone(gradleHomePath, PREFETCH_BUILD_MARKER, fabricVersions)) {
         onProgress({ phase: 'fabric', message: 'Fabric 依赖已下载，跳过 build 步骤', percent: 52, source })
+      // Note: portable-prefetch runs gradle as a one-shot setup phase (with separate
+  // daemon lifecycle managed by stopGradleDaemonsForHome). We intentionally keep
+  // --no-daemon here so the prefetch step never accidentally inherits or stomps
+  // on the daemon that the interactive build path is reusing.
       } else {
         onProgress({ phase: 'fabric', message: '正在下载 Fabric Loader、Yarn 与 Fabric API…', percent: 46, source })
         await runGradle(projectDir, runtimeRoot, jdkPath, ['build', '--no-daemon',], 30 * 60 * 1000, forward('fabric', 52))

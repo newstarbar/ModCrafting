@@ -61,7 +61,7 @@ export function contextWindowLimit(model?: string, providerId?: string): number 
 
   const m = (model || '').toLowerCase()
   if (/1m|1000k|1048k/.test(m)) return 1_000_000
-  if (/deepseek-?v4|v4-flash|v4-pro/.test(m)) return 1_000_000
+  if (/^deepseek-(?:v4)?(?:flash|pro)/.test(m)) return 1_000_000
   if (/256/.test(m)) return 256_000
   if (/(^|[^0-9])32k?([^0-9]|$)/.test(m)) return 32_000
   if (/(^|[^0-9])64k?([^0-9]|$)/.test(m)) return 64_000

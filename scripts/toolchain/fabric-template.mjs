@@ -180,6 +180,18 @@ java_version=21
 
 # Offline build (ModCrafting bundled cache)
 org.gradle.offline=true
+
+# Performance: keep Gradle daemon warm between ModCrafting builds and reuse the
+# configuration phase across builds. ModCrafting's runShutdownCleanup stops the
+# daemon on app exit, so the long-lived JVM cost only applies while the app is open.
+# problems=warn keeps the build unblocked when a third-party Gradle plugin hasn't
+# yet been updated for configuration-cache compatibility.
+org.gradle.daemon=true
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.configuration-cache=true
+org.gradle.configuration-cache.problems=warn
+org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
 `
 }
 

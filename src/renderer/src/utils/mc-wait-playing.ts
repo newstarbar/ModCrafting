@@ -73,8 +73,8 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
   const logChunks: string[] = []
   let lastStatus = 'starting'
   let lastExitReason: string | undefined
-  let soakTimer: ReturnType<typeof window.setTimeout> | null = null
-  let failureTimer: ReturnType<typeof window.setTimeout> | null = null
+  let soakTimer: number | null = null
+  let failureTimer: number | null = null
   let pendingFailure: WaitForMcPlayingResult | null = null
 
   return new Promise((resolve) => {
@@ -113,7 +113,7 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
           ...result,
           logTail: formatMcLogTail(logChunks)
         })
-      }, failureSettleMs)
+      }, failureSettleMs) as unknown as number
     }
 
     const startSoak = (): void => {
@@ -124,7 +124,7 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
           finish(failure)
           return
         }
-        void window.api.mcRuntimeStatus(instanceId).then((runtime) => {
+        void window.api.mcRuntimeStatus(instanceId).then((runtime: { phase?: string; bridgeReady?: boolean; failureCode?: string; failureMessage?: string; error?: string }) => {
           if (runtime.phase === 'ready' && runtime.bridgeReady) {
             finish({ ok: true, phase: 'ready' })
             return
@@ -140,7 +140,7 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
           }
           clearSoak()
         }).catch(() => clearSoak())
-      }, soakMs)
+      }, soakMs) as unknown as number
     }
 
     const check = (): void => {
@@ -157,13 +157,13 @@ export function waitForMcRunReady(options: WaitForMcPlayingOptions): Promise<Wai
       }
     }
 
-    const unsubLog = window.api.onMcLog((id, text) => {
+    const unsubLog = window.api.onMcLog((id: string, text: string) => {
       if (id !== instanceId) return
       logChunks.push(text)
       check()
     })
 
-    const unsubState = window.api.onMcStateChanged((id, state) => {
+    const unsubState = window.api.onMcStateChanged((id: string, state: object) => {
       if (id !== instanceId) return
       const s = state as { status?: string; exitReason?: string }
       if (s.status) lastStatus = s.status

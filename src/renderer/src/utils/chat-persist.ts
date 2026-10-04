@@ -143,7 +143,7 @@ export function serializeDisplayMessages(
             id: e.id,
             title: e.title,
             layoutType: e.layoutType,
-            html: e.html.length > 48_000 ? `${e.html.slice(0, 48_000)}\n… [截断]` : e.html,
+            html: e.html != null && e.html.length > 48_000 ? `${e.html.slice(0, 48_000)}\n… [截断]` : (e.html ?? ''),
             elements: e.elements,
             status: e.status,
             layoutJson: e.layoutJson

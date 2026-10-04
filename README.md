@@ -43,7 +43,7 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
 | **Vibecoding 对话开发** | Chat / Plan / Execute 每轮分类；计划提交 AcceptanceContract；宿主管理实现 → build → run → game_test |
 | **Fabric 项目向导** | 图形化新建项目：Mod ID、包名、作者、版本；自动生成 `build.gradle`、`fabric.mod.json`、入口类 |
 | **模板快速创建** | 7 种内置模板（自定义方块 / 物品 / 食物 / 实体 / 工具 / 护甲 / 配方），表单填写后跳过 Plan 阶段，直接由 `fabric_template_generate` 工具透传生成 |
-| **46 个内置 AI 工具** | 文件/知识/Fabric/构建/游戏/用户交互/流程控制；能力、超时与步骤可见性由单一策略目录统一管理 |
+| **47 个内置 AI 工具** | 文件/知识/Fabric/构建/游戏/用户交互/流程控制；能力、超时与步骤可见性由单一策略目录统一管理 |
 | **验收与修复护栏** | `PASS` / `FAIL` / `INCONCLUSIVE` 三态裁决；动作后新鲜证据；修复范围限制；每步骤 20 模型轮次 / 40 工具调用 / 3 修复循环 |
 | **上下文压缩** | 老旧工具结果微压缩 + 接近 token 上限触发 LLM 摘要 + 跨轮诊断保留（近期 5 条用户反馈 + 2 条助手摘要） |
 | **确定性游戏测试** | `run` 与 `game_test` 分离；专用测试世界执行 Arrange → Act → Assert → Cleanup；截图不能单独通过 |
@@ -136,7 +136,7 @@ flowchart TB
       Contract[AcceptanceContract<br/>需求 → Oracle]
       Workflow[workflow-engine<br/>步骤 + 证据 + 受限修复]
       Policy[fabric-agent-policy<br/>领域护栏]
-      Tools[46 Tool Definitions]
+      Tools[47 Tool Definitions]
     end
     Chat --> Classifier
     Classifier --> Controller
@@ -271,7 +271,7 @@ npm run build:win:portable
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | API Endpoint | `https://api.deepseek.com/v1` | OpenAI 兼容接口地址 |
-| Model | `deepseek-v4-flash` | 可从内置 Provider/模型列表切换 |
+| Model | `deepseek-flash` | 可从内置 Provider/模型列表切换 |
 | API Key | （用户填写） | 本地加密存储，**切勿提交到 Git** |
 
 Agent 每轮独立分类用户消息，自动分流至三种模式：

@@ -79,29 +79,10 @@ export interface ToolEvent {
   executionId?: string
   /** Provenance of the tool implementation. Test Lab suites only accept core. */
   source?: 'core' | 'plugin' | 'external'
-  validation?: {
-    kind: 'recipe' | 'mixin' | 'game'
-    valid: boolean
-    verdict?: 'PASS' | 'FAIL' | 'INCONCLUSIVE'
-    checkedAt: number
-    inconclusiveCode?: import('./game-test-protocol.ts').GameTestInconclusiveCode
-    responsibility?: import('./game-test-protocol.ts').GameTestResponsibility
-    scenarioRevision?: number
-    scenarioFingerprint?: string
-    acceptanceContractFingerprint?: string
-    requiredPassCount?: number
-    observerSessionId?: string
-    windowFingerprint?: string
-    variantFingerprint?: string
-    replayPurpose?: 'first_failure_replay' | 'product_diagnostic'
-    diagnosticReplay?: boolean
-    resolvedVariables?: Record<string, string | number>
-    currentCheckpoint?: string
-    failureSignature?: string
-    runtimeState?: import('./game-test-protocol.ts').GameTestRuntimeState
-    instanceId?: string
-    minecraftProcessId?: string
-  }
+  validation?: import('./tools.ts').ToolValidationEvidence
+  /** Structured host-owned compiler/runtime diagnostics, when this tool built or tested. */
+  buildReport?: import('../../../shared/harness-runtime.ts').BuildReport
+  validationResult?: import('../../../shared/harness-runtime.ts').ValidationResult
 }
 
 export interface FileDiff {
@@ -184,7 +165,7 @@ export interface Event {
     id: string
     description: string
     status: string
-    kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'game_test'
+    kind?: 'inspect' | 'write' | 'recipe' | 'mixin' | 'build' | 'run' | 'test_design' | 'game_test'
     targetPath?: string
     targetPaths?: string[]
     evidence?: string

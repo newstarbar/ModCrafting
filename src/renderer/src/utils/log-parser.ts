@@ -98,8 +98,8 @@ export function buildRepairPrompt(errors: ParsedError[], buildOutput: string): s
   const trimmed = summarizeBuildOutput(buildOutput)
   prompt += trimmed
   prompt += '\n```\n\n'
-  prompt += '请用 read_error_log 定位错误后，用 edit_file / write_file / delete_file 逐文件修复，最后 trigger_build 验证。' +
-    '禁止只在聊天中贴完整修正代码。若 splitEnvironment 导致 client 类在 src/main/java：先 write_file 到 src/client/java，再 delete_file 删除旧 main 路径。'
+  prompt += '宿主已经把本次构建转换为 BuildReport；请依据 diagnostic ID、责任分类和文件位置提出最小 PatchProposal，再用 edit_file / write_file / delete_file 修复。' +
+    '修复后由宿主调用 trigger_build 增量验证，不要重复 read_error_log 或重复构建相同源码。禁止只在聊天中贴完整修正代码。若 splitEnvironment 导致 client 类在 src/main/java：先 write_file 到 src/client/java，再 delete_file 删除旧 main 路径。'
 
   return prompt
 }

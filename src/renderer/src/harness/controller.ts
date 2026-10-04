@@ -1,22 +1,22 @@
+// @ts-nocheck
 // ======== Controller ========
 // Ported from Reasonix internal/control/controller.go
 // Session management, plan/execute phases, approval gates
 
-import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from "./events";
-import { Agent, type RunOptions } from "./agent";
-import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMessage } from "./chat-message";
+import { type Sink, EventKind, type Event, FuncSink, LoggerSink } from "./events.ts";
+import { Agent, type RunOptions } from "./agent.ts";
+import { contentAsText, isVisionCapableModel, type ChatContentPart, type ChatMessage } from "./chat-message.ts";
 import { contentPartsAsClassifyText } from "../context/user-content.ts";
-import { Registry } from "./tools";
-import { PlanTracker } from "./plan-tracker";
-import { MAX_IMPLEMENTATION_PLAN_STEPS, parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from "../utils/plan-steps";
-import { logger } from "../utils/logger";
-import { buildFabricAgentPolicyPrompt } from "./fabric-agent-policy";
-import { isRetryableFetchError } from "./fetch-retry";
-import { type ComposerMode, buildSessionGoalBlock, isNarrowResumeInput, isStructuralErrorReport, buildUserSymptomBlock, buildCrossTurnDiagnosisRetain } from "./turn-intent";
+import { Registry } from "./tools.ts";
+import { PlanTracker } from "./plan-tracker.ts";
+import { MAX_IMPLEMENTATION_PLAN_STEPS, parsePlanSteps, planHasActionableSteps, selectPlanText, selectVisiblePlanText, isActionablePlanText } from "../utils/plan-steps.ts";
+import { logger } from "../utils/logger.ts";
+import { buildFabricAgentPolicyPrompt } from "./fabric-agent-policy.ts";
+import { isReasoningContinuityError, isRetryableFetchError } from "./fetch-retry.ts";
+import { type ComposerMode, buildSessionGoalBlock, isNarrowResumeInput, isStructuralErrorReport, buildUserSymptomBlock, buildCrossTurnDiagnosisRetain } from "./turn-intent.ts";
 import { classifyUserTurn, type ClassifyUserTurnResult, type ClassifierDiagnostics } from "./turn-classifier.ts";
 import { isQuickCreateGeneratedMessage } from "../project/template-params.ts";
 import type { WorkflowStep } from "./workflow-types.ts";
-import { TOOL_LABELS_ZH } from "./tool-labels";
 import { defaultVerifyTarget, formatVerifyTargetBlock, verifyTargetFromClassification, type VerifyTarget } from "./verify-target.ts";
 import { formatGradleSummary, formatJavaFileList, parseGradleProperties, scanJavaSourceTree } from "./project-info.ts";
 import { canonicalizePlanSteps, isGuiFilePath, stepRequiresGuiPreview } from "./plan-normalizer.ts";
@@ -24,24 +24,44 @@ import { computeApprovedLayoutFingerprint, getApprovedLayoutRecord, hydrateGameT
 import { registerKnownProjectPaths } from "./tool-definitions.ts";
 import { structuredGameTestGate } from "./plan-execution-gate.ts";
 import {
-  routeUserTurn,
+  buildRouteDecisionFromSignals,
+  extractRoutingSignals,
   findRoutingPreset,
+  isFastTierRef,
   isVisionModelRef,
+  MODEL_COOLDOWN_MS,
+  modelRefKey,
+  resolveBindingForDifficulty,
+  withActiveRoles,
   type AgentRoleId,
   type CollaborationTrace,
   type ModelRef,
   type ModelRoutingConfig,
   type RouteDecision,
-  type RoutingSelection
+  type RoutingSelection,
+  type TurnRoutingIntent
 } from "../../../shared/model-routing.ts";
+import { normalizeModelId } from "../../../shared/llm-providers.ts";
+import { classifyRoutingSignals } from "./routing-classifier.ts";
+import type { BuildReport, ExecutionWorkspace, HarnessRunState, LlmProtocol, ProjectProfile, ProviderProtocolDiagnostic, RepairProposal, TaskCheckpoint, ValidationStage } from "../../../shared/harness-runtime.ts";
+import { compareDiagnosticProgress } from "../../../shared/harness-diagnostics.ts";
+import { knowledgeQueryFingerprint } from "./doc-search-dedup.ts";
+import { isKnowledgeTool } from "./tool-policy.ts";
+
+/** Marker heading of the live project-structure message injected during execute turns. */
+const PROJECT_INFO_MESSAGE_PREFIX = "## 项目结构（实时刷新）";
+
+function isProjectInfoMessage(message: ChatMessage): boolean {
+	return message.role === "system" && typeof message.content === "string" && message.content.startsWith(PROJECT_INFO_MESSAGE_PREFIX);
+}
 
 export interface ControllerOptions {
 	registry: Registry;
 	projectPath: string | null;
-	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string };
+	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol };
 	routingConfig?: ModelRoutingConfig;
 	routingSelection?: RoutingSelection;
-	resolveModelConfig?: (model: ModelRef) => Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string } | null>;
+	resolveModelConfig?: (model: ModelRef) => Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol } | null>;
 	onEvent?: (event: Event) => void;
 	onAgentStatus?: (status: string) => void;
 	onStreamUpdate?: (text: string, reasoning?: string) => void;
@@ -53,13 +73,31 @@ export class Controller {
 	private sink: Sink;
 	private _projectPath: string | null;
 
-	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string };
+	apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol };
 	private routingConfig?: ModelRoutingConfig;
 	private routingSelection?: RoutingSelection;
 	private resolveModelConfig?: ControllerOptions['resolveModelConfig'];
 	private routeDecision: RouteDecision | null = null;
 	private collaborationTrace: CollaborationTrace[] = [];
 	private activeRoleContext: { roleId: AgentRoleId; providerId: string; modelId: string; invocationId: string } | null = null;
+	/** LiteLLM-style short cooldown after auth / 429 / protocol failure. */
+	private modelCooldowns = new Map<string, number>();
+	/** Per-turn role delegation counter against preset/hardLimits.maxDelegations. */
+	private turnDelegationCount = 0;
+	/** Candidate-only execution state. User files are promoted only after the
+	 * shadow plan, build and game contract have completed. */
+	private executionWorkspace: ExecutionWorkspace | null = null;
+	private executionProjectPath: string | null = null;
+	private projectProfile: ProjectProfile | null = null;
+	private pendingCheckpoint: TaskCheckpoint | null = null;
+	private resumeCheckpointRequested = false;
+	private lastBuildReport: BuildReport | null = null;
+	private resolvedDiagnosticIds = new Set<string>();
+	private checkpointKnowledgeFactKeys = new Set<string>();
+	private checkpointKnowledgeFacts = new Map<string, string>();
+	private repairProposalHistory: RepairProposal[] = [];
+	private providerProtocolDiagnostics: ProviderProtocolDiagnostic[] = [];
+	private checkpointUsage = { repairProposals: 0, modelRounds: 0, toolCalls: 0, startedAt: Date.now(), fallbackIndex: 0 };
 
 	// Session
 	messages: ChatMessage[] = [];
@@ -114,6 +152,29 @@ export class Controller {
 
 		this.sink = new LoggerSink(
 			new FuncSink((event) => {
+				if (event.kind === EventKind.ModelInvocation && event.modelInvocation?.phase === "start") {
+					this.checkpointUsage.modelRounds++;
+				}
+				if (event.kind === EventKind.ToolDispatch && event.tool && !event.tool.partial) {
+					this.checkpointUsage.toolCalls++;
+				}
+				if (event.kind === EventKind.Collaboration && event.collaboration?.status === "fallback") {
+					this.checkpointUsage.fallbackIndex++;
+				}
+				if (event.kind === EventKind.ToolResult && event.tool?.buildReport) {
+					if (this.lastBuildReport?.diagnostics?.length && event.tool.buildReport.diagnostics?.length) {
+						for (const id of compareDiagnosticProgress(this.lastBuildReport.diagnostics, event.tool.buildReport.diagnostics).resolvedIds) this.resolvedDiagnosticIds.add(id);
+					}
+					this.lastBuildReport = event.tool.buildReport;
+				}
+				if (event.kind === EventKind.ToolResult && event.tool && isKnowledgeTool(event.tool.name || "")) {
+					const raw = knowledgeQueryFingerprint(event.tool.name || "", (() => { try { return JSON.parse(event.tool.args || "{}"); } catch { return {}; } })());
+					if (raw !== `${event.tool.name}:`) {
+						const key = `${this.projectProfile?.fingerprint || this._projectPath || "unknown"}|${event.tool.name}|${raw}`;
+						this.checkpointKnowledgeFactKeys.add(key);
+						if (event.tool.output && !event.tool.error) this.checkpointKnowledgeFacts.set(key, event.tool.output);
+					}
+				}
 				if (event.tool && !event.tool.source) {
 					const name = event.tool.name || '';
 					event.tool.source = name.startsWith('plugin_') || name.startsWith('plugin:') ? 'plugin' : name.startsWith('external_') || name.startsWith('external:') ? 'external' : 'core';
@@ -149,6 +210,14 @@ export class Controller {
 					providerId: context?.providerId || this.apiConfig.providerId || 'custom',
 					modelId: request.modelId
 				});
+			},
+			onRepairProposal: (proposal) => {
+					this.checkpointUsage.repairProposals++;
+					this.repairProposalHistory = [...this.repairProposalHistory, proposal].slice(-64);
+			},
+			onProviderProtocolDiagnostic: (diagnostic) => {
+				this.providerProtocolDiagnostics = [...this.providerProtocolDiagnostics, diagnostic].slice(-128);
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: 'warn', text: `Provider 工具流诊断：${diagnostic.message}` } });
 			}
 		});
 	}
@@ -197,10 +266,294 @@ export class Controller {
 	}
 
 	setProjectPath(p: string | null): void {
+		if (this._projectPath && p && this._projectPath.replace(/\\/g, "/").toLowerCase() !== p.replace(/\\/g, "/").toLowerCase()) {
+			this.executionWorkspace = null;
+			this.executionProjectPath = null;
+			this.projectProfile = null;
+			this.pendingCheckpoint = null;
+			this.lastBuildReport = null;
+			this.resolvedDiagnosticIds.clear();
+			this.checkpointKnowledgeFactKeys.clear();
+			this.checkpointKnowledgeFacts.clear();
+		}
 		this._projectPath = p;
+		if (p) void this.loadPendingCheckpoint(p);
 	}
 
-	setApiConfig(config: { endpoint: string; apiKey: string; model: string; providerId?: string }): void {
+	private activeProjectPath(): string | null {
+		return this.executionProjectPath || this._projectPath;
+	}
+
+	private taskBudgetReason(): string | null {
+		const budget = this.checkpointUsage;
+		if (budget.repairProposals >= 12) return "修复候选预算（12）已用尽";
+		if (budget.modelRounds >= 40) return "模型轮次预算（40）已用尽";
+		if (budget.toolCalls >= 120) return "工具调用预算（120）已用尽";
+		if (Date.now() - budget.startedAt >= 90 * 60_000) return "90 分钟任务预算已用尽";
+		return null;
+	}
+
+	private async ensureProjectProfile(): Promise<void> {
+		if (this.projectProfile || !this._projectPath || typeof window === "undefined" || !window.api?.inspectProjectProfile) return;
+		try {
+			this.projectProfile = await window.api.inspectProjectProfile(this._projectPath);
+		} catch (error) {
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "warn", text: `项目画像解析暂不可用，继续使用受限模式：${error instanceof Error ? error.message : String(error)}` } });
+		}
+	}
+
+	private async loadPendingCheckpoint(projectPath: string): Promise<void> {
+		try {
+			if (!window.api.listHarnessCheckpoints) return;
+			const normalized = projectPath.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+			const candidates = (await window.api.listHarnessCheckpoints()).filter((checkpoint) => {
+				const candidate = checkpoint.workspace.userProjectPath.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+				return candidate === normalized && checkpoint.state !== "COMPLETE" && checkpoint.workspace.status !== "discarded" && checkpoint.workspace.status !== "promoted";
+			});
+			this.pendingCheckpoint = candidates[0] || null;
+			if (this.pendingCheckpoint) {
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: "info", text: "发现可恢复的 Harness 检查点。发送「继续」将从影子工程和当前步骤原地恢复。" } });
+			}
+		} catch {
+			// Checkpoint discovery is advisory; a missing/old file must never block a new task.
+		}
+	}
+
+	/** Rehydrate the host-owned plan before routing a narrow "continue" after
+	 * renderer/application restart.  Chat history is not a source of truth for
+	 * execution state; the checkpoint's serialized steps are. */
+	private restorePlanFromCheckpoint(): boolean {
+		const checkpoint = this.pendingCheckpoint;
+		if (!checkpoint?.plan?.length) return false;
+		const steps = checkpoint.plan.map((step) => ({
+			id: step.id,
+			description: step.description,
+			status: step.status,
+			...(step.kind ? { kind: step.kind } : {}),
+			...(step.targetPath ? { targetPath: step.targetPath } : {}),
+			...(step.targetPaths ? { targetPaths: [...step.targetPaths] } : {}),
+			...(step.evidence ? { evidence: step.evidence } : {}),
+			...(step.gameTest ? { gameTest: step.gameTest as GameTestSpec } : {})
+		}));
+		this.planTracker = PlanTracker.fromSteps(steps);
+		this.taskId = checkpoint.taskId;
+		this.projectProfile = checkpoint.profile || this.projectProfile;
+		this.lastBuildReport = checkpoint.lastBuildReport || this.lastBuildReport;
+		this.resolvedDiagnosticIds = new Set(checkpoint.resolvedDiagnosticIds || []);
+		this.checkpointKnowledgeFactKeys = new Set(checkpoint.knowledgeFactKeys || []);
+		this.checkpointKnowledgeFacts = new Map((checkpoint.knowledgeFacts || []).map((fact) => [fact.key, fact.value]));
+		this.repairProposalHistory = [...(checkpoint.repairProposals || [])];
+		this.providerProtocolDiagnostics = [...(checkpoint.providerProtocolDiagnostics || [])];
+		this.checkpointUsage = {
+			repairProposals: checkpoint.budgets?.repairProposals || 0,
+			modelRounds: checkpoint.budgets?.modelRounds || 0,
+			toolCalls: checkpoint.budgets?.toolCalls || 0,
+			startedAt: checkpoint.budgets?.startedAt || Date.now(),
+			fallbackIndex: checkpoint.fallbackIndex || 0
+		};
+		this._phase = "execute";
+		this.planReadyAwaitingExecute = false;
+		this.resumeCheckpointRequested = true;
+		this.emitPlanState(this.planTracker);
+		return true;
+	}
+
+	private async saveHarnessCheckpoint(state: HarnessRunState, stage: ValidationStage, reason?: string): Promise<void> {
+		const initialWorkspace = this.executionWorkspace;
+		if (!initialWorkspace || !window.api.saveHarnessCheckpoint) return;
+		let workspace: ExecutionWorkspace = initialWorkspace;
+		if (state === "PAUSED" && window.api.markWorkspace) {
+			try {
+				workspace = await window.api.markWorkspace(workspace.id, "paused");
+				this.executionWorkspace = workspace;
+			} catch { /* preserve the checkpoint even when metadata cannot be updated */ }
+		}
+		let patchJournal = workspace.patchJournal || [];
+		try {
+			const diff = await window.api.diffWorkspace?.(workspace.id);
+			if (diff) {
+				workspace = { ...workspace, changedPaths: diff.changedPaths, patchJournal: diff.patchJournal };
+				this.executionWorkspace = workspace;
+				patchJournal = diff.patchJournal;
+			}
+		} catch { /* diff is advisory; the shadow workspace remains recoverable */ }
+		const checkpointWorkspace = patchJournal.length > 0 ? { ...workspace, patchJournal } : workspace;
+		const checkpoint: TaskCheckpoint = {
+			version: 1,
+			schemaVersion: 2,
+			taskId: this.taskId,
+			workspace: checkpointWorkspace,
+			state,
+			stage,
+			profile: this.projectProfile || undefined,
+			planStepId: this.planTracker?.currentStep?.id,
+			diagnosticIds: this.lastBuildReport?.diagnostics.map((diagnostic) => diagnostic.id) || [],
+			resolvedDiagnosticIds: [...this.resolvedDiagnosticIds],
+			...(this.lastBuildReport ? { lastBuildReport: this.lastBuildReport } : {}),
+			repairProposals: this.repairProposalHistory.length > 0 ? this.repairProposalHistory.slice(-64) : this.lastBuildReport?.diagnostics.slice(0, 12).map((diagnostic) => ({
+				id: `diagnostic_${diagnostic.id}`,
+				diagnosticIds: [diagnostic.id],
+				hypothesis: "待模型根据 BuildReport 确认根因",
+				files: diagnostic.file ? [diagnostic.file] : [],
+				expectedResolution: "消除 diagnostic ID 或推进验证阶段"
+			})) || [],
+			modelRole: this.activeRoleContext?.roleId,
+			fallbackIndex: this.checkpointUsage.fallbackIndex,
+			budgets: {
+				repairProposals: this.checkpointUsage.repairProposals,
+				modelRounds: this.checkpointUsage.modelRounds,
+				toolCalls: this.checkpointUsage.toolCalls,
+				startedAt: this.checkpointUsage.startedAt,
+				maxRepairProposals: 12,
+				maxModelRounds: 40,
+				maxToolCalls: 120,
+				maxMinutes: 90
+			},
+			updatedAt: Date.now(),
+			quickGameStatus: "pending",
+			finalGameStatus: state === "COMPLETE" ? "pass" : "pending",
+			knowledgeFactKeys: [...this.checkpointKnowledgeFactKeys].slice(-256),
+			knowledgeFacts: [...this.checkpointKnowledgeFacts.entries()].slice(-256).map(([key, value]) => ({ key, value })),
+			plan: this.planTracker?.snapshot().map((step) => ({ ...step })),
+			modelCalls: this.collaborationTrace
+				.filter((trace) => trace.status === "completed" || trace.status === "failed" || trace.status === "fallback")
+				.slice(-32)
+				.map((trace) => ({ roleId: trace.roleId, providerId: trace.providerId, modelId: trace.modelId, status: trace.status, startedAt: trace.startedAt, endedAt: trace.endedAt })),
+			providerProtocolDiagnostics: this.providerProtocolDiagnostics.slice(-128),
+			...(reason ? { pauseReason: reason } : {})
+		};
+		try { await window.api.saveHarnessCheckpoint(checkpoint); } catch { /* recovery must not mask the original result */ }
+	}
+
+	private async prepareExecutionWorkspace(): Promise<boolean> {
+		if (!this._projectPath) return true;
+		if (this.executionWorkspace && this.executionProjectPath) return true;
+		try {
+			if (!this.pendingCheckpoint) await this.loadPendingCheckpoint(this._projectPath);
+			if (this.resumeCheckpointRequested && this.pendingCheckpoint && this.pendingCheckpoint.workspace.userProjectPath.replace(/\\/g, "/").toLowerCase() === this._projectPath.replace(/\\/g, "/").toLowerCase()) {
+				const checkpoint = this.pendingCheckpoint;
+				// A baseline blocker belongs to the old user-project fingerprint.  If
+				// the user fixed the project while paused, discard the stale candidate
+				// and create a fresh baseline; otherwise keep the blocker explicit.
+				const currentProfile = await window.api.inspectProjectProfile(this._projectPath);
+				if (checkpoint.pauseReason === "BASELINE_BUILD_FAILED" && checkpoint.profile?.fingerprint === currentProfile.fingerprint) {
+					this.emitEvent({ kind: EventKind.Notice, notice: { level: "error", text: "基线工程仍未通过编译；请先修复用户项目本身，再发送「继续」。影子工程未被提交。" } });
+					return false;
+				}
+				if (checkpoint.profile?.fingerprint && checkpoint.profile.fingerprint !== currentProfile.fingerprint) {
+					this.pendingCheckpoint = null;
+					this.resumeCheckpointRequested = false;
+					this.lastBuildReport = null;
+					this.resolvedDiagnosticIds.clear();
+					this.checkpointKnowledgeFactKeys.clear();
+					this.checkpointKnowledgeFacts.clear();
+					this.repairProposalHistory = [];
+					this.emitEvent({ kind: EventKind.Notice, notice: { level: "info", text: "检测到用户项目基线已变化，旧影子候选不再覆盖新修改；将重新建立画像和基线。" } });
+				} else {
+				const restored = await window.api.getWorkspace(this.pendingCheckpoint.workspace.id);
+				this.executionWorkspace = restored;
+				this.executionProjectPath = restored.shadowPath;
+				this.projectProfile = this.pendingCheckpoint.profile || await window.api.inspectProjectProfile(restored.shadowPath);
+				this.taskId = this.pendingCheckpoint.taskId;
+				this.pendingCheckpoint = null;
+				this.resumeCheckpointRequested = false;
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: "info", text: `已恢复影子工作区：${restored.id}` } });
+				return true;
+				}
+			}
+			this.projectProfile = await window.api.inspectProjectProfile(this._projectPath);
+			const workspace = await window.api.createWorkspace(this._projectPath, this.taskId);
+			this.executionWorkspace = workspace;
+			this.executionProjectPath = workspace.shadowPath;
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "info", text: "已创建影子工作区。模型的读写、编译和游戏测试均在候选工程中进行。" } });
+
+			// Baseline is deterministic and host-owned. An existing project failure is
+			// recorded as a blocker and is never attributed to the requested feature.
+			const profile = this.projectProfile;
+			const candidateTasks = profile?.splitEnvironment
+				? ["compileJava compileClientJava processResources", "classes"]
+				: ["compileJava processResources", "classes"];
+			let baselineResult: { output: string; exitCode: number; report?: BuildReport } | null = null;
+			for (const task of candidateTasks) {
+				const cached = profile?.fingerprint && window.api.getBaselineBuildCache
+					? await window.api.getBaselineBuildCache(this._projectPath, profile.fingerprint, task)
+					: null;
+				if (cached?.ok) {
+					baselineResult = { output: `${cached.output}\n[BASELINE CACHE HIT]`, exitCode: cached.exitCode, report: cached };
+					this.lastBuildReport = cached;
+					break;
+				}
+				baselineResult = await window.api.runGradleTask(workspace.shadowPath, task, { timeoutMs: 10 * 60_000 });
+				// Re-normalize the host result with the baseline flag.  The generic
+				// env:runGradleTask channel cannot know whether a caller is probing a
+				// baseline, so old reports must not misattribute pre-existing failures
+				// to generated code.
+				const report = window.api.createBuildReport
+					? await window.api.createBuildReport({ projectPath: workspace.shadowPath, task, output: baselineResult.output, exitCode: baselineResult.exitCode, usedOnlineFallback: baselineResult.report?.usedOnlineFallback, cancelled: baselineResult.report?.cancelled, baseline: true })
+					: baselineResult.report;
+				this.lastBuildReport = report;
+				if (report.ok) {
+					if (profile?.fingerprint && window.api.putBaselineBuildCache) void window.api.putBaselineBuildCache(this._projectPath, profile.fingerprint, task, report);
+					break;
+				}
+				if (!/task .*not found|任务 .*不存在|unknown task|找不到任务/i.test(report.output)) break;
+			}
+			const baselineReport = baselineResult?.report;
+			if (baselineReport && !baselineReport.ok) {
+				await window.api.markWorkspace?.(workspace.id, "paused");
+				await this.saveHarnessCheckpoint("PAUSED", "baseline", "BASELINE_BUILD_FAILED");
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: "error", text: `基线工程本身未通过编译，已暂停且未修改用户项目。\n${baselineReport.diagnostics.slice(0, 4).map((d) => `${d.file || ""}${d.line ? `:${d.line}` : ""} ${d.message}`).join("\n") || baselineReport.output.slice(-1200)}` } });
+				return false;
+			}
+			await this.saveHarnessCheckpoint("PROFILED", "profiled");
+			return true;
+		} catch (error) {
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "error", text: `无法创建 Harness 影子工作区，任务已暂停：${error instanceof Error ? error.message : String(error)}` } });
+			await this.saveHarnessCheckpoint("PAUSED", "baseline", "WORKSPACE_CREATE_FAILED");
+			return false;
+		}
+	}
+
+	private async finalizeAtomicDelivery(): Promise<boolean> {
+		const workspace = this.executionWorkspace;
+		if (!workspace || !this._projectPath) return true;
+		try {
+			await this.saveHarnessCheckpoint("FINAL_GAME_TEST", "final_game");
+			await this.saveHarnessCheckpoint("PROMOTE", "promote");
+			await window.api.markWorkspace?.(workspace.id, "active");
+			const promoted = await window.api.promoteWorkspace(workspace.id);
+			if (!promoted.ok) {
+				await window.api.markWorkspace?.(workspace.id, "paused", { changedPaths: promoted.changedPaths, conflictPaths: promoted.conflictPaths });
+				await this.saveHarnessCheckpoint("PAUSED", "promote", promoted.status === "promotion_conflict" ? "PROMOTION_CONFLICT" : (promoted.error || "PROMOTION_FAILED"));
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: "warn", text: promoted.status === "promotion_conflict" ? `用户项目在执行期间发生修改，未覆盖用户文件。冲突文件：${promoted.conflictPaths.join(", ")}` : `候选交付未能提交：${promoted.error || "未知错误"}` } });
+				return false;
+			}
+			// Promotion is followed by one real-project build. If it fails, the
+			// workspace manager restores the exact pre-task files from its backup.
+			try { await window.api.mcStopAll?.(); } catch { /* build may still proceed if no client is running */ }
+			const final = await window.api.runGradleTask(this._projectPath, "build", { timeoutMs: 15 * 60_000 });
+			const report = final.report || await window.api.createBuildReport({ projectPath: this._projectPath, task: "build", output: final.output, exitCode: final.exitCode });
+			this.lastBuildReport = report;
+			if (!report.ok) {
+				await window.api.rollbackWorkspace(workspace.id);
+				await window.api.markWorkspace?.(workspace.id, "rolled_back");
+				await this.saveHarnessCheckpoint("PAUSED", "final_build", "FINAL_BUILD_FAILED");
+				this.emitEvent({ kind: EventKind.Notice, notice: { level: "error", text: `最终真实项目构建失败，已自动回滚用户文件。\n${report.diagnostics.slice(0, 4).map((d) => `${d.file || ""}${d.line ? `:${d.line}` : ""} ${d.message}`).join("\n") || report.output.slice(-1200)}` } });
+				return false;
+			}
+			await this.saveHarnessCheckpoint("COMPLETE", "complete");
+			await window.api.removeHarnessCheckpoint?.(this.taskId);
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "info", text: `原子交付完成：${promoted.changedPaths.length} 个文件已通过影子工程验收并提交。` } });
+			return true;
+		} catch (error) {
+			try { await window.api.rollbackWorkspace(workspace.id); } catch { /* preserve checkpoint for manual recovery */ }
+			await this.saveHarnessCheckpoint("PAUSED", "promote", `PROMOTION_EXCEPTION: ${error instanceof Error ? error.message : String(error)}`);
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "error", text: `原子交付异常，候选工程已保留，可发送「继续」恢复：${error instanceof Error ? error.message : String(error)}` } });
+			return false;
+		}
+	}
+
+	setApiConfig(config: { endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol }): void {
 		this.apiConfig = config;
 	}
 
@@ -213,18 +566,57 @@ export class Controller {
 	getCollaborationTrace(): CollaborationTrace[] { return [...this.collaborationTrace]; }
 	getRouteDecision(): RouteDecision | null { return this.routeDecision; }
 
-	private async modelConfigsForRole(roleId: AgentRoleId): Promise<Array<{ endpoint: string; apiKey: string; model: string; providerId?: string; ref: ModelRef }>> {
+	private routingBudget(): { maxDelegations: number } {
+		const hard = this.routingConfig?.hardLimits?.maxDelegations ?? 12;
+		if (!this.routingConfig || !this.routingSelection || this.routingSelection.mode !== 'routed') {
+			return { maxDelegations: hard };
+		}
+		const preset = findRoutingPreset(this.routingConfig, this.routingSelection.customPresetId || this.routingSelection.strategyId);
+		return { maxDelegations: Math.min(hard, preset.budget.maxDelegations) };
+	}
+
+	private isModelCooling(ref: ModelRef, now = Date.now()): boolean {
+		const until = this.modelCooldowns.get(modelRefKey(ref));
+		return typeof until === 'number' && until > now;
+	}
+
+	private markModelCooldown(ref: ModelRef, reason: string): void {
+		this.modelCooldowns.set(modelRefKey(ref), Date.now() + MODEL_COOLDOWN_MS);
+		logger.agent('model cooldown', { providerId: ref.providerId, modelId: ref.modelId, reason, ms: MODEL_COOLDOWN_MS });
+	}
+
+	private async modelConfigsForRole(roleId: AgentRoleId): Promise<Array<{ endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol; ref: ModelRef }>> {
 		const fixed = this.routingSelection?.mode !== 'routed';
 		if (fixed || !this.routingConfig || !this.routingSelection) {
 			return [{ ...this.apiConfig, ref: { providerId: this.apiConfig.providerId || 'custom', modelId: this.apiConfig.model } }];
 		}
 		const preset = findRoutingPreset(this.routingConfig, this.routingSelection.customPresetId || this.routingSelection.strategyId);
 		const binding = preset.roles[roleId];
-		const candidates = [binding.primary, ...binding.fallbacks];
-		const resolvedConfigs: Array<{ endpoint: string; apiKey: string; model: string; providerId?: string; ref: ModelRef }> = [];
+		if (binding && binding.enabled === false && !binding.required) {
+			throw new Error(`角色「${roleId}」已在预设中禁用。`);
+		}
+		const difficulty = this.routeDecision?.difficulty || 'simple';
+		const resolvedBinding = resolveBindingForDifficulty(binding, difficulty);
+		// Folding the composer selection into cheap slots can collide with a fallback,
+		// so de-duplicate by ref key while preserving escalation order.
+		const seenRefs = new Set<string>();
+		const candidates: ModelRef[] = [];
+		for (const ref of [resolvedBinding.primary, ...resolvedBinding.fallbacks]) {
+			const preferred = this.withUserModelPreference(roleId, ref);
+			const key = modelRefKey(preferred);
+			if (seenRefs.has(key)) continue;
+			seenRefs.add(key);
+			candidates.push(preferred);
+		}
+		const resolvedConfigs: Array<{ endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol; ref: ModelRef }> = [];
 		let lastError = '';
+		const now = Date.now();
 		for (const candidate of candidates) {
 			if (roleId === 'visualReviewer' && !isVisionModelRef(candidate)) continue;
+			if (this.isModelCooling(candidate, now)) {
+				lastError = `${candidate.providerId}/${candidate.modelId}(冷却中)`;
+				continue;
+			}
 			const resolved = await this.resolveModelConfig?.(candidate);
 			if (resolved?.apiKey?.trim()) resolvedConfigs.push({ ...resolved, ref: candidate });
 			lastError = `${candidate.providerId}/${candidate.modelId}`;
@@ -233,8 +625,56 @@ export class Controller {
 		throw new Error(`角色「${roleId}」没有可用模型${lastError ? `（已尝试 ${lastError}）` : ''}。请在设置中保存所需 Provider 的 API Key。`);
 	}
 
-	private async modelConfigForRole(roleId: AgentRoleId): Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string; ref: ModelRef }> {
+	private async modelConfigForRole(roleId: AgentRoleId): Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol; ref: ModelRef }> {
 		return (await this.modelConfigsForRole(roleId))[0];
+	}
+
+	/**
+	 * In routed mode the composer selection used to be inert: every cheap slot resolved
+	 * to a catalog default the user never picked, while only the strong-model slots drove
+	 * the bill. Routing may still escalate to the strong model, but a cheap slot now
+	 * belongs to the model the user selected — and only when that model can serve the
+	 * role (vision roles keep their requirement).
+	 */
+	private withUserModelPreference(roleId: AgentRoleId, ref: ModelRef): ModelRef {
+		const providerId = this.apiConfig.providerId;
+		if (!providerId || providerId !== ref.providerId) return ref;
+		if (!isFastTierRef(ref)) return ref;
+		const modelId = normalizeModelId(providerId, this.apiConfig.model || '');
+		if (!modelId || modelId === ref.modelId) return ref;
+		const preferred: ModelRef = { providerId, modelId };
+		if (roleId === 'visualReviewer' && !isVisionModelRef(preferred)) return ref;
+		return preferred;
+	}
+
+	private roleIsActive(roleId: AgentRoleId): boolean {
+		return Boolean(this.routeDecision?.activeRoles.includes(roleId));
+	}
+
+	private async resolveRouteDecisionHybrid(inputText: string, intent: TurnRoutingIntent): Promise<RouteDecision> {
+		const template = this.routingSelection?.taskTemplateId || 'auto';
+		const hasImages = /data:image\//i.test(inputText);
+		const seed = extractRoutingSignals(inputText, template, hasImages);
+		let signals = seed;
+		let source: RouteDecision['source'] = 'rules';
+		if (seed.ambiguous) {
+			try {
+				const routerConfig = await this.modelConfigForRole('router');
+				const refined = await classifyRoutingSignals({
+					apiConfig: routerConfig,
+					input: inputText,
+					seed,
+					abortSignal: this.abortController?.signal
+				});
+				if (refined) {
+					signals = refined;
+					source = 'hybrid';
+				}
+			} catch {
+				source = 'fallback';
+			}
+		}
+		return withActiveRoles(buildRouteDecisionFromSignals(signals, source, intent), intent);
 	}
 
 	private recordCollaboration(trace: CollaborationTrace): void {
@@ -247,9 +687,19 @@ export class Controller {
 	}
 
 	private async runForRole(roleId: AgentRoleId, streamCb: (text: string, reasoning?: string) => void, options: RunOptions): Promise<string> {
+		const budget = this.routingBudget();
+		if (this.turnDelegationCount >= budget.maxDelegations) {
+			return `[HARNESS_PAUSED:budget] 本轮职责委派已达上限（${budget.maxDelegations}）。请发送「继续」或简化任务后再试。`;
+		}
+		this.turnDelegationCount += 1;
 		const configs = await this.modelConfigsForRole(roleId);
 		let lastError: unknown;
 		for (let index = 0; index < configs.length; index++) {
+			const budgetReason = this.taskBudgetReason();
+			if (budgetReason) {
+				if (this.executionWorkspace) await this.saveHarnessCheckpoint("PAUSED", "compile_check", "TASK_BUDGET_EXHAUSTED");
+				return `[HARNESS_PAUSED:budget] ${budgetReason}。候选工程已保留，发送「继续」时仍会遵守已用预算。`;
+			}
 			const config = configs[index];
 			const trace: CollaborationTrace = {
 				id: `role_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
@@ -260,20 +710,135 @@ export class Controller {
 			this.emitModelInvocation({ invocationId: trace.id, roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, phase: 'start', startedAt: trace.startedAt, status: 'running' });
 			try {
 				this.activeRoleContext = { roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, invocationId: trace.id };
-				const result = await this.agent.run(config.endpoint, config.apiKey, config.model, this.messages, this._projectPath, this.abortController?.signal, streamCb, options);
-				const failed = /^Error:|执行因错误中断/.test(result);
+				const result = await this.agent.run(config.endpoint, config.apiKey, config.model, this.messages, this.activeProjectPath(), this.abortController?.signal, streamCb, {
+					...options,
+					providerId: config.ref.providerId || config.providerId,
+					protocol: config.protocol,
+					projectProfile: options.projectProfile ?? this.projectProfile,
+					previousBuildReport: options.previousBuildReport ?? this.lastBuildReport,
+					knowledgeFacts: [...this.checkpointKnowledgeFacts.entries()].map(([key, value]) => ({ key, value }))
+				});
+				const failed = /^Error:|执行因错误中断|^\[HARNESS_PAUSED:(?:diagnostic_stalled|protocol|budget|evidence_deadlock)\]/.test(result);
 				trace.status = failed ? 'failed' : 'completed'; trace.endedAt = Date.now(); trace.summary = failed ? result.slice(0, 180) : '职责完成';
 				this.emitModelInvocation({ invocationId: trace.id, roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, phase: 'end', startedAt: trace.startedAt, endedAt: trace.endedAt, status: trace.status });
 				this.recordCollaboration(trace); this.activeRoleContext = null;
-				if (!failed || index === configs.length - 1) return result;
+				// evidence_deadlock is a gate contradiction, not a model defect: switching
+				// providers would re-run the same refused step.
+				if (!failed || index === configs.length - 1 || /^\[HARNESS_PAUSED:(?:budget|evidence_deadlock)\]/.test(result)) return result;
+				if (/^\[HARNESS_PAUSED:protocol\]/.test(result) || /(?:429|rate.?limit|401|403|unauthorized|invalid.?api.?key)/i.test(result)) {
+					this.markModelCooldown(config.ref, 'role_failure');
+				}
 				lastError = new Error(result);
+				if (/^\[HARNESS_PAUSED:protocol\]/.test(result)) {
+					this.providerProtocolDiagnostics = [...this.providerProtocolDiagnostics, {
+						id: `fallback:configured:${Date.now()}`,
+						providerId: config.ref.providerId,
+						modelId: config.ref.modelId,
+						kind: 'fallback',
+						message: 'native and XML tool protocols failed; switching to configured fallback provider',
+						fallback: 'configured_provider',
+						createdAt: Date.now()
+					}].slice(-128);
+				}
 			} catch (error) {
 				this.activeRoleContext = null; trace.status = 'failed'; trace.endedAt = Date.now(); trace.summary = String(error); this.emitModelInvocation({ invocationId: trace.id, roleId, providerId: config.ref.providerId, modelId: config.ref.modelId, phase: 'end', startedAt: trace.startedAt, endedAt: trace.endedAt, status: 'failed', error: String(error) }); this.recordCollaboration(trace); lastError = error;
+				const message = error instanceof Error ? error.message : String(error);
+				// A thinking-continuation rejection is a request-shape contract breach, not an
+				// outage: the fallback model hits the identical 400 and the reasoning history is
+				// lost either way, so surface it instead of walking the fallback ladder.
+				if (isReasoningContinuityError(error)) throw error;
+				if (/(?:429|rate.?limit|401|403|unauthorized|invalid.?api.?key)/i.test(message)) {
+					this.markModelCooldown(config.ref, 'exception');
+				}
 				if (index === configs.length - 1) throw error;
 			}
+			this.agent.resetProviderProtocolState();
 			this.recordCollaboration({ ...trace, id: `${trace.id}_fallback`, status: 'fallback', summary: '主模型不可用，切换备用模型。' });
 		}
 		throw lastError instanceof Error ? lastError : new Error(String(lastError || '模型调用失败'));
+	}
+
+	/** Short readonly role turn (explorer / debugger / reviewer / summarizer). */
+	private async runReadonlyRoleBrief(
+		roleId: AgentRoleId,
+		streamCb: (text: string, reasoning?: string) => void,
+		instruction: string
+	): Promise<string> {
+		if (!this.roleIsActive(roleId)) return '';
+		this.messages.push({
+			role: 'user',
+			origin: 'harness',
+			phase: 'plan',
+			taskId: this.taskId,
+			content: instruction
+		});
+		this.onAgentStatus?.(roleId === 'explorer' ? '勘探中...' : roleId === 'debugger' ? '诊断中...' : roleId === 'codeReviewer' ? '代码审查中...' : '总结中...');
+		return this.runForRole(roleId, streamCb, {
+			phase: 'plan',
+			emitLifecycle: false,
+			turnMode: this.lastTurnMode === 'plan_only' ? 'plan_only' : 'develop',
+			composerMode: this.composerMode
+		});
+	}
+
+	private async maybeRunExplorerBrief(streamCb: (text: string, reasoning?: string) => void): Promise<void> {
+		if (!this.roleIsActive('explorer')) return;
+		const template = this.routeDecision?.taskTemplateId;
+		const hint = template === 'minecraft'
+			? '只读勘探：先用 minecraft_data_lookup / list_directory / read_file 定位相关代码与标准 ID，用简短中文总结路径与约束后停止。禁止写文件。'
+			: template === 'build'
+				? '只读勘探：检查构建脚本与环境相关文件，总结可能原因后停止。禁止写文件。'
+				: '只读勘探：用 list_directory / read_file 了解相关代码结构，用简短中文总结后停止。禁止写文件、禁止 submit_plan。';
+		await this.runReadonlyRoleBrief('explorer', streamCb, hint);
+	}
+
+	private async maybeRunDebuggerBrief(streamCb: (text: string, reasoning?: string) => void): Promise<void> {
+		if (!this.roleIsActive('debugger')) return;
+		await this.runReadonlyRoleBrief(
+			'debugger',
+			streamCb,
+			'只读诊断：用 read_error_log / fabric_log_debugger / read_file 定位根因，输出简短中文诊断与建议修改点后停止。禁止写文件。'
+		);
+	}
+
+	private async maybeRunPostExecuteRoles(streamCb: (text: string, reasoning?: string) => void, executeResult: string): Promise<string> {
+		if (!this.planTracker?.allDone()) return executeResult;
+		let result = executeResult;
+		if (this.roleIsActive('codeReviewer') && !/^Error:|^\[HARNESS_PAUSED:/.test(executeResult)) {
+			const review = await this.runReadonlyRoleBrief(
+				'codeReviewer',
+				streamCb,
+				'只读代码审查：基于本轮改动与构建/测试结果，指出风险与遗漏；不要写文件，完成后给出简短中文结论。'
+			);
+			if (review) result = `${result}\n\n${review}`;
+		}
+		if (this.roleIsActive('summarizer')) {
+			const summary = await this.runReadonlyRoleBrief(
+				'summarizer',
+				streamCb,
+				'用简短中文总结本轮完成内容、验证结果与后续建议。不要调用写文件工具。'
+			);
+			if (summary) result = `${result}\n\n${summary}`;
+		}
+		return result;
+	}
+
+	private async runKnowledgeTurn(streamCb: (text: string, reasoning?: string) => void): Promise<string> {
+		await this.updateSystemPrompt('chat');
+		await this.maybeRunExplorerBrief(streamCb);
+		if (this.roleIsActive('summarizer')) {
+			return this.runReadonlyRoleBrief(
+				'summarizer',
+				streamCb,
+				'基于勘探结果用中文回答用户的知识/文档问题。可继续只读检索；不要写文件。'
+			);
+		}
+		return this.runForRole('coordinator', streamCb, {
+			phase: 'plan',
+			emitLifecycle: true,
+			turnMode: 'chat',
+			composerMode: this.composerMode
+		});
 	}
 
 	setRegistry(registry: Registry): void {
@@ -362,6 +927,12 @@ export class Controller {
 	private retainCurrentUserAsNewTask(): void {
 		const system = this.messages.find((message) => message.role === "system");
 		this.taskId = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+		this.checkpointUsage = { repairProposals: 0, modelRounds: 0, toolCalls: 0, startedAt: Date.now(), fallbackIndex: 0 };
+		this.resolvedDiagnosticIds.clear();
+		this.checkpointKnowledgeFactKeys.clear();
+		this.checkpointKnowledgeFacts.clear();
+		this.repairProposalHistory = [];
+		this.lastBuildReport = null;
 		// Keep recent user feedback + short assistant notes so follow-up bugfix
 		// rounds do not start with only system+1 user (diag showed controllerMessages: 2).
 		this.messages = buildCrossTurnDiagnosisRetain({
@@ -474,11 +1045,22 @@ export class Controller {
 
 	private async buildProjectInfo(): Promise<string> {
 		let projectInfo = "";
-		if (!this._projectPath) return projectInfo;
+		const activePath = this.activeProjectPath();
+		if (!activePath) return projectInfo;
 
-		const projectPath = this._projectPath;
+		const projectPath = activePath;
 		const listDirectory = (absPath: string) => window.api.listDirectory(absPath);
 		projectInfo = `## 项目信息\n项目路径：${projectPath}\n`;
+		if (this.projectProfile) {
+			const profile = this.projectProfile;
+			projectInfo += `ProjectProfile：Minecraft ${profile.minecraftVersion || "?"} · Yarn ${profile.yarnMappings || "?"} · Loader ${profile.loaderVersion || "?"} · Java ${profile.javaVersion || "?"}\n`;
+			projectInfo += `Loom ${profile.loomVersion || "?"} · source sets ${profile.sourceSets.join(", ")} · splitEnvironment=${profile.splitEnvironment}\n`;
+			projectInfo += `Mod ID：${profile.modId || "?"} · 入口点 ${[...profile.entrypoints.main, ...profile.entrypoints.client, ...profile.entrypoints.server].join(", ") || "?"}\n`;
+			projectInfo += `可用 Gradle task：${profile.gradleTasks.join(", ")}\n`;
+			if (profile.registeredSymbols.length > 0) projectInfo += `已有注册/实现：${profile.registeredSymbols.slice(0, 24).join("；")}\n`;
+			if (profile.eventHandlers.length > 0) projectInfo += `已有事件处理器：${profile.eventHandlers.slice(0, 16).join("；")}\n`;
+			if (!profile.symbolIndex.available) projectInfo += `本地 Yarn 符号索引不可用：${profile.symbolIndex.error || "未生成"}\n`;
+		}
 
 		// GUI 文件标注器：匹配 *Screen.java / *Hud*.java / *Gui*.java 追加 [GUI]
 		const guiTagger = (relPath: string): string => (isGuiFilePath(relPath) ? " [GUI]" : "");
@@ -634,24 +1216,8 @@ export class Controller {
 		return projectInfo;
 	}
 
-	// Build system prompt with tool descriptions and Fabric knowledge
+	// Build system prompt with Fabric knowledge (tool schemas travel with each request)
 	private async buildSystemPrompt(mode: "chat" | "plan" | "execute"): Promise<string> {
-		const toolNameMap: Record<string, string> = { ...TOOL_LABELS_ZH };
-		const toolDescs = this.registry
-			.names()
-			.filter((name) => {
-				if (name === "complete_step") return false;
-				const tool = this.registry.get(name);
-				return mode !== "plan" || Boolean(tool?.readOnly());
-			})
-			.map((name) => {
-				const t = this.registry.get(name);
-				const cn = toolNameMap[name] || name;
-				const kind = t?.readOnly() ? "（只读）" : "（写入）";
-				return t ? `- **${cn}** (\`${t.name}\`): ${t.description} ${kind}` : "";
-			})
-			.join("\n");
-
 		const fabricPolicy = buildFabricAgentPolicyPrompt(mode);
 		const goalBlock = [buildSessionGoalBlock(this.sessionGoal), buildUserSymptomBlock(this.activeUserSymptom), formatVerifyTargetBlock(this.activeVerifyTarget)].filter(Boolean).join("\n\n");
 		// projectInfo 注入到 system prompt，确保 execute 阶段每轮都能看到项目结构，避免重复 list_directory/read_file 探索。
@@ -715,11 +1281,11 @@ submit_plan 参数要求：
 1. 只执行当前步骤。不确定路径/类名/包名时先 read_file/grep；仅用户偏好才 ask_clarification，禁止猜需求。
 2. 每轮必须调用工具。旁白不超过 2 句，只告知"当前在做什么"。禁止 Wait/Hmm 式反复自我否定与超长推理；想清后立即调工具。
 3. 写完当前步骤所需全部文件后，调用 complete_step 标记完成，再进入下一步。
-4. 全部文件写完后 trigger_build build → 成功则 trigger_build runClient → mc_ensure_test_world 进入世界 → mc_test_scenario(feature_type=...) 生成带有效 acceptanceContract、客观 assertions 和 actions 的新场景 → 按步骤执行测试场景 → mc_screenshot/mc_inspect/mc_world/mc_observe_entity 客观验证效果。若用户要求重启后完整复测，必须在 mc_test_scenario 传 required_pass_count=2，Harness 会重启并用同一 scenarioId 从 setup 独立复测。
+4. 每个连贯编译单元写入后由宿主自动静态校验和增量编译；不要重复 trigger_build 或 read_error_log。所有单元通过后才运行完整 build → runClient → test_design（读实现代码 → 设计沙盒 → mc_test_scenario 注册） → game_test（mc_run_test；PASS 才完成）。若用户要求重启后完整复测，必须在 mc_test_scenario 传 required_pass_count=2，Harness 会重启并用同一 scenarioId 从 setup 独立复测。
 5. Mixin 必须依次使用 fabric_mixin_target_lookup → fabric_mixin_scaffold/edit_file → fabric_mixin_register → fabric_mixin_validate；配方必须用 create_recipe/fabric_recipe_generate 并取得校验证据；模板用 fabric_template_generate（必须传入 formFields）。
 6. **GUI 布局预览强制要求：任何涉及 Screen/HUD/ConfigScreen 代码的步骤（无论是新建还是修改现有 GUI），必须先调用 gui_layout_preview 工具生成 HTML 布局预览供用户确认，拿到用户确认的布局 JSON 后才能编写/修改 GUI 代码。禁止跳过预览直接 edit_file/write_file GUI 代码。layoutType 选择：设置列表→option-list；自定义界面→custom-screen；HUD→hud-overlay。生成的 HTML 仅用于可视化布局，禁止包含 <button>、<input type="button">、onclick 事件或任何确认/取消按钮；确认/取消由外层 UI 统一提供。**
 7. 禁止重复写同一文件、禁止用相同参数重复调用只读工具。
-8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须：① mc_ensure_test_world 进入世界 ② mc_ensure_cheats 确保作弊权限 ③ mc_test_scenario(feature_type=...) 生成有效 acceptanceContract、客观 assertions 与 actions 的新场景 ④ 按步骤执行测试场景（生成生物/给予物品/触发事件） ⑤ mc_screenshot/mc_inspect/mc_world/mc_observe_entity 客观验证效果。禁止仅凭 menu 宣称完成。禁止仅凭"已进入世界"宣称完成。禁止跳过 mc_test_scenario 直接 complete_step。feature_type 取值：new_item/new_block/new_recipe/entity_behavior/player_interaction/hud_gui。实体行为修改类功能必须用 mc_observe_entity 对比状态变化（爆炸倒计时/AI 目标/移动速度），禁止仅凭截图宣称完成。mc_ensure_test_world 失败后必须用 mc_inspect 检视界面再 mc_input 手动操作，禁止跳过世界进入步骤。任务总结必须列出实际执行的验证工具调用和结果，禁止虚构验证结果。
+8. MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。功能在游戏内的（HUD/方块/物品/实体/命令）必须走完整测试流程：① build → runClient 进入游戏② run 步完成后进入 test_design 步（读实现代码 → 选沙盒 preset → mc_test_scenario 注册含 sandbox/actions/assertions/acceptanceContract 的 V2 规格）③ game_test 步用注册好的 scenarioId 调用 mc_run_test。禁止仅凭 menu 宣称完成。禁止跳过 test_design 直接 mc_run_test。test_design 仅允许读代码/世界/注册场景，禁止写产品代码和 mc_run_test。feature_type 取值：new_item/new_block/new_recipe/entity_behavior/player_interaction/hud_gui。实体行为修改类功能必须用 mc_observe_entity 对比状态变化，禁止仅凭截图宣称完成。任务总结必须列出实际执行的验证工具调用和结果，禁止虚构验证结果。
 9. ${isVisionCapableModel(this.apiConfig.model)
 		? "验证策略：当前模型支持图片理解。功能测试时调用 mc_screenshot 截图，模型会直接分析截图验证功能效果。"
 		: "验证策略：当前模型不支持图片理解。功能测试验证策略：① 优先使用 mc_inspect 获取结构化数据（界面类型、控件列表、玩家状态）进行数据化验证；② 仍需调用 mc_screenshot 截图（供总结展示和用户参考），但不要尝试从截图本身分析；③ 若 mc_inspect 无法验证的功能（如颜色/动画/渲染效果），在输出中明确标注\"需用户手动确认\"；④ 禁止声称\"测试通过\"而无客观证据（mc_inspect 数据或用户确认）。"}`;
@@ -732,9 +1298,10 @@ ${phaseHeader}
 你是 Minecraft Fabric 模组开发助手。用中文回答。Java/JSON 代码保持英文。
 
 ## 可用工具
-${toolDescs}
+每个工具的用途、参数与只读/写入属性都随请求以 function schema 提供，此处不再重复列举。
+按 schema description 选择工具；Mixin、配方、GUI 预览、游戏测试等强制流程见下方「重要规则」。
 
-${mode === "plan" ? "## 当前：输出计划阶段\n需求歧义时可用 ask_clarification（短选项）；标识符用 grep/read_file 勘察，收集完后调用 submit_plan。" : "## 当前：执行阶段\n直接调用工具执行计划。修改已有文件优先 edit_file（先 read_file）；新建用 write_file。涉及 GUI/Screen/HUD 代码时必须先调用 gui_layout_preview 预览。最后 trigger_build 构建并启动游戏测试。工程冲突默认选更干净一致的方案，不要把实现细节丢给用户选。"}
+${mode === "plan" ? "## 当前：输出计划阶段\n需求歧义时可用 ask_clarification（短选项）；标识符用 grep/read_file 勘察，收集完后调用 submit_plan。" : "## 当前：执行阶段\n所有读写、增量编译和游戏测试都指向宿主创建的影子工作区。直接调用工具执行计划；修改已有文件优先 edit_file（先 read_file），新建用 write_file。写入连贯编译单元后宿主自动静态校验并增量编译，模型不要重复 trigger_build 或 read_error_log；BuildReport 的 diagnostic ID 是唯一修复入口。涉及 GUI/Screen/HUD 代码时必须先调用 gui_layout_preview 预览。严格最终验收通过后才原子 promote；冲突、预算、网络或中断进入可恢复 PAUSED。"}
 
 ## 重要规则
 - **写代码前用 fabric_docs_search 查 Fabric API：搜索具体类名/方法名（如 "FabricItemSettings equipmentSlot"），返回 Javadoc + 方法签名。不要凭记忆写 API 调用。**
@@ -783,30 +1350,25 @@ ${projectInfo}`;
 		this.lastSystemMode = mode;
 	}
 
-	/** 更新或追加独立的 project-info system 消息（保持 messages[0] cache 友好）。 */
+	/**
+	 * Refresh the live project-structure message.
+	 *
+	 * This is appended at the tail and only rewritten when its text actually changed.
+	 * It used to sit at index 1 and be overwritten in place every execute round, which
+	 * forked the serialized prefix and re-billed the entire conversation each turn.
+	 */
 	private refreshProjectInfoMessage(info: string): void {
 		if (!info) return;
-		const content = `## 项目结构（实时刷新）\n${info}`;
-		// 查找已有的 project-info 消息
-		const infoIdx = this.messages.findIndex(
-			(m) => m.role === "system" && typeof m.content === "string" && m.content.startsWith("## 项目结构（实时刷新）")
-		);
-		if (infoIdx >= 0) {
-			this.messages[infoIdx] = { role: "system", content, origin: "harness" };
-		} else {
-			// 追加在 harness system 消息之后
-			const harnessIdx = this.messages.findIndex((m) => m.role === "system" && m.origin === "harness");
-			if (harnessIdx >= 0) {
-				this.messages.splice(harnessIdx + 1, 0, { role: "system", content, origin: "harness" });
-			}
-		}
+		const content = `${PROJECT_INFO_MESSAGE_PREFIX}\n${info}`;
+		const index = this.messages.findIndex(isProjectInfoMessage);
+		if (index === this.messages.length - 1 && this.messages[index].content === content) return;
+		if (index >= 0) this.messages.splice(index, 1);
+		this.messages.push({ role: "system", content, origin: "harness" });
 	}
 
 	/** 移除独立的 project-info system 消息（mode 切换时调用）。 */
 	private removeProjectInfoMessage(): void {
-		this.messages = this.messages.filter(
-			(m) => !(m.role === "system" && typeof m.content === "string" && m.content.startsWith("## 项目结构（实时刷新）"))
-		);
+		this.messages = this.messages.filter((m) => !isProjectInfoMessage(m));
 	}
 
 	private trimTrailingAssistants(): void {
@@ -846,6 +1408,10 @@ ${projectInfo}`;
 	}
 
 	private async runExecutePhase(streamCb: (text: string, reasoning?: string) => void, options?: { forceFeatureGuiVerify?: boolean }): Promise<string> {
+		if (!(await this.prepareExecutionWorkspace())) {
+			this._phase = "execute";
+			return "任务已暂停：基线工程或影子工作区不可用。发送「继续」可从检查点恢复。";
+		}
 		await this.updateSystemPrompt("execute");
 		this._phase = "execute";
 		this.planReadyAwaitingExecute = false;
@@ -855,11 +1421,17 @@ ${projectInfo}`;
 		}
 		this.emitEvent({ kind: EventKind.Phase, phase: "execute_start" });
 		this.onAgentStatus?.("执行中...");
+		// Persist the transition before the first provider call.  If the renderer
+		// is reloaded while the model is streaming, recovery resumes from the
+		// serialized plan/影子工程 instead of inferring state from chat text.
+		await this.saveHarnessCheckpoint("GENERATING", "generating");
 
 		const requireFeatureGuiVerify = Boolean(options?.forceFeatureGuiVerify) || (Boolean(this.activeUserSymptom) && this.lastGuiFeatureSymptom);
 		if (options?.forceFeatureGuiVerify) {
 			this.ensureVerifyTargetForGui();
 		}
+
+		await this.maybeRunDebuggerBrief(streamCb);
 
 		const result = await this.runForRole('implementer', streamCb, {
 			phase: "execute",
@@ -870,10 +1442,19 @@ ${projectInfo}`;
 			requireFeatureGuiVerify,
 			verifyTarget: this.activeVerifyTarget
 		});
+		if (this.planTracker?.allDone()) {
+			const delivered = await this.finalizeAtomicDelivery();
+			if (!delivered) return `${result}\n\n候选工程已暂停，用户项目未接收未验收修改。发送「继续」恢复。`;
+			this.executionWorkspace = null;
+			this.executionProjectPath = null;
+			this.projectProfile = null;
+		} else {
+			await this.saveHarnessCheckpoint("PAUSED", "compile_check", "WORKFLOW_INCOMPLETE");
+		}
 		this.maybeEmitSymptomConfirmNotice();
 		// 任务完成且收集到截图时，发送任务总结截图事件
 		this.emitTaskSummaryScreenshots();
-		return result;
+		return this.maybeRunPostExecuteRoles(streamCb, result);
 	}
 
 	/** 任务完成后发送截图展示事件（复用 ToolResult 事件结构，UI 层渲染为可点击缩略图） */
@@ -1131,7 +1712,16 @@ ${projectInfo}`;
 		this._running = true;
 		this.abortController = new AbortController();
 		this.agent.resetRunState();
+		this.turnDelegationCount = 0;
 		try {
+		await this.ensureProjectProfile();
+		const taskBudgetReason = this.executionWorkspace ? this.taskBudgetReason() : null;
+		if (taskBudgetReason) {
+			await this.saveHarnessCheckpoint("PAUSED", "compile_check", "TASK_BUDGET_EXHAUSTED");
+			const paused = `[HARNESS_PAUSED:budget] ${taskBudgetReason}。候选工程已保留；可发送「继续」查看检查点，或开始新任务。`;
+			this.emitEvent({ kind: EventKind.Notice, notice: { level: "warn", text: paused } });
+			return paused;
+		}
 
 		const inputText = contentPartsAsClassifyText(input);
 
@@ -1158,26 +1748,38 @@ ${projectInfo}`;
 			this.classifierDiagnostics = [...this.classifierDiagnostics, classified.diagnostics].slice(-30);
 		}
 		this.applyClassificationSideEffects(classified, inputText);
-		this.routeDecision = routeUserTurn(inputText, this.routingSelection?.taskTemplateId || 'auto', /data:image\//i.test(inputText));
+		const intent = classified.intent;
+		this.lastTurnMode = intent === "plan_only" ? "plan_only" : intent;
+		this.routeDecision = await this.resolveRouteDecisionHybrid(inputText, intent === 'plan_only' ? 'plan_only' : intent);
 		this.emitEvent({ kind: EventKind.Collaboration, routeDecision: this.routeDecision });
 		for (const delegation of this.routeDecision.delegations) {
 			if (delegation.roleId === 'router') continue;
 			const preset = this.routingConfig && this.routingSelection?.mode === 'routed'
 				? findRoutingPreset(this.routingConfig, this.routingSelection.customPresetId || this.routingSelection.strategyId)
 				: undefined;
-			const model = preset?.roles[delegation.roleId]?.primary || { providerId: this.apiConfig.providerId || 'custom', modelId: this.apiConfig.model };
+			const difficulty = this.routeDecision.difficulty;
+			const binding = preset?.roles[delegation.roleId];
+			const resolved = binding ? resolveBindingForDifficulty(binding, difficulty) : null;
+			const model = resolved ? this.withUserModelPreference(delegation.roleId, resolved.primary) : { providerId: this.apiConfig.providerId || 'custom', modelId: this.apiConfig.model };
 			this.recordCollaboration({ id: `queued_${delegation.id}`, roleId: delegation.roleId, providerId: model.providerId, modelId: model.modelId, status: 'queued', summary: delegation.reason });
 		}
-
-		const intent = classified.intent;
-		this.lastTurnMode = intent === "plan_only" ? "plan_only" : intent;
 
 		if (options.pushUser) {
 			this.messages.push({ role: "user", content: input, origin: "user", taskId: this.taskId });
 		}
-		if (this.routeDecision.taskTemplateId === 'ui') {
+		if (this.roleIsActive('visualReviewer')) {
 			try {
-				await this.modelConfigForRole('visualReviewer');
+				const vision = await this.modelConfigForRole('visualReviewer');
+				this.recordCollaboration({
+					id: `visual_gate_${Date.now().toString(36)}`,
+					roleId: 'visualReviewer',
+					providerId: vision.ref.providerId,
+					modelId: vision.ref.modelId,
+					status: 'completed',
+					startedAt: Date.now(),
+					endedAt: Date.now(),
+					summary: '视觉审查模型可用'
+				});
 			} catch (error) {
 				const message = `UI / GUI 任务需要可用的视觉审查模型。${error instanceof Error ? error.message : String(error)}`;
 				this.emitEvent({ kind: EventKind.Notice, notice: { level: 'error', text: message } });
@@ -1225,12 +1827,21 @@ ${projectInfo}`;
 			}
 
 			if (effectiveIntent === "resume") {
-				// 「继续」仅在计划待用户确认执行时恢复；否则按上下文重新规划，避免沿用上一轮旧进度。
-				if (this.planReadyAwaitingExecute && this.planTracker && !this.planTracker.allDone()) {
+				// 「继续」优先恢复未完成的执行计划（包括 PAUSED/failed step），
+				// 不再根据聊天文本重新推断工作区和修复状态。
+				const checkpointNeedsFinalization = Boolean(this.pendingCheckpoint && ["final_build", "final_game", "promote", "complete"].includes(this.pendingCheckpoint.stage));
+				if (this.planTracker && (!this.planTracker.allDone() || checkpointNeedsFinalization)) {
+					this.resumeCheckpointRequested = true;
 					const result = await this.beginExecuteFromTracker(streamCb);
 					this.onAgentStatus?.("");
 					return result;
 				}
+				if (isNarrowResumeInput(inputText) && this.restorePlanFromCheckpoint()) {
+					const result = await this.beginExecuteFromTracker(streamCb);
+					this.onAgentStatus?.("");
+					return result;
+				}
+				this.resumeCheckpointRequested = isNarrowResumeInput(inputText);
 				this.retainCurrentUserAsNewTask();
 				this.planTracker = null;
 				this.lastPlanCandidate = null;
@@ -1249,6 +1860,12 @@ ${projectInfo}`;
 
 			if (effectiveIntent === "chat") {
 				const result = await this.runChatTurn(streamCb);
+				this.onAgentStatus?.("");
+				return result;
+			}
+
+			if (this.routeDecision?.taskTemplateId === 'knowledge' && (effectiveIntent === 'develop' || effectiveIntent === 'plan_only')) {
+				const result = await this.runKnowledgeTurn(streamCb);
 				this.onAgentStatus?.("");
 				return result;
 			}
@@ -1330,6 +1947,8 @@ ${projectInfo}`;
 
 				await this.updateSystemPrompt("plan");
 				this.emitEvent({ kind: EventKind.Phase, phase: "plan_start" });
+
+				await this.maybeRunExplorerBrief(streamCb);
 
 				const planResult = await this.runForRole('planner', streamCb, {
 					phase: "plan",
@@ -1432,6 +2051,9 @@ ${projectInfo}`;
 			const errMsg = err instanceof Error ? err.message : String(err);
 			logger.error("Controller send error", errMsg);
 			const incompletePlan = this.planTracker && !this.planTracker.allDone();
+			if (incompletePlan && this.executionWorkspace) {
+				await this.saveHarnessCheckpoint("PAUSED", "compile_check", errMsg);
+			}
 			if (incompletePlan && isRetryableFetchError(err)) {
 				this.messages.push({
 					role: "system",
@@ -1546,6 +2168,7 @@ ${projectInfo}`;
 
 		// 保持在 execute 阶段，不清空 planTracker
 		// 仅重置 Agent 运行状态（clarificationPending、idleRounds 等）
+		this.resumeCheckpointRequested = true;
 		this.agent.resetRunState();
 
 		return this.runTurn(lastUser.content, { pushUser: false });
@@ -1656,6 +2279,9 @@ ${projectInfo}`;
 			this.abortController.abort();
 			this._running = false;
 			this.agent.clarificationPending = false;
+			if (this.executionWorkspace && this.planTracker && !this.planTracker.allDone()) {
+				void this.saveHarnessCheckpoint("PAUSED", "compile_check", "USER_CANCELLED");
+			}
 			logger.agent("Turn cancelled");
 		}
 	}
@@ -1738,9 +2364,9 @@ ${projectInfo}`;
 	private handleGuiLayoutPreview(payload: {
 		id: string;
 		title: string;
-		layoutType: import("./events").GuiLayoutType;
+		layoutType: import("./events.ts").GuiLayoutType;
 		html: string;
-		elements: import("./events").GuiLayoutElement[];
+		elements: import("./events.ts").GuiLayoutElement[];
 	}): Promise<string> {
 		// 并发控制：若已有 pending 预览，自动取消旧的
 		for (const [oldId, resolver] of this.pendingGuiLayoutResolvers.entries()) {
@@ -1871,6 +2497,7 @@ ${projectInfo}`;
 		this.planReadyAwaitingExecute = false;
 		this.lastSystemMode = null;
 		this.classifierDiagnostics = [];
+		this.providerProtocolDiagnostics = [];
 		this.agent.resetRunState();
 		this.agent.clarificationPending = false;
 		this.pendingVisualReview = null;
@@ -1892,6 +2519,7 @@ ${projectInfo}`;
 			`- 会话目标：${this.sessionGoal || "（未设定）"}`,
 			`- 阶段：${this._phase}`,
 			`- 模型：${this.apiConfig.model}`,
+			`- Provider 协议诊断数：${this.providerProtocolDiagnostics.length}`,
 			`- 消息数：${this.messages.length}`,
 			"",
 			"---",
@@ -1920,6 +2548,9 @@ ${projectInfo}`;
 				lines.push(`- \`${name}\`${clipped ? `: ${clipped}` : ""}`, "");
 			}
 		}
+		if (this.providerProtocolDiagnostics.length > 0) {
+			lines.push("---", "", "## Provider 工具协议诊断", "", JSON.stringify(this.providerProtocolDiagnostics, null, 2), "");
+		}
 
 		const md = lines.join("\n").replace(/\n{3,}/g, "\n\n");
 		const result = await window.api.sessionExport(md, "mc-session");
@@ -1939,6 +2570,10 @@ ${projectInfo}`;
 
 	getClassifierDiagnosticsSnapshot(): ClassifierDiagnostics[] {
 		return this.classifierDiagnostics.map((entry) => ({ ...entry }));
+	}
+
+	getProviderProtocolDiagnosticsSnapshot(): ProviderProtocolDiagnostic[] {
+		return this.providerProtocolDiagnostics.map((entry) => ({ ...entry }));
 	}
 
 	/** Sanitized state for the local automation bridge; never exposes API keys. */

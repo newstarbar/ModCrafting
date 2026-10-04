@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`UpdateBanner > clamps progress bar width to 100% 1`] = `
+<div
+  class="update-banner"
+  role="status"
+>
+  <span
+    class="update-banner-text"
+  >
+    完成
+  </span>
+  <div
+    class="update-banner-track"
+  >
+    <div
+      class="update-banner-fill"
+      style="width: 100%;"
+    />
+  </div>
+  <span
+    class="update-banner-percent"
+  >
+    150
+    %
+  </span>
+</div>
+`;
+
+exports[`UpdateBanner > renders at 0% progress 1`] = `
+<div
+  class="update-banner"
+  role="status"
+>
+  <span
+    class="update-banner-text"
+  >
+    准备中
+  </span>
+  <div
+    class="update-banner-track"
+  >
+    <div
+      class="update-banner-fill"
+      style="width: 0%;"
+    />
+  </div>
+  <span
+    class="update-banner-percent"
+  >
+    0
+    %
+  </span>
+</div>
+`;
+
+exports[`UpdateBanner > renders banner with message and progress when visible 1`] = `
+<div
+  class="update-banner"
+  role="status"
+>
+  <span
+    class="update-banner-text"
+  >
+    正在下载更新…
+  </span>
+  <div
+    class="update-banner-track"
+  >
+    <div
+      class="update-banner-fill"
+      style="width: 42%;"
+    />
+  </div>
+  <span
+    class="update-banner-percent"
+  >
+    42
+    %
+  </span>
+</div>
+`;

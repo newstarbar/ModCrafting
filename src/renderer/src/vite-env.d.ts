@@ -80,7 +80,23 @@ interface ModCraftingApi {
   detectProject: (projectPath: string) => Promise<ProjectInfo>
   getFabricVersions: () => Promise<FabricVersions>
   lookupFabricSymbol: (request: FabricSymbolLookupRequest) => Promise<FabricSymbolLookupResult>
-  verifyFabricSymbolIndex: () => Promise<{ ok: boolean; error?: string; classes?: number }>
+  verifyFabricSymbolIndex: () => Promise<{ ok: boolean; error?: string; classes?: number; minecraftVersion?: string; yarnMappings?: string }>
+  inspectProjectProfile: (projectPath: string) => Promise<import('../../shared/harness-runtime').ProjectProfile>
+  createWorkspace: (projectPath: string, taskId?: string) => Promise<import('../../shared/harness-runtime').ExecutionWorkspace>
+  getWorkspace: (workspaceId: string) => Promise<import('../../shared/harness-runtime').ExecutionWorkspace>
+  diffWorkspace: (workspaceId: string) => Promise<{ changedPaths: string[]; current: import('../../shared/harness-runtime').WorkspaceManifestEntry[]; patchJournal: import('../../shared/harness-runtime').WorkspacePatchEntry[] }>
+  promoteWorkspace: (workspaceId: string) => Promise<{ ok: boolean; status: import('../../shared/harness-runtime').ExecutionWorkspace['status']; changedPaths: string[]; conflictPaths: string[]; error?: string }>
+  markWorkspace: (workspaceId: string, status: import('../../shared/harness-runtime').ExecutionWorkspace['status'], fields?: { changedPaths?: string[]; conflictPaths?: string[] }) => Promise<import('../../shared/harness-runtime').ExecutionWorkspace>
+  rollbackWorkspace: (workspaceId: string) => Promise<{ ok: boolean }>
+  discardWorkspace: (workspaceId: string) => Promise<{ ok: boolean }>
+  createBuildReport: (options: import('../../shared/harness-runtime').BuildReportOptions) => Promise<import('../../shared/harness-runtime').BuildReport>
+  getBaselineBuildCache: (projectPath: string, profileFingerprint: string, task: string) => Promise<import('../../shared/harness-runtime').BuildReport | null>
+  putBaselineBuildCache: (projectPath: string, profileFingerprint: string, task: string, report: import('../../shared/harness-runtime').BuildReport) => Promise<{ ok: boolean }>
+  saveHarnessCheckpoint: (checkpoint: import('../../shared/harness-runtime').TaskCheckpoint) => Promise<import('../../shared/harness-runtime').TaskCheckpoint>
+  loadHarnessCheckpoint: (taskId: string) => Promise<import('../../shared/harness-runtime').TaskCheckpoint | null>
+  listHarnessCheckpoints: () => Promise<import('../../shared/harness-runtime').TaskCheckpoint[]>
+  removeHarnessCheckpoint: (taskId: string) => Promise<{ ok: boolean }>
+  runStagedBuild: (workspaceId: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean; report?: import('../../shared/harness-runtime').BuildReport }>
   setTitle: (title: string) => Promise<void>
   notifyTaskComplete: () => Promise<void>
   clearBadge: () => Promise<void>
@@ -187,7 +203,7 @@ interface ModCraftingApi {
   ensureJdkReady: () => Promise<{ ok: boolean; path?: string; error?: string }>
   ensureGradleHomeFromSeed: () => Promise<{ ok: boolean; error?: string }>
   prepareBuild: (projectPath: string) => Promise<{ ok: boolean; jdkPath?: string; cmdPrefix: string; powershellEnv: string; error?: string }>
-  runGradleTask: (projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean }>
+  runGradleTask: (projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => Promise<{ output: string; exitCode: number; usedOnlineFallback: boolean; cancelled?: boolean; report?: import('../../shared/harness-runtime').BuildReport }>
   getToolchainStatus: () => Promise<{ jdk: string; gradle: string; deps: string; jdkPath: string | null; runtimeRoot: string; isPackaged: boolean; edition: 'dev' | 'full' | 'portable' }>
   checkRuntimeWritable: () => Promise<{ writable: boolean; runtimeRoot: string; error?: string }>
   checkRuntimeCapacity: () => Promise<{ ok: boolean; freeBytes?: number; error?: string }>
@@ -217,9 +233,9 @@ interface ModCraftingApi {
   getAppVersion: () => Promise<string>
   openReleasePages: () => Promise<{ success: boolean }>
   onUpdateStatus: (callback: (payload: { phase: string; source?: string; percent?: number; error?: string }) => void) => () => void
-  loadApiConfig: () => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean; providerSettings: Record<string, { endpoint: string; model: string }> }>
-  loadApiConfigForProvider: (providerId: string) => Promise<{ endpoint: string; model: string; providerId: string; hasApiKey: boolean }>
-  saveApiConfig: (config: { endpoint: string; model: string; providerId?: string }) => Promise<{ success: boolean; error?: string }>
+  loadApiConfig: () => Promise<{ endpoint: string; model: string; providerId: string; protocol?: import('../../shared/harness-runtime.ts').LlmProtocol; hasApiKey: boolean; savedProviderIds: string[]; encryptionAvailable: boolean; providerSettings: Record<string, { endpoint: string; model: string; protocol?: import('../../shared/harness-runtime.ts').LlmProtocol }> }>
+  loadApiConfigForProvider: (providerId: string) => Promise<{ endpoint: string; model: string; providerId: string; protocol?: import('../../shared/harness-runtime.ts').LlmProtocol; hasApiKey: boolean }>
+  saveApiConfig: (config: { endpoint: string; model: string; providerId?: string; protocol?: import('../../shared/harness-runtime.ts').LlmProtocol }) => Promise<{ success: boolean; error?: string }>
   loadModelRoutingConfig: () => Promise<import('../../shared/model-routing').ModelRoutingConfig>
   saveModelRoutingConfig: (config: import('../../shared/model-routing').ModelRoutingConfig) => Promise<{
     success: boolean

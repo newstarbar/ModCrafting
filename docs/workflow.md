@@ -25,8 +25,8 @@ Standalone runner 的产物位于系统临时目录 `modcrafting-app-test/<runId
 游戏内验收采用确定性测试状态机，而不是“看到截图就算成功”：
 
 1. `runClient` 仅在客户端菜单稳定、目标模组与 `modmenu`/`modcrafting_observer` 都出现在 Fabric 加载清单、并且 Observer V2 capabilities 可连接时完成；`MC_PHASE:menu` 不是通过证据。
-2. `mc_test_scenario` 根据实际功能创建带目标 ID 与断言的测试规格。
-3. `mc_run_test` 在专用 `ModCrafting Test World` 内准备环境、执行动作、采集动作后的快照、逐项断言并清理。
+2. `mc_test_scenario` 在 `test_design` 步中调用：AI 读实现代码 → 设计沙盒 preset → 设计 actions/assertions → 注册带 `sandbox`/`actions`/`assertions`/`acceptanceContract` 的 V2 规格。`mc_test_scenario` 输出已改为**设计脚手架**模式，按 feature_type 提供可观测维度、推荐断言类型和默认沙盒，不再输出散文步骤作为通过证据。
+3. `mc_run_test` 在 `game_test` 步中调用：在专用 `ModCrafting Test World` 内准备环境、执行 actions、采集快照、逐项断言并清理。
 4. 只有满足场景 `requiredPassCount` 的独立 `PASS` 才可结束客观测试；需要多次 PASS 时主机重启 Minecraft 并从 setup 重放同一场景。`FAIL` 需清理后原样复测一次才会触发产品修复；`INCONCLUSIVE` 由 Harness 按结构化原因自动进入契约修订（最多三次）、环境恢复（最多两次）或专用视觉审核，绝不把导航、桥接或视觉问题当成代码错误，也不弹出通用澄清。
 
 实施计划先提交 `AcceptanceContract`：每条用户需求必须映射到构建成功、游戏断言或用户视觉确认。Harness 不包含样例功能的实现建议；复杂例子仅作为 Test Lab 的黑盒夹具运行。
@@ -46,7 +46,7 @@ ModCrafting 把 **AI 对话式开发（Vibecoding）**、**Fabric 工程脚手�
     ↓
 AcceptanceContract + 实现步骤
     ↓
-执行实现 → build → run/bridge → game_test
+执行实现 → build → run → test_design → game_test
     ↓
 逐 requirement 汇总 PASS / FAIL / INCONCLUSIVE
     ↓
@@ -85,7 +85,8 @@ AcceptanceContract + 实现步骤
 
 `workflow-engine.ts` 串行逐步执行：
 
-- `complete_step` 先等待本轮验证工具结束；只有证据成立才推进。无证据请求会明确返回 `step_evidence_required`，连续两次不会再无限循环。
+- `complete_step` 先等待本轮验证工具结束；只有证据成立才推进。无证据请求会明确返回 `step_evidence_required`，连续两次进入可恢复的 `[HARNESS_PAUSED:evidence_deadlock]` 并报告真实轮次，不再无限循环或谎报预算耗尽。
+- `write` 步的目标路径若已由本轮更早步骤的工具真实写出（如 `fabric_mixin_register` 注册的 `*.mixins.json`），宿主采纳该写入产物推进，并在 UI 发一条采纳 `Notice`；仅"磁盘上文件已存在"不算证据。
 - `inspect` 验收可以声明 `fabric_mixin_validate` 或 `fabric_recipe_validate`；宿主仅接受 `valid=true`、对应验证类型和匹配目标路径的结构化结果。
 
 - 每轮执行**全部**允许的工具（只读并行，写入串行）
@@ -159,16 +160,19 @@ AcceptanceContract + 实现步骤
 
 ## 路由工作流
 
-输入区可在“路由预设”和“固定模型”间切换。路由模式把策略（快速、均衡、深度及更多预设）和任务模板（自动、新功能、Bug 修复、UI/GUI、构建环境、Minecraft 内容、重构、知识/文档）分别作为会话临时选择；未修改时使用全局默认。执行时从路由、协调、只读勘探、规划、实现、诊断/审查、验证到总结逐步推进，且仅实现职责可写文件。
+模型配置收敛为两层入口：
 
-齿轮打开独立设置中心。用户可按厂商配置 Endpoint、默认模型和加密密钥，在“模型路由”查看职责与预算，在“预设”复制、导入或导出不含密钥的自定义策略。
+1. **输入区模型菜单（日常）**：切换路由策略（默认展示快速/均衡/深度，其余进「更多策略」；meta 显示主厂名）或选择**主厂商已连接**固定模型；其它已保存厂商折叠到「其他已连接厂商」。页脚可跳转「管理模型连接…」与「高级路由…」。任务模板默认 `auto`，不在输入区展开。
+2. **设置中心 → 模型（配置）**：主厂商连接（Endpoint / 默认模型 / API Key）、默认策略卡片（单厂多模型），以及高级区：可选伴厂商专家槽（代码审查 / 游戏·视觉审查预留）、角色绑定、默认任务模板、自定义预设导入导出。
+
+执行时仍按路由职责推进（勘探 / 规划 / 实现 / 诊断 / 审查 / 总结），且仅实现职责可写文件。侧栏齿轮只打开设置中心，不再提供第二套 API 表单。
 
 ## API 配置
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | API Endpoint | `https://api.deepseek.com/v1` | OpenAI 兼容接口地址 |
-| Model | `deepseek-v4-flash` | 可从内置 Provider/模型列表切换 |
+| Model | `deepseek-flash` | 可从内置 Provider/模型列表切换 |
 | API Key | （用户填写） | 本地加密存储，**切勿提交到 Git** |
 
-支持 DeepSeek 等 OpenAI 兼容端点；密钥仅存本机，不进仓库。
+支持 DeepSeek 等 OpenAI 兼容端点；密钥仅在设置中心「模型 → 主厂商」保存，不进仓库。伴厂商仅在高级区按需启用，默认不必配置。

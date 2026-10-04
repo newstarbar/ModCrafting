@@ -11,6 +11,9 @@ import {
 } from './turn-intent.ts'
 import { parseToolCalls } from './tools.ts'
 import { stripMinimaxProtocolTokens, stripThinkTags } from './model-output-normalizer.ts'
+import { createModelAdapter } from './model-adapter.ts'
+import type { ChatMessage } from './chat-message.ts'
+import type { LlmProtocol } from '../../../shared/harness-runtime.ts'
 
 export interface ClassifyVerifyTargetPayload {
   label: string
@@ -45,7 +48,7 @@ export interface ClassifierDiagnostics {
 }
 
 export interface ClassifyUserTurnArgs {
-  apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string }
+  apiConfig: { endpoint: string; apiKey: string; model: string; providerId?: string; protocol?: LlmProtocol }
   input: string
   ctx: TurnIntentContext
   stickySymptom?: string | null
@@ -396,6 +399,12 @@ function extractToolCallArgs(data: unknown): unknown | null {
       }
     }
   }
+  const anthropic = data as { content?: Array<{ type?: string; name?: string; input?: unknown; text?: string }> }
+  for (const block of anthropic.content || []) {
+    if (block.type === 'tool_use' && (!block.name || block.name === CLASSIFY_TOOL_NAME)) return block.input ?? null
+  }
+  const anthropicText = (anthropic.content || []).filter((block) => block.type === 'text').map((block) => block.text || '').join('\n')
+  if (anthropicText) return parseJsonContent(anthropicText)
   return parseJsonContent(msg?.content)
 }
 
@@ -423,10 +432,6 @@ function classifierDiagnostics(
   }
 }
 
-function isMiniMax(args: ClassifyUserTurnArgs): boolean {
-  return args.apiConfig.providerId === 'minimax' || /^minimax-/i.test(args.apiConfig.model)
-}
-
 function classifyMessages(args: ClassifyUserTurnArgs, jsonOnly = false): Array<{ role: 'system' | 'user'; content: string }> {
   const system = jsonOnly
     ? `${CLASSIFY_SYSTEM_PROMPT}\n不要调用工具。只返回一个符合 classify_user_turn 参数 Schema 的 JSON 对象，不要 Markdown、解释或 think 内容。`
@@ -435,34 +440,6 @@ function classifyMessages(args: ClassifyUserTurnArgs, jsonOnly = false): Array<{
     { role: 'system', content: system },
     { role: 'user', content: buildUserClassifyPayload(args.input, args.ctx, args.stickySymptom) }
   ]
-}
-
-function buildClassifierRequest(args: ClassifyUserTurnArgs, jsonOnly: boolean): Record<string, unknown> {
-  const minimax = isMiniMax(args)
-  const body: Record<string, unknown> = {
-    model: args.apiConfig.model,
-    stream: false,
-    max_tokens: 400,
-    temperature: minimax ? 0.01 : 0,
-    messages: classifyMessages(args, jsonOnly)
-  }
-  if (jsonOnly) return body
-  body.tools = [
-    {
-      type: 'function',
-      function: {
-        name: CLASSIFY_TOOL_NAME,
-        description: 'Classify the user turn for ModCrafting harness routing',
-        parameters: CLASSIFY_TOOL_PARAMETERS
-      }
-    }
-  ]
-  // MiniMax rejects the OpenAI object form used to force a tool call. Its system
-  // prompt and schema are sufficient; other OpenAI-compatible providers retain it.
-  if (!minimax) {
-    body.tool_choice = { type: 'function', function: { name: CLASSIFY_TOOL_NAME } }
-  }
-  return body
 }
 
 interface ClassifierAttemptResult {
@@ -479,15 +456,19 @@ async function runClassifierAttempt(
 ): Promise<ClassifierAttemptResult> {
   const attempted: ClassifierDiagnostics['attempted'] = jsonOnly ? 'json_retry' : 'tool_call'
   try {
-    const response = await fetchImpl(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${args.apiConfig.apiKey.trim()}`
-      },
-      signal: controller.signal,
-      body: JSON.stringify(buildClassifierRequest(args, jsonOnly))
+    const adapter = createModelAdapter({ endpoint, model: args.apiConfig.model, providerId: args.apiConfig.providerId, protocol: args.apiConfig.protocol })
+    const request = adapter.buildRequest({
+      endpoint,
+      apiKey: args.apiConfig.apiKey,
+      model: args.apiConfig.model,
+      providerId: args.apiConfig.providerId,
+      protocol: args.apiConfig.protocol,
+      messages: classifyMessages(args, jsonOnly) as ChatMessage[],
+      tools: jsonOnly ? [] : [{ name: CLASSIFY_TOOL_NAME, description: 'Classify the user turn for ModCrafting harness routing', parameters: CLASSIFY_TOOL_PARAMETERS }],
+      maxTokens: 400,
+      stream: false
     })
+    const response = await fetchImpl(request.url, { ...request.init, signal: controller.signal })
     if (!response.ok) {
       return { diagnostics: classifierDiagnostics(args, attempted, `http_${response.status}`, response.status) }
     }

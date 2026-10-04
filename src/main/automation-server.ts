@@ -188,7 +188,7 @@ export function startAutomationServer(next: AutomationOptions): void {
           if (!loaded.success || !loaded.config) {
             return send(res, 409, { ok: false, error: loaded.error || 'saved_provider_unavailable' })
           }
-          const result = await dispatch('configure_provider', loaded.config, Number(body.timeoutMs) || 30_000)
+          const result = await dispatch('configure_provider', loaded.config as unknown as Record<string, unknown>, Number(body.timeoutMs) || 30_000)
           appendEvent({ type: 'saved_provider_configured', providerId: loaded.config.providerId, model: loaded.config.model })
           return send(res, 200, { ok: true, runId, cursor, result })
         }
@@ -217,6 +217,9 @@ export function startAutomationServer(next: AutomationOptions): void {
     } catch (error) {
       return send(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
     }
+  })
+  server.on('error', (err) => {
+    console.error('[automation] server error:', err)
   })
   server.listen(0, '127.0.0.1', () => {
     const address = server?.address()

@@ -50,12 +50,12 @@ test('microCompact never compresses blocked/Error tool outputs', () => {
 })
 
 test('contextPercentFromPrompt uses model-declared working window', () => {
-  // DeepSeek V4 Flash claims 1M; 80k / 1M = 8%
-  assert.equal(contextPercentFromPrompt(80_000, 'deepseek-v4-flash', 'deepseek'), 8)
+  // DeepSeek Flash claims 1M; 80k / 1M = 8%
+  assert.equal(contextPercentFromPrompt(80_000, 'deepseek-flash', 'deepseek'), 8)
   // 800k / 1M = 80%
-  assert.equal(contextPercentFromPrompt(800_000, 'deepseek-v4-flash', 'deepseek'), 80)
+  assert.equal(contextPercentFromPrompt(800_000, 'deepseek-flash', 'deepseek'), 80)
   // Over working window clamps to 100
-  assert.equal(contextPercentFromPrompt(1_500_000, 'deepseek-v4-flash', 'deepseek'), 100)
+  assert.equal(contextPercentFromPrompt(1_500_000, 'deepseek-flash', 'deepseek'), 100)
 })
 
 test('microCompact truncates aged write_file tool_call arguments', () => {

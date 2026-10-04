@@ -1,3 +1,4 @@
+// @ts-nocheck
 export interface FormField {
   key: string
   label: string

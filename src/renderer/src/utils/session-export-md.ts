@@ -2,6 +2,7 @@ import type { ChronoEntry, DisplayMessage } from '../types/display-message'
 import type { ChatMessage } from '../harness/chat-message.ts'
 import { contentAsText } from '../harness/chat-message.ts'
 import type { ClassifierDiagnostics } from '../harness/turn-classifier.ts'
+import type { ProviderProtocolDiagnostic } from '../../../shared/harness-runtime.ts'
 import type { PlanStep } from '../components/TaskPlan'
 import type { ChatTurn } from './chat-turns.ts'
 import { groupMessagesIntoTurns } from './chat-turns.ts'
@@ -225,6 +226,7 @@ export interface BuildSessionMarkdownOptions {
   activePlanSteps?: PlanStep[]
   controllerMessages?: ChatMessage[]
   classifierDiagnostics?: ClassifierDiagnostics[]
+  providerProtocolDiagnostics?: ProviderProtocolDiagnostic[]
 }
 
 function maskEndpoint(endpoint?: string): string {
@@ -381,6 +383,13 @@ export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string 
     lines.push('---', '', '## 附录 · 意图分类器诊断', '')
     lines.push('_仅含 Provider、模型、endpoint 主机、失败阶段和 HTTP 状态；不包含 API Key 或请求正文。_', '')
     lines.push(jsonBlock(opts.classifierDiagnostics))
+    lines.push('')
+  }
+
+  if (opts.providerProtocolDiagnostics?.length) {
+    lines.push('---', '', '## 附录 · Provider 工具协议诊断', '')
+    lines.push('_仅记录协议、chunk 索引/ID、累计参数长度、错误码和降级结果；不包含 API Key 或完整敏感参数。_', '')
+    lines.push(jsonBlock(opts.providerProtocolDiagnostics, 24_000))
     lines.push('')
   }
 

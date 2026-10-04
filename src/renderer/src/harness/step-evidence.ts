@@ -118,9 +118,9 @@ function resultOk(result: ToolResult): boolean {
 }
 
 /**
- * An inspect step can explicitly ask for a deterministic validator instead of a
- * file read.  Keep this opt-in: a successful validator must be named in the
- * step's evidence contract and must prove the same target file.
+ * An inspect or write step can explicitly ask for a deterministic validator instead of
+ * a file read. Keep this opt-in: a successful validator must be named in the step's
+ * evidence contract and must prove the same target file.
  */
 function declaredStructuredValidationMatches(step: PlanStepState, result: ToolResult): boolean {
   const validation = result.validation
@@ -128,10 +128,12 @@ function declaredStructuredValidationMatches(step: PlanStepState, result: ToolRe
 
   const contract = String(step.evidence || '').toLowerCase()
   const expected = validation.kind === 'mixin'
-    ? { tool: 'fabric_mixin_validate', kind: 'mixin' }
+    ? { tool: 'fabric_mixin_validate', kind: 'mixin' as const }
     : validation.kind === 'recipe'
-      ? { tool: 'fabric_recipe_validate', kind: 'recipe' }
-      : null
+      ? { tool: 'fabric_recipe_validate', kind: 'recipe' as const }
+      : validation.kind === 'mod_json'
+        ? { tool: 'fabric_mod_json_validate', kind: 'mod_json' as const }
+        : null
   if (!expected || result.toolName !== expected.tool || validation.kind !== expected.kind) return false
   if (!contract.includes(expected.tool)) return false
 
@@ -172,6 +174,13 @@ export function canToolResultAdvanceStep(
   }
 
   if (kind === 'write') {
+    // A write step may declare a deterministic validator as its acceptance contract
+    // (e.g. registering a Mixin config is verified by fabric_mod_json_validate, not by a
+    // second write). Honour the declared contract, but only for the exact tool it names,
+    // only when that tool reported valid, and only when it proves the same target path.
+    if (declaredStructuredValidationMatches(step, result)) {
+      return { ok: true, reason: 'write_structured_validation' }
+    }
     const artifactPath = result.artifactPath || String(result.args?.path || '')
     const isWriteTool =
       toolName === 'write_file' ||

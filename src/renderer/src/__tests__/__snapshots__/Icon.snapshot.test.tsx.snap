@@ -1,0 +1,247 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Icon components > IconAlertTriangle renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+  />
+  <line
+    x1="12"
+    x2="12"
+    y1="9"
+    y2="13"
+  />
+  <line
+    x1="12"
+    x2="12.01"
+    y1="17"
+    y2="17"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconCode renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <polyline
+    points="16 18 22 12 16 6"
+  />
+  <polyline
+    points="8 6 2 12 8 18"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconFile renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+  />
+  <polyline
+    points="14 2 14 8 20 8"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconFolder renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconGhost renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <circle
+    cx="9"
+    cy="10"
+    r="1"
+  />
+  <circle
+    cx="15"
+    cy="10"
+    r="1"
+  />
+  <path
+    d="M18 21v-2a4 4 0 0 0-4-4H10a4 4 0 0 0-4 4v2"
+  />
+  <path
+    d="M2 10h20"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconPlay renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <polygon
+    points="5 3 19 12 5 21 5 3"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconPlus renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M12 5v14M5 12h14"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconPlus renders with lg size class 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon icon-lg"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M12 5v14M5 12h14"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconPlus renders with sm size class 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon icon-sm"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M12 5v14M5 12h14"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconSend renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <line
+    x1="22"
+    x2="11"
+    y1="2"
+    y2="13"
+  />
+  <polygon
+    points="22 2 15 22 11 13 2 9 22 2"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconSettings renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <circle
+    cx="12"
+    cy="12"
+    r="3"
+  />
+  <path
+    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+  />
+</svg>
+`;
+
+exports[`Icon components > IconX renders correctly (default size) 1`] = `
+<svg
+  aria-hidden="true"
+  class="icon"
+  fill="none"
+  stroke="currentColor"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  stroke-width="1.75"
+  viewBox="0 0 24 24"
+>
+  <path
+    d="M18 6L6 18M6 6l12 12"
+  />
+</svg>
+`;

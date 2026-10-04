@@ -317,7 +317,7 @@ async function startInstance(id: string, windowSize?: MinecraftWindowSize): Prom
   const instanceEnv = buildInstanceGradleEnv(buildPrep.env || process.env, id)
   const gameDirArg = quoteGameDirArg(gameDirAbs)
   const windowArgs = windowSize ? ` --width ${windowSize.width} --height ${windowSize.height}` : ''
-  const fullCmd = `"${cmd}" ${offlineFlags} runClient --no-daemon --args="--gameDir ${gameDirArg}${windowArgs}"`
+  const fullCmd = `"${cmd}" ${offlineFlags} runClient --args="--gameDir ${gameDirArg}${windowArgs}"`
 
   try {
     const proc = spawn(fullCmd, {

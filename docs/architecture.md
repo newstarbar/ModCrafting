@@ -114,9 +114,9 @@ Test Lab 不随正式安装包发布。它通过 `scripts/mcp/modcrafting-test-m
 
 ## 模型路由与设置中心
 
-主进程将不含密钥的路由策略保存为 `model-routing-config.json`；Provider 的端点和默认模型按厂商保存在 `api-settings.json`，密钥仍由 `safeStorage` 分厂商加密保存。渲染进程的 Harness Controller 将每次用户输入先转成可解释的路由决策，再把既有执行阶段映射到固定职责模型。只有 `implementer` 能取得写入工具；其余职责遵守只读工具策略，原有计划门控、20/40/3 预算与验收流程不变。
+主进程将不含密钥的路由策略保存为 `model-routing-config.json`（含 `homeProviderId` / 可选 `companionProviderId` 与专家槽）；Provider 的端点和默认模型按厂商保存在 `api-settings.json`，密钥仍由 `safeStorage` 分厂商加密保存。渲染进程的 Harness Controller 将每次用户输入先提取可解释的路由信号（规则优先，歧义时可选模型 refinement），生成 `RouteDecision`（含 `activeRoles`），再按主厂梯队物化内置预设（伴厂仅覆盖选定专家角色），并按角色×难度档位绑定模型执行真实委派。只有 `implementer` 能取得写入工具；其余职责遵守只读工具策略，原有计划门控、20/40/3 预算与验收流程不变。
 
-应用框架的视图包括项目中心、工作区和独立设置中心。设置中心负责模型服务、路由、预设和工具/MCP；会话仅保存路由选择与协作轨迹，不保存 API Key。
+UI 入口分层：输入区优先主厂策略/模型；设置中心「模型」页配置主厂商、默认策略与可选伴厂专家槽。工具/MCP、运行环境、更新等仍在设置中心其它分区。会话仅保存路由选择与协作轨迹，不保存 API Key。
 
 ## 默认技术栈
 

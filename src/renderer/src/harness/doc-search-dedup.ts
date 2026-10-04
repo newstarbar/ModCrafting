@@ -69,6 +69,21 @@ export function hasSimilarDocSearch(
   return false
 }
 
+/**
+ * Cross-knowledge fingerprint used by the workflow engine.  The old repair
+ * loop only deduplicated fabric_docs_search, so wiki/data lookups could still
+ * consume rounds while returning the same fact.  Keep the tool name in the
+ * key: a vanilla ID lookup and an API signature lookup are different facts.
+ */
+export function knowledgeQueryFingerprint(toolName: string, args: Record<string, unknown> | undefined): string {
+  const values = Object.entries(args || {})
+    .filter(([key, value]) => key !== 'path' && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'))
+    .map(([key, value]) => `${key}:${typeof value === 'string' ? normalizeDocSearchFingerprint(value) : String(value)}`)
+    .filter((entry) => !entry.endsWith(':'))
+    .sort()
+  return `${toolName}:${values.join('|')}`
+}
+
 /** Pull API method names from javac / Gradle compile errors for repair prompts. */
 export function extractCompileApiHints(output: string): string[] {
   const hints: string[] = []

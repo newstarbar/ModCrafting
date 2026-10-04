@@ -1,0 +1,1003 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`StatusBar > renders idle state with minimal usage 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-idle"
+    />
+    <span
+      class="mc-t"
+    >
+      就绪
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    ModCrafting
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-context stat"
+    title="上下文占用约 12%（prompt 15,200 / 有效窗口 128,000）"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      12
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-bar__fill"
+            style="width: 12%;"
+          />
+        </span>
+      </span>
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+</div>
+`;
+
+exports[`StatusBar > renders running state with provider label 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-busy"
+    />
+    <span
+      class="mc-t"
+    >
+      运行中
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    DeepSeek
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-context stat"
+    title="上下文占用约 12%（prompt 15,200 / 有效窗口 128,000）"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      12
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-bar__fill"
+            style="width: 12%;"
+          />
+        </span>
+      </span>
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+</div>
+`;
+
+exports[`StatusBar > renders with deepseek balance label 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-idle"
+    />
+    <span
+      class="mc-t"
+    >
+      就绪
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    ModCrafting
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="DeepSeek 账户余额（GET /user/balance）"
+  >
+    <span
+      class="stat-label"
+    >
+      余额
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥110.00
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-context stat"
+    title="上下文占用约 12%（prompt 15,200 / 有效窗口 128,000）"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      12
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-bar__fill"
+            style="width: 12%;"
+          />
+        </span>
+      </span>
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+</div>
+`;
+
+exports[`StatusBar > renders with project versions and MC runtime 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-busy"
+    />
+    <span
+      class="mc-t"
+    >
+      运行中
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    ModCrafting
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-context stat"
+    title="上下文占用约 12%（prompt 15,200 / 有效窗口 128,000）"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      12
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-bar__fill"
+            style="width: 12%;"
+          />
+        </span>
+      </span>
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-mc statusbar-mc-versions stat mc-dim"
+    title="undefined · Loader undefined · API 0.114.0"
+  >
+    undefined · Loader undefined · API 0.114.0
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-mc statusbar-mc-runtime stat stat-good"
+    title="项目运行状态"
+  >
+    <span
+      class="stat-value"
+    >
+      游戏中
+    </span>
+  </span>
+</div>
+`;
+
+exports[`StatusBar > renders with toolchain initializing (percent) 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-idle"
+    />
+    <span
+      class="mc-t"
+    >
+      就绪
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    ModCrafting
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-context stat"
+    title="上下文占用约 12%（prompt 15,200 / 有效窗口 128,000）"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      12
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-bar__fill"
+            style="width: 12%;"
+          />
+        </span>
+      </span>
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+  <span
+    class="statusbar-env stat"
+    title="JDK · Gradle · 离线依赖"
+  >
+    <span
+      class="stat-value stat-ok"
+    >
+      初始化 67%
+    </span>
+  </span>
+</div>
+`;
+
+exports[`StatusBar > renders with toolchain ready 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-idle"
+    />
+    <span
+      class="mc-t"
+    >
+      就绪
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    ModCrafting
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-context stat"
+    title="上下文占用约 12%（prompt 15,200 / 有效窗口 128,000）"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      12
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-bar__fill"
+            style="width: 12%;"
+          />
+        </span>
+      </span>
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+  <span
+    class="statusbar-env stat"
+    title="JDK · Gradle · 离线依赖"
+  >
+    <span
+      class="stat-value stat-good"
+    >
+      环境就绪
+    </span>
+  </span>
+</div>
+`;

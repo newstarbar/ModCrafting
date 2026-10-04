@@ -1,0 +1,386 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`TaskPlan > renders all-completed state 1`] = `
+<div
+  class="task-plan task-plan--pinned"
+>
+  <div
+    class="task-plan-header"
+  >
+    <button
+      aria-expanded="true"
+      aria-label="收起实施计划"
+      class="task-plan-header-toggle"
+      type="button"
+    >
+      <span
+        class="task-plan-collapsed-icon"
+      >
+        ▾
+      </span>
+      <span
+        class="task-plan-title"
+      >
+        实施计划
+      </span>
+    </button>
+    <span
+      class="task-plan-progress"
+    >
+      全部完成
+    </span>
+  </div>
+  <div
+    class="task-plan-section task-plan-section-done"
+  >
+    <button
+      class="task-plan-section-toggle"
+      type="button"
+    >
+      <span>
+        已完成 
+        2
+         项
+      </span>
+      <span>
+        ▸
+      </span>
+    </button>
+  </div>
+</div>
+`;
+
+exports[`TaskPlan > renders collapsed plan (anchored variant) 1`] = `
+<div
+  class="task-plan task-plan--anchored task-plan--collapsed"
+>
+  <div
+    class="task-plan-header task-plan-header--collapsed"
+  >
+    <button
+      aria-expanded="false"
+      aria-label="展开实施计划"
+      class="task-plan-header-toggle"
+      type="button"
+    >
+      <span
+        class="task-plan-collapsed-icon"
+      >
+        ▸
+      </span>
+      <span
+        class="task-plan-title"
+      >
+        实施计划
+      </span>
+    </button>
+    <span
+      class="task-plan-focus-desc"
+      title="在 \`ModInit\` 中注册方块与物品"
+    >
+      #2 
+      在 \`ModInit\` 中注册方块与物品
+    </span>
+    <span
+      class="task-plan-status-pill task-plan-status-pill--running"
+    >
+      进行中
+    </span>
+    <span
+      class="task-plan-count"
+    >
+      1
+      /
+      4
+    </span>
+  </div>
+</div>
+`;
+
+exports[`TaskPlan > renders error state 1`] = `
+<div
+  class="task-plan task-plan--pinned"
+>
+  <div
+    class="task-plan-header"
+  >
+    <button
+      aria-expanded="true"
+      aria-label="收起实施计划"
+      class="task-plan-header-toggle"
+      type="button"
+    >
+      <span
+        class="task-plan-collapsed-icon"
+      >
+        ▾
+      </span>
+      <span
+        class="task-plan-title"
+      >
+        实施计划
+      </span>
+    </button>
+    <span
+      class="task-plan-progress"
+    >
+      部分失败
+    </span>
+  </div>
+  <div
+    class="task-plan-section"
+  >
+    <div
+      class="task-plan-section-label"
+    >
+      待执行
+    </div>
+    <div
+      class="task-plan-steps"
+    >
+      <div
+        class="task-plan-step task-plan-step-error"
+      >
+        <span
+          class="task-plan-step-num"
+        >
+          #
+          2
+        </span>
+        <span
+          class="task-plan-step-icon task-plan-step-icon-error"
+        >
+          ✕
+        </span>
+        <span
+          class="task-plan-step-tag task-plan-step-tag-error"
+        >
+          失败
+        </span>
+        <div
+          class="task-plan-step-text "
+        >
+          <div
+            class="markdown-body task-plan-step-markdown"
+          >
+            <p>
+              编译失败：缺少导入
+            </p>
+          </div>
+        </div>
+      </div>
+      <div
+        class="task-plan-step task-plan-step-pending"
+      >
+        <span
+          class="task-plan-step-num"
+        >
+          #
+          3
+        </span>
+        <span
+          class="task-plan-step-icon task-plan-step-icon-pending"
+        >
+          ○
+        </span>
+        <span
+          class="task-plan-step-tag task-plan-step-tag-pending"
+        >
+          待办
+        </span>
+        <div
+          class="task-plan-step-text "
+        >
+          <div
+            class="markdown-body task-plan-step-markdown"
+          >
+            <p>
+              添加合成配方
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div
+    class="task-plan-section task-plan-section-done"
+  >
+    <button
+      class="task-plan-section-toggle"
+      type="button"
+    >
+      <span>
+        已完成 
+        1
+         项
+      </span>
+      <span>
+        ▸
+      </span>
+    </button>
+  </div>
+</div>
+`;
+
+exports[`TaskPlan > renders expanded plan with mixed statuses (pinned variant) 1`] = `
+<div
+  class="task-plan task-plan--pinned"
+>
+  <div
+    class="task-plan-header"
+  >
+    <button
+      aria-expanded="true"
+      aria-label="收起实施计划"
+      class="task-plan-header-toggle"
+      type="button"
+    >
+      <span
+        class="task-plan-collapsed-icon"
+      >
+        ▾
+      </span>
+      <span
+        class="task-plan-title"
+      >
+        实施计划
+      </span>
+    </button>
+    <span
+      class="task-plan-progress"
+    >
+      进行中 · #2 · 已完成 1/4
+    </span>
+  </div>
+  <div
+    class="task-plan-section"
+  >
+    <div
+      class="task-plan-section-label"
+    >
+      待执行
+    </div>
+    <div
+      class="task-plan-steps"
+    >
+      <div
+        class="task-plan-step task-plan-step-running"
+      >
+        <span
+          class="task-plan-step-num"
+        >
+          #
+          2
+        </span>
+        <span
+          class="task-plan-step-icon task-plan-step-icon-running"
+        >
+          ●
+        </span>
+        <span
+          class="task-plan-step-tag task-plan-step-tag-running"
+        >
+          进行中
+        </span>
+        <div
+          class="task-plan-step-text "
+        >
+          <div
+            class="markdown-body task-plan-step-markdown"
+          >
+            <p>
+              在 
+              <code
+                class="inline-code"
+                node="[object Object]"
+              >
+                ModInit
+              </code>
+               中注册方块与物品
+            </p>
+          </div>
+        </div>
+      </div>
+      <div
+        class="task-plan-step task-plan-step-pending"
+      >
+        <span
+          class="task-plan-step-num"
+        >
+          #
+          3
+        </span>
+        <span
+          class="task-plan-step-icon task-plan-step-icon-pending"
+        >
+          ○
+        </span>
+        <span
+          class="task-plan-step-tag task-plan-step-tag-pending"
+        >
+          待办
+        </span>
+        <div
+          class="task-plan-step-text "
+        >
+          <div
+            class="markdown-body task-plan-step-markdown"
+          >
+            <p>
+              添加合成配方（workbench shaped）
+            </p>
+          </div>
+        </div>
+      </div>
+      <div
+        class="task-plan-step task-plan-step-pending"
+      >
+        <span
+          class="task-plan-step-num"
+        >
+          #
+          4
+        </span>
+        <span
+          class="task-plan-step-icon task-plan-step-icon-pending"
+        >
+          ○
+        </span>
+        <span
+          class="task-plan-step-tag task-plan-step-tag-pending"
+        >
+          待办
+        </span>
+        <div
+          class="task-plan-step-text "
+        >
+          <div
+            class="markdown-body task-plan-step-markdown"
+          >
+            <p>
+              构建并运行 GameTest 验证
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div
+    class="task-plan-section task-plan-section-done"
+  >
+    <button
+      class="task-plan-section-toggle"
+      type="button"
+    >
+      <span>
+        已完成 
+        1
+         项
+      </span>
+      <span>
+        ▸
+      </span>
+    </button>
+  </div>
+</div>
+`;

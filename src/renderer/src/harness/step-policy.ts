@@ -169,7 +169,7 @@ export function isToolAllowedForStep(
 
   if (call.name === 'write_file' || call.name === 'edit_file') {
     if (options?.repairMode && (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test')) return true
-    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return false
+    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'test_design' || step.kind === 'game_test') return false
     if (step.kind === 'recipe') return false
     // mixin 步需要 write_file（新建 client 路径）+ edit_file（改 stub）才能完成 main→client 迁移
     if (step.kind === 'mixin') return true
@@ -178,6 +178,7 @@ export function isToolAllowedForStep(
 
   if (call.name === 'delete_file') {
     if (step.kind === 'build' || step.kind === 'run') return true
+    if (step.kind === 'test_design') return false
     if (step.kind === 'game_test') return Boolean(options?.repairMode)
     return step.kind === 'write' || step.kind === 'mixin'
   }
@@ -189,10 +190,56 @@ export function isToolAllowedForStep(
     return true
   }
 
-  // complete_step only in non-terminal steps (build/run auto-detected by host)
-  if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run' && step.kind !== 'game_test') return true
+  // complete_step only in non-terminal steps (build/run/test_design/game_test auto-detected by host)
+  if (call.name === 'complete_step' && step.kind !== 'build' && step.kind !== 'run' && step.kind !== 'test_design' && step.kind !== 'game_test') return true
 
   return commandAllowedForStep(step, call, options)
+}
+
+/** Semantic beforeToolCall policy used after the ActiveToolSnapshot has
+ * already established capability availability. It intentionally does not
+ * consult `allowedTools`/`recommendedTools`; task/path/repair timing remains
+ * host-owned, while the snapshot is the only capability gate. */
+export function isToolSemanticallyAllowedForStep(
+  step: WorkflowStep,
+  call: ToolCallWithId,
+  options?: ToolGateOptions
+): boolean {
+  if (isRepairWriteBlocked(step, call, options)) return false
+  if (call.name === 'write_file' || call.name === 'edit_file') {
+    if (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test') return Boolean(options?.repairMode)
+    if (step.kind === 'test_design') return false
+    if (step.kind === 'recipe') return false
+    return step.kind === 'write' || step.kind === 'mixin'
+  }
+  if (call.name === 'delete_file') {
+    if (step.kind === 'build' || step.kind === 'run') return true
+    if (step.kind === 'test_design') return false
+    if (step.kind === 'game_test') return Boolean(options?.repairMode)
+    return step.kind === 'write' || step.kind === 'mixin'
+  }
+  if (call.name === 'trigger_build') {
+    const task = String(call.args.task || 'build')
+    if (step.kind === 'build') return task === 'build'
+    if (step.kind === 'run') return task === 'build' || task === 'runClient'
+    return step.kind === 'game_test' && Boolean(options?.repairMode) && (task === 'build' || task === 'runClient')
+  }
+  if (call.name === 'read_file' && step.kind === 'recipe') {
+    return isRecipeInspectionPath(String(call.args.path || ''))
+  }
+  if (call.name === 'run_command') return commandAllowedForStep(step, call, options)
+  if (call.name === 'complete_step') return step.kind !== 'build' && step.kind !== 'run' && step.kind !== 'test_design' && step.kind !== 'game_test'
+  if (call.name === 'mc_run_test') return step.kind === 'game_test'
+  if (call.name === 'mc_test_scenario') return step.kind === 'run' || step.kind === 'test_design' || step.kind === 'game_test'
+  if (/^mc_/.test(call.name)) {
+    if (step.kind === 'test_design') {
+      return ['mc_inspect', 'mc_inventory', 'mc_world', 'mc_observe_entity', 'mc_runtime_status'].includes(call.name)
+    }
+    return step.kind === 'run' || step.kind === 'game_test'
+  }
+  if (call.name === 'fabric_recipe_generate' || call.name === 'create_recipe') return step.kind === 'recipe'
+  if (call.name === 'fabric_mixin_scaffold' || call.name === 'fabric_mixin_register') return step.kind === 'mixin'
+  return true
 }
 
 function rejectedRepairWriteResult(step: WorkflowStep, call: ToolCallWithId, options?: ToolGateOptions): ToolResult {
@@ -209,7 +256,8 @@ function rejectedRepairWriteResult(step: WorkflowStep, call: ToolCallWithId, opt
     toolName: call.name,
     args: call.args,
     exitCode: null,
-    errorKind: 'repair_write_required'
+    errorKind: 'repair_write_required',
+    failureKind: 'policy_blocked'
   }
 }
 
@@ -222,11 +270,14 @@ export function createRejectedToolResult(
     return rejectedRepairWriteResult(step, call, options)
   }
   let output = `blocked: [tool_not_allowed] 当前步骤 #${step.id}（${step.title}）不允许调用 "${call.name}"。`
-  if (call.name === 'complete_step' && (step.kind === 'build' || step.kind === 'run' || step.kind === 'game_test')) {
+  if (call.name === 'complete_step' && (step.kind === 'build' || step.kind === 'run' || step.kind === 'test_design' || step.kind === 'game_test')) {
     output =
       step.kind === 'game_test'
         ? `blocked: [tool_not_allowed] game_test 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
           `请调用 mc_run_test；只有结构化 verdict=PASS 才会自动推进。`
+      : step.kind === 'test_design'
+        ? `blocked: [tool_not_allowed] test_design 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
+          `请先读机制代码，再调用 mc_test_scenario 注册含 sandbox/actions/assertions/acceptanceContract 的有效 V2 场景；注册成功后系统自动推进。`
       : step.kind === 'run'
         ? `blocked: [tool_not_allowed] run 步骤 #${step.id}（${step.title}）禁止 complete_step。` +
           `请用 mc_inspect / mc_screenshot 完成验收；满足验收后系统会自动推进。勿再调用 complete_step。`
@@ -256,8 +307,14 @@ export function createRejectedToolResult(
         ? ' gradle 构建命令或文件检查命令'
         : ' 文件删除命令'
     output += ` 当前步骤类型为 ${step.kind}，run_command 仅允许${allowedHint}。如需列出目录文件，请改用 list_directory。`
+  } else if (call.name === 'mc_run_test') {
+    output += ` mc_run_test 仅在 game_test 步骤允许。当前步骤类型为 ${step.kind}；若在 test_design，请先用 mc_test_scenario 注册场景。`
   } else if (call.name === 'mc_screenshot' || call.name === 'mc_inspect' || call.name === 'mc_command' || call.name === 'mc_input' || call.name === 'mc_ensure_test_world' || call.name === 'mc_ensure_cheats' || call.name === 'mc_inventory' || call.name === 'mc_world' || call.name === 'mc_chat') {
-    output += ` MC 操作工具仅在 run/game_test 步骤允许。当前步骤类型为 ${step.kind}，请先完成当前步骤推进到对应游戏步骤。`
+    if (step.kind === 'test_design') {
+      output += ` test_design 仅允许观察类工具（mc_inspect / mc_inventory / mc_world / mc_observe_entity）与 mc_test_scenario；禁止世界控制与 mc_run_test。`
+    } else {
+      output += ` MC 操作工具仅在 run/game_test 步骤允许。当前步骤类型为 ${step.kind}，请先完成当前步骤推进到对应游戏步骤。`
+    }
   } else if (call.name === 'fabric_recipe_generate' || call.name === 'create_recipe') {
     output += ` 配方工具仅在 recipe 步骤允许。当前步骤类型为 ${step.kind}。`
   } else if (call.name === 'fabric_mixin_scaffold' || call.name === 'fabric_mixin_register') {
@@ -273,7 +330,8 @@ export function createRejectedToolResult(
     toolName: call.name,
     args: call.args,
     exitCode: null,
-		errorKind: 'policy_deferred'
+		errorKind: 'policy_deferred',
+		failureKind: 'policy_blocked'
 	}
 }
 

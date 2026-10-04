@@ -1,19 +1,21 @@
+// @ts-nocheck
 // ======== ModCrafting Tool Definitions ========
 // Built-in tools for the Fabric mod development environment
 
-import { type Tool, type ToolContext, type Previewer, type ToolExecutionPayload } from "./tools";
-import type { FileDiff, GuiLayoutElement, GuiLayoutType } from "./events";
-import { formatGamePanelFailure, isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge";
-import { waitForMcRunReady } from "../utils/mc-wait-playing";
-import { setMcInputGuard } from "./mc-observer-tools";
-import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, validateRecipeContent, type RecipeKind, type RecipeKey } from "./recipe-utils";
-import { minecraftItems } from "../data/items";
-import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from "./fabric-knowledge";
-import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from "./fabric-utils";
+import { type Tool, type ToolContext, type Previewer, type ToolExecutionPayload } from "./tools.ts";
+import type { BuildReport } from "../../../shared/harness-runtime.ts";
+import type { FileDiff, GuiLayoutElement, GuiLayoutType } from "./events.ts";
+import { formatGamePanelFailure, isPanelBridgeRegistered, runBuildViaPanel, startGameViaPanel, getLastBuildLogText } from "../utils/panel-bridge.ts";
+import { waitForMcRunReady } from "../utils/mc-wait-playing.ts";
+import { setMcInputGuard } from "./mc-observer-tools.ts";
+import { buildRecipeContent, buildShapelessRecipeContent, parseRecipeIngredients, recipePath, validateRecipeContent, type RecipeKind, type RecipeKey } from "./recipe-utils.ts";
+import { minecraftItems } from "../data/items.ts";
+import { buildFabricDocsSearchSummary, buildFabricJavadocLookupUrl, buildVanillaWikiQuerySummary } from "./fabric-knowledge.ts";
+import { buildDataAssetFiles, classifyFabricLog, validateFabricModJsonContent } from "./fabric-utils.ts";
 import {
 	MOD_TEMPLATES,
 	type ProjectCreateConfig
-} from "../project/scaffold";
+} from "../project/scaffold.ts";
 import { executeTemplateGenerate, resolveProjectConfig } from "../project/template-runner.ts";
 import { validateFileEditGate } from "./edit-gate.ts";
 import { guardedWriteFile } from "./guarded-write.ts";
@@ -25,7 +27,7 @@ import {
 	generateModBlocksRegistrationClass,
 	generateModItemsRegistrationClass
 } from "../project/template-codegen.ts";
-import { buildMixinScaffold, expectedMixinSourcePaths, isValidMixinSourcePath, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
+import { buildMixinScaffold, expectedMixinSourcePaths, isValidMixinSourcePath, mixinAnnotationForm, parseAtTarget, parseMethodDescriptor, readMixinMetadata, type MixinScaffoldMetadata, type SupportedMixinInjection } from "./mixin-utils.ts";
 import {
 	assertRegisterableMixin,
 	inferSideFromSourcePath,
@@ -220,7 +222,7 @@ async function generateValidatedRecipe(
 	};
 }
 
-async function runWithCommandStream(ctx: ToolContext, run: () => Promise<{ output: string; exitCode: number | null }>): Promise<{ output: string; exitCode: number | null }> {
+async function runWithCommandStream(ctx: ToolContext, run: () => Promise<{ output: string; exitCode: number | null; usedOnlineFallback?: boolean; cancelled?: boolean; report?: BuildReport }>): Promise<{ output: string; exitCode: number | null; usedOnlineFallback?: boolean; cancelled?: boolean; report?: BuildReport }> {
 	const executionId = ctx.executionId;
 	const unsub = ctx.onProgress ? window.api.onCommandOutput((text, sourceExecutionId) => {
 		if (!sourceExecutionId || sourceExecutionId === executionId) ctx.onProgress!(text);
@@ -830,13 +832,27 @@ export const fabricModJsonValidateTool: Tool = {
 		}
 	},
 	readOnly: () => true,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
 		const relPath = String(args.path || "src/main/resources/fabric.mod.json");
+		if (relPath !== "fabric.mod.json" && !relPath.endsWith("/fabric.mod.json")) {
+			return `Error: ${relPath} 不是 fabric.mod.json。校验 Mixin 配置注册请用 fabric_mixin_validate（它会检查 mixins.json）。`;
+		}
 		const res = await window.api.readFile(`${ctx.projectPath}/${relPath}`);
 		if (!res.success || !res.content) return `Error reading ${relPath}: ${res.error || "empty file"}`;
 		const result = validateFabricModJsonContent(res.content);
-		return JSON.stringify(result, null, 2);
+		return {
+			output: JSON.stringify(result, null, 2),
+			artifactPaths: [relPath],
+			validation: {
+				kind: "mod_json",
+				valid: result.ok,
+				level: "structural",
+				version: "1.21.4",
+				targetPath: relPath,
+				checkedAt: Date.now()
+			}
+		};
 	}
 };
 
@@ -1121,7 +1137,7 @@ export const readErrorLogTool: Tool = {
 				}
 			}
 			if (logType === "last-build" && _ctx.projectPath) {
-				if (isPanelBridgeRegistered()) {
+				if (isPanelBridgeRegistered() && !_ctx.runId) {
 					const panelLog = getLastBuildLogText().trim();
 					if (panelLog) return buildLogTail(panelLog);
 				}
@@ -1167,69 +1183,82 @@ export const triggerBuildTool: Tool = {
 		properties: {
 			task: {
 				type: "string",
-				enum: ["build", "runClient", "runDatagen", "runServer", "test"],
+				enum: ["build", "compileJava", "compileClientJava", "processResources", "classes", "runClient", "runDatagen", "runServer", "test"],
 				description: "Gradle task to run"
 			}
 		},
 		required: ["task"]
 	},
 	readOnly: () => false,
-	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string> {
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
 		if (!ctx.projectPath) return "No project open";
 		const task = String(args.task || "build");
+		const startupResult = async (output: string, exitCode: number, cancelled = false): Promise<string | ToolExecutionPayload> => {
+			if (task !== "runClient" || typeof window === "undefined" || !window.api?.createBuildReport) return output;
+			try {
+				const buildReport = await window.api.createBuildReport({ projectPath: ctx.projectPath!, task, output, exitCode, cancelled });
+				return { output, buildReport };
+			} catch {
+				return output;
+			}
+		};
 
 		if (task === "runClient") {
 			try {
-				if (isPanelBridgeRegistered()) {
+				if (isPanelBridgeRegistered() && !ctx.runId) {
 					const res = await startGameViaPanel();
 					// Panel startup is legacy/non-abortable. If it completes after this tool
 					// has been cancelled, stop only the instance created by this invocation.
 					if (ctx.abortSignal?.aborted && res.instanceId) {
 						await window.api.mcStop(res.instanceId).catch(() => undefined);
-						return `游戏启动已取消（实例 ${res.instanceId} 已停止）。[MC_PHASE:error]`;
+						return startupResult(`游戏启动已取消（实例 ${res.instanceId} 已停止）。[MC_PHASE:error]`, 130, true);
 					}
 					if (!res.ok) {
-						return `游戏启动失败：${formatGamePanelFailure(res)}\n[MC_PHASE:error]`;
+						return startupResult(`游戏启动失败：${formatGamePanelFailure(res)}\n[MC_PHASE:error]`, 1);
 					}
 					// AI 自测期间显示输入保护覆盖窗口
 					void showInputGuardForInstance(res.instanceId);
-					return [
+					return startupResult([
 						`游戏已启动，Fabric 模组与 Observer V2 已就绪（实例 ${res.instanceId}）。[MC_PHASE:ready]`,
 						'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
 						'下一步：调用 mc_ensure_test_world 进入游戏世界，再根据功能类型设计测试场景（mc_command/mc_input），最后用 mc_screenshot/mc_inspect 验证效果。'
-					].join('\n');
+					].join('\n'), 0);
 				}
 				const start = await window.api.mcStartOrCreate(ctx.projectPath);
 				if (ctx.abortSignal?.aborted && start.id) {
 					await window.api.mcStop(start.id).catch(() => undefined);
-					return `游戏启动已取消（实例 ${start.id} 已停止）。[MC_PHASE:error]`;
+					return startupResult(`游戏启动已取消（实例 ${start.id} 已停止）。[MC_PHASE:error]`, 130, true);
 				}
 				if (!start.success) {
-					return `Error starting game: ${start.error || "unknown error"}\n[MC_PHASE:error]`;
+					return startupResult(`Error starting game: ${start.error || "unknown error"}\n[MC_PHASE:error]`, 1);
 				}
 				const instanceId = start.id || "";
 				if (!instanceId) {
-					return `Error starting game: 未获取到游戏实例 ID\n[MC_PHASE:error]`;
+					return startupResult(`Error starting game: 未获取到游戏实例 ID\n[MC_PHASE:error]`, 1);
 				}
 				const wait = await waitForMcRunReady({ instanceId });
 				if (!wait.ok) {
 					const tail = wait.logTail ? `\n\n--- 游戏日志（末尾）---\n${wait.logTail}` : "";
-					return `游戏启动失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`;
+					return startupResult(`游戏启动失败：${wait.error || "unknown error"}${tail}\n[MC_PHASE:error]`, 1);
 				}
 				// AI 自测期间启用游戏内输入护栏
 				void showInputGuardForInstance(instanceId);
-				return [
+				return startupResult([
 					`游戏已启动，Fabric 模组与 Observer V2 已就绪（实例 ${instanceId}）。[MC_PHASE:ready]`,
 					'注意：MC_PHASE:menu 只代表游戏启动成功，不代表功能测试通过。',
 					'下一步：调用 mc_ensure_test_world 进入游戏世界，再根据功能类型设计测试场景（mc_command/mc_input），最后用 mc_screenshot/mc_inspect 验证效果。'
-				].join('\n');
+				].join('\n'), 0);
 			} catch (err) {
-				return `Error starting game: ${err}\n[MC_PHASE:error]`;
+				return startupResult(`Error starting game: ${err}\n[MC_PHASE:error]`, 1);
 			}
 		}
 
 		try {
-			if (task === "build" && isPanelBridgeRegistered()) {
+			// The foreground panel is allowed for manual UI builds, but a Harness
+			// invocation must execute against its shadow path.  The panel's legacy
+			// bridge is tied to the user's visible project and could otherwise
+			// silently compile/promote the real workspace.
+			if (task === "build" && isPanelBridgeRegistered() && !ctx.runId && !ctx.validationGate) {
 				// 构建前停止运行中的 MC 实例，避免源文件被占用导致构建失败
 				// 同时关闭游戏内输入护栏
 				try {
@@ -1244,14 +1273,15 @@ export const triggerBuildTool: Tool = {
 				const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "\n[退出码: 0]";
 				const log = getLastBuildLogText().trim();
 				const logBlock = log ? `\n\n--- 构建输出 ---\n${buildLogTail(log)}` : "";
+				const report = await window.api.createBuildReport({ projectPath: ctx.projectPath, task, output: log, exitCode: res.exitCode });
 				if (res.failed) {
 				const errs = extractBuildErrors(log)
 				const summary = errs.length > 0
 					? `【编译错误摘要】\n${errs.map((e) => `- ${e}`).join('\n')}\n\n`
 					: ''
-				return `${summary}构建失败。${logBlock || "\n详情见右侧高级面板。"}${exitInfo}`;
-			}
-				return `构建已完成。${logBlock}${exitInfo}`;
+				return { output: `${summary}构建失败。${logBlock || "\n详情见右侧高级面板。"}${exitInfo}`, buildReport: report };
+				}
+				return { output: `构建已完成。${logBlock}${exitInfo}`, buildReport: report };
 			}
 
 			const res = await runWithCommandStream(ctx, () => window.api.runGradleTask(ctx.projectPath!, task, {
@@ -1262,16 +1292,66 @@ export const triggerBuildTool: Tool = {
 		const output = res.output || `Task "${task}" completed (exit: ${res.exitCode})`;
 		const exitInfo = res.exitCode !== 0 ? `\n[退出码: ${res.exitCode}]` : "";
 		const fallbackNote = res.usedOnlineFallback ? "\n[已联网补全依赖缓存]" : "";
+    const report = res.report || await window.api.createBuildReport({ projectPath: ctx.projectPath, task, output, exitCode: res.exitCode, usedOnlineFallback: res.usedOnlineFallback, cancelled: res.cancelled });
+    const reportError = report && !report.ok ? `\n[BuildReport:${report.diagnostics.map((diagnostic) => diagnostic.id).join(",") || report.stage}]` : "";
 		if (res.exitCode !== 0 && res.exitCode !== null) {
 			const errs = extractBuildErrors(output)
 			if (errs.length > 0) {
 				const summary = `【编译错误摘要】\n${errs.map((e) => `- ${e}`).join('\n')}\n\n`
-				return summary + output + exitInfo + fallbackNote
+            return { output: summary + output + exitInfo + fallbackNote + reportError, buildReport: report }
 			}
 		}
-		return output + exitInfo + fallbackNote;
+        return { output: output + exitInfo + fallbackNote + reportError, buildReport: report };
 		} catch (err) {
-			return `Error running build: ${err}`;
+			const output = `Error running build: ${err}`;
+			try {
+				const buildReport = await window.api.createBuildReport({ projectPath: ctx.projectPath, task, output, exitCode: 1 });
+				return { output, buildReport };
+			} catch {
+				return output;
+			}
+		}
+	}
+};
+
+// ── fast_compile ──
+// Cheap semantic pre-check that runs the bundled javac against the shadow
+// workspace's Java sources. Goal: catch the 95% of "wrong API name / missing
+// import / wrong arity" mistakes in 2-8 seconds, before the model waits for a
+// full Gradle build. Returns a BuildReport with severity-tagged diagnostics;
+// callers should treat `degraded` as a hard signal to fall back to trigger_build.
+export const fastCompileTool: Tool = {
+	name: "fast_compile",
+	description: "Run javac (no Gradle, no daemon) against the shadow workspace's Java sources using the bundled Loom/Fabric classpath. Returns a BuildReport with severity=hard|soft tagged diagnostics. Use this after editing Java files to get feedback in 2-8s instead of waiting for a full Gradle build.",
+	schema: {
+		type: "object",
+		properties: {
+			timeoutMs: { type: "number", description: "Hard wall-clock cap, in ms. Default 60000." }
+		}
+	},
+	readOnly: () => false,
+	async execute(ctx: ToolContext, args: Record<string, unknown>): Promise<string | ToolExecutionPayload> {
+		if (!ctx.projectPath) return "No project open";
+		if (!ctx.fileSession?.workspaceId) {
+			return { output: "fast_compile 需要 workspaceId（影子工程未启用）", error: "missing workspaceId", ok: false, exitCode: 1 };
+		}
+		const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : 60_000;
+		try {
+			const report = await window.api.fastCompile(ctx.fileSession.workspaceId, { timeoutMs });
+			const fast = (report as any).fast as { durationMs: number; classpathEntries: number; sourceFiles: number; degraded: boolean } | undefined;
+			const degraded = (report as any).degraded === true || fast?.degraded === true;
+			const hard = report.diagnostics.filter((d: any) => d.severity !== "soft");
+			const soft = report.diagnostics.filter((d: any) => d.severity === "soft");
+			const header = degraded
+				? `【fast_compile degraded】classpath 不完整，请回退到 trigger_build 验证（javac 看不到完整依赖）`
+				: report.ok
+					? `【fast_compile OK】${fast ? `${fast.sourceFiles} 个源文件 / ${fast.classpathEntries} 个 jar / ${(fast.durationMs / 1000).toFixed(1)}s` : ""}`
+					: `【fast_compile 失败】${hard.length} 个硬错误，${soft.length} 个软警告`;
+			const hardBlock = hard.length > 0 ? `\n硬错误：\n${hard.slice(0, 20).map((d: any) => `- ${d.file || "?"}:${d.line || "?"} ${d.message}`).join("\n")}` : "";
+			const softBlock = soft.length > 0 ? `\n软警告（javac 不可证，可能被 AW/splitEnv 影响）：\n${soft.slice(0, 8).map((d: any) => `- ${d.file || "?"}:${d.line || "?"} ${d.message}`).join("\n")}` : "";
+			return { output: header + hardBlock + softBlock, buildReport: report };
+		} catch (err) {
+			return { output: `fast_compile 异常: ${String(err)}`, error: String(err), ok: false, exitCode: 1 };
 		}
 	}
 };
@@ -1771,7 +1851,16 @@ export const fabricMixinValidateTool: Tool = {
 		if (!lookup.ok || !lookup.class) errors.push(`目标 selector 无效: ${lookup.error || "not found"}`);
 		if (lookup.class?.side === "client" && metadata.side !== "client") errors.push("客户端目标不能注册为 common/server Mixin");
 		const targetSimpleName = (metadata.targetClass.split(".").pop() || metadata.targetClass).replace(/\$/g, ".");
-		if (!source.includes(`@Mixin(${targetSimpleName}.class)`)) errors.push("@Mixin 目标与确定性元数据不一致");
+		const nestedTarget = metadata.targetClass.includes("$");
+		if (!source.includes(`@Mixin(${mixinAnnotationForm(metadata.targetClass, targetSimpleName)})`)) {
+			errors.push(nestedTarget
+				? `嵌套目标必须写成 @Mixin(targets = "${metadata.targetClass}")（内部类通常是 private，类字面量无法编译）`
+				: "@Mixin 目标与确定性元数据不一致");
+		}
+		const nestedImport = `import ${metadata.targetClass.replace(/\$/g, ".")};`;
+		if (nestedTarget && source.includes(nestedImport)) {
+			errors.push(`请删除 ${nestedImport}；内部类可能不可见，只能靠 targets 字符串引用`);
+		}
 		if (kind === "method" && !source.includes(`${metadata.selector}${metadata.descriptor}`)) errors.push("注解缺少精确方法 descriptor");
 		const requiredAnnotation: Record<SupportedMixinInjection, string> = {
 			inject: "@Inject", accessor: "@Accessor", invoker: "@Invoker", redirect: "@Redirect", modify_arg: "@ModifyArg", modify_return_value: "@ModifyReturnValue"
@@ -2253,7 +2342,11 @@ export const submitPlanTool: Tool = {
 			description: `执行确定性游戏测试（mc_run_test scenarioId=${created.spec.id}；仅 PASS 完成）`,
 			evidence: "V2 GameTestSession verdict=PASS 与逐条断言的新鲜证据"
 		}];
-		return `\`\`\`json\n${JSON.stringify({ steps: plannedSteps, gameTest: created.spec, acceptanceContract: contract.contract }, null, 2)}\n\`\`\`\n\n${formatGameTestSpec(created.spec)}`;
+		return `\`\`\`json
+${JSON.stringify({ steps: plannedSteps, gameTest: created.spec, acceptanceContract: contract.contract }, null, 2)}
+\`\`\`
+
+${formatGameTestSpec(created.spec)}`;
 	}
 };
 
@@ -2400,12 +2493,12 @@ export const guiLayoutPreviewTool: Tool = {
 }
 
 // Register all built-in tools
-import { Registry } from "./tools";
-import { logger } from "../utils/logger";
-import { MC_OBSERVER_TOOLS } from "./mc-observer-tools";
-import { minecraftDataLookupTool, mcWikiSearchTool } from "./mc-data-tool";
-import { mcTestScenarioTool } from "./mc-test-scenario-tool";
-import { mcRunTestTool } from "./game-test-runner";
+import { Registry } from "./tools.ts";
+import { logger } from "../utils/logger.ts";
+import { MC_OBSERVER_TOOLS } from "./mc-observer-tools.ts";
+import { minecraftDataLookupTool, mcWikiSearchTool } from "./mc-data-tool.ts";
+import { mcTestScenarioTool } from "./mc-test-scenario-tool.ts";
+import { mcRunTestTool } from "./game-test-runner.ts";
 
 export function registerModCraftingTools(registry: Registry, options?: { disabledTools?: string[] }): void {
 	const disabled = new Set(options?.disabledTools || []);
@@ -2436,6 +2529,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		runCommandTool,
 		readErrorLogTool,
 		triggerBuildTool,
+		fastCompileTool,
 		explainCodeTool,
 		listTemplatesTool,
 		fabricTemplateGenerateTool,

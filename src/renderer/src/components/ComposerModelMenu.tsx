@@ -1,11 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import {
   getAllProviders,
+  getProvider,
   modelDisplayLabel,
   isKnownModel,
   type LlmProviderDef,
 } from '../../../shared/llm-providers.ts'
-import { allRoutingPresets, TASK_TEMPLATE_LABELS, type ModelRoutingConfig, type RoutingSelection } from '../../../shared/model-routing.ts'
+import { allRoutingPresets, type ModelRoutingConfig, type RoutingSelection } from '../../../shared/model-routing.ts'
 
 export interface ProviderModelSelection {
   providerId: string
@@ -13,12 +14,16 @@ export interface ProviderModelSelection {
   endpoint: string
 }
 
+const PRIMARY_STRATEGY_IDS = new Set(['fast', 'balanced', 'deep'])
+
 interface ComposerModelMenuProps {
   providerId: string
   modelId: string
   onChange: (selection: ProviderModelSelection) => void
   onOpenApiSettings?: () => void
+  onOpenAdvancedRouting?: () => void
   disabled?: boolean
+  savedProviderIds?: string[]
   routingConfig?: ModelRoutingConfig
   routingSelection?: RoutingSelection
   onRoutingSelectionChange?: (selection: RoutingSelection) => void
@@ -29,12 +34,16 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
   modelId,
   onChange,
   onOpenApiSettings,
+  onOpenAdvancedRouting,
   disabled,
+  savedProviderIds = [],
   routingConfig,
   routingSelection,
   onRoutingSelectionChange,
 }) => {
   const [open, setOpen] = useState(false)
+  const [showMoreStrategies, setShowMoreStrategies] = useState(false)
+  const [showOtherProviders, setShowOtherProviders] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -57,9 +66,39 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
 
   const inPresets = isKnownModel(modelId, providerId)
   const routed = routingSelection?.mode === 'routed'
-  const selectedPreset = routed ? allRoutingPresets(routingConfig).find((preset) => preset.id === (routingSelection.customPresetId || routingSelection.strategyId)) : null
-  const displayLabel = routed ? `${selectedPreset?.label || '路由'} · ${TASK_TEMPLATE_LABELS[routingSelection?.taskTemplateId || 'auto']}` : modelDisplayLabel(modelId, providerId)
-  const providers = getAllProviders()
+  const presets = allRoutingPresets(routingConfig)
+  const selectedPreset = routed
+    ? presets.find((preset) => preset.id === (routingSelection.customPresetId || routingSelection.strategyId))
+    : null
+  const homeProviderId = routingConfig?.homeProviderId || providerId || 'deepseek'
+  const homeProviderLabel = getProvider(homeProviderId)?.label || homeProviderId
+  const companionEnabled = Boolean(routingConfig?.companionProviderId)
+  const displayLabel = routed
+    ? (selectedPreset?.label || '路由策略')
+    : modelDisplayLabel(modelId, providerId)
+
+  const primaryPresets = presets.filter((preset) => PRIMARY_STRATEGY_IDS.has(preset.id) || !preset.builtIn)
+  const morePresets = presets.filter((preset) => preset.builtIn && !PRIMARY_STRATEGY_IDS.has(preset.id))
+  const visibleStrategies = showMoreStrategies ? [...primaryPresets, ...morePresets] : primaryPresets
+
+  const { homeProviders, otherProviders } = useMemo(() => {
+    const saved = new Set(savedProviderIds)
+    const connected = getAllProviders().filter((provider) => saved.has(provider.id) && provider.models.length > 0)
+    return {
+      homeProviders: connected.filter((provider) => provider.id === homeProviderId),
+      otherProviders: connected.filter((provider) => provider.id !== homeProviderId)
+    }
+  }, [savedProviderIds, homeProviderId])
+
+  const selectStrategy = (presetId: string, builtIn: boolean) => {
+    onRoutingSelectionChange?.({
+      mode: 'routed',
+      strategyId: presetId,
+      customPresetId: builtIn ? undefined : presetId,
+      taskTemplateId: 'auto'
+    })
+    setOpen(false)
+  }
 
   const handleSelect = (provider: LlmProviderDef, model: { id: string }) => {
     onChange({
@@ -67,8 +106,36 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
       modelId: model.id,
       endpoint: provider.baseUrl,
     })
+    onRoutingSelectionChange?.({
+      mode: 'fixed',
+      strategyId: 'single',
+      taskTemplateId: 'auto',
+      model: { providerId: provider.id, modelId: model.id }
+    })
     setOpen(false)
   }
+
+  const renderProviderGroup = (provider: LlmProviderDef) => (
+    <div key={provider.id} className="composer-menu-subgroup" role="presentation">
+      <div className="composer-menu-subgroup-label">{provider.label}</div>
+      {provider.models.map((preset) => (
+        <button
+          key={`${provider.id}:${preset.id}`}
+          type="button"
+          role="menuitem"
+          className={`composer-menu-item${
+            !routed && providerId === provider.id && modelId === preset.id ? ' composer-menu-item--active' : ''
+          }`}
+          onClick={() => handleSelect(provider, preset)}
+        >
+          <span className="composer-menu-item-label">{preset.label}</span>
+          {!routed && providerId === provider.id && modelId === preset.id && (
+            <span className="composer-menu-check" aria-hidden>✓</span>
+          )}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div className="composer-menu composer-menu--model" ref={rootRef}>
@@ -78,7 +145,7 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
         disabled={disabled}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={modelId}
+        title={routed ? `路由 · ${selectedPreset?.label || '策略'}` : modelId}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="composer-menu-trigger-text">{displayLabel}</span>
@@ -87,60 +154,73 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
       {open && (
         <div className="composer-menu-popover composer-menu-popover--grouped" role="menu">
           {onRoutingSelectionChange && (
-            <>
-              <div className="composer-menu-group" role="presentation">
-                <div className="composer-menu-group-label">多模型路由</div>
-                {allRoutingPresets(routingConfig).map((preset) => (
-                  <button key={preset.id} type="button" role="menuitem"
-                    className={`composer-menu-item${routed && (routingSelection?.customPresetId || routingSelection?.strategyId) === preset.id ? ' composer-menu-item--active' : ''}`}
-                    onClick={() => { onRoutingSelectionChange({ mode: 'routed', strategyId: preset.id, customPresetId: preset.builtIn ? undefined : preset.id, taskTemplateId: routingSelection?.taskTemplateId || 'auto' }); setOpen(false) }}>
-                    <span className="composer-menu-item-label">{preset.label}</span>
-                    <span className="composer-menu-item-meta">{preset.budget.maxDelegations} 次委派</span>
-                  </button>
-                ))}
-              </div>
-              {routed && (
-                <div className="composer-menu-group" role="presentation">
-                  <div className="composer-menu-group-label">任务模板</div>
-                  {Object.entries(TASK_TEMPLATE_LABELS).map(([id, label]) => (
-                    <button key={id} type="button" role="menuitem" className={`composer-menu-item${routingSelection?.taskTemplateId === id ? ' composer-menu-item--active' : ''}`}
-                      onClick={() => { onRoutingSelectionChange({ ...routingSelection!, taskTemplateId: id as RoutingSelection['taskTemplateId'] }); setOpen(false) }}>
-                      <span className="composer-menu-item-label">{label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button type="button" className="composer-menu-item composer-menu-item--footer" onClick={() => {
-                onRoutingSelectionChange({ mode: 'fixed', strategyId: 'single', taskTemplateId: 'auto', model: { providerId, modelId } }); setOpen(false)
-              }}>使用固定模型</button>
-            </>
-          )}
-          {providers.filter((p) => p.models.length > 0).map((provider) => (
-            <div key={provider.id} className="composer-menu-group" role="presentation">
-              <div className="composer-menu-group-label">{provider.label}</div>
-              {provider.models.map((preset) => (
+            <div className="composer-menu-group" role="presentation">
+              <div className="composer-menu-group-label">路由策略</div>
+              {visibleStrategies.map((preset) => (
                 <button
-                  key={`${provider.id}:${preset.id}`}
+                  key={preset.id}
                   type="button"
                   role="menuitem"
-                  className={`composer-menu-item${
-                    providerId === provider.id && modelId === preset.id ? ' composer-menu-item--active' : ''
-                  }`}
-                  onClick={() => { handleSelect(provider, preset); onRoutingSelectionChange?.({ mode: 'fixed', strategyId: 'single', taskTemplateId: 'auto', model: { providerId: provider.id, modelId: preset.id } }) }}
+                  className={`composer-menu-item${routed && (routingSelection?.customPresetId || routingSelection?.strategyId) === preset.id ? ' composer-menu-item--active' : ''}`}
+                  onClick={() => selectStrategy(preset.id, Boolean(preset.builtIn))}
                 >
                   <span className="composer-menu-item-label">{preset.label}</span>
-                  {providerId === provider.id && modelId === preset.id && (
-                    <span className="composer-menu-check" aria-hidden>✓</span>
-                  )}
+                  <span className="composer-menu-item-meta">
+                    {homeProviderLabel} · {preset.budget.maxDelegations} 次委派
+                    {companionEnabled ? ' · +专家检测' : ''}
+                  </span>
                 </button>
               ))}
-            </div>
-          ))}
-          {!inPresets && modelId && (
-            <div className="composer-menu-custom" role="presentation">
-              当前：{displayLabel}
+              {!showMoreStrategies && morePresets.length > 0 && (
+                <button
+                  type="button"
+                  className="composer-menu-item composer-menu-item--footer"
+                  onClick={() => setShowMoreStrategies(true)}
+                >
+                  更多策略…
+                </button>
+              )}
             </div>
           )}
+
+          <div className="composer-menu-group" role="presentation">
+            <div className="composer-menu-group-label">固定模型 · 主厂商</div>
+            {homeProviders.length === 0 && otherProviders.length === 0 ? (
+              <div className="composer-menu-custom" role="presentation">
+                尚未保存任何厂商 API Key。请先「管理模型连接…」。
+              </div>
+            ) : homeProviders.length === 0 ? (
+              <div className="composer-menu-custom" role="presentation">
+                主厂商尚未保存 Key；可先在下方展开其他已连接厂商，或去设置保存主厂密钥。
+              </div>
+            ) : (
+              homeProviders.map(renderProviderGroup)
+            )}
+            {otherProviders.length > 0 && (
+              <>
+                {!showOtherProviders ? (
+                  <button
+                    type="button"
+                    className="composer-menu-item composer-menu-item--footer"
+                    onClick={() => setShowOtherProviders(true)}
+                  >
+                    其他已连接厂商（{otherProviders.length}）…
+                  </button>
+                ) : (
+                  <>
+                    <div className="composer-menu-group-label">其他已连接厂商</div>
+                    {otherProviders.map(renderProviderGroup)}
+                  </>
+                )}
+              </>
+            )}
+            {!routed && !inPresets && modelId && (
+              <div className="composer-menu-custom" role="presentation">
+                当前：{displayLabel}
+              </div>
+            )}
+          </div>
+
           {onOpenApiSettings && (
             <button
               type="button"
@@ -150,7 +230,19 @@ const ComposerModelMenu: React.FC<ComposerModelMenuProps> = ({
                 onOpenApiSettings()
               }}
             >
-              自定义模型…
+              管理模型连接…
+            </button>
+          )}
+          {onOpenAdvancedRouting && (
+            <button
+              type="button"
+              className="composer-menu-item composer-menu-item--footer"
+              onClick={() => {
+                setOpen(false)
+                onOpenAdvancedRouting()
+              }}
+            >
+              高级路由…
             </button>
           )}
         </div>

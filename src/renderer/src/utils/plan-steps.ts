@@ -231,3 +231,12 @@ export function isActionablePlanText(text: string): boolean {
   const hasStructuredKind = steps.some((s) => Boolean(s.kind || s.targetPath))
   return hasFileRef || hasOpsRef || hasStructuredKind
 }
+
+const NUMBERED_LINE_RE = /^\s*\d+[.\、\s]+/
+
+export function isNumberedPlanText(content: string): boolean {
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return false
+  const numbered = lines.filter((l) => NUMBERED_LINE_RE.test(l))
+  return numbered.length >= 2 || (numbered.length === 1 && lines.length === 1)
+}

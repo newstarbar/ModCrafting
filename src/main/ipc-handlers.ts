@@ -87,9 +87,19 @@ import {
   saveProjectSessions,
   saveCurrentSessionIdDisk
 } from './session-store'
+import { createBuildReport } from './build-report'
+import { inspectProjectProfile } from './project-profile'
+import { runFastCompileReport } from './fast-compile'
+import { WorkspaceManager } from './workspace-manager'
+import type { BuildReport } from '../shared/harness-runtime'
+import { CheckpointStore } from './checkpoint-store'
+import { BaselineBuildCache } from './baseline-cache'
 
 // Track active watchers
 const watchers = new Map<string, fs.FSWatcher>()
+const workspaceManager = new WorkspaceManager({ dataRoot: path.join(app.getPath('userData'), 'harness-workspaces') })
+const checkpointStore = new CheckpointStore(path.join(app.getPath('userData'), 'harness-checkpoints'))
+const baselineBuildCache = new BaselineBuildCache(path.join(app.getPath('userData'), 'harness-baseline-cache'))
 
 export function setupIpcHandlers(): void {
 	// Deterministic game-test reports are application diagnostics, never project files.
@@ -249,6 +259,32 @@ export function setupIpcHandlers(): void {
   )
 
   ipcMain.handle('fabric:verifySymbolIndex', async () => verifyFabricSymbolIndex())
+
+  // Harness runtime: deterministic project profiling and transactional
+  // candidate workspaces.  The renderer never needs to know how these are
+  // copied or promoted.
+  ipcMain.handle('harness:inspectProjectProfile', async (_event, projectPath: string) => {
+    const symbolIndex = verifyFabricSymbolIndex()
+    return inspectProjectProfile(projectPath, {
+      symbolIndex: symbolIndex.ok
+        ? { available: true, classes: symbolIndex.classes, minecraftVersion: symbolIndex.minecraftVersion, yarnMappings: symbolIndex.yarnMappings }
+        : { available: false, error: symbolIndex.error }
+    })
+  })
+  ipcMain.handle('harness:createWorkspace', async (_event, projectPath: string, taskId?: string) => workspaceManager.create(projectPath, taskId as `${string}-${string}-${string}-${string}-${string}` | undefined))
+  ipcMain.handle('harness:getWorkspace', async (_event, workspaceId: string) => workspaceManager.get(workspaceId))
+  ipcMain.handle('harness:diffWorkspace', async (_event, workspaceId: string) => workspaceManager.diff(workspaceId))
+  ipcMain.handle('harness:promoteWorkspace', async (_event, workspaceId: string) => workspaceManager.promote(workspaceId))
+  ipcMain.handle('harness:rollbackWorkspace', async (_event, workspaceId: string) => { await workspaceManager.rollback(workspaceId); return { ok: true } })
+  ipcMain.handle('harness:markWorkspace', async (_event, workspaceId: string, status: 'active' | 'promoted' | 'paused' | 'promotion_conflict' | 'rolled_back' | 'discarded', fields?: { changedPaths?: string[]; conflictPaths?: string[] }) => workspaceManager.mark(workspaceId, status, fields || {}))
+  ipcMain.handle('harness:discardWorkspace', async (_event, workspaceId: string) => { await workspaceManager.discard(workspaceId); return { ok: true } })
+  ipcMain.handle('harness:createBuildReport', async (_event, options: Parameters<typeof createBuildReport>[0]): Promise<BuildReport> => createBuildReport(options))
+  ipcMain.handle('harness:getBaselineBuildCache', async (_event, projectPath: string, profileFingerprint: string, task: string) => baselineBuildCache.get(projectPath, profileFingerprint, task))
+  ipcMain.handle('harness:putBaselineBuildCache', async (_event, projectPath: string, profileFingerprint: string, task: string, report: BuildReport) => { await baselineBuildCache.put(projectPath, profileFingerprint, task, report); return { ok: true } })
+  ipcMain.handle('harness:saveCheckpoint', async (_event, checkpoint) => checkpointStore.save(checkpoint))
+  ipcMain.handle('harness:loadCheckpoint', async (_event, taskId: string) => checkpointStore.load(taskId))
+  ipcMain.handle('harness:listCheckpoints', async () => checkpointStore.list())
+  ipcMain.handle('harness:removeCheckpoint', async (_event, taskId: string) => { await checkpointStore.remove(taskId); return { ok: true } })
 
   // Window: set title
   ipcMain.handle('window:setTitle', async (_event, title: string) => {
@@ -497,11 +533,91 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('env:runGradleTask', async (event, projectPath: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => {
     const signal = beginToolExecution(options?.executionId)
     try {
-      return await runGradleTask(projectPath, task, (text) => {
+      const result = await runGradleTask(projectPath, task, (text) => {
         event.sender.send('command:output', text, options?.executionId)
       }, { abortSignal: signal, timeoutMs: options?.timeoutMs, idleTimeoutMs: options?.idleTimeoutMs })
+      return {
+        ...result,
+        report: createBuildReport({
+          projectPath,
+          task,
+          output: result.output,
+          exitCode: result.exitCode,
+          usedOnlineFallback: result.usedOnlineFallback,
+          cancelled: result.cancelled
+        })
+      }
     } finally {
       finishToolExecution(options?.executionId)
+    }
+  })
+
+  // Explicit Harness alias.  Keeping a dedicated channel makes it impossible
+  // for renderer code to accidentally stage a candidate through a UI-only
+  // command path while preserving the same cancellation and BuildReport
+  // contract as the legacy environment API.
+  ipcMain.handle('harness:runStagedBuild', async (event, workspaceId: string, task: string, options?: { executionId?: string; timeoutMs?: number; idleTimeoutMs?: number }) => {
+    const workspace = await workspaceManager.get(workspaceId)
+    const projectPath = workspace.shadowPath
+    const signal = beginToolExecution(options?.executionId)
+    try {
+      const result = await runGradleTask(projectPath, task, (text) => {
+        event.sender.send('command:output', text, options?.executionId)
+      }, { abortSignal: signal, timeoutMs: options?.timeoutMs, idleTimeoutMs: options?.idleTimeoutMs })
+      return {
+        ...result,
+        report: createBuildReport({
+          projectPath,
+          task,
+          output: result.output,
+          exitCode: result.exitCode,
+          usedOnlineFallback: result.usedOnlineFallback,
+          cancelled: result.cancelled
+        })
+      }
+    } finally {
+      finishToolExecution(options?.executionId)
+    }
+  })
+
+  /**
+   * Fast semantic compile: runs the bundled javac against the shadow workspace's
+   * Java sources plus the Loom/Fabric jar classpath. Returns a BuildReport with
+   * severity-tagged diagnostics (see compile-verdict.ts).
+   *
+   * The renderer must treat `degraded` as a hard request to fall back to a full
+   * Gradle validation build — it means javac could not see every dependency the
+   * project actually uses.
+   */
+  ipcMain.handle('harness:fastCompile', async (_event, workspaceId: string, options?: { timeoutMs?: number }) => {
+    const workspace = await workspaceManager.get(workspaceId)
+    const projectPath = workspace.shadowPath
+    const jdkPath = resolveJdkPath()
+    if (!jdkPath) {
+      return { ok: false, exitCode: -1, output: 'JDK 不可用，跳过快速编译', degraded: true, unavailable: true, classpathEntries: 0, sourceFiles: 0, fast: { durationMs: 0, classpathEntries: 0, sourceFiles: 0, degraded: true } }
+    }
+    const symbolIndex = verifyFabricSymbolIndex()
+    const profile = inspectProjectProfile(projectPath, {
+      symbolIndex: symbolIndex.ok
+        ? { available: true, classes: symbolIndex.classes, minecraftVersion: symbolIndex.minecraftVersion, yarnMappings: symbolIndex.yarnMappings }
+        : { available: false, error: symbolIndex.error }
+    })
+    try {
+      return await runFastCompileReport({
+        projectPath,
+        jdkPath,
+        projectProfile: profile,
+        symbolLookup: (req) => {
+          try {
+            return lookupFabricSymbol(req) as unknown as ReturnType<NonNullable<Parameters<typeof runFastCompileReport>[0]['symbolLookup']>>
+          } catch {
+            return null
+          }
+        },
+        timeoutMs: options?.timeoutMs ?? 60_000
+      })
+    } catch (err) {
+      return { ok: false, exitCode: -1, output: `fast-compile 异常: ${String(err)}`, degraded: true, unavailable: false, classpathEntries: 0, sourceFiles: 0, fast: { durationMs: 0, classpathEntries: 0, sourceFiles: 0, degraded: true } }
     }
   })
 
@@ -637,7 +753,7 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('config:load', async () => loadApiConfig())
   ipcMain.handle('config:loadProvider', async (_event, providerId: string) => loadApiConfigForProvider(providerId))
 
-  ipcMain.handle('config:save', async (_event, config: { endpoint: string; model: string; providerId?: string }) =>
+  ipcMain.handle('config:save', async (_event, config: { endpoint: string; model: string; providerId?: string; protocol?: import('../shared/harness-runtime.ts').LlmProtocol }) =>
     saveApiConfig(config)
   )
   ipcMain.handle('modelRouting:load', async () => loadModelRoutingConfig())

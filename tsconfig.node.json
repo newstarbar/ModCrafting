@@ -10,8 +10,7 @@
     "resolveJsonModule": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "composite": true
+    "noEmit": true
   },
   "include": ["electron.vite.config.ts"]
 }

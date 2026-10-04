@@ -1,4 +1,5 @@
 import { getCatalogVisionSupport } from '../../../shared/llm-providers.ts'
+import type { LlmProtocol, ToolFailureKind } from '../../../shared/harness-runtime.ts'
 
 export interface ChatToolCall {
   id: string
@@ -16,6 +17,12 @@ export interface ChatMessage {
   content: string | ChatContentPart[]
   /** Internal provenance; stripped before sending to providers. */
   origin?: 'user' | 'assistant' | 'tool' | 'harness'
+  /**
+   * Chain-of-thought the provider emitted for this assistant turn. Thinking-capable
+   * OpenAI-compatible providers demand it back on later turns; dropping it is a 400.
+   * Serialized as `reasoning_content`, and only for the openai-chat protocol.
+   */
+  reasoningContent?: string
   taskId?: string
   phase?: 'chat' | 'plan' | 'execute'
   tool_calls?: ChatToolCall[]
@@ -29,6 +36,11 @@ export interface ModelToolCall {
   name: string
   args: Record<string, unknown>
   rawArguments: string
+  /** Provider/stream evidence retained until schema validation. */
+  protocol?: LlmProtocol
+  providerIndex?: number
+  providerId?: string
+  failureKind?: Extract<ToolFailureKind, 'arguments_incomplete' | 'arguments_invalid'>
 }
 
 export function modelToolCallToChatToolCall(call: ModelToolCall): ChatToolCall {
@@ -42,11 +54,16 @@ export function modelToolCallToChatToolCall(call: ModelToolCall): ChatToolCall {
   }
 }
 
-export function assistantToolCallMessage(content: string, calls: ModelToolCall[]): ChatMessage {
+export function assistantToolCallMessage(
+  content: string,
+  calls: ModelToolCall[],
+  reasoningContent?: string
+): ChatMessage {
   return {
     role: 'assistant',
     content: content || '',
     origin: 'assistant',
+    ...(reasoningContent ? { reasoningContent } : {}),
     tool_calls: calls.map(modelToolCallToChatToolCall)
   }
 }
@@ -87,6 +104,15 @@ export function contentAsText(content: string | ChatContentPart[] | undefined | 
     .join('\n')
 }
 
+/** Retry shape for a provider that rejects the echoed `reasoning_content` field. */
+export function withoutReasoningEcho(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.reasoningContent === undefined) return message
+    const { reasoningContent: _reasoningContent, ...rest } = message
+    return rest
+  })
+}
+
 /**
  * Whether a model can accept image inputs.
  * Prefer the explicit `vision` flag in `LLM_PROVIDERS`; fall back to name heuristics
@@ -101,9 +127,17 @@ export function isVisionCapableModel(
   if (catalog !== undefined) return catalog
 
   const m = model.toLowerCase()
-  // Explicit non-vision families (avoid false positives like "glm-4v" substring on glm-5)
-  if (m.startsWith('deepseek')) return false
-  if (/^glm-\d/.test(m) && !m.includes('glm-4v') && !/-v\b/.test(m) && !m.includes('vision')) {
+  // Explicit non-vision families (avoid false positives like "glm-4v" substring on glm-5).
+  // Retired DeepSeek ids are folded onto deepseek-flash by the catalog lookup above; the
+  // flash test here keeps the heuristic right even when a catalog miss reaches this path.
+  if (m.startsWith('deepseek') && !m.includes('flash')) return false
+  if (
+    /^glm-\d/.test(m) &&
+    !m.includes('glm-4v') &&
+    !/-v\b/.test(m) &&
+    !m.includes('vision') &&
+    !m.includes('flash')
+  ) {
     return false
   }
 
@@ -126,6 +160,8 @@ export function isVisionCapableModel(
     m.includes('glm-4v') ||
     m.includes('glm-5v') ||
     m.includes('internvl') ||
+    (m.startsWith('deepseek') && m.includes('flash')) ||
+    m.includes('kimi-k3') ||
     m.includes('kimi-k2.5') ||
     m.includes('kimi-k2.6') ||
     m.includes('kimi-k2.7')
@@ -138,10 +174,10 @@ export function appendToolRoundHistory(
   calls: ModelToolCall[],
   results: Map<string, { output: string; imageBase64?: string; imageMimeType?: string }>,
   instruction?: string,
-  opts?: { visionModel?: boolean }
+  opts?: { visionModel?: boolean; reasoningContent?: string }
 ): string | undefined {
   if (calls.length === 0) return instruction?.trim() || undefined
-  messages.push(assistantToolCallMessage(streamContent, calls))
+  messages.push(assistantToolCallMessage(streamContent, calls, opts?.reasoningContent))
   for (const call of calls) {
     const result = results.get(call.id)
     const image =

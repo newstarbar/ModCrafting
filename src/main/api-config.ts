@@ -1,10 +1,11 @@
 import { app, safeStorage } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
-import { getProvider, inferProviderId } from '../shared/llm-providers.ts'
+import { getProvider, inferProviderId, normalizeModelId } from '../shared/llm-providers.ts'
+import type { LlmProtocol } from '../shared/harness-runtime.ts'
 
 const DEFAULT_ENDPOINT = 'https://api.deepseek.com/v1'
-const DEFAULT_MODEL = 'deepseek-v4-flash'
+const DEFAULT_MODEL = 'deepseek-flash'
 const DEFAULT_PROVIDER_ID = 'deepseek'
 
 export interface ApiSettings {
@@ -14,7 +15,8 @@ export interface ApiSettings {
   hasApiKey: boolean
   savedProviderIds: string[]
   encryptionAvailable: boolean
-  providerSettings: Record<string, { endpoint: string; model: string }>
+  protocol?: LlmProtocol
+  providerSettings: Record<string, { endpoint: string; model: string; protocol?: LlmProtocol }>
 }
 
 function settingsPath(userDataPath = app.getPath('userData')): string {
@@ -67,7 +69,8 @@ interface ApiSettingsFile {
   endpoint?: string
   model?: string
   providerId?: string
-  providers?: Record<string, { endpoint?: string; model?: string }>
+  protocol?: LlmProtocol
+  providers?: Record<string, { endpoint?: string; model?: string; protocol?: LlmProtocol }>
 }
 
 function readSettingsFile(userDataPath = app.getPath('userData')): ApiSettingsFile {
@@ -80,19 +83,24 @@ function readSettingsFile(userDataPath = app.getPath('userData')): ApiSettingsFi
   }
 }
 
-function providerSettingsFromFile(file: ApiSettingsFile): Record<string, { endpoint: string; model: string }> {
+function providerSettingsFromFile(file: ApiSettingsFile): Record<string, { endpoint: string; model: string; protocol?: LlmProtocol }> {
   const legacyProvider = file.providerId || inferProviderId(file.endpoint || DEFAULT_ENDPOINT, file.model || DEFAULT_MODEL) || DEFAULT_PROVIDER_ID
   const entries = Object.entries(file.providers || {}).flatMap(([providerId, setting]) => {
     if (!setting || typeof setting !== 'object') return []
     const catalog = getProvider(providerId)
     return [[providerId, {
       endpoint: setting.endpoint || catalog?.baseUrl || '',
-      model: setting.model || catalog?.models[0]?.id || ''
+      model: normalizeModelId(providerId, setting.model || catalog?.models[0]?.id || ''),
+      ...(setting.protocol ? { protocol: setting.protocol } : {})
     }] as const]
   })
   const result = Object.fromEntries(entries)
   if (!result[legacyProvider]) {
-    result[legacyProvider] = { endpoint: file.endpoint || getProvider(legacyProvider)?.baseUrl || DEFAULT_ENDPOINT, model: file.model || getProvider(legacyProvider)?.models[0]?.id || DEFAULT_MODEL }
+    result[legacyProvider] = {
+      endpoint: file.endpoint || getProvider(legacyProvider)?.baseUrl || DEFAULT_ENDPOINT,
+      model: normalizeModelId(legacyProvider, file.model || getProvider(legacyProvider)?.models[0]?.id || DEFAULT_MODEL),
+      ...(file.protocol ? { protocol: file.protocol } : {})
+    }
   }
   return result
 }
@@ -102,6 +110,7 @@ export interface LoadedApiConfigWithKey {
   model: string
   providerId: string
   apiKey: string
+  protocol?: LlmProtocol
 }
 
 /**
@@ -116,10 +125,11 @@ export function loadApiConfigFromUserData(
   const file = readSettingsFile(userDataPath)
   const providerSettings = providerSettingsFromFile(file)
   const endpoint = file.endpoint || DEFAULT_ENDPOINT
-  const model = file.model || DEFAULT_MODEL
+  const savedModel = file.model || DEFAULT_MODEL
   const providerId = sanitizeProviderId(
-    requestedProviderId || file.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
+    requestedProviderId || file.providerId || inferProviderId(endpoint, savedModel) || DEFAULT_PROVIDER_ID
   )
+  const model = normalizeModelId(providerId, savedModel)
   const selected = providerSettings[providerId]
   const encrypted = readEncryptedBufferAt(apiKeyPathForProvider(providerId, userDataPath))
     || readEncryptedBufferAt(legacyApiKeyPath(userDataPath))
@@ -128,7 +138,7 @@ export function loadApiConfigFromUserData(
   try {
     const apiKey = safeStorage.decryptString(encrypted).trim()
     if (!apiKey) return { success: false, error: `saved_provider_key_empty:${providerId}` }
-    return { success: true, config: { endpoint: selected?.endpoint || endpoint, model: selected?.model || model, providerId, apiKey } }
+    return { success: true, config: { endpoint: selected?.endpoint || endpoint, model: selected?.model || model, providerId, apiKey, protocol: selected?.protocol || file.protocol } }
   } catch {
     return { success: false, error: `saved_provider_key_decrypt_failed:${providerId}` }
   }
@@ -175,14 +185,16 @@ export function loadApiConfig(): ApiSettings {
   const file = readSettingsFile()
   const providerSettings = providerSettingsFromFile(file)
   const endpoint = file.endpoint || DEFAULT_ENDPOINT
-  const model = file.model || DEFAULT_MODEL
+  const savedModel = file.model || DEFAULT_MODEL
   const providerId = file.providerId
-    || inferProviderId(endpoint, model)
+    || inferProviderId(endpoint, savedModel)
+  const model = normalizeModelId(providerId, savedModel)
   const savedProviderIds = listSavedProviderIds()
   return {
     endpoint,
     model,
     providerId,
+    protocol: providerSettings[providerId]?.protocol || file.protocol,
     hasApiKey: savedProviderIds.includes(sanitizeProviderId(providerId)),
     savedProviderIds,
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
@@ -190,7 +202,7 @@ export function loadApiConfig(): ApiSettings {
   }
 }
 
-export function loadApiConfigForProvider(requestedProviderId: string): { endpoint: string; model: string; providerId: string; hasApiKey: boolean } {
+export function loadApiConfigForProvider(requestedProviderId: string): { endpoint: string; model: string; providerId: string; hasApiKey: boolean; protocol?: LlmProtocol } {
   const file = readSettingsFile()
   const providerId = sanitizeProviderId(requestedProviderId)
   const providerSettings = providerSettingsFromFile(file)
@@ -199,7 +211,8 @@ export function loadApiConfigForProvider(requestedProviderId: string): { endpoin
   return {
     providerId,
     endpoint: setting?.endpoint || catalog?.baseUrl || file.endpoint || DEFAULT_ENDPOINT,
-    model: setting?.model || catalog?.models[0]?.id || file.model || DEFAULT_MODEL,
+    model: normalizeModelId(providerId, setting?.model || catalog?.models[0]?.id || file.model || DEFAULT_MODEL),
+    protocol: setting?.protocol || (providerId === file.providerId ? file.protocol : catalog?.protocol),
     hasApiKey: providerHasSavedKey(providerId)
   }
 }
@@ -208,19 +221,22 @@ export function saveApiConfig(config: {
   endpoint: string
   model: string
   providerId?: string
+  protocol?: LlmProtocol
 }): { success: boolean; error?: string } {
   try {
     fs.mkdirSync(app.getPath('userData'), { recursive: true })
     const endpoint = config.endpoint || DEFAULT_ENDPOINT
-    const model = config.model || DEFAULT_MODEL
-    const providerId = config.providerId || inferProviderId(endpoint, model) || DEFAULT_PROVIDER_ID
+    const savedModel = config.model || DEFAULT_MODEL
+    const providerId = config.providerId || inferProviderId(endpoint, savedModel) || DEFAULT_PROVIDER_ID
+    const model = normalizeModelId(providerId, savedModel)
     const existing = readSettingsFile()
     const providerSettings = providerSettingsFromFile(existing)
-    providerSettings[providerId] = { endpoint, model }
+    providerSettings[providerId] = { endpoint, model, ...(config.protocol ? { protocol: config.protocol } : {}) }
     fs.writeFileSync(settingsPath(), JSON.stringify({
       endpoint,
       model,
       providerId,
+      ...(config.protocol ? { protocol: config.protocol } : {}),
       providers: providerSettings,
     }, null, 2), 'utf-8')
     return { success: true }

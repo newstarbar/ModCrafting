@@ -20,9 +20,9 @@ test('shouldForceRestoreSnapshot on cross-session and first open', () => {
   assert.equal(shouldForceRestoreSnapshot('session-a', null), false)
 })
 
-test('shouldCancelTurnOnSessionLeave when leaving a real session', () => {
-  assert.equal(shouldCancelTurnOnSessionLeave('session-a', 'session-b'), true)
-  assert.equal(shouldCancelTurnOnSessionLeave('session-a', null), true)
+test('shouldCancelTurnOnSessionLeave never cancels in-flight turn on session switch', () => {
+  assert.equal(shouldCancelTurnOnSessionLeave('session-a', 'session-b'), false)
+  assert.equal(shouldCancelTurnOnSessionLeave('session-a', null), false)
   assert.equal(shouldCancelTurnOnSessionLeave(null, 'session-b'), false)
   assert.equal(shouldCancelTurnOnSessionLeave('session-a', 'session-a'), false)
   assert.equal(shouldCancelTurnOnSessionLeave(null, null), false)

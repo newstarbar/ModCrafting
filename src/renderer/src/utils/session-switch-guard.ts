@@ -21,10 +21,13 @@ export function shouldForceRestoreSnapshot(
   return previousSessionId !== nextSessionId
 }
 
-/** True when leaving a session that may still have an in-flight turn. */
+/**
+ * Session switching now detaches/attaches without cancelling background Agent turns.
+ * Returns false to preserve background execution.
+ */
 export function shouldCancelTurnOnSessionLeave(
-  previousSessionId: string | null,
-  nextSessionId: string | null
+  _previousSessionId: string | null,
+  _nextSessionId: string | null
 ): boolean {
-  return Boolean(previousSessionId && previousSessionId !== nextSessionId)
+  return false
 }

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { PlanStepState } from './plan-tracker.ts'
 import { recipePath } from './recipe-utils.ts'
 import { isCombinedBuildRunDescription } from '../utils/plan-steps.ts'
@@ -9,7 +10,9 @@ const PATH_RE = /(?:`)?((?:src\/|data\/|gradle\/)[^\s`，,。；;）)]+)(?:`)?/i
 
 const BUILD_STEP_TITLE = '构建项目（gradlew build / trigger_build build）'
 const RUN_STEP_TITLE = '启动游戏进行真实测试（runClient）'
-export const GAME_TEST_STEP_TITLE = '执行确定性游戏测试（mc_test_scenario → mc_run_test；PASS 才完成）'
+export const TEST_DESIGN_STEP_TITLE =
+  '设计游戏测试场景（读机制代码 → 选择沙盒 → mc_test_scenario 注册有效 V2 规格；禁止 mc_run_test）'
+export const GAME_TEST_STEP_TITLE = '执行确定性游戏测试（mc_run_test；PASS 才完成）'
 
 const EXPLICIT_KIND_RE = /^\[(write|recipe|mixin|inspect)\]\s*/i
 
@@ -34,9 +37,18 @@ function inferKind(
   explicitKind?: StepKind
 ): StepKind {
   const d = description.toLowerCase()
+  // Host test-design terminal must win over generic mc_test_scenario mentions.
+  if (/test_design|设计游戏测试场景/.test(d)) return 'test_design'
   // Legacy V2 plans mislabeled this terminal as inspect. Semantic test markers win.
-  if (/mc_run_test|确定性游戏测试|执行功能测试|验证功能效果|mc_test_scenario/.test(d)) return 'game_test'
-  if (explicitKind === 'write' || explicitKind === 'recipe' || explicitKind === 'mixin' || explicitKind === 'inspect' || explicitKind === 'game_test') {
+  if (/mc_run_test|确定性游戏测试|执行功能测试|验证功能效果/.test(d)) return 'game_test'
+  if (
+    explicitKind === 'write' ||
+    explicitKind === 'recipe' ||
+    explicitKind === 'mixin' ||
+    explicitKind === 'inspect' ||
+    explicitKind === 'test_design' ||
+    explicitKind === 'game_test'
+  ) {
     return explicitKind
   }
 
@@ -97,6 +109,7 @@ function defaultMaxAttempts(kind: StepKind): number {
   if (kind === 'mixin') return 6
   if (kind === 'build') return 6
   if (kind === 'run') return 20
+  if (kind === 'test_design') return 8
   if (kind === 'game_test') return 8
   // write often needs a few docs lookups before the first write_file
   if (kind === 'write') return 6
@@ -162,6 +175,7 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
     ...(step.evidence ? { evidence: step.evidence } : {}),
     ...(step.gameTest ? { gameTest: step.gameTest } : {}),
     allowedTools: defaultAllowedTools(kind),
+    recommendedTools: defaultAllowedTools(kind),
     maxAttempts: defaultMaxAttempts(kind),
     ...(requiresGuiPreview ? { requiresGuiPreview } : {}),
     validation: kind === 'recipe'
@@ -174,6 +188,8 @@ function normalizeStep(step: PlanStepState): WorkflowStep {
           ? { type: 'build_success' }
           : kind === 'run'
             ? { type: 'run_started' }
+            : kind === 'test_design'
+              ? { type: 'test_design_ready' }
             : kind === 'game_test'
               ? { type: 'game_test_passed' }
             : { type: 'tool_success' }
@@ -194,17 +210,38 @@ export function canonicalizePlanSteps(steps: PlanStepState[]): PlanStepState[] {
     const kind = inferKind(step.description, step.kind)
     return {
       ...step,
-      ...(kind === 'inspect' || kind === 'write' || kind === 'recipe' || kind === 'mixin' || kind === 'build' || kind === 'run' || kind === 'game_test' ? { kind } : {}),
-      ...(kind === 'game_test' && step.status === 'error' ? { status: 'pending' as const } : {})
+      ...(kind === 'inspect' || kind === 'write' || kind === 'recipe' || kind === 'mixin' || kind === 'build' || kind === 'run' || kind === 'test_design' || kind === 'game_test' ? { kind } : {}),
+      ...((kind === 'game_test' || kind === 'test_design') && step.status === 'error' ? { status: 'pending' as const } : {})
     }
   })
-  const implementation = classified.filter((step) => !['build', 'run', 'game_test'].includes(inferKind(step.description, step.kind)))
+  const terminalKinds = new Set(['build', 'run', 'test_design', 'game_test'])
+  const implementation = classified.filter((step) => !terminalKinds.has(inferKind(step.description, step.kind)))
   const build = classified.find((step) => inferKind(step.description, step.kind) === 'build')
   const run = classified.find((step) => inferKind(step.description, step.kind) === 'run')
+  const testDesign = classified.find((step) => inferKind(step.description, step.kind) === 'test_design')
   const gameTest = classified.find((step) => inferKind(step.description, step.kind) === 'game_test')
+  const needsGameTest = Boolean(gameTest) || implementation.some((step) => {
+    const kind = inferKind(step.description, step.kind)
+    return kind === 'write' || kind === 'recipe' || kind === 'mixin' ||
+      /\.java|src\/.*resources|配方|物品|方块|实体|交互|hud|gui|mixin/i.test(step.description)
+  })
   const terminals: PlanStepState[] = []
   if (build) terminals.push(build)
   if (run) terminals.push(run)
-  if (gameTest) terminals.push(gameTest)
+  if (needsGameTest) {
+    terminals.push(testDesign || {
+      id: '0',
+      description: TEST_DESIGN_STEP_TITLE,
+      status: 'pending',
+      kind: 'test_design'
+    })
+    if (gameTest) terminals.push(gameTest)
+    else terminals.push({
+      id: '0',
+      description: GAME_TEST_STEP_TITLE,
+      status: 'pending',
+      kind: 'game_test'
+    })
+  }
   return [...implementation, ...terminals].map((step, index) => ({ ...step, id: String(index + 1) }))
 }

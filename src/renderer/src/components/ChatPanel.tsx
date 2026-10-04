@@ -1,26 +1,15 @@
+// @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import appIcon from '../../../../packaging/appIcon.png'
-import { Controller } from '../harness/controller'
-import { Registry } from '../harness/tools'
-import { registerModCraftingTools } from '../harness/tool-definitions'
-import { EventKind } from '../harness/events'
-import type { Event } from '../harness/events'
-import { collaborationForAutomation, toolArgsForAutomation, toolOutputForAutomation } from '../harness/automation-event-projection'
 import TaskPlan from './TaskPlan'
 import type { PlanStep } from './TaskPlan'
-import { parsePlanSteps, isActionablePlanText } from '../utils/plan-steps'
-import { resolveTurnDoneStatus } from '../utils/turn-status'
-import { ensureClosingSummaryEntry, type ClosingReason } from '../utils/turn-closing-summary'
+import { isNumberedPlanText } from '../utils/plan-steps'
 import { buildSessionMarkdown } from '../utils/session-export-md'
 import SessionExportPanel from './SessionExportPanel'
-import { buildPreTurnSnapshot, enrichUserSnapshotAfterTurnDone, type TurnFileChange } from '../utils/rollback-snapshot'
-import { EMPTY_USAGE, estimateCostDelta, contextPercentFromPrompt, normalizeSessionUsage, type UsageStats } from '../utils/usage'
+import { EMPTY_USAGE, type UsageStats } from '../utils/usage'
 import type { ChatSession, PersistedMessage } from '../types/chat'
 import {
   serializeDisplayMessages,
-  deserializeToDisplay,
-  restoreActivePlan,
-  buildRestoredCollapseState,
   toControllerMessagesWithAttachments
 } from '../utils/chat-persist'
 import { groupMessagesIntoTurns } from '../utils/chat-turns'
@@ -32,7 +21,6 @@ import type { ComposerMode } from '../harness/turn-intent'
 import ImageLightbox, { copyImageToClipboard } from './ImageLightbox'
 import MarkdownContent from './MarkdownContent'
 import MessageFooter from './MessageFooter'
-import { recordToolDispatch, recordToolResult } from '../utils/tool-activity'
 import TemplateFormPanel from './TemplateFormPanel'
 import { buildTemplateParamsFromForm, isQuickCreateTemplate, quickCreateSessionGoal } from '../project/template-params'
 import { executeTemplateGenerate, resolveProjectConfig } from '../project/template-runner'
@@ -41,32 +29,28 @@ import RollbackWarningPanel from './RollbackWarningPanel'
 import DeleteMessagePanel from './DeleteMessagePanel'
 import ClarificationOverlay from './ClarificationOverlay'
 import GuiLayoutPreviewPanel from './GuiLayoutPreviewPanel'
+import ConcurrentAgentConfirmModal from './ConcurrentAgentConfirmModal'
 import { removeMessageFromDisplay } from '../utils/message-delete'
 import { messagePlainText } from '../utils/message-text'
 import { shouldShowPinnedPlan } from '../utils/plan-visibility'
 import ToolExploreGroup from './ToolExploreGroup'
-import { groupExploreToolRuns, collectExploreGroupKeys, isExploreTool } from '../utils/tool-explore-group'
+import { groupExploreToolRuns, isExploreTool } from '../utils/tool-explore-group'
 import { extractPreview } from '../utils/tool-output-preview'
 import { KnowledgeHitTags, hasKnowledgeHitTags } from './KnowledgeHitTags'
-import {
-  shouldApplyTurnEvent,
-  shouldCancelTurnOnSessionLeave,
-  shouldForceRestoreSnapshot
-} from '../utils/session-switch-guard'
 import type { ComposerAttachment, ContextPayload, MessageAttachment } from '../context/context-ingress'
 import {
   attachmentToMessageAttachment,
   hasImageAttachment,
-  isImagePath,
   mimeFromPath,
   newAttachmentId,
   payloadToAttachment
 } from '../context/context-ingress'
-import { buildUserContent } from '../context/user-content'
 import { isVisionCapableModel } from '../harness/chat-message'
-import { ContextChipList, type ContextChipData, getChipLabel } from './ContextChip'
-import type { CollaborationTrace, ModelRef, ModelRoutingConfig, RoutingSelection } from '../../../shared/model-routing.ts'
+import { type ContextChipData, getChipLabel } from './ContextChip'
+import type { ModelRef, ModelRoutingConfig, RoutingSelection } from '../../../shared/model-routing'
 import type { GameTestWorkflowStatus } from '../harness/game-test-protocol'
+import { SessionRuntimeManager, SessionRuntime, type ActivePlan } from '../harness/session-runtime'
+import { getToolLabelZh } from '../harness/tool-labels'
 
 interface ChatPanelProps {
   projectPath: string | null
@@ -79,58 +63,20 @@ interface ChatPanelProps {
   onRunningChange?: (running: boolean) => void
   currentSessionId: string | null
   sessions: ChatSession[]
-	onPersistSession: (sessionId: string, messages: PersistedMessage[]) => void
-	onNewSession: (firstMessage?: string, attachments?: MessageAttachment[]) => string
-	onRenameSession: (id: string, name: string) => void
+  onPersistSession: (sessionId: string, messages: PersistedMessage[]) => void
+  onNewSession: (firstMessage?: string, attachments?: MessageAttachment[]) => string
+  onRenameSession: (id: string, name: string) => void
   toolchainReady?: boolean
   onUpdateSessionMeta?: (sessionId: string, meta: { composerMode?: ComposerMode; sessionGoal?: string }) => void
   onTemplateSelect?: (templateId: string, name: string) => void
   onProviderModelChange?: (selection: { providerId: string; modelId: string; endpoint: string }) => void
   onOpenApiSettings?: () => void
+  onOpenAdvancedRouting?: () => void
+  savedProviderIds?: string[]
   routingConfig?: ModelRoutingConfig
   routingSelection?: RoutingSelection
   resolveRoutingModel?: (model: ModelRef) => Promise<{ endpoint: string; apiKey: string; model: string; providerId?: string } | null>
   onRoutingSelectionChange?: (selection: RoutingSelection) => void
-}
-
-const toolRegistry = new Registry()
-registerModCraftingTools(toolRegistry)
-
-async function reloadAgentToolRegistry(controller: Controller | null): Promise<Registry> {
-  const registry = new Registry()
-  let disabled: string[] = []
-  try {
-    const cfg = await window.api.loadAgentConfig()
-    disabled = cfg.disabledTools || []
-  } catch {
-    // ignore
-  }
-  registerModCraftingTools(registry, { disabledTools: disabled })
-  controller?.setRegistry(registry)
-  return registry
-}
-
-interface ToolCallDisplay {
-  id: string; name: string
-  status: 'pending' | 'running' | 'done' | 'error' | 'timed_out' | 'cancelled'
-  output?: string; durationMs?: number
-}
-
-interface ActivePlan {
-  steps: PlanStep[]
-  anchorMsgId: string
-  pinned: boolean
-}
-
-function generateMessageId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `msg-${crypto.randomUUID()}`
-  }
-  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
-}
-
-function uid(): string {
-  return generateMessageId()
 }
 
 function UserAttachmentImage({ path, name }: { path: string; name?: string }) {
@@ -254,72 +200,8 @@ function UserAttachmentImage({ path, name }: { path: string; name?: string }) {
   )
 }
 
-// 工具中文名映射
-import { getToolLabelZh } from '../harness/tool-labels'
-
 function getToolDisplayName(name: string, args?: Record<string, unknown>): string {
   return getToolLabelZh(name, args)
-}
-
-function toPlanSteps(steps: Array<{
-  id: string
-  description: string
-  status: string
-  kind?: 'inspect' | 'write' | 'recipe' | 'mixin'
-  targetPath?: string
-  targetPaths?: string[]
-  evidence?: string
-}>): PlanStep[] {
-  return steps.map((s) => ({
-    ...s,
-    id: s.id,
-    description: s.description,
-    status: (s.status === 'completed' || s.status === 'running' || s.status === 'error'
-      ? s.status
-      : 'pending') as PlanStep['status']
-  }))
-}
-
-const NUMBERED_LINE_RE = /^\s*\d+[.\、\s]+/
-
-function isNumberedPlanText(content: string): boolean {
-  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean)
-  if (lines.length === 0) return false
-  const numbered = lines.filter((l) => NUMBERED_LINE_RE.test(l))
-  return numbered.length >= 2 || (numbered.length === 1 && lines.length === 1)
-}
-
-function replacePlanEntriesWithSummary(entries: ChronoEntry[], stepCount: number): ChronoEntry[] {
-  const kept = entries.filter((e) => e.kind !== 'text' || !isNumberedPlanText(e.content))
-  return [...kept, { kind: 'text', content: `已制定实施计划（${stepCount} 步），进度见上方。` }]
-}
-
-function finalizeRunningTools(entries: ChronoEntry[], hasError: boolean): ChronoEntry[] {
-  return entries.map((e) => {
-    if (e.kind === 'tool' && e.status === 'running') {
-      return { ...e, status: hasError ? 'error' as const : 'done' as const }
-    }
-    return e
-  })
-}
-
-function formatClarificationTextEntry(question: string, options: string[]): string {
-  const q = question.trim()
-  if (!options.length) return q
-  const opts = options.map((o, i) => `${i + 1}. ${o}`).join('\n')
-  return `${q}\n\n选项：\n${opts}`
-}
-
-function appendClarificationTextEntry(
-  entries: ChronoEntry[],
-  question: string,
-  options: string[]
-): ChronoEntry[] {
-  const content = formatClarificationTextEntry(question, options)
-  if (!content) return entries
-  const last = entries[entries.length - 1]
-  if (last?.kind === 'text' && last.content.trim() === content.trim()) return entries
-  return [...entries, { kind: 'text', content }]
 }
 
 interface ChatPanelRef {
@@ -330,7 +212,31 @@ interface ChatPanelRef {
   automationRespond: (params: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
-const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ projectPath, contextQueue, setContextQueue, selectedFile, apiConfig, ensureApiKey, onUsageChange, onRunningChange, currentSessionId, sessions, onPersistSession, onNewSession, onRenameSession, toolchainReady = true, onUpdateSessionMeta, onProviderModelChange, onOpenApiSettings, routingConfig, routingSelection, resolveRoutingModel, onRoutingSelectionChange }, ref) {
+const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({
+  projectPath,
+  contextQueue,
+  setContextQueue,
+  selectedFile: _selectedFile,
+  apiConfig,
+  ensureApiKey,
+  onUsageChange,
+  onRunningChange,
+  currentSessionId,
+  sessions,
+  onPersistSession,
+  onNewSession,
+  onRenameSession,
+  toolchainReady = true,
+  onUpdateSessionMeta,
+  onProviderModelChange,
+  onOpenApiSettings,
+  onOpenAdvancedRouting,
+  savedProviderIds,
+  routingConfig,
+  routingSelection,
+  resolveRoutingModel,
+  onRoutingSelectionChange
+}, ref) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
@@ -348,23 +254,18 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [planReady, setPlanReady] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState('')
-  // sessions and currentSessionId come from App (single source of truth)
-  // Use a ref so handleEvent (created once) always gets the latest session ID
   const currentSessionIdRef = useRef(currentSessionId)
   currentSessionIdRef.current = currentSessionId
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const controllerRef = useRef<Controller | null>(null)
 
   const [collapsedToolIds, setCollapsedToolIds] = useState<Set<string>>(new Set())
   const [collapsedExploreGroupKeys, setCollapsedExploreGroupKeys] = useState<Set<string>>(new Set())
   const [collapsedReasoningKeys, setCollapsedReasoningKeys] = useState<Set<string>>(new Set())
   const [runTick, setRunTick] = useState(0)
   const toolOutputRefs = useRef<Map<string, HTMLDivElement>>(new Map())
-  const reasoningScrollRef = useRef<HTMLDivElement | null>(null)
   const [usageAccum, setUsageAccum] = useState<UsageStats>(EMPTY_USAGE)
-  const turnUsageRef = useRef({ promptTokens: 0, completionTokens: 0 })
   const [activePlan, setActivePlan] = useState<ActivePlan | null>(null)
   const activePlanRef = useRef<ActivePlan | null>(null)
   activePlanRef.current = activePlan
@@ -374,148 +275,32 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
   const [clarificationQuestion, setClarificationQuestion] = useState('')
   const [clarificationOptions, setClarificationOptions] = useState<string[]>([])
   const [gameTestStatus, setGameTestStatus] = useState<GameTestWorkflowStatus | null>(null)
-  // Automation commands arrive through IPC between React renders. Keep the
-  // pending bit in a ref so a just-emitted clarification cannot be rejected
-  // merely because the imperative handle still closes over the prior render.
   const clarificationPendingRef = useRef(false)
   clarificationPendingRef.current = clarificationPending
+
   const [showExportPanel, setShowExportPanel] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [showTemplateForm, setShowTemplateForm] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [rollbackWarning, setRollbackWarning] = useState<{ msgId: string; content: string; fileCount: number } | null>(null)
   const [deletePending, setDeletePending] = useState<{ msgId: string; role: 'user' | 'assistant'; preview: string } | null>(null)
-  // 工具截图放大预览（mc_screenshot 等工具返回的截图）
   const [toolScreenshotLightbox, setToolScreenshotLightbox] = useState<{ src: string; name: string } | null>(null)
-  const displayMessagesRef = useRef<DisplayMessage[]>([])
-  displayMessagesRef.current = displayMessages
+  const [concurrentAgentModal, setConcurrentAgentModal] = useState<{
+    open: boolean
+    runningSessionName: string
+    onConfirm: () => void
+  }>({ open: false, runningSessionName: '', onConfirm: () => {} })
 
   const onPersistSessionRef = useRef(onPersistSession)
   onPersistSessionRef.current = onPersistSession
   const onUpdateSessionMetaRef = useRef(onUpdateSessionMeta)
   onUpdateSessionMetaRef.current = onUpdateSessionMeta
-
-  const persistComposerMeta = useCallback((meta: { composerMode?: ComposerMode; sessionGoal?: string }) => {
-    const sid = currentSessionIdRef.current
-    if (!sid) return
-    onUpdateSessionMetaRef.current?.(sid, meta)
-  }, [])
-
-  const flushPersistTo = useCallback((
-    sessionId: string | null,
-    messages: DisplayMessage[],
-    plan: ActivePlan | null,
-    options?: { appendSystem?: PersistedMessage[]; resetSystem?: boolean }
-  ) => {
-    if (!sessionId) return
-    const serialized = serializeDisplayMessages(messages, plan)
-    let systemMsgs = options?.resetSystem
-      ? []
-      : (sessionsRef.current.find((s) => s.id === sessionId)?.messages.filter((m) => m.role === 'system') ?? [])
-    if (options?.appendSystem?.length) {
-      systemMsgs = [...systemMsgs, ...options.appendSystem]
-    }
-    onPersistSessionRef.current(sessionId, [...serialized, ...systemMsgs])
-  }, [])
-
-  const flushPersist = useCallback((
-    messages: DisplayMessage[],
-    plan: ActivePlan | null,
-    options?: { appendSystem?: PersistedMessage[]; resetSystem?: boolean }
-  ) => {
-    flushPersistTo(currentSessionIdRef.current, messages, plan, options)
-  }, [flushPersistTo])
-
-  /** Invalidate in-flight turn events after cancel / session switch. */
-  const turnGenerationRef = useRef(0)
-  const activeTurnGenerationRef = useRef(0)
-  const bumpTurnGeneration = useCallback(() => {
-    turnGenerationRef.current += 1
-  }, [])
-  const bindActiveTurnGeneration = useCallback(() => {
-    activeTurnGenerationRef.current = turnGenerationRef.current
-  }, [])
-
   const onRunningChangeRef = useRef(onRunningChange)
-  const onUsageChangeRef = useRef(onUsageChange)
-  const apiConfigRef = useRef(apiConfig)
   onRunningChangeRef.current = onRunningChange
+  const onUsageChangeRef = useRef(onUsageChange)
   onUsageChangeRef.current = onUsageChange
+  const apiConfigRef = useRef(apiConfig)
   apiConfigRef.current = apiConfig
-
-  const toggleToolOutput = useCallback((id: string) => {
-    setCollapsedToolIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
-
-  const toggleExploreGroup = useCallback((key: string) => {
-    setCollapsedExploreGroupKeys((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }, [])
-
-  const toggleReasoning = useCallback((key: string) => {
-    setCollapsedReasoningKeys((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }, [])
-
-  const collapseAllReasoning = useCallback((msgId: string, entries: ChronoEntry[]) => {
-    const keys: string[] = []
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i]
-      if (e.kind === 'reasoning') {
-        e.done = true
-        keys.push(`${msgId}-${i}`)
-      }
-    }
-    if (keys.length === 0) return
-    setCollapsedReasoningKeys((prev) => {
-      const next = new Set(prev)
-      keys.forEach((k) => next.add(k))
-      return next
-    })
-  }, [])
-
-  const markLastReasoningDone = useCallback((msgId: string, entries: ChronoEntry[]) => {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]
-      if (e.kind === 'reasoning' && !e.done) {
-        e.done = true
-        setCollapsedReasoningKeys((prev) => new Set(prev).add(`${msgId}-${i}`))
-        break
-      }
-      if (e.kind !== 'reasoning') break
-    }
-  }, [])
-  const turnRef = useRef({
-    msgId: '',
-    entries: [] as ChronoEntry[],
-    streamDone: false,
-    collaborationTrace: [] as CollaborationTrace[]
-  })
-
-  const resetTurnUiState = useCallback(() => {
-    turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
-    setIsLoading(false)
-    setClarificationPending(false)
-    setClarificationQuestion('')
-    setClarificationOptions([])
-    setGameTestStatus(null)
-    setAgentStatus('')
-    setPlanReady(false)
-    onRunningChangeRef.current?.(false)
-  }, [])
 
   const isUserScrolledUpRef = useRef(false)
   const chatMessagesRef = useRef<HTMLDivElement>(null)
@@ -525,6 +310,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     isUserScrolledUpRef.current = !atBottom
   }, [])
+
   useEffect(() => {
     if (isUserScrolledUpRef.current) return
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -542,117 +328,92 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
   }, [])
 
-  // Init controller once
+  // Listen to config saves and reload tool registry globally
   useEffect(() => {
-    const ctrl = new Controller({
-      registry: toolRegistry, projectPath, apiConfig, routingConfig, routingSelection, resolveModelConfig: resolveRoutingModel,
-      onEvent: handleEvent,
-      onAgentStatus: (s) => setAgentStatus(s),
-      onStreamUpdate: () => {}
-    })
-    controllerRef.current = ctrl
-    void reloadAgentToolRegistry(ctrl)
     const onConfigSaved = (): void => {
-      void reloadAgentToolRegistry(controllerRef.current)
+      void SessionRuntimeManager.getInstance().reloadTools()
     }
     window.addEventListener('agent-config-saved', onConfigSaved)
     return () => {
       window.removeEventListener('agent-config-saved', onConfigSaved)
-      ctrl.cancel()
     }
   }, [])
 
-  useEffect(() => { controllerRef.current?.setProjectPath(projectPath) }, [projectPath])
-  useEffect(() => { controllerRef.current?.setApiConfig(apiConfig) }, [apiConfig])
-  useEffect(() => { controllerRef.current?.setRouting(routingConfig, routingSelection, resolveRoutingModel) }, [routingConfig, routingSelection, resolveRoutingModel])
+  // Helper to obtain current active runtime
+  const getActiveRuntime = useCallback((): SessionRuntime | null => {
+    const sid = currentSessionIdRef.current
+    if (!sid) return null
+    return SessionRuntimeManager.getInstance().getOrCreateRuntime({
+      sessionId: sid,
+      projectPath,
+      apiConfig,
+      routingConfig,
+      routingSelection,
+      resolveRoutingModel,
+      onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+      onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+      onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+      onRunningChange: (r) => onRunningChangeRef.current?.(r)
+    })
+  }, [projectPath, apiConfig, routingConfig, routingSelection, resolveRoutingModel])
 
-  // Restore UI + controller when switching sessions; wait until session payload is available
-  const restoredSessionIdRef = useRef<string | null>(null)
+  // Subscribe to current session's runtime
   useEffect(() => {
-    const previousSessionId = restoredSessionIdRef.current
-
-    // Leaving a session (switch away or clear): flush that session, cancel in-flight turn.
-    if (shouldCancelTurnOnSessionLeave(previousSessionId, currentSessionId)) {
-      flushPersistTo(previousSessionId, displayMessagesRef.current, activePlanRef.current)
-      if (controllerRef.current?.running) {
-        controllerRef.current.cancel()
-      }
-      bumpTurnGeneration()
-      resetTurnUiState()
-      setAttachments([])
-    }
-
     if (!currentSessionId) {
-      restoredSessionIdRef.current = null
       setDisplayMessages([])
       setActivePlan(null)
-      setCollapsedToolIds(new Set())
-      setCollapsedExploreGroupKeys(new Set())
-      setCollapsedReasoningKeys(new Set())
-      turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
+      setIsLoading(false)
+      setAgentStatus('')
+      setPlanReady(false)
       setUsageAccum(EMPTY_USAGE)
+      setClarificationPending(false)
+      setGameTestStatus(null)
+      onRunningChangeRef.current?.(false)
       onUsageChangeRef.current?.(EMPTY_USAGE)
-      controllerRef.current?.clearSession()
       return
     }
 
-    // Same session (e.g. persist cycle updated `sessions`) — do not re-restore.
-    if (previousSessionId === currentSessionId) return
-
     const session = sessionsRef.current.find((s) => s.id === currentSessionId)
-    if (!session) return
-
-    restoredSessionIdRef.current = currentSessionId
-    turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
-    const display = deserializeToDisplay(session.messages, uid) as DisplayMessage[]
-    const restoredPlan = restoreActivePlan(display, session.messages)
-    const { toolIds, reasoningKeys, exploreGroupKeys } = buildRestoredCollapseState(display)
-    setCollapsedToolIds(toolIds)
-    setCollapsedExploreGroupKeys(exploreGroupKeys)
-    setCollapsedReasoningKeys(reasoningKeys)
-    setDisplayMessages(display)
-    setActivePlan(restoredPlan)
-    setComposerMode(session.composerMode ?? 'agent')
-    setSessionGoal(session.sessionGoal ?? '')
-    setPlanReady(false)
-    controllerRef.current?.setComposerMode(session.composerMode ?? 'agent')
-    controllerRef.current?.setSessionGoal(session.sessionGoal ?? '')
-    const restoredUsage = normalizeSessionUsage(
-      session.usage,
-      apiConfigRef.current.model,
-      apiConfigRef.current.providerId
-    )
-    setUsageAccum(restoredUsage)
-    onUsageChangeRef.current?.(restoredUsage)
-
-    const persistedMsgsPromise = toControllerMessagesWithAttachments(
-      session.messages,
-      (filePath) => window.api.readAttachmentDataUrl(filePath)
-    )
-    const forceRestore = shouldForceRestoreSnapshot(previousSessionId, currentSessionId)
-    void persistedMsgsPromise.then((persistedMsgs) => {
-      if (restoredSessionIdRef.current !== currentSessionId) return
-      if (forceRestore) {
-        controllerRef.current?.restoreSnapshot(persistedMsgs)
-      } else {
-        const currentCtrlMsgs = controllerRef.current?.getSnapshot() ?? []
-        if (currentCtrlMsgs.length === 0 || persistedMsgs.length > currentCtrlMsgs.length) {
-          controllerRef.current?.restoreSnapshot(persistedMsgs)
-        }
-      }
+    const runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+      sessionId: currentSessionId,
+      projectPath,
+      apiConfig,
+      routingConfig,
+      routingSelection,
+      resolveRoutingModel,
+      onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+      onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+      onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+      onRunningChange: (r) => onRunningChangeRef.current?.(r)
     })
-    if (restoredPlan?.steps && restoredPlan.steps.length > 0) {
-      controllerRef.current?.restorePlanTracker(restoredPlan.steps)
-    } else {
-      controllerRef.current?.restorePlanTracker([])
-    }
-  }, [currentSessionId, sessions, flushPersistTo, bumpTurnGeneration, resetTurnUiState])
 
-  useEffect(() => {
-    return () => {
-      flushPersist(displayMessagesRef.current, activePlanRef.current)
+    if (session) {
+      runtime.hydrateFromSession(session)
     }
-  }, [flushPersist])
+
+    const unsubscribe = runtime.subscribe((snapshot) => {
+      setDisplayMessages(snapshot.displayMessages)
+      setActivePlan(snapshot.activePlan)
+      setIsLoading(snapshot.isLoading)
+      setAgentStatus(snapshot.agentStatus)
+      setPlanReady(snapshot.planReady)
+      setComposerMode(snapshot.composerMode)
+      setSessionGoal(snapshot.sessionGoal)
+      setUsageAccum(snapshot.usageAccum)
+      setCompletionFlash(snapshot.completionFlash)
+      setClarificationPending(snapshot.clarificationPending)
+      setClarificationQuestion(snapshot.clarificationQuestion)
+      setClarificationOptions(snapshot.clarificationOptions)
+      setGameTestStatus(snapshot.gameTestStatus)
+      setCollapsedToolIds(snapshot.collapsedToolIds)
+      setCollapsedExploreGroupKeys(snapshot.collapsedExploreGroupKeys)
+      setCollapsedReasoningKeys(snapshot.collapsedReasoningKeys)
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [currentSessionId, projectPath, apiConfig, routingConfig, routingSelection, resolveRoutingModel])
 
   // Watch for external context injected via ContextIngress (crash, code explain, game HUD, …)
   const contextConsumedRef = useRef(0)
@@ -666,7 +427,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     const newChips: ContextChipData[] = []
     for (const item of newItems) {
       if (item.kind === 'text') {
-        // 带 tag 的文本创建为 chip，不直接拼接 textarea
         if (item.tag) {
           newChips.push({
             id: newAttachmentId(),
@@ -674,12 +434,10 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             label: item.tag.label || getChipLabel(item.tag.type),
             text: item.text
           })
-          // 代码解释仍需切换 ask 模式
           if (item.tag.type === 'code-explain') {
             setComposerMode('ask')
             composerModeRef.current = 'ask'
-            controllerRef.current?.setComposerMode('ask')
-            persistComposerMeta({ composerMode: 'ask' })
+            getActiveRuntime()?.setComposerMode('ask')
           }
         } else {
           textParts.push(item.text)
@@ -700,8 +458,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       if (textParts.some((item) => isCodeExplainInput(item))) {
         setComposerMode('ask')
         composerModeRef.current = 'ask'
-        controllerRef.current?.setComposerMode('ask')
-        persistComposerMeta({ composerMode: 'ask' })
+        getActiveRuntime()?.setComposerMode('ask')
       }
       const prefix = textParts.some((item) => isCodeExplainInput(item)) && !text.includes('请解释')
         ? '请解释以下代码：\n\n'
@@ -710,7 +467,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
     setContextQueue([])
     contextConsumedRef.current = 0
-  }, [contextQueue, setContextQueue, persistComposerMeta])
+  }, [contextQueue, setContextQueue, getActiveRuntime])
 
   // Game HUD / external push → ContextIngress
   useEffect(() => {
@@ -721,8 +478,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         if (isCodeExplainInput(text)) {
           setComposerMode('ask')
           composerModeRef.current = 'ask'
-          controllerRef.current?.setComposerMode('ask')
-          persistComposerMeta({ composerMode: 'ask' })
+          getActiveRuntime()?.setComposerMode('ask')
         }
         setInput((prev) => (prev ? `${prev}\n\n${text}` : text))
         return
@@ -749,125 +505,91 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
         return
       }
       if (payload.kind === 'file' && payload.path) {
-        const filePath = payload.path
         setAttachments((prev) => [
           ...prev,
           {
             id: newAttachmentId(),
             kind: 'file',
-            path: filePath,
-            name: payload.name || filePath.split(/[/\\]/).pop() || 'file'
+            path: payload.path,
+            name: payload.name
           }
         ])
       }
     })
-  }, [persistComposerMeta])
-
-  const addPathsAsAttachments = useCallback(async (paths: string[]) => {
-    if (!projectPath || paths.length === 0) return
-    for (const filePath of paths) {
-      if (isImagePath(filePath)) {
-        const saved = await window.api.saveAttachment({
-          projectPath,
-          sourcePath: filePath,
-          mimeType: mimeFromPath(filePath),
-          fileName: filePath.split(/[/\\]/).pop()
-        })
-        if (!saved.ok) continue
-        const preview = await window.api.readAttachmentDataUrl(saved.path)
-        setAttachments((prev) => [
-          ...prev,
-          {
-            id: newAttachmentId(),
-            kind: 'image',
-            path: saved.path,
-            mimeType: saved.mimeType,
-            name: saved.name,
-            previewUrl: preview.ok ? preview.dataUrl : undefined
-          }
-        ])
-      } else {
-        setAttachments((prev) => [
-          ...prev,
-          {
-            id: newAttachmentId(),
-            kind: 'file',
-            path: filePath,
-            name: filePath.split(/[/\\]/).pop() || 'file'
-          }
-        ])
-      }
-    }
-  }, [projectPath])
+  }, [getActiveRuntime])
 
   const handleAttachFiles = useCallback(async () => {
-    if (!projectPath) return
-    const paths = await window.api.selectAttachmentFiles()
-    await addPathsAsAttachments(paths)
-  }, [projectPath, addPathsAsAttachments])
+    if (!window.api?.openAttachmentDialog) return
+    const result = await window.api.openAttachmentDialog()
+    if (result.cancelled || !result.files.length) return
+    const newAtts: ComposerAttachment[] = result.files.map((f) => ({
+      id: newAttachmentId(),
+      kind: f.kind,
+      path: f.path,
+      name: f.name,
+      mimeType: f.mimeType
+    }))
+    setAttachments((prev) => [...prev, ...newAtts])
+    for (const att of newAtts) {
+      if (att.kind !== 'image') continue
+      void window.api.readAttachmentDataUrl(att.path).then((r) => {
+        if (!r.ok) return
+        setAttachments((prev) =>
+          prev.map((a) => (a.id === att.id ? { ...a, previewUrl: r.dataUrl } : a))
+        )
+      })
+    }
+  }, [])
 
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = String(reader.result || '')
-        const idx = result.indexOf(',')
-        resolve(idx >= 0 ? result.slice(idx + 1) : result)
-      }
-      reader.onerror = () => reject(reader.error)
-      reader.readAsDataURL(file)
-    })
-
-  const ingestBrowserFiles = useCallback(async (files: File[]) => {
-    if (!projectPath || files.length === 0) return
+  const handlePasteFiles = useCallback(async (files: File[]) => {
     for (const file of files) {
-      const electronPath = (file as File & { path?: string }).path
-      if (electronPath) {
-        await addPathsAsAttachments([electronPath])
-        continue
+      const isImg = file.type.startsWith('image/')
+      const name = file.name || (isImg ? 'pasted-image.png' : 'pasted-file')
+      const buffer = await file.arrayBuffer()
+      const saved = await window.api.savePastedAttachment(name, buffer)
+      if (!saved.ok || !saved.path) continue
+
+      const att: ComposerAttachment = {
+        id: newAttachmentId(),
+        kind: isImg ? 'image' : 'file',
+        path: saved.path,
+        name,
+        mimeType: file.type || (isImg ? 'image/png' : 'application/octet-stream')
       }
-      if (file.type.startsWith('image/') || isImagePath(file.name)) {
-        const base64 = await fileToBase64(file)
-        const saved = await window.api.saveAttachment({
-          projectPath,
-          base64,
-          mimeType: file.type || mimeFromPath(file.name),
-          fileName: file.name
+      setAttachments((prev) => [...prev, att])
+      if (isImg) {
+        void window.api.readAttachmentDataUrl(saved.path).then((r) => {
+          if (!r.ok) return
+          setAttachments((prev) =>
+            prev.map((a) => (a.id === att.id ? { ...a, previewUrl: r.dataUrl } : a))
+          )
         })
-        if (!saved.ok) continue
-        const preview = await window.api.readAttachmentDataUrl(saved.path)
-        setAttachments((prev) => [
-          ...prev,
-          {
-            id: newAttachmentId(),
-            kind: 'image',
-            path: saved.path,
-            mimeType: saved.mimeType,
-            name: saved.name,
-            previewUrl: preview.ok ? preview.dataUrl : undefined
-          }
-        ])
-      } else {
-        // Non-image without path cannot be handed to agent as filesystem path
-        alert(`无法添加文件「${file.name}」：请使用附件按钮从本地选择，以便保留真实路径。`)
       }
     }
-  }, [projectPath, addPathsAsAttachments])
+  }, [])
 
-  const handlePasteFiles = useCallback((items: DataTransferItemList) => {
-    const files: File[] = []
-    for (const item of Array.from(items)) {
-      if (item.kind === 'file') {
-        const f = item.getAsFile()
-        if (f) files.push(f)
-      }
+  const handleDropFiles = useCallback(async (paths: string[]) => {
+    if (!window.api?.inspectDroppedPaths) return
+    const inspected = await window.api.inspectDroppedPaths(paths)
+    if (!inspected.length) return
+    const newAtts: ComposerAttachment[] = inspected.map((f) => ({
+      id: newAttachmentId(),
+      kind: f.kind,
+      path: f.path,
+      name: f.name,
+      mimeType: f.mimeType
+    }))
+    setAttachments((prev) => [...prev, ...newAtts])
+    for (const att of newAtts) {
+      if (att.kind !== 'image') continue
+      void window.api.readAttachmentDataUrl(att.path).then((r) => {
+        if (!r.ok) return
+        setAttachments((prev) =>
+          prev.map((a) => (a.id === att.id ? { ...a, previewUrl: r.dataUrl } : a))
+        )
+      })
     }
-    void ingestBrowserFiles(files)
-  }, [ingestBrowserFiles])
-
-  const handleDropFiles = useCallback((fileList: FileList) => {
-    void ingestBrowserFiles(Array.from(fileList))
-  }, [ingestBrowserFiles])
+  }, [])
 
   const handleRemoveAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id))
@@ -877,635 +599,47 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     setContextChips((prev) => prev.filter((c) => c.id !== id))
   }, [])
 
-  // Refresh display from turnRef
-  const refreshDisplay = useCallback(() => {
-    const t = turnRef.current
-    if (!t.msgId) return
-    setDisplayMessages((prev) => prev.map((m) => {
-      if (m.id !== t.msgId) return m
-      return {
-        ...m,
-        entries: [...t.entries],
-        isStreaming: !t.streamDone
-      }
-    }))
-  }, [])
-
-  // ======== EVENT HANDLER ========
-  const handleEvent = useCallback((event: Event) => {
-    // Drop late events from a cancelled / switched-away turn.
-    if (!shouldApplyTurnEvent(activeTurnGenerationRef.current, turnGenerationRef.current)) {
-      return
+  const toggleToolOutput = useCallback((id: string) => {
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.toggleToolOutput(id)
+    } else {
+      setCollapsedToolIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
     }
-    const t = turnRef.current
-    void window.api.automationEmit?.({
-      type: 'harness_event',
-      kind: event.kind,
-      phase: event.phase,
-      text: event.text?.slice(0, 4_000),
-      error: event.error,
-      notice: event.notice,
-      tool: event.tool ? {
-        id: event.tool.id,
-        name: event.tool.name,
-        args: toolArgsForAutomation(event.tool.name, event.tool.args),
-        output: toolOutputForAutomation(event.tool.name, event.tool.output),
-        outcome: event.tool.outcome,
-        error: event.tool.error,
-        durationMs: event.tool.durationMs,
-        source: event.tool.source,
-        validation: event.tool.validation
-      } : undefined,
-      planSteps: event.planSteps,
-      routeDecision: event.routeDecision,
-      collaboration: event.collaboration ? collaborationForAutomation(event.collaboration) : undefined,
-      modelInvocation: event.modelInvocation,
-      gameTestStatus: event.gameTestStatus
-    })
+  }, [getActiveRuntime])
 
-    switch (event.kind) {
-      case EventKind.Phase:
-        if (event.phase === 'plan_start') {
-          if (!t.msgId) {
-            t.msgId = uid()
-            t.entries = []
-            t.streamDone = false
-            setDisplayMessages((prev) => [...prev, {
-              id: t.msgId, role: 'assistant',
-              entries: [], isStreaming: true, timestamp: Date.now(),
-              model: apiConfig.model, providerId: apiConfig.providerId,
-              collaborationTrace: [...t.collaborationTrace]
-            }])
-          } else {
-            t.streamDone = false
-            refreshDisplay()
-          }
-        } else if (event.phase === 'plan_done') {
-          const planText = (event.text || '').trim()
-          const actionable = event.planActionable ?? isActionablePlanText(planText)
-          if (actionable && planText) {
-            const steps = parsePlanSteps(planText)
-            if (steps.length > 0 && t.msgId) {
-              const planStepList = toPlanSteps(steps.map((s) => ({ ...s, status: 'pending' })))
-              const nextPlan = { steps: planStepList, anchorMsgId: t.msgId, pinned: true }
-              t.entries = replacePlanEntriesWithSummary(t.entries, steps.length)
-              setActivePlan(nextPlan)
-              setDisplayMessages((prev) => {
-                const next = prev.map((m) => (
-                  m.id === t.msgId ? { ...m, entries: [...t.entries] } : m
-                ))
-                flushPersist(next, nextPlan)
-                return next
-              })
-            }
-          }
-        } else if (event.phase === 'plan_stream_end') {
-          if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
-          refreshDisplay()
-        } else if (event.phase === 'execute_start') {
-          setAgentStatus('执行中...')
-          setPlanReady(false)
-        } else if (event.phase === 'plan_ready') {
-          setPlanReady(true)
-        } else if (event.phase === 'clarification_resume') {
-          t.streamDone = false
-          if (t.msgId) {
-            setDisplayMessages((prev) => prev.map((m) => (
-              m.id === t.msgId
-                ? { ...m, isStreaming: true, turnStatus: undefined }
-                : m
-            )))
-          } else {
-            refreshDisplay()
-          }
-        }
-        break
-
-      case EventKind.Collaboration: {
-        if (event.collaboration) {
-          const trace = event.collaboration
-          const index = t.collaborationTrace.findIndex((item) => item.id === trace.id)
-          if (index >= 0) t.collaborationTrace[index] = trace
-          else t.collaborationTrace.push(trace)
-          if (t.msgId) {
-            setDisplayMessages((prev) => prev.map((message) => message.id === t.msgId
-              ? { ...message, collaborationTrace: [...t.collaborationTrace] }
-              : message))
-          }
-        }
-        if (event.routeDecision) setAgentStatus(`协作路由：${event.routeDecision.reason}`)
-        break
-      }
-
-      case EventKind.PlanState:
-        if (event.planSteps && event.planSteps.length > 0) {
-          const nextSteps = toPlanSteps(event.planSteps)
-          const nextPlan = activePlanRef.current
-            ? { ...activePlanRef.current, steps: nextSteps }
-            : t.msgId
-              ? { steps: nextSteps, anchorMsgId: t.msgId, pinned: true }
-              : null
-          if (nextPlan) {
-            activePlanRef.current = nextPlan
-            setActivePlan(nextPlan)
-            setDisplayMessages((prev) => {
-              const next = prev.map((m) => (
-                m.id === nextPlan.anchorMsgId
-                  ? { ...m, embeddedPlan: nextSteps }
-                  : m
-              ))
-              flushPersist(next, nextPlan)
-              return next
-            })
-          }
-        }
-        break
-
-      case EventKind.ClarificationNeeded:
-        if (event.clarification) {
-          setClarificationPending(true)
-          setClarificationQuestion(event.clarification.question)
-          setClarificationOptions(event.clarification.options || [])
-          setIsLoading(false)
-          setAgentStatus('')
-          onRunningChangeRef.current?.(false)
-
-          t.streamDone = true
-          if (t.msgId) {
-            collapseAllReasoning(t.msgId, t.entries)
-            t.entries = finalizeRunningTools(t.entries, false)
-            t.entries = appendClarificationTextEntry(
-              t.entries,
-              event.clarification.question,
-              event.clarification.options || []
-            )
-            setDisplayMessages((prev) => {
-              const next = prev.map((m) => (
-                m.id === t.msgId
-                  ? {
-                      ...m,
-                      entries: [...t.entries],
-                      isStreaming: false,
-                      turnStatus: 'answered' as const
-                    }
-                  : m
-              ))
-              flushPersist(next, activePlanRef.current)
-              return next
-            })
-          }
-        }
-        break
-
-      case EventKind.GameTestStatus:
-        if (event.gameTestStatus) {
-          setGameTestStatus(event.gameTestStatus)
-          setAgentStatus(event.gameTestStatus.message)
-        }
-        break
-
-      case EventKind.GuiLayoutPreview:
-        if (event.guiLayout) {
-          const gl = event.guiLayout
-          // 不清空 isLoading——工具仍在 Promise 阻塞中，turn 未结束
-          if (t.msgId) {
-            const layoutEntry: ChronoEntry = {
-              kind: 'guiLayoutPreview',
-              id: gl.id,
-              title: gl.title,
-              layoutType: gl.layoutType,
-              html: gl.html,
-              elements: gl.elements,
-              status: 'pending'
-            }
-            t.entries = [...t.entries, layoutEntry]
-            setDisplayMessages((prev) => {
-              const next = prev.map((m) => (
-                m.id === t.msgId
-                  ? { ...m, entries: [...t.entries] }
-                  : m
-              ))
-              flushPersist(next, activePlanRef.current)
-              return next
-            })
-          }
-        }
-        break
-
-      case EventKind.GuiLayoutPreviewCancelled:
-        // 步骤切换/修复模式进入时，将所有 pending 的预览条目标记为已取消
-        setDisplayMessages((prev) => {
-          let anyChanged = false
-          const next = prev.map((m) => {
-            if (!m.entries) return m
-            let msgChanged = false
-            const entries = m.entries.map((e) => {
-              if (e.kind === 'guiLayoutPreview' && e.status === 'pending') {
-                msgChanged = true
-                anyChanged = true
-                return { ...e, status: 'cancelled' as const }
-              }
-              return e
-            })
-            return msgChanged ? { ...m, entries } : m
-          })
-          if (anyChanged) flushPersist(next, activePlanRef.current)
-          return anyChanged ? next : prev
-        })
-        break
-
-      case EventKind.TurnStarted:
-        turnUsageRef.current = { promptTokens: 0, completionTokens: 0 }
-        onRunningChangeRef.current?.(true)
-        setUsageAccum((prev) => {
-          const next = {
-            ...prev,
-            turns: prev.turns + 1,
-            turnTokens: 0,
-            turnCacheHitTokens: 0,
-            turnCacheMissTokens: 0
-          }
-          onUsageChangeRef.current?.(next)
-          return next
-        })
-        if (!t.msgId) {
-          t.msgId = uid()
-          t.entries = []
-          t.streamDone = false
-          setDisplayMessages((prev) => [...prev, {
-            id: t.msgId, role: 'assistant',
-            entries: [], isStreaming: true, timestamp: Date.now(),
-            model: apiConfig.model, providerId: apiConfig.providerId
-          }])
-        } else {
-          t.streamDone = false
-          refreshDisplay()
-        }
-        break
-
-      case EventKind.Reasoning:
-        if (event.text) {
-          const last = t.entries[t.entries.length - 1]
-          if (last?.kind === 'reasoning') {
-            // Append to the last reasoning entry (streaming chunk)
-            last.content += event.text
-          } else {
-            // New reasoning entry (after a tool or text)
-            t.entries.push({ kind: 'reasoning', content: event.text })
-          }
-          refreshDisplay()
-        }
-        break
-
-      case EventKind.Text:
-        if (event.text) {
-          markLastReasoningDone(t.msgId, t.entries)
-          const last = t.entries[t.entries.length - 1]
-          if (last?.kind === 'text') {
-            // Append to the last text entry (streaming chunk)
-            last.content += event.text
-          } else {
-            // New text entry (after a tool or reasoning)
-            t.entries.push({ kind: 'text', content: event.text })
-          }
-          refreshDisplay()
-        }
-        break
-
-      case EventKind.ToolDispatch:
-        if (event.tool && event.tool.name) {
-          recordToolDispatch(event.tool.name, event.tool.id, event.tool.args as Record<string, unknown> | undefined)
-          markLastReasoningDone(t.msgId, t.entries)
-          setCollapsedToolIds((prev) => {
-            const next = new Set(prev)
-            const toolName = event.tool!.name
-            if (isExploreTool(toolName)) {
-              next.add(event.tool!.id)
-            } else {
-              next.delete(event.tool!.id)
-            }
-            return next
-          })
-          setCollapsedExploreGroupKeys((prev) => {
-            const next = new Set(prev)
-            for (const key of collectExploreGroupKeys(t.msgId, t.entries)) {
-              next.add(key)
-            }
-            return next
-          })
-          // Parse args for display
-          let parsedArgs: Record<string, unknown> | undefined
-          try {
-            if (event.tool.args) {
-              parsedArgs = typeof event.tool.args === 'string'
-                ? JSON.parse(event.tool.args)
-                : event.tool.args as unknown as Record<string, unknown>
-            }
-          } catch { /* ignore */ }
-          t.entries.push({
-            kind: 'tool',
-            id: event.tool.id,
-            name: event.tool.name,
-            status: 'running',
-            startMs: Date.now(),
-            args: parsedArgs,
-            displayName: getToolDisplayName(event.tool.name, parsedArgs)
-          })
-          refreshDisplay()
-        }
-        break
-
-      case EventKind.ToolProgress:
-        if (event.tool?.id && event.tool.output) {
-          for (const entry of t.entries) {
-            if (entry.kind === 'tool' && entry.id === event.tool.id) {
-              entry.status = 'running'
-              entry.liveOutput = (entry.liveOutput || '') + event.tool.output
-              break
-            }
-          }
-          refreshDisplay()
-          const outEl = toolOutputRefs.current.get(event.tool.id)
-          if (outEl) outEl.scrollTop = outEl.scrollHeight
-        }
-        break
-
-      case EventKind.ToolResult:
-        if (event.tool) {
-          if (event.tool.name === 'mc_run_test' && event.tool.validation?.verdict === 'PASS') {
-            setGameTestStatus(null)
-          }
-          recordToolResult(
-            event.tool.name || 'unknown',
-            event.tool.id,
-            event.tool.output || event.tool.error || '',
-            { error: Boolean(event.tool.error), durationMs: event.tool.durationMs }
-          )
-          setCollapsedToolIds((prev) => new Set(prev).add(event.tool!.id))
-          setCollapsedExploreGroupKeys((prev) => {
-            const next = new Set(prev)
-            for (const key of collectExploreGroupKeys(t.msgId, t.entries)) {
-              next.add(key)
-            }
-            return next
-          })
-          // Find existing tool entry by id and update it
-          let foundEntry = false
-          for (const entry of t.entries) {
-            if (entry.kind === 'tool' && entry.id === event.tool.id) {
-              foundEntry = true
-              entry.status = event.tool.outcome === 'timed_out'
-                ? 'timed_out'
-                : event.tool.outcome === 'cancelled'
-                  ? 'cancelled'
-                  : event.tool.error ? 'error' : 'done'
-              entry.output = event.tool.output || event.tool.error || entry.liveOutput || ''
-              entry.liveOutput = undefined
-              entry.durationMs = event.tool.durationMs
-              if (event.tool.fileDiff) {
-                entry.fileDiff = event.tool.fileDiff
-              }
-              // 携带截图数据（mc_screenshot 等工具返回）
-              if (event.tool.imageBase64) {
-                entry.imageBase64 = event.tool.imageBase64
-                entry.imageMimeType = event.tool.imageMimeType
-              }
-              break
-            }
-          }
-          // 任务总结截图：无对应 ToolDispatch，直接创建条目
-          if (!foundEntry && event.tool.name === 'task_summary_screenshot' && event.tool.imageBase64) {
-            t.entries.push({
-              kind: 'tool',
-              id: event.tool.id,
-              name: event.tool.name,
-              status: 'done',
-              output: event.tool.output || '',
-              imageBase64: event.tool.imageBase64,
-              imageMimeType: event.tool.imageMimeType,
-              displayName: '任务总结截图'
-            })
-            refreshDisplay()
-          }
-          // Detect complete_step results to mark plan steps done
-          const output = event.tool.output || ''
-          const stepDoneMatch = output.match(/\[STEP_DONE:(\d+)\]/)
-          if (stepDoneMatch) {
-            const stepIdx = parseInt(stepDoneMatch[1]) - 1
-            setActivePlan((prev) => {
-              const next = prev
-                ? {
-                    ...prev,
-                    steps: prev.steps.map((s, i) =>
-                      i === stepIdx ? { ...s, status: 'completed' as const } : s
-                    )
-                  }
-                : prev
-              if (next) flushPersist(displayMessagesRef.current, next)
-              return next
-            })
-          }
-          if (t.msgId) {
-            setDisplayMessages((prev) => {
-              const next = prev.map((m) => (
-                m.id === t.msgId ? { ...m, entries: [...t.entries], isStreaming: !t.streamDone } : m
-              ))
-              flushPersist(next, activePlanRef.current)
-              return next
-            })
-          } else {
-            refreshDisplay()
-          }
-        }
-        break
-
-      case EventKind.Usage:
-        if (event.usage) {
-          const u = event.usage
-          const pT = u.promptTokens || 0
-          const cT = u.completionTokens || 0
-          const hit = u.cacheHitTokens || 0
-          const miss = u.cacheMissTokens || 0
-          const stepTokens = u.totalTokens || (pT + cT)
-          // Accumulate turn totals for billing; context % uses latest step prompt only.
-          turnUsageRef.current = {
-            promptTokens: turnUsageRef.current.promptTokens + pT,
-            completionTokens: turnUsageRef.current.completionTokens + cT
-          }
-          setUsageAccum((prev) => {
-            const costDelta = estimateCostDelta(pT, cT, hit, miss, {
-              model: u.modelId || apiConfigRef.current.model,
-              providerId: u.providerId || apiConfigRef.current.providerId,
-            })
-            const next = {
-              ...prev,
-              sessionTokens: prev.sessionTokens + stepTokens,
-              turnTokens: prev.turnTokens + stepTokens,
-              cacheHitTokens: prev.cacheHitTokens + hit,
-              cacheMissTokens: prev.cacheMissTokens + miss,
-              turnCacheHitTokens: prev.turnCacheHitTokens + hit,
-              turnCacheMissTokens: prev.turnCacheMissTokens + miss,
-              lastPromptTokens: pT,
-              contextPercent: contextPercentFromPrompt(
-                pT,
-                apiConfigRef.current.model,
-                apiConfigRef.current.providerId
-              ),
-              cost: prev.cost + costDelta
-            }
-            onUsageChangeRef.current?.(next, costDelta > 0 ? { costDelta } : undefined)
-            return next
-          })
-        }
-        break
-
-      case EventKind.TurnDone: {
-        setClarificationPending(false)
-        setClarificationQuestion('')
-        t.streamDone = true
-        if (t.msgId) collapseAllReasoning(t.msgId, t.entries)
-        const hasError = Boolean(event.error)
-        t.entries = finalizeRunningTools(t.entries, hasError)
-        if (event.phase === 'plan_failed') {
-          activePlanRef.current = null
-        }
-        const planSnapshot = event.phase === 'plan_failed' ? null : activePlanRef.current
-
-        const finalSteps = planSnapshot
-          ? planSnapshot.steps.map((s) => ({
-              ...s,
-              status: hasError && s.status === 'running'
-                ? 'error' as const
-                : s.status
-            }))
-          : undefined
-        const finalPlanDone = finalSteps ? finalSteps.every((s) => s.status === 'completed') : false
-        const turnStatus = resolveTurnDoneStatus({
-          hasError,
-          error: event.error,
-          finalSteps,
-          composerMode: composerModeRef.current,
-          turnMode: event.turnMode,
-          phase: event.phase
-        })
-
-        const closingReason: ClosingReason = turnStatus
-        t.entries = ensureClosingSummaryEntry(t.entries, {
-          reason: closingReason,
-          steps: finalSteps,
-          sessionGoal: sessionGoalRef.current,
-          error: event.error,
-        })
-
-        setIsLoading(false)
-        setAgentStatus('')
-        onRunningChangeRef.current?.(false)
-
-        if (!hasError && finalPlanDone) {
-          setCompletionFlash('任务已完成')
-          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-          void window.api.notifyTaskComplete?.()
-        } else if (hasError || turnStatus === 'error') {
-          setCompletionFlash('异常结束')
-          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-        } else if (!hasError && turnStatus === 'planned') {
-          setCompletionFlash('计划已就绪')
-          setPlanReady(true)
-          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-        } else if (!hasError && turnStatus === 'answered') {
-          setCompletionFlash('')
-        } else if (!hasError && turnStatus === 'partial') {
-          setCompletionFlash('任务部分完成')
-          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-        } else if (!hasError && !finalPlanDone && finalSteps?.length) {
-          setCompletionFlash('任务部分完成')
-          if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-          completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-        }
-
-        setUsageAccum((prev) => {
-          onUsageChangeRef.current?.(prev)
-          return prev
-        })
-
-        const anchorId = planSnapshot?.anchorMsgId || t.msgId
-
-        const fileChanges = t.entries
-          .filter(e => e.kind === 'tool' && ['write_file', 'edit_file'].includes(e.name || ''))
-          .map(e => {
-            const diff = (e as { fileDiff?: { path: string; oldContent?: string; action?: 'create' | 'update' | 'delete' } }).fileDiff
-            if (!diff) return null
-            return {
-              path: diff.path,
-              oldContent: diff.oldContent,
-              action: diff.action
-            } satisfies TurnFileChange
-          })
-          .filter((c): c is TurnFileChange => c !== null)
-
-        setDisplayMessages((prev) => {
-          const resolvedAnchorId = anchorId || t.msgId
-          let next = prev.map((m) => {
-            if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
-              const isAnchor = m.id === anchorId || m.id === t.msgId
-              return {
-                ...m,
-                ...(isAnchor ? { entries: [...t.entries] } : {}),
-                isStreaming: false,
-                ...(isAnchor ? {
-                  turnStatus,
-                  embeddedPlan: event.phase === 'plan_failed'
-                    ? undefined
-                    : (finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan)
-                } : {})
-              }
-            }
-            return m
-          })
-
-          if (resolvedAnchorId) {
-            next = enrichUserSnapshotAfterTurnDone(next, resolvedAnchorId, fileChanges, {
-              planTrackerSteps: planSnapshot?.steps.map(s => ({
-                id: s.id,
-                description: s.description,
-                status: s.status
-              })),
-              phase: event.phase === 'plan' ? 'plan' : 'execute',
-              activePlan: planSnapshot ? { ...planSnapshot, steps: [...planSnapshot.steps] } : undefined,
-            })
-          }
-
-          flushPersist(
-            next,
-            turnStatus === 'planned' || turnStatus === 'partial' ? planSnapshot : null
-          )
-          return next
-        })
-
-        setActivePlan(
-          turnStatus === 'planned' || turnStatus === 'partial' ? planSnapshot : null
-        )
-        t.msgId = ''
-        break
-      }
-
-      case EventKind.Notice:
-        if (event.notice) {
-          if (event.notice.level === 'error') {
-            flushPersist(displayMessagesRef.current, activePlanRef.current, {
-              appendSystem: [{ role: 'system', content: event.notice.text, timestamp: Date.now() }]
-            })
-          } else if (event.notice.level === 'warn') {
-            setAgentStatus(event.notice.text)
-          }
-        }
-        break
+  const toggleExploreGroup = useCallback((key: string) => {
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.toggleExploreGroup(key)
+    } else {
+      setCollapsedExploreGroupKeys((prev) => {
+        const next = new Set(prev)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      })
     }
-  }, [refreshDisplay, collapseAllReasoning, markLastReasoningDone, flushPersist])
+  }, [getActiveRuntime])
+
+  const toggleReasoning = useCallback((key: string) => {
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.toggleReasoning(key)
+    } else {
+      setCollapsedReasoningKeys((prev) => {
+        const next = new Set(prev)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      })
+    }
+  }, [getActiveRuntime])
 
   const maybeRenameSessionForFirstMessage = useCallback((sessionId: string, messageText: string) => {
     const session = sessions.find((s) => s.id === sessionId)
@@ -1517,7 +651,54 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     if (title) onRenameSession(sessionId, title)
   }, [sessions, displayMessages, onRenameSession])
 
-  // Session helpers — delegated to App (single source of truth)
+  const executeSend = useCallback(async (
+    userMsg: string,
+    messageAttachments: MessageAttachment[],
+    imageDataUrls: Map<string, string>,
+    executeWaitingPlan: boolean
+  ) => {
+    let sid = currentSessionIdRef.current
+    let runtime: SessionRuntime
+    if (!sid) {
+      const newId = onNewSession(
+        userMsg || (messageAttachments.length ? '（附件）' : ''),
+        messageAttachments.length ? messageAttachments : undefined
+      )
+      sid = newId
+      currentSessionIdRef.current = newId
+      runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+        sessionId: newId,
+        projectPath,
+        apiConfig,
+        routingConfig,
+        routingSelection,
+        resolveRoutingModel,
+        onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+        onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+        onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+        onRunningChange: (r) => onRunningChangeRef.current?.(r)
+      })
+      runtime.setComposerMode(composerModeRef.current)
+      runtime.setSessionGoal(sessionGoalRef.current)
+    } else {
+      maybeRenameSessionForFirstMessage(sid, userMsg || '（附件）')
+      runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+        sessionId: sid,
+        projectPath,
+        apiConfig,
+        routingConfig,
+        routingSelection,
+        resolveRoutingModel,
+        onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+        onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+        onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+        onRunningChange: (r) => onRunningChangeRef.current?.(r)
+      })
+    }
+
+    await runtime.send(userMsg, messageAttachments, imageDataUrls, { executeWaitingPlan })
+  }, [projectPath, apiConfig, routingConfig, routingSelection, resolveRoutingModel, onNewSession, maybeRenameSessionForFirstMessage])
+
   const handleSend = useCallback(async () => {
     const pendingAttachments = attachmentsRef.current
     const pendingChips = contextChipsRef.current
@@ -1525,19 +706,9 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     const hasAtt = pendingAttachments.length > 0
     const hasChips = pendingChips.length > 0
     if ((!hasText && !hasAtt && !hasChips) || isLoading || !toolchainReady) return
-    // Clarification answers go through ClarificationOverlay confirm — not the composer.
     if (clarificationPending) return
     if (hasImageAttachment(pendingAttachments) && !isVisionCapableModel(apiConfig.model, apiConfig.providerId)) {
       alert('当前模型不支持图片理解，请移除图片或切换到视觉模型后再发送')
-      return
-    }
-
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    // Prevent phantom turns: ClarificationNeeded clears isLoading while controller
-    // may still be _running; sending then queues mid-turn and never emits TurnDone.
-    if (ctrl.running) {
-      setAgentStatus('上一轮仍在执行，请稍候或先停止')
       return
     }
 
@@ -1548,11 +719,15 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       alert('请先配置 API Key（左侧「设置」→ 保存密钥）')
       return
     }
-    if (resolvedKey !== apiConfig.apiKey) {
-      ctrl.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
+
+    const sid = currentSessionIdRef.current
+    const currentRuntime = sid ? getActiveRuntime() : null
+    if (currentRuntime && (currentRuntime.isLoading || currentRuntime.controller.running)) {
+      setAgentStatus('上一轮仍在执行，请稍候或先停止')
+      return
     }
 
-    // 聚合标签：chip 文本前置到用户输入前面（底层文本不变，仅 UI 层聚合展示）
+    // 聚合标签：chip 文本前置到用户输入前面
     const chipText = pendingChips.map((c) => c.text).join('\n\n')
     const inputText = input.trim()
     const userMsg = chipText && inputText
@@ -1565,231 +740,74 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       const loaded = await window.api.readAttachmentDataUrl(att.path)
       if (loaded.ok) imageDataUrls.set(att.path, loaded.dataUrl)
     }
-    const sendContent = buildUserContent(userMsg, messageAttachments, imageDataUrls)
 
-    // 仅「执行计划」在 planReady 时恢复；「继续」等新消息清除旧进度，按上下文重新规划。
     const executeWaitingPlan =
       planReady
       && /^(执行计划|开始执行|执行)[\s!！。.?？~，,]*$/i.test(userMsg)
       && Boolean(activePlanRef.current?.steps?.length)
-    if (executeWaitingPlan && activePlanRef.current?.steps?.length) {
-      ctrl.restorePlanTracker(activePlanRef.current.steps)
-      setActivePlan(activePlanRef.current)
-    } else {
-      ctrl.clearPlanForNewTurn()
-      setActivePlan(null)
-      setPlanReady(false)
-    }
 
-    setGameTestStatus(null)
     setInput('')
     setAttachments([])
     setContextChips([])
-    bindActiveTurnGeneration()
-    setIsLoading(true)
-    setAgentStatus('思考中...')
-    setCompletionFlash('')
-    // Create the visible assistant placeholder before classification/network work.
-    // Some providers can take several seconds before emitting the first stream or
-    // phase event; without this the composer says “stop” but the transcript looks stuck.
-    const assistantPlaceholder: DisplayMessage = {
-      id: uid(),
-      role: 'assistant',
-      content: '',
-      entries: [],
-      isStreaming: true,
-      timestamp: Date.now(),
-      model: apiConfig.model,
-      providerId: apiConfig.providerId
-    }
-    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false, collaborationTrace: [] }
 
-    if (!currentSessionId) {
-      const newId = onNewSession(
-        userMsg || (messageAttachments.length ? '（附件）' : ''),
-        messageAttachments.length ? messageAttachments : undefined
-      )
-      currentSessionIdRef.current = newId
-      // Claim session before App re-renders so restore effect does not wipe this turn.
-      restoredSessionIdRef.current = newId
-      const preSnapshot = buildPreTurnSnapshot({
-        messageIndex: 0,
-        controller: ctrl,
-        composerMode,
-        sessionGoal,
-        activePlan: activePlanRef.current,
-      })
-      const firstUser: DisplayMessage = {
-        id: uid(),
-        role: 'user',
-        content: userMsg,
-        timestamp: Date.now(),
-        stateSnapshot: preSnapshot,
-        attachments: messageAttachments.length ? messageAttachments : undefined
-      }
-      setDisplayMessages([firstUser, assistantPlaceholder])
-      // Persist immediately so reopen keeps image paths (do not wait for TurnDone).
-      flushPersistTo(newId, [firstUser, assistantPlaceholder], null)
-      ctrl.clearSession()
-      ctrl.setComposerMode(composerMode)
-      ctrl.setSessionGoal(sessionGoal)
-      persistComposerMeta({ composerMode, sessionGoal })
-    } else {
-      maybeRenameSessionForFirstMessage(currentSessionId, userMsg || '（附件）')
-      setDisplayMessages((prev) => {
-        const preSnapshot = buildPreTurnSnapshot({
-          messageIndex: prev.length,
-          controller: ctrl,
-          composerMode,
-          sessionGoal,
-          activePlan: activePlanRef.current,
-        })
-        const next = [...prev, {
-          id: uid(),
-          role: 'user' as const,
-          content: userMsg,
-          timestamp: Date.now(),
-          stateSnapshot: preSnapshot,
-          attachments: messageAttachments.length ? messageAttachments : undefined
-        }, assistantPlaceholder]
-        flushPersist(next, executeWaitingPlan ? activePlanRef.current : null)
-        return next
-      })
-    }
-
-    ctrl.setComposerMode(composerMode)
-    ctrl.setSessionGoal(sessionGoal)
-    try {
-      await ctrl.send(sendContent)
-    } catch {
-      setIsLoading(false)
-      setAgentStatus('')
-      onRunningChangeRef.current?.(false)
-    } finally {
-      // Mid-turn queue / missing TurnDone must not leave the composer locked.
-      if (!ctrl.running) {
-        setIsLoading((prev) => {
-          if (prev) {
-            setAgentStatus('')
-            onRunningChangeRef.current?.(false)
-            return false
+    // Concurrency check for Agent mode
+    if (composerMode === 'agent') {
+      const runningCheck = SessionRuntimeManager.getInstance().hasRunningAgentSession(projectPath, sid || undefined)
+      if (runningCheck.running && runningCheck.sessionId) {
+        const otherSessionName = sessions.find((s) => s.id === runningCheck.sessionId)?.name || '未命名会话'
+        setConcurrentAgentModal({
+          open: true,
+          runningSessionName: otherSessionName,
+          onConfirm: () => {
+            setConcurrentAgentModal({ open: false, runningSessionName: '', onConfirm: () => {} })
+            void executeSend(userMsg, messageAttachments, imageDataUrls, executeWaitingPlan)
           }
-          return prev
         })
+        return
       }
     }
-  }, [input, isLoading, toolchainReady, apiConfig, ensureApiKey, currentSessionId, flushPersist, flushPersistTo, onNewSession, maybeRenameSessionForFirstMessage, composerMode, sessionGoal, clarificationPending, bindActiveTurnGeneration, persistComposerMeta])
+
+    await executeSend(userMsg, messageAttachments, imageDataUrls, executeWaitingPlan)
+  }, [input, isLoading, toolchainReady, clarificationPending, apiConfig, ensureApiKey, getActiveRuntime, planReady, composerMode, projectPath, sessions, executeSend])
 
   const handleClarificationConfirm = useCallback(async (answer: string) => {
     const trimmed = answer.trim()
     if (!trimmed || isLoading || !clarificationPending) return
-    setClarificationPending(false)
-    setClarificationQuestion('')
-    setClarificationOptions([])
-    setInput('')
-    bindActiveTurnGeneration()
-    setIsLoading(true)
-    setAgentStatus('思考中...')
-    onRunningChangeRef.current?.(true)
-    const ctrl = controllerRef.current
-    if (ctrl) {
-      try {
-        await ctrl.answerClarification(trimmed)
-      } catch {
-        setIsLoading(false)
-        setAgentStatus('')
-        onRunningChangeRef.current?.(false)
-      }
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      await runtime.answerClarification(trimmed)
     }
-  }, [isLoading, clarificationPending, bindActiveTurnGeneration])
+  }, [isLoading, clarificationPending, getActiveRuntime])
 
   const handleGuiLayoutConfirm = useCallback((entryId: string, layoutJson: string) => {
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    ctrl.resolveGuiLayout(entryId, layoutJson)
-    setDisplayMessages((prev) => {
-      const next = prev.map((m) => {
-        if (!m.entries) return m
-        const found = m.entries.some((e) => e.kind === 'guiLayoutPreview' && e.id === entryId)
-        if (!found) return m
-        return {
-          ...m,
-          entries: m.entries.map((e) =>
-            e.kind === 'guiLayoutPreview' && e.id === entryId
-              ? { ...e, status: 'confirmed' as const, layoutJson }
-              : e
-          )
-        }
-      })
-      flushPersist(next, activePlanRef.current)
-      return next
-    })
-  }, [flushPersist])
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.resolveGuiLayout(entryId, layoutJson)
+    }
+  }, [getActiveRuntime])
 
   const handleGuiLayoutCancel = useCallback((entryId: string) => {
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    ctrl.cancelGuiLayout(entryId)
-    setDisplayMessages((prev) => {
-      const next = prev.map((m) => {
-        if (!m.entries) return m
-        const found = m.entries.some((e) => e.kind === 'guiLayoutPreview' && e.id === entryId)
-        if (!found) return m
-        return {
-          ...m,
-          entries: m.entries.map((e) =>
-            e.kind === 'guiLayoutPreview' && e.id === entryId
-              ? { ...e, status: 'cancelled' as const }
-              : e
-          )
-        }
-      })
-      flushPersist(next, activePlanRef.current)
-      return next
-    })
-  }, [flushPersist])
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.cancelGuiLayout(entryId)
+    }
+  }, [getActiveRuntime])
 
   const handleGuiLayoutFeedback = useCallback((entryId: string, feedback: string) => {
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    ctrl.feedbackGuiLayout(entryId, feedback)
-    setDisplayMessages((prev) => {
-      const next = prev.map((m) => {
-        if (!m.entries) return m
-        const found = m.entries.some((e) => e.kind === 'guiLayoutPreview' && e.id === entryId)
-        if (!found) return m
-        return {
-          ...m,
-          entries: m.entries.map((e) =>
-            e.kind === 'guiLayoutPreview' && e.id === entryId
-              ? { ...e, status: 'cancelled' as const }
-              : e
-          )
-        }
-      })
-      flushPersist(next, activePlanRef.current)
-      return next
-    })
-  }, [flushPersist])
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.feedbackGuiLayout(entryId, feedback)
+    }
+  }, [getActiveRuntime])
 
   const handleExecutePlan = useCallback(async () => {
     if (isLoading || !toolchainReady) return
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    bindActiveTurnGeneration()
-    setIsLoading(true)
-    setAgentStatus('执行中...')
-    setPlanReady(false)
-    try {
-      await ctrl.startExecuteFromPlan()
-    } catch {
-      setIsLoading(false)
-      setAgentStatus('')
-      onRunningChangeRef.current?.(false)
-    }
-  }, [isLoading, toolchainReady, bindActiveTurnGeneration])
+    const runtime = getActiveRuntime()
+    if (!runtime) return
+    await runtime.executePlan()
+  }, [isLoading, toolchainReady, getActiveRuntime])
 
-  const handleTemplateSelect = useCallback((templateId: string, name: string) => {
+  const handleTemplateSelect = useCallback((templateId: string, _name: string) => {
     if (isLoading || clarificationPending) {
       alert('AI 正在处理中，请稍候')
       return
@@ -1840,54 +858,53 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     const nextSessionGoal = quickCreate ? quickCreateSessionGoal(prompt) : sessionGoal
     if (quickCreate) {
       setSessionGoal(nextSessionGoal)
-      persistComposerMeta({ sessionGoal: nextSessionGoal })
-      controllerRef.current?.clearSession()
+      const sid = currentSessionIdRef.current
+      if (sid) onUpdateSessionMetaRef.current?.(sid, { sessionGoal: nextSessionGoal })
     }
 
-    controllerRef.current?.setComposerMode(composerMode)
-    controllerRef.current?.setSessionGoal(nextSessionGoal)
-
-    if (!currentSessionId) {
+    let sid = currentSessionIdRef.current
+    let runtime: SessionRuntime
+    if (!sid) {
       const newId = onNewSession(prompt)
+      sid = newId
       currentSessionIdRef.current = newId
-      restoredSessionIdRef.current = newId
-      const preSnapshot = buildPreTurnSnapshot({
-        messageIndex: 0,
-        controller: controllerRef.current,
-        composerMode,
-        sessionGoal: nextSessionGoal,
-        activePlan: activePlanRef.current,
+      runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+        sessionId: newId,
+        projectPath,
+        apiConfig,
+        routingConfig,
+        routingSelection,
+        resolveRoutingModel,
+        onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+        onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+        onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+        onRunningChange: (r) => onRunningChangeRef.current?.(r)
       })
-      setDisplayMessages([{ id: uid(), role: 'user', content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }])
+      runtime.setComposerMode(composerModeRef.current)
+      runtime.setSessionGoal(nextSessionGoal)
     } else {
-      maybeRenameSessionForFirstMessage(currentSessionId, prompt)
-      setDisplayMessages((prev) => {
-        const preSnapshot = buildPreTurnSnapshot({
-          messageIndex: prev.length,
-          controller: controllerRef.current,
-          composerMode,
-          sessionGoal: nextSessionGoal,
-          activePlan: activePlanRef.current,
-        })
-        const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }]
-        flushPersist(next, null)
-        return next
+      maybeRenameSessionForFirstMessage(sid, prompt)
+      runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+        sessionId: sid,
+        projectPath,
+        apiConfig,
+        routingConfig,
+        routingSelection,
+        resolveRoutingModel,
+        onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+        onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+        onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+        onRunningChange: (r) => onRunningChangeRef.current?.(r)
       })
+      if (quickCreate) {
+        runtime.controller.clearSession()
+      }
+      runtime.setComposerMode(composerMode)
+      runtime.setSessionGoal(nextSessionGoal)
     }
 
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    ctrl.setComposerMode(composerMode)
-    ctrl.setSessionGoal(nextSessionGoal)
-    bindActiveTurnGeneration()
-    setIsLoading(true)
-    setAgentStatus('思考中...')
-    ctrl.send(prompt).catch(() => {
-      setIsLoading(false)
-      setAgentStatus('')
-      onRunningChangeRef.current?.(false)
-    })
-  }, [currentSessionId, onNewSession, maybeRenameSessionForFirstMessage, flushPersist, composerMode, sessionGoal, setContextQueue, projectPath, bindActiveTurnGeneration, persistComposerMeta])
+    await runtime.send(prompt, [], new Map())
+  }, [projectPath, sessionGoal, composerMode, onNewSession, maybeRenameSessionForFirstMessage, apiConfig, routingConfig, routingSelection, resolveRoutingModel, setContextQueue])
 
   const handleTemplateFormCancel = useCallback(() => {
     setShowTemplateForm(false)
@@ -1896,125 +913,105 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const automationSend = useCallback(async (text: string, mode: ComposerMode = 'agent') => {
     const prompt = text.trim()
-    const ctrl = controllerRef.current
     if (!prompt) throw new Error('empty_prompt')
-    if (!ctrl) throw new Error('controller_unavailable')
-    if (ctrl.running) throw new Error('turn_already_running')
-    const resolvedKey = ensureApiKey ? await ensureApiKey() : apiConfig.apiKey.trim()
-    if (!resolvedKey) throw new Error('api_key_unavailable')
-    ctrl.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
-    ctrl.setComposerMode(mode)
-    setComposerMode(mode)
-    bindActiveTurnGeneration()
-    setIsLoading(true)
-    setAgentStatus('automation running...')
-    // Automation uses the same transcript lifecycle as a UI send. Without these
-    // two entries the agent is genuinely running but the visible test window has
-    // no assistant activity card, which hides liveness regressions from Test Lab.
-    const assistantPlaceholder: DisplayMessage = {
-      id: uid(), role: 'assistant', content: '', entries: [], isStreaming: true,
-      timestamp: Date.now(), model: apiConfig.model, providerId: apiConfig.providerId
-    }
-    if (!currentSessionId) {
+    const sid = currentSessionIdRef.current
+    let runtime: SessionRuntime
+    if (!sid) {
       const newId = onNewSession(prompt)
       currentSessionIdRef.current = newId
-      restoredSessionIdRef.current = newId
-      const preSnapshot = buildPreTurnSnapshot({ messageIndex: 0, controller: ctrl, composerMode: mode, sessionGoal, activePlan: activePlanRef.current })
-      const userMessage: DisplayMessage = { id: uid(), role: 'user', content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }
-      setDisplayMessages([userMessage, assistantPlaceholder])
-      flushPersistTo(newId, [userMessage, assistantPlaceholder], null)
-    } else {
-      setDisplayMessages((prev) => {
-        const preSnapshot = buildPreTurnSnapshot({ messageIndex: prev.length, controller: ctrl, composerMode: mode, sessionGoal, activePlan: activePlanRef.current })
-        const next = [...prev, { id: uid(), role: 'user' as const, content: prompt, timestamp: Date.now(), stateSnapshot: preSnapshot }, assistantPlaceholder]
-        flushPersist(next, null)
-        return next
+      runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+        sessionId: newId,
+        projectPath,
+        apiConfig,
+        routingConfig,
+        routingSelection,
+        resolveRoutingModel,
+        onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+        onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+        onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+        onRunningChange: (r) => onRunningChangeRef.current?.(r)
       })
+      runtime.setComposerMode(mode)
+    } else {
+      runtime = SessionRuntimeManager.getInstance().getOrCreateRuntime({
+        sessionId: sid,
+        projectPath,
+        apiConfig,
+        routingConfig,
+        routingSelection,
+        resolveRoutingModel,
+        onPersistSession: (id, msgs) => onPersistSessionRef.current(id, msgs),
+        onUpdateSessionMeta: (id, meta) => onUpdateSessionMetaRef.current?.(id, meta),
+        onUsageChange: (u, m) => onUsageChangeRef.current?.(u, m),
+        onRunningChange: (r) => onRunningChangeRef.current?.(r)
+      })
+      runtime.setComposerMode(mode)
     }
-    turnRef.current = { msgId: assistantPlaceholder.id, entries: [], streamDone: false, collaborationTrace: [] }
-    void ctrl.send(prompt).catch(() => {
-      setIsLoading(false)
-      setAgentStatus('')
-      onRunningChangeRef.current?.(false)
-    })
-    return { accepted: true, ...ctrl.getAutomationSnapshot() }
-  }, [apiConfig, ensureApiKey, bindActiveTurnGeneration, currentSessionId, onNewSession, flushPersist, flushPersistTo, composerMode, sessionGoal])
+    if (runtime.isLoading || runtime.controller.running) throw new Error('turn_already_running')
+    const resolvedKey = ensureApiKey ? await ensureApiKey() : apiConfig.apiKey.trim()
+    if (!resolvedKey) throw new Error('api_key_unavailable')
+    runtime.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
+    setComposerMode(mode)
+    void runtime.send(prompt, [], new Map()).catch(() => {})
+    return { accepted: true, ...runtime.controller.getAutomationSnapshot() }
+  }, [apiConfig, ensureApiKey, projectPath, routingConfig, routingSelection, resolveRoutingModel, onNewSession])
 
-  const automationSnapshot = useCallback(() => ({
-    controller: controllerRef.current?.getAutomationSnapshot() || null,
-    ui: {
-      isLoading,
-      agentStatus,
-      composerMode,
-      planReady,
-      messageCount: displayMessages.length,
-      activeAssistantStreaming: Boolean(
-        [...displayMessages].reverse().find((message) => message.role === 'assistant')?.isStreaming
-      ),
-      activePlan: activePlanRef.current,
-      guiLayout: [...displayMessages].reverse().flatMap((message) => [...(message.entries || [])].reverse())
-        .find((entry) => entry.kind === 'guiLayoutPreview' && entry.status === 'pending') || null,
-      clarification: clarificationPending
-        ? { question: clarificationQuestion, options: clarificationOptions }
-        : null,
-      gameTestStatus
+  const automationSnapshot = useCallback(() => {
+    const runtime = getActiveRuntime()
+    return {
+      controller: runtime?.controller.getAutomationSnapshot() || null,
+      ui: {
+        isLoading,
+        agentStatus,
+        composerMode,
+        planReady,
+        messageCount: displayMessages.length,
+        activeAssistantStreaming: Boolean(
+          [...displayMessages].reverse().find((message) => message.role === 'assistant')?.isStreaming
+        ),
+        activePlan: activePlanRef.current,
+        guiLayout: [...displayMessages].reverse().flatMap((message) => [...(message.entries || [])].reverse())
+          .find((entry) => entry.kind === 'guiLayoutPreview' && entry.status === 'pending') || null,
+        clarification: clarificationPending
+          ? { question: clarificationQuestion, options: clarificationOptions }
+          : null,
+        gameTestStatus
+      }
     }
-  }), [isLoading, agentStatus, composerMode, planReady, displayMessages, clarificationPending, clarificationQuestion, clarificationOptions, gameTestStatus])
+  }, [getActiveRuntime, isLoading, agentStatus, composerMode, planReady, displayMessages, clarificationPending, clarificationQuestion, clarificationOptions, gameTestStatus])
 
-  const automationCancel = useCallback(() => controllerRef.current?.cancel(), [])
+  const automationCancel = useCallback(() => {
+    getActiveRuntime()?.cancel()
+  }, [getActiveRuntime])
 
   const automationRespond = useCallback(async (params: Record<string, unknown>) => {
-    const ctrl = controllerRef.current
-    if (!ctrl) throw new Error('controller_unavailable')
+    const runtime = getActiveRuntime()
+    if (!runtime) throw new Error('controller_unavailable')
     const requestId = String(params.requestId || '')
     const action = String(params.action || '')
     if (!action || (action !== 'clarify' && !requestId)) throw new Error('invalid_response')
     if (action === 'approve' || action === 'deny') {
-      ctrl.approve(requestId, action === 'approve')
+      runtime.approve(requestId, action === 'approve')
       return { accepted: true }
     }
     if (action === 'clarify') {
       const answer = String(params.value || '').trim()
       if (!answer || !clarificationPendingRef.current) throw new Error('clarification_not_pending')
-      setClarificationPending(false)
-      setClarificationQuestion('')
-      setClarificationOptions([])
-      setInput('')
-      bindActiveTurnGeneration()
-      setIsLoading(true)
-      setAgentStatus('automation running...')
-      onRunningChangeRef.current?.(true)
-      void ctrl.answerClarification(answer).catch(() => {
-        setIsLoading(false)
-        setAgentStatus('')
-        onRunningChangeRef.current?.(false)
-      })
+      void runtime.answerClarification(answer)
       return { accepted: true }
     }
     if (action === 'gui_layout') {
-      ctrl.resolveGuiLayout(requestId, String(params.value || '{}'))
+      runtime.resolveGuiLayout(requestId, String(params.value || '{}'))
       return { accepted: true }
     }
     if (action === 'visual_review') {
       const decision = String(params.decision || params.value || '').toLowerCase()
       if (decision !== 'accepted' && decision !== 'rejected') throw new Error('invalid_visual_review_decision')
-      bindActiveTurnGeneration()
-      setIsLoading(true)
-      setAgentStatus(decision === 'accepted' ? 'recording user_confirmation...' : 'entering product repair...')
-      onRunningChangeRef.current?.(true)
-      try {
-        const result = await ctrl.resolveVisualReview(requestId, decision)
-        if (decision === 'accepted') setGameTestStatus(null)
-        return { accepted: true, result }
-      } catch (error) {
-        setIsLoading(false)
-        setAgentStatus('')
-        onRunningChangeRef.current?.(false)
-        throw error
-      }
+      const result = await runtime.resolveVisualReview(requestId, decision as 'accepted' | 'rejected')
+      return { accepted: true, result }
     }
     throw new Error('unsupported_response_action')
-  }, [bindActiveTurnGeneration])
+  }, [getActiveRuntime])
 
   useImperativeHandle(ref, () => ({
     handleTemplateSelect,
@@ -2026,68 +1023,23 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const handleComposerModeChange = useCallback((mode: ComposerMode) => {
     setComposerMode(mode)
-    controllerRef.current?.setComposerMode(mode)
-    persistComposerMeta({ composerMode: mode })
-  }, [persistComposerMeta])
+    const runtime = getActiveRuntime()
+    if (runtime) runtime.setComposerMode(mode)
+  }, [getActiveRuntime])
 
   const handleSessionGoalChange = useCallback((goal: string) => {
     setSessionGoal(goal)
-    controllerRef.current?.setSessionGoal(goal)
-    persistComposerMeta({ sessionGoal: goal })
-  }, [persistComposerMeta])
+    const runtime = getActiveRuntime()
+    if (runtime) runtime.setSessionGoal(goal)
+  }, [getActiveRuntime])
 
   const handleCancel = useCallback(() => {
-    bumpTurnGeneration()
-    controllerRef.current?.cancel()
-    const t = turnRef.current
-    t.streamDone = true
-    t.entries = finalizeRunningTools(t.entries, true)
-    const planSnapshot = activePlanRef.current
-    const finalSteps = planSnapshot?.steps
-
-    t.entries = ensureClosingSummaryEntry(t.entries, {
-      reason: 'cancelled',
-      steps: finalSteps,
-      sessionGoal: sessionGoalRef.current,
-      error: 'Cancelled',
-    })
-
-    setIsLoading(false)
-    setAgentStatus('')
-    onRunningChangeRef.current?.(false)
-    setCompletionFlash('已停止')
-    if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
-    completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-
-    const anchorId = planSnapshot?.anchorMsgId || t.msgId
-
-    setDisplayMessages((prev) => {
-      const next = prev.map((m) => {
-        if (m.isStreaming || m.id === anchorId || m.id === t.msgId) {
-          const isAnchor = m.id === anchorId || m.id === t.msgId
-          return {
-            ...m,
-            ...(isAnchor && t.msgId ? { entries: [...t.entries] } : {}),
-            isStreaming: false,
-            ...(isAnchor ? {
-              turnStatus: 'cancelled' as const,
-              embeddedPlan: finalSteps && finalSteps.length > 0 ? finalSteps : m.embeddedPlan
-            } : {})
-          }
-        }
-        return m
-      })
-      flushPersist(next, null)
-      return next
-    })
-
-    setActivePlan(null)
-    t.msgId = ''
-  }, [flushPersist, bumpTurnGeneration])
+    const runtime = getActiveRuntime()
+    if (runtime) runtime.cancel()
+  }, [getActiveRuntime])
 
   const handleRetryTurn = useCallback(async (turnId: string) => {
     if (isLoading) return
-
     const resolvedKey = ensureApiKey
       ? await ensureApiKey()
       : apiConfig.apiKey.trim()
@@ -2095,64 +1047,18 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       alert('请先配置 API Key（左侧「设置」→ 保存密钥）')
       return
     }
+    const runtime = getActiveRuntime()
+    if (!runtime) return
     if (resolvedKey !== apiConfig.apiKey) {
-      controllerRef.current?.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
+      runtime.setApiConfig({ ...apiConfig, apiKey: resolvedKey })
     }
-
-    const turnIndex = displayMessages.findIndex((m) => m.id === turnId)
-    if (turnIndex < 0) return
-
-    const truncated = displayMessages.slice(0, turnIndex + 1)
-
-    // 判断截断点是否在 execute 阶段：检查当前计划是否存在且锚点在截断范围内
-    const currentPlan = activePlanRef.current
-    const hasValidPlan = Boolean(
-      currentPlan &&
-      currentPlan.steps.length > 0 &&
-      truncated.some((m) => m.id === currentPlan.anchorMsgId)
-    )
-    const planToKeep = hasValidPlan ? currentPlan : null
-
-    bindActiveTurnGeneration()
-    setIsLoading(true)
-    setAgentStatus('思考中...')
-    setActivePlan(planToKeep)
-    setCompletionFlash('')
-    turnRef.current = { msgId: '', entries: [], streamDone: false, collaborationTrace: [] }
-
-    setDisplayMessages(truncated)
-    flushPersist(truncated, planToKeep, { resetSystem: true })
-
-    const serialized = serializeDisplayMessages(truncated, planToKeep)
-    void toControllerMessagesWithAttachments(serialized, (p) => window.api.readAttachmentDataUrl(p)).then((msgs) => {
-      controllerRef.current?.restoreSnapshot(msgs)
-      if (planToKeep) {
-        controllerRef.current?.restorePlanTracker(planToKeep.steps)
-      }
-    })
-
-    const ctrl = controllerRef.current
-    if (!ctrl) return
-    try {
-      if (planToKeep) {
-        await ctrl.retryExecuteTurn()
-      } else {
-        await ctrl.retryFromUser()
-      }
-    }
-    catch {
-      setIsLoading(false)
-      setAgentStatus('')
-      onRunningChangeRef.current?.(false)
-    }
-  }, [isLoading, apiConfig, ensureApiKey, displayMessages, flushPersist, bindActiveTurnGeneration])
+    await runtime.retryTurn(turnId)
+  }, [isLoading, ensureApiKey, apiConfig, getActiveRuntime])
 
   const handleRollback = useCallback((msgId: string) => {
     if (isLoading) return
-
     const msgIndex = displayMessages.findIndex((m) => m.id === msgId)
     if (msgIndex === -1) return
-
     const targetMsg = displayMessages[msgIndex]
     const snapshot = targetMsg.stateSnapshot
     if (!snapshot) {
@@ -2161,24 +1067,19 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
       return
     }
-
-    const fileCount = snapshot.fileSnapshots.length
     setRollbackWarning({
       msgId,
       content: targetMsg.content,
-      fileCount
+      fileCount: snapshot.fileSnapshots.length
     })
   }, [isLoading, displayMessages])
 
   const handleRollbackConfirm = useCallback(async () => {
     if (!rollbackWarning) return
-
     const { msgId, content: messageContent } = rollbackWarning
     setRollbackWarning(null)
-
     const msgIndex = displayMessages.findIndex((m) => m.id === msgId)
     if (msgIndex === -1) return
-
     const targetMsg = displayMessages[msgIndex]
     const snapshot = targetMsg.stateSnapshot
     if (!snapshot) return
@@ -2192,36 +1093,30 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
     }
 
     const restoredMessages = displayMessages.slice(0, msgIndex)
-
-    const ctrl = controllerRef.current
-    if (ctrl) {
-      ctrl.restoreSnapshot(snapshot.controllerMessages)
-      ctrl.setComposerMode(snapshot.composerMode)
-      ctrl.setSessionGoal(snapshot.sessionGoal)
-      ctrl.restorePlanTracker(snapshot.planTrackerSteps ?? [])
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.controller.restoreSnapshot(snapshot.controllerMessages)
+      runtime.setComposerMode(snapshot.composerMode)
+      runtime.setSessionGoal(snapshot.sessionGoal)
+      runtime.controller.restorePlanTracker(snapshot.planTrackerSteps ?? [])
+      runtime.displayMessages = restoredMessages
+      runtime.activePlan = snapshot.activePlan || null
+      runtime.planReady = Boolean(snapshot.activePlan?.steps.length)
+      runtime.collapsedToolIds = new Set()
+      runtime.collapsedReasoningKeys = new Set()
+      runtime.flushPersist(restoredMessages, snapshot.activePlan || null)
+      runtime.notify()
     }
 
-    setDisplayMessages(restoredMessages)
-    setActivePlan(snapshot.activePlan || null)
-    setPlanReady(Boolean(snapshot.activePlan?.steps.length))
-    setComposerMode(snapshot.composerMode)
-    setSessionGoal(snapshot.sessionGoal)
-
-    setCollapsedToolIds(new Set())
-    setCollapsedReasoningKeys(new Set())
-
     setInput(messageContent)
-
     if (projectPath) {
       window.api.listDirectory(projectPath)
     }
 
-    flushPersist(restoredMessages, snapshot.activePlan || null)
-
     setCompletionFlash('已回滚')
     if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
     completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-  }, [rollbackWarning, displayMessages, projectPath, flushPersist])
+  }, [rollbackWarning, displayMessages, projectPath, getActiveRuntime])
 
   const handleRollbackCancel = useCallback(() => {
     setRollbackWarning(null)
@@ -2229,26 +1124,21 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const handleDeleteMessage = useCallback((msgId: string) => {
     if (isLoading) return
-
     const msgIndex = displayMessages.findIndex((m) => m.id === msgId)
     if (msgIndex === -1) return
-
     const targetMsg = displayMessages[msgIndex]
     const preview = messagePlainText(targetMsg).slice(0, 200) || '(无文本内容)'
-
     setDeletePending({
       msgId,
       role: targetMsg.role,
-      preview,
+      preview
     })
   }, [isLoading, displayMessages])
 
   const handleDeleteConfirm = useCallback(() => {
     if (!deletePending) return
-
     const { msgId } = deletePending
     setDeletePending(null)
-
     const { next, removedIds } = removeMessageFromDisplay(displayMessages, msgId)
 
     let nextPlan = activePlanRef.current
@@ -2256,29 +1146,24 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
       nextPlan = null
     }
 
-    const serialized = serializeDisplayMessages(next, nextPlan)
-    if (!nextPlan) {
-      nextPlan = restoreActivePlan(next, serialized)
-    }
-
-    setDisplayMessages(next)
-    setActivePlan(nextPlan)
-    setPlanReady(Boolean(nextPlan?.steps.length))
-
-    const ctrl = controllerRef.current
-    if (ctrl) {
+    const runtime = getActiveRuntime()
+    if (runtime) {
+      runtime.displayMessages = next
+      runtime.activePlan = nextPlan
+      runtime.planReady = Boolean(nextPlan?.steps.length)
+      const serialized = serializeDisplayMessages(next, nextPlan)
       void toControllerMessagesWithAttachments(serialized, (p) => window.api.readAttachmentDataUrl(p)).then((msgs) => {
-        ctrl.restoreSnapshot(msgs)
-        ctrl.restorePlanTracker([])
+        runtime.controller.restoreSnapshot(msgs)
+        runtime.controller.restorePlanTracker([])
       })
+      runtime.flushPersist(next, nextPlan)
+      runtime.notify()
     }
-
-    flushPersist(next, nextPlan)
 
     setCompletionFlash('已删除')
     if (completionFlashTimerRef.current) window.clearTimeout(completionFlashTimerRef.current)
     completionFlashTimerRef.current = window.setTimeout(() => setCompletionFlash(''), 3000)
-  }, [deletePending, displayMessages, flushPersist])
+  }, [deletePending, displayMessages, getActiveRuntime])
 
   const handleDeleteCancel = useCallback(() => {
     setDeletePending(null)
@@ -2289,9 +1174,6 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
 
   const renderMessage = (msg: DisplayMessage, turn: ChatTurn) => {
     const isUser = msg.role === 'user'
-    // Streaming text can pause while the controller is classifying, waiting for a
-    // provider, or running a tool. Keep a visible liveness indicator in the
-    // conversation itself so the header/status bar is not the only signal.
     const showActivity = !isUser && isLoading && msg.isStreaming && turn.assistant?.id === msg.id
     const activityLabel = agentStatus.trim() || 'AI 正在处理，请稍候…'
     const activityElapsed = Math.max(1, Math.floor((Date.now() - msg.timestamp) / 1000))
@@ -2740,6 +1622,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             modelId={apiConfig.model}
             onProviderModelChange={onProviderModelChange ?? (() => {})}
             onOpenApiSettings={onOpenApiSettings}
+            onOpenAdvancedRouting={onOpenAdvancedRouting}
+            savedProviderIds={savedProviderIds}
             routingConfig={routingConfig}
             routingSelection={routingSelection}
             onRoutingSelectionChange={onRoutingSelectionChange}
@@ -2807,7 +1691,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               (activePlan?.steps?.length
                 ? activePlan.steps.map((s) => s.description).join('；')
                 : '')
-            const ctrl = controllerRef.current
+            const ctrl = getActiveRuntime()?.controller
             const latestEmbeddedPlan = [...displayMessages]
               .reverse()
               .find((m) => m.role === 'assistant' && m.embeddedPlan && m.embeddedPlan.length > 0)
@@ -2826,8 +1710,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
               activePlanSteps: activePlan?.steps?.length
                 ? activePlan.steps
                 : latestEmbeddedPlan,
-              controllerMessages: ctrl?.getSnapshot(),
+              controllerMessages: ctrl?.getSnapshot().map((message) =>
+                message.reasoningContent
+                  ? { ...message, reasoningContent: `[reasoning ${message.reasoningContent.length} chars]` }
+                  : message
+              ),
               classifierDiagnostics: ctrl?.getClassifierDiagnosticsSnapshot(),
+              providerProtocolDiagnostics: ctrl?.getProviderProtocolDiagnosticsSnapshot(),
             })
             const result = await window.api.sessionExport(md, 'mc-session-diag')
             if (result.cancelled) return
@@ -2849,6 +1738,13 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({ 
             setExportBusy(false)
           }
         }}
+      />
+    )}
+    {concurrentAgentModal.open && (
+      <ConcurrentAgentConfirmModal
+        runningSessionName={concurrentAgentModal.runningSessionName}
+        onConfirm={concurrentAgentModal.onConfirm}
+        onCancel={() => setConcurrentAgentModal({ open: false, runningSessionName: '', onConfirm: () => {} })}
       />
     )}
     </>

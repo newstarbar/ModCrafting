@@ -1,6 +1,7 @@
 import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv'
 import type { ModelToolCall } from './chat-message.ts'
 import type { ToolResult } from './tools.ts'
+import type { ActiveToolSnapshot, ToolFailureKind } from '../../../shared/harness-runtime.ts'
 
 export interface ToolSchema {
   name: string
@@ -190,10 +191,11 @@ export function normalizeToolCallArguments(call: ModelToolCall): ModelToolCall {
 
 function rejectedResult(
   call: ModelToolCall,
-  errorKind: 'tool_not_offered' | 'invalid_tool_arguments',
-  detail: string
+  failureKind: Extract<ToolFailureKind, 'arguments_invalid' | 'arguments_incomplete'>,
+  detail: string,
+  legacyErrorKind: 'invalid_tool_arguments' = 'invalid_tool_arguments'
 ): ToolResult {
-  const output = `blocked: [${errorKind}] 工具 "${call.name}" 未执行：${detail}`
+  const output = `blocked: [${failureKind}] 工具 "${call.name}" 未执行：${detail}`
   return {
     output,
     error: output,
@@ -202,7 +204,10 @@ function rejectedResult(
     toolName: call.name,
     args: call.args,
     exitCode: null,
-    errorKind
+    // Keep old replay/checkpoint consumers readable while exposing the new
+    // protocol classification to current recovery logic.
+    errorKind: legacyErrorKind,
+    failureKind
   }
 }
 
@@ -211,14 +216,32 @@ export interface ToolCallContext {
   phase?: 'plan' | 'execute'
   /** 当前步骤标题（execute 阶段），用于错误消息定位 */
   stepTitle?: string
+  /** Why the snapshot gated this tool out; quoted instead of re-listing every tool name. */
+  inactiveReason?: string
 }
 
-/** 工具不在白名单时，生成阶段感知的明确错误消息（含允许工具列表 + 操作指导） */
+/** 工具存在但本轮未启用时，生成阶段感知的明确错误消息。 */
 function rejectedNotOfferedResult(
   call: ModelToolCall,
   offeredSchemas: ToolSchema[],
-  context?: ToolCallContext
+  context?: ToolCallContext,
+  knownToolNames?: Set<string>
 ): ToolResult {
+  const isUnknown = Boolean(knownToolNames && !knownToolNames.has(call.name))
+  if (isUnknown) {
+    const output = `blocked: [tool_unknown] 工具注册表中不存在 "${call.name}"；请改用当前工具快照中的已注册工具。`
+    return {
+      output,
+      error: output,
+      durationMs: 0,
+      ok: false,
+      toolName: call.name,
+      args: call.args,
+      exitCode: null,
+      errorKind: 'unknown_tool',
+      failureKind: 'tool_unknown'
+    }
+  }
   const phase = context?.phase ?? 'execute'
   // 排除 complete_step 避免噪音；保留 submit_plan 让 AI 知道可以提交计划
   const allowedNames = offeredSchemas
@@ -242,11 +265,14 @@ function rejectedNotOfferedResult(
     }
   } else {
     const stepInfo = context?.stepTitle ? `当前步骤：${context.stepTitle}。` : ''
-    detail = `${stepInfo}工具 "${call.name}" 不在当前步骤的白名单中。当前允许的工具：${allowedList}。\n` +
-      `请改用允许的工具；若当前步骤无需工具调用，可调用 complete_step 推进到下一步骤。`
+    // Do not re-list every advertised tool here: this text is persisted into history and
+    // replayed on later rounds. The step prompt already carries the allowed-tool line.
+    const reason = context?.inactiveReason ? `（${context.inactiveReason}）` : ''
+    detail = `${stepInfo}工具 "${call.name}" 存在，但本轮未启用${reason}。\n` +
+      `请改用当前步骤说明中列出的工具；若当前步骤无需工具调用，可调用 complete_step 推进到下一步骤。`
   }
 
-  const output = `blocked: [tool_not_offered] ${detail}`
+  const output = `blocked: [tool_inactive] ${detail}`
   return {
     output,
     error: output,
@@ -255,7 +281,8 @@ function rejectedNotOfferedResult(
     toolName: call.name,
     args: call.args,
     exitCode: null,
-    errorKind: 'tool_not_offered'
+    errorKind: 'tool_not_offered',
+    failureKind: 'tool_inactive'
   }
 }
 
@@ -263,20 +290,38 @@ function rejectedNotOfferedResult(
  * Native calls and XML fallback calls pass through this same boundary. */
 export function validateToolCalls(
   calls: ModelToolCall[],
-  offeredSchemas: ToolSchema[],
+  offeredSchemas: ToolSchema[] | ActiveToolSnapshot,
   context?: ToolCallContext
 ): ValidatedToolCalls {
-  const offered = new Map(offeredSchemas.map((schema) => [schema.name, schema]))
+  const schemas = Array.isArray(offeredSchemas) ? offeredSchemas : offeredSchemas.tools
+  const knownToolNames = Array.isArray(offeredSchemas)
+    ? undefined
+    : new Set([...Object.keys(offeredSchemas.inactiveReasons), ...schemas.map((schema) => schema.name)])
+  const offered = new Map(schemas.map((schema) => [schema.name, schema]))
   const accepted: ModelToolCall[] = []
   const rejected = new Map<string, ToolResult>()
 
   for (const call of calls) {
     const normalizedCall = normalizeToolCallArguments(call)
+    // Stream integrity is checked before tool existence. A truncated provider
+    // record may not contain its name yet; that is a protocol problem, not a
+    // whitelist/inactive-tool decision.
+    if (normalizedCall.failureKind === 'arguments_incomplete') {
+      rejected.set(normalizedCall.id, rejectedResult(normalizedCall, 'arguments_incomplete', 'Provider 工具参数流未完整结束；请重新提交完整 JSON 参数。'))
+      continue
+    }
+    if (normalizedCall.failureKind === 'arguments_invalid') {
+      rejected.set(normalizedCall.id, rejectedResult(normalizedCall, 'arguments_invalid', 'Provider 返回的工具参数不是合法 JSON object'))
+      continue
+    }
     const schema = offered.get(normalizedCall.name)
     if (!schema) {
       rejected.set(
         normalizedCall.id,
-        rejectedNotOfferedResult(normalizedCall, offeredSchemas, context)
+        rejectedNotOfferedResult(normalizedCall, schemas, {
+          ...context,
+          inactiveReason: Array.isArray(offeredSchemas) ? undefined : offeredSchemas.inactiveReasons[normalizedCall.name]
+        }, knownToolNames)
       )
       continue
     }
@@ -286,7 +331,7 @@ export function validateToolCalls(
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         rejected.set(
           normalizedCall.id,
-          rejectedResult(normalizedCall, 'invalid_tool_arguments', 'arguments 必须是 JSON object')
+          rejectedResult(normalizedCall, 'arguments_invalid', 'arguments 必须是 JSON object')
         )
         continue
       }
@@ -295,7 +340,7 @@ export function validateToolCalls(
         normalizedCall.name === 'write_file' || normalizedCall.name === 'edit_file'
           ? 'arguments 不是合法 JSON（大文件易截断）。整文件重写请：① write_file 短骨架（overwrite=true，内容建议 <80 行）；② 多次 edit_file，每次 new_string 只加一小段方法/字段。禁止再次提交整文件 JSON；此问题与文档无关，不要 fabric_docs_search。'
           : 'arguments 不是合法 JSON'
-      rejected.set(normalizedCall.id, rejectedResult(normalizedCall, 'invalid_tool_arguments', hint))
+      rejected.set(normalizedCall.id, rejectedResult(normalizedCall, 'arguments_invalid', hint))
       continue
     }
 
@@ -305,14 +350,14 @@ export function validateToolCalls(
     } catch (error) {
       rejected.set(
         call.id,
-        rejectedResult(normalizedCall, 'invalid_tool_arguments', `工具 Schema 无效：${String(error)}`)
+        rejectedResult(normalizedCall, 'arguments_invalid', `工具 Schema 无效：${String(error)}`)
       )
       continue
     }
     if (!validator(normalizedCall.args)) {
       rejected.set(
         normalizedCall.id,
-        rejectedResult(normalizedCall, 'invalid_tool_arguments', formatErrors(validator.errors, normalizedCall.name))
+        rejectedResult(normalizedCall, 'arguments_invalid', formatErrors(validator.errors, normalizedCall.name))
       )
       continue
     }

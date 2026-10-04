@@ -62,6 +62,7 @@ public final class InputActions {
             case "scroll" -> scroll(body);
             case "click_at" -> clickAt(body);
             case "click_widget" -> clickWidget(body);
+            case "click_slot" -> clickSlot(body);
 			case "set_text" -> setText(body);
             case "forward", "back", "left", "right", "jump", "sneak", "sprint",
                  "use", "attack", "inventory", "drop", "swap_hands" -> preset(action, body);
@@ -147,6 +148,60 @@ public final class InputActions {
         result.put("index", matchedIndex);
         result.put("message", target.getMessage() != null ? target.getMessage().getString() : "");
         return result;
+    }
+
+    /**
+     * Deterministic slot click for container automation (crafting grids, result slots, inventory).
+     * body: { slot: int, button?: 0|1|2 (default 0=left), shift?: bool }
+     */
+    private static Map<String, Object> clickSlot(Map<String, Object> body) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) {
+            return error("NOT_IN_WORLD", "玩家尚未进入世界");
+        }
+        int slot = intVal(body.get("slot"), -1);
+        if (slot < 0) {
+            return error("BAD_REQUEST", "click_slot 需要整数 slot（≥ 0）");
+        }
+        int button = intVal(body.get("button"), 0);
+        boolean shift = boolVal(body.get("shift"));
+        // Use the client's InteractionManager to click the slot through the open screen handler
+        try {
+            if (client.interactionManager == null) {
+                return error("NO_SCREEN", "当前没有打开的容器界面，无法点击槽位");
+            }
+            // Verify there's an open container screen with the requested slot
+            Screen screen = client.currentScreen;
+            if (!(screen instanceof net.minecraft.client.gui.screen.ingame.AbstractContainerScreen<?> containerScreen)) {
+                return error("NO_CONTAINER_SCREEN", "click_slot 需要打开一个容器界面（如合成台、背包）；当前界面：" + (screen != null ? screen.getClass().getSimpleName() : "null"));
+            }
+            var handler = containerScreen.getScreenHandler();
+            if (handler == null || slot >= handler.slots.size()) {
+                return error("BAD_REQUEST", "slot " + slot + " 超出当前容器范围（最大 " + (handler != null ? handler.slots.size() : 0) + "）");
+            }
+            var targetSlot = handler.slots.get(slot);
+            // Use the network interaction manager to click the slot at screen level
+            // This works for both crafting result slots and inventory slots
+            client.interactionManager.clickSlot(
+                handler.syncId,
+                slot,
+                button,
+                shift ? net.minecraft.screen.ClickType.QUICK_MOVE : net.minecraft.screen.ClickType.PICKUP,
+                client.player
+            );
+            return Map.of(
+                "ok", true,
+                "action", "click_slot",
+                "slot", slot,
+                "button", button,
+                "shift", shift,
+                "handlerSyncId", handler.syncId,
+                "slotItem", targetSlot.getStack().isEmpty() ? null : Registries.ITEM.getId(targetSlot.getStack().getItem()).toString(),
+                "screenAfter", screen.getClass().getSimpleName()
+            );
+        } catch (Exception e) {
+            return error("CLICK_FAILED", "click_slot 失败: " + e.getMessage());
+        }
     }
 
     /** Set a visible text field deterministically (used to name the dedicated test world). */
@@ -386,6 +441,12 @@ public final class InputActions {
             }
         }
         return def;
+    }
+
+    private static boolean boolVal(Object o) {
+        if (o instanceof Boolean b) return b;
+        String s = str(o).toLowerCase(Locale.ROOT);
+        return "true".equals(s) || "1".equals(s) || "yes".equals(s);
     }
 
     private static Map<String, Object> error(String code, String message) {

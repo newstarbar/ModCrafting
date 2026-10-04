@@ -10,6 +10,8 @@ npm run build            # 编译主进程、预加载与 Renderer
 npm run start            # 启动已构建的 Electron 应用
 npm run test             # Harness 单元/回归测试（自动收集 harness-*.test.ts）
 npm run test:harness     # npm run test 的别名
+npm run test:ui          # UI 组件 snapshot 测试（Vitest + Testing Library）
+npm run test:ui:update   # 更新 UI snapshot 基线
 ```
 
 ## Harness Test Lab
@@ -101,6 +103,7 @@ npm run clean:local -- --all
 | 层级 | 入口 | 典型覆盖 |
 |---|---|---|
 | Harness 单元/回归 | `npm test` | 计划、工具门控、分类、证据、修复范围、游戏协议 |
+| UI 组件 snapshot | `npm run test:ui` | React 组件 DOM 结构快照与视觉回归检测 |
 | MCP 协议烟测 | `npm run test:mcp` | stdio Server 构造、Schema 和工具发现 |
 | 应用级回放 | `npm run test:app` | 真实 Electron/React/Controller/IPC 与活跃状态 |
 | Observer | `npm run bridge:build` | Java/Mixin 编译及基础模组 JAR |

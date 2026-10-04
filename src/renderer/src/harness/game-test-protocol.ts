@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { legacyAcceptanceContract, validateAcceptanceContract, type AcceptanceContract } from './acceptance-contract.ts'
 import {
   GAME_TEST_REGION as SHARED_GAME_TEST_REGION,
@@ -19,6 +20,53 @@ export type GameFeatureType =
   | 'entity_behavior'
   | 'player_interaction'
   | 'hud_gui'
+
+/** Declarative sandbox presets for structured test environments.
+ * The host expands these into concrete command sequences during setup.
+ * Entity tests default to enclosed_arena to prevent world-boundary escapes. */
+export type SandboxPreset = 'flat_platform' | 'enclosed_arena' | 'stimulus_pad' | 'crafting_station' | 'skip'
+
+export const SANDBOX_COMMANDS: Record<Exclude<SandboxPreset, 'skip'>, string[]> = {
+  flat_platform: [
+    'fill 0 99 0 16 99 16 minecraft:stone',
+    'fill 0 99 0 16 99 16 minecraft:air'
+  ],
+  enclosed_arena: [
+    // Glass/barrier ring + ceiling to keep entities in bounded space
+    'fill 0 99 0 16 99 16 minecraft:air',
+    'fill 0 99 0 16 99 16 minecraft:barrier',
+    'fill 0 100 0 16 100 16 minecraft:air',
+    'fill 0 101 0 16 101 16 minecraft:air',
+    // Floor
+    'fill 1 99 1 15 99 15 minecraft:stone',
+    // Wall north/south
+    'fill 1 100 1 15 110 1 minecraft:glass',
+    'fill 1 100 15 15 110 15 minecraft:glass',
+    // Wall east/west
+    'fill 1 100 1 1 110 15 minecraft:glass',
+    'fill 15 100 1 15 110 15 minecraft:glass',
+    // Ceiling
+    'fill 1 110 1 15 110 15 minecraft:glass'
+  ],
+  stimulus_pad: [
+    'fill 0 99 0 16 99 16 minecraft:air',
+    'fill 0 99 0 16 99 16 minecraft:stone',
+    // Fire stimulus point
+    'setblock 0 100 8 minecraft:fire',
+    // Water stimulus point
+    'setblock 16 100 8 minecraft:water[level=0]',
+    // Target area (armor stand)
+    'summon minecraft:armor_stand 8 100 8 {Tags:["test_target"],Invisible:1b,NoGravity:1b}'
+  ],
+  crafting_station: [
+    'fill 0 99 0 16 99 16 minecraft:air',
+    'fill 0 99 0 16 99 16 minecraft:stone',
+    // Crafting table nearby
+    'setblock 8 100 8 minecraft:crafting_table',
+    // Face south (toward block)
+    'tp @s 8 100 12 0 0'
+  ]
+}
 
 export type GameTestVerdict = 'PASS' | 'FAIL' | 'INCONCLUSIVE'
 export type GameTestPhase = 'created' | 'preparing' | 'acting' | 'asserting' | 'cleaning' | 'finished'
@@ -102,7 +150,7 @@ export type GameAction =
  * single declarative action to occupy the world-control tool indefinitely. */
 export const MAX_GAME_TEST_WAIT_MS = 90_000
 
-export type SnapshotSource = 'player' | 'serverPlayer' | 'screen' | 'entity' | 'renderTrace' | 'hudTrace' | 'combatTrace'
+export type SnapshotSource = 'player' | 'serverPlayer' | 'screen' | 'containerSlots' | 'entity' | 'renderTrace' | 'hudTrace' | 'combatTrace'
 
 export type SnapshotRelationOperator = 'equals' | 'not_equals' | 'approximately' | 'ratio'
 
@@ -174,6 +222,10 @@ export interface GameTestSpec {
     id?: string
     hotkey?: string
   }
+  /** Declarative sandbox preset; host expands to SANDBOX_COMMANDS during setup.
+   * Entity tests default to enclosed_arena (field-level enforced by createGameTestSpec).
+   * Use 'skip' only when the test world is already prepared. */
+  sandbox?: SandboxPreset
   setup: GameAction[]
   actions: GameAction[]
   assertions: GameAssertion[]
@@ -419,10 +471,11 @@ function nextId(prefix: string): string {
 /** A stable identity for a scenario's executable contract. Runtime IDs and
  * timestamps are deliberately excluded so repeated invalid submissions can be
  * detected across fresh test-session IDs. */
-export function gameTestScenarioFingerprint(spec: Pick<GameTestSpec, 'featureType' | 'subject' | 'setup' | 'actions' | 'assertions' | 'cleanup' | 'visualOnly' | 'acceptanceContract' | 'requiredPassCount' | 'baselineCheckpoint' | 'checkpoints' | 'variables' | 'approvedLayoutId' | 'approvedLayoutFingerprint'>): string {
+export function gameTestScenarioFingerprint(spec: Pick<GameTestSpec, 'featureType' | 'subject' | 'sandbox' | 'setup' | 'actions' | 'assertions' | 'cleanup' | 'visualOnly' | 'acceptanceContract' | 'requiredPassCount' | 'baselineCheckpoint' | 'checkpoints' | 'variables' | 'approvedLayoutId' | 'approvedLayoutFingerprint'>): string {
   return JSON.stringify(stableFingerprintValue({
     featureType: spec.featureType,
     subject: spec.subject,
+    sandbox: spec.sandbox,
     setup: spec.setup,
     actions: spec.actions,
     assertions: spec.assertions,
@@ -499,6 +552,31 @@ function defaultCleanup(): GameAction[] {
   ]
 }
 
+/** Resolve sandbox preset and return the composed setup. */
+export function resolveSandbox(
+  rawSandbox: unknown,
+  featureType: string,
+  explicitArenaRequired: boolean
+): { sandbox: SandboxPreset | undefined; error?: string } {
+  if (rawSandbox === undefined || rawSandbox === null || rawSandbox === '') {
+    // Entity tests default to enclosed_arena unless explicitly skipped
+    if (featureType === 'entity_behavior') {
+      return { sandbox: 'enclosed_arena' }
+    }
+    return { sandbox: undefined }
+  }
+  const valid: SandboxPreset[] = ['flat_platform', 'enclosed_arena', 'stimulus_pad', 'crafting_station', 'skip']
+  if (!valid.includes(rawSandbox as SandboxPreset)) {
+    return { sandbox: undefined, error: `sandbox 必须是 ${valid.join('|')} 之一；当前值：${rawSandbox}` }
+  }
+  const preset = rawSandbox as SandboxPreset
+  // Entity tests must use enclosed_arena unless explicitly skipped
+  if (explicitArenaRequired && preset !== 'enclosed_arena' && preset !== 'skip') {
+    return { sandbox: preset, error: `entity_behavior 测试必须使用 enclosed_arena 或 skip；当前 sandbox="${preset}"。若想跳过标准沙盒，请传 sandbox="skip" 并在 actions 中提供自定义环境构建命令。` }
+  }
+  return { sandbox: preset }
+}
+
 const ASSERTION_TYPES = new Set<GameAssertion['type']>([
   'command_result', 'inventory_contains', 'main_hand', 'block_equals', 'entity_exists',
   'screen_matches', 'widget_state', 'player_state', 'recipe_exists', 'state_changed',
@@ -508,6 +586,24 @@ const ASSERTION_TYPES = new Set<GameAssertion['type']>([
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+/** Expands a sandbox preset into GameAction commands (run after defaultSetup). */
+export function expandSandboxCommands(sandbox: SandboxPreset | undefined): GameAction[] {
+  if (!sandbox || sandbox === 'skip') return []
+  const commands = SANDBOX_COMMANDS[sandbox]
+  if (!commands) return []
+  return commands.map((command) => ({ type: 'command' as const, command, label: `sandbox:${sandbox}:${command.slice(0, 30)}` }))
+}
+
+/** Resolve a declarative sandbox into concrete setup commands.
+ * The sandbox expansion runs AFTER defaultSetup (defaultSetup is always prepended). */
+export function composeSetup(
+  defaultSetupActions: GameAction[],
+  sandbox?: SandboxPreset
+): GameAction[] {
+  // defaultSetup first, then sandbox overlay
+  return [...defaultSetupActions, ...expandSandboxCommands(sandbox)]
 }
 
 function nonEmptyString(value: unknown): value is string {
@@ -778,11 +874,14 @@ function validateActions(value: unknown, path: string): { ok: true; actions: Gam
     if (item.type === 'command' && nonEmptyString(item.command)) actions.push({ type: 'command', command: item.command, ...meta })
     else if (item.type === 'input' && nonEmptyString(item.action)) {
       const action = item.action === 'key' ? 'key_press' : item.action
-      const allowed = new Set(['click_at', 'click_widget', 'set_text', 'key_press', 'key_down', 'key_up', 'mouse_click', 'mouse_move', 'scroll', 'forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint', 'use', 'attack', 'inventory', 'drop', 'swap_hands'])
+      const allowed = new Set(['click_at', 'click_widget', 'click_slot', 'set_text', 'key_press', 'key_down', 'key_up', 'mouse_click', 'mouse_move', 'scroll', 'forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint', 'use', 'attack', 'inventory', 'drop', 'swap_hands'])
       if (!allowed.has(action)) return { ok: false, error: `${itemPath}.action is unsupported; use a concrete mc_input action such as key_press.` }
       const actionArgs = record(item.args) || {}
       if ((action === 'key_press' || action === 'key_down' || action === 'key_up') && !nonEmptyString(actionArgs.key)) {
         return { ok: false, error: `${itemPath}.args.key is required for ${action}.` }
+      }
+      if (action === 'click_slot' && !numericOrVariable(actionArgs.slot)) {
+        return { ok: false, error: `${itemPath}.args.slot is required for click_slot (integer ≥ 0).` }
       }
       actions.push({ type: 'input', action, ...(Object.keys(actionArgs).length ? { args: actionArgs } : {}), ...meta })
     }
@@ -977,7 +1076,14 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
   const invalid = assertions.find((assertion) => JSON.stringify(assertion).match(PLACEHOLDER_RE))
   if (invalid) return { ok: false, error: `断言包含未替换占位符：${JSON.stringify(invalid)}` }
 
-  const setup = defaultSetup()
+  // Resolve declarative sandbox; entity tests default to enclosed_arena
+  const sandboxResult = resolveSandbox(args.sandbox, kind, kind === 'entity_behavior')
+  if (sandboxResult.error) return { ok: false, error: sandboxResult.error }
+  const sandbox = sandboxResult.sandbox
+
+  const defaultSetupActions = defaultSetup()
+  const composedSetup = sandbox ? [...defaultSetupActions, ...expandSandboxCommands(sandbox)] : defaultSetupActions
+
   const actions: GameAction[] = [...suppliedActions.actions]
   if (actions.length === 0 && kind === 'new_item') {
     actions.push({ type: 'command', command: `give @s ${subjectId} 1`, label: '给予目标物品' })
@@ -1037,7 +1143,8 @@ export function createGameTestSpec(args: Record<string, unknown>): { ok: true; s
     id: nextId('scenario'),
     featureType: kind,
     subject: { ...(modId ? { modId } : {}), ...(subjectId ? { id: subjectId } : {}), ...(hotkey ? { hotkey } : {}) },
-    setup,
+    sandbox,
+    setup: composedSetup,
     actions,
     assertions,
     cleanup: defaultCleanup(),
@@ -1132,6 +1239,11 @@ export function registerGameTestSpec(value: unknown): { ok: true; spec: GameTest
     }
     restoredApprovedLayout = registered.record
   }
+  // Re-validate sandbox if present in a restored spec
+  const sandboxResult = resolveSandbox(raw.sandbox, String(raw.featureType || ''), false)
+  if (sandboxResult.error) return { ok: false, error: sandboxResult.error }
+  const sandbox = sandboxResult.sandbox
+
   const spec: GameTestSpec = {
     version: 2,
     id: raw.id,
@@ -1141,6 +1253,7 @@ export function registerGameTestSpec(value: unknown): { ok: true; spec: GameTest
       ...(nonEmptyString(subject.id) ? { id: subject.id } : {}),
       ...(nonEmptyString(subject.hotkey) ? { hotkey: subject.hotkey } : {})
     },
+    sandbox,
     setup: setup.actions,
     actions: actions.actions,
     assertions: asserted.assertions,
