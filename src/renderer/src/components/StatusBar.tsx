@@ -1,4 +1,5 @@
-import React from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   cacheHitMissForDisplay,
   contextWindowLimit,
@@ -9,6 +10,12 @@ import {
   workingContextWindow,
   type UsageStats
 } from '../utils/usage'
+import {
+  CONTEXT_CATEGORY_LABELS,
+  isContextDuplicateNotable,
+  type ContextAttribution
+} from '../utils/context-attribution'
+import ContextBreakdown from './ContextBreakdown'
 import type { McRuntimeSlot } from '../types/dev-status'
 import type { ProjectVersions } from '../utils/project-versions'
 import { formatProjectVersions } from '../utils/project-versions'
@@ -28,6 +35,8 @@ interface StatusBarProps {
   toolchainPercent?: number
   projectVersions?: ProjectVersions | null
   mcRuntime?: McRuntimeSlot
+  /** Category split of the last real prompt. Absent → the bar falls back to a single fill. */
+  attribution?: ContextAttribution | null
 }
 
 function contextLevelClass(percent: number): string {
@@ -48,8 +57,53 @@ const StatusBar: React.FC<StatusBarProps> = ({
   toolchainProgress,
   toolchainPercent,
   projectVersions,
-  mcRuntime
+  mcRuntime,
+  attribution = null
 }) => {
+  // The status bar is a scroll container (overflow-x), which clips any
+  // absolutely positioned child, so the popover is portalled to <body>.
+  const contextAnchorRef = useRef<HTMLSpanElement>(null)
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
+  const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 })
+
+  const syncPopoverPosition = useCallback(() => {
+    const el = contextAnchorRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const popoverWidth = Math.min(480, window.innerWidth - 24)
+    // Anchored by its right edge; keep the box inside the viewport.
+    const right = Math.max(Math.min(rect.right, window.innerWidth - 12), popoverWidth + 12)
+    setPopoverPos({ top: rect.top - 8, left: right })
+  }, [])
+
+  const toggleBreakdown = useCallback(() => {
+    setBreakdownOpen((open) => {
+      if (!open) syncPopoverPosition()
+      return !open
+    })
+  }, [syncPopoverPosition])
+
+  useEffect(() => {
+    if (!breakdownOpen) return
+    if (!attribution) setBreakdownOpen(false)
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('.statusbar-context') || target?.closest('.context-breakdown')) return
+      setBreakdownOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setBreakdownOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('resize', syncPopoverPosition)
+    window.addEventListener('scroll', syncPopoverPosition, true)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('resize', syncPopoverPosition)
+      window.removeEventListener('scroll', syncPopoverPosition, true)
+    }
+  }, [breakdownOpen, attribution, syncPopoverPosition])
+
   const envReady = toolchain
     && toolchain.jdk === 'ready'
     && toolchain.gradle === 'ready'
@@ -72,6 +126,11 @@ const StatusBar: React.FC<StatusBarProps> = ({
   const contextTitle = xpPercent > 80
     ? `上下文占用约 ${xpPercent}%（即将满载 / 有效窗口 ${workingLimit.toLocaleString()}）`
     : `上下文占用约 ${xpPercent}%（prompt ${usage.lastPromptTokens.toLocaleString()} / 有效窗口 ${workingLimit.toLocaleString()}${claimedNote}）`
+
+  const duplicateNote = attribution && attribution.duplicateShare > 0.02
+    ? `；重复内容约 ${Math.round(attribution.duplicateShare * 100)}%`
+    : ''
+  const segments = attribution?.categories?.length ? attribution.categories : null
 
   const { hit: cacheHit, miss: cacheMiss } = cacheHitMissForDisplay(
     usage.turnCacheHitTokens,
@@ -143,7 +202,24 @@ const StatusBar: React.FC<StatusBarProps> = ({
       </span>
 
       <span className="stat-sep">|</span>
-      <span className="statusbar-context stat" title={contextTitle}>
+      <span
+        ref={contextAnchorRef}
+        className={`statusbar-context stat${attribution ? ' statusbar-context--clickable' : ''}`}
+        title={`${contextTitle}${duplicateNote}`}
+        role={attribution ? 'button' : undefined}
+        tabIndex={attribution ? 0 : undefined}
+        aria-expanded={attribution ? breakdownOpen : undefined}
+        aria-label={attribution ? '上下文占用归因' : undefined}
+        onClick={attribution ? toggleBreakdown : undefined}
+        onKeyDown={attribution
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                toggleBreakdown()
+              }
+            }
+          : undefined}
+      >
         <span className="stat-label">上下文</span>
         <span className="stat-value">{contextLimitLabel}</span>
         <span className="stat-label">·</span>
@@ -151,14 +227,49 @@ const StatusBar: React.FC<StatusBarProps> = ({
         <span className={`statusbar-context-bar ${contextLevelClass(xpPercent)}`}>
           <span className="statusbar-context-bar__frame">
             <span className="statusbar-context-bar__track">
-              <span
-                className="statusbar-context-bar__fill"
-                style={{ width: `${xpPercent > 0 ? Math.max(xpPercent, 4) : 0}%` }}
-              />
+              {segments ? (
+                <span
+                  className="statusbar-context-segments"
+                  style={{ width: `${xpPercent > 0 ? Math.max(xpPercent, 3) : 0}%` }}
+                >
+                  {segments.map((slice) => (
+                    <span
+                      key={slice.category}
+                      className={`statusbar-context-seg statusbar-context-seg--${slice.category}`}
+                      style={{ flexGrow: slice.share, flexShrink: 0 }}
+                      title={`${CONTEXT_CATEGORY_LABELS[slice.category]} 占 prompt ${Math.round(slice.share * 100)}%`}
+                    />
+                  ))}
+                </span>
+              ) : (
+                <span
+                  className="statusbar-context-bar__fill"
+                  style={{ width: `${xpPercent > 0 ? Math.max(xpPercent, 4) : 0}%` }}
+                />
+              )}
             </span>
           </span>
         </span>
+        {isContextDuplicateNotable(attribution) && (
+          <span
+            className="statusbar-context-dup"
+            title={`重复内容约占可见上下文 ${Math.round((attribution?.duplicateShare || 0) * 100)}%`}
+          >
+            重复 {Math.round((attribution?.duplicateShare || 0) * 100)}%
+          </span>
+        )}
+        {attribution && <span className={`statusbar-context-caret${breakdownOpen ? ' is-open' : ''}`}>▸</span>}
       </span>
+      {breakdownOpen && attribution && createPortal(
+        <ContextBreakdown
+          attribution={attribution}
+          cacheHitTokens={usage.cacheHitTokens}
+          cacheMissTokens={usage.cacheMissTokens}
+          anchor={popoverPos}
+          onClose={() => setBreakdownOpen(false)}
+        />,
+        document.body
+      )}
 
       <span className="stat-sep">|</span>
       <span className="statusbar-cache stat" title={cacheTitle}>

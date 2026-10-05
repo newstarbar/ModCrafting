@@ -6,6 +6,12 @@ import type { ProviderProtocolDiagnostic } from '../../../shared/harness-runtime
 import type { PlanStep } from '../components/TaskPlan'
 import type { ChatTurn } from './chat-turns.ts'
 import { groupMessagesIntoTurns } from './chat-turns.ts'
+import {
+  CONTEXT_CATEGORY_LABELS,
+  formatContextBytes,
+  type ContextAttribution,
+  type ContextAttributionFrame
+} from './context-attribution.ts'
 
 const TOOL_OUTPUT_LIMIT = 48_000
 const TOOL_ARGS_LIMIT = 16_000
@@ -27,6 +33,135 @@ function fence(lang: string, body: string): string {
 function clip(text: string, limit: number): string {
   if (text.length <= limit) return text
   return `${text.slice(0, limit)}\n\n… [截断：原始 ${text.length} 字符，已保留前 ${limit}]`
+}
+
+function mdCell(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\|/g, '\\|')
+    .replace(/\s*\r?\n\s*/g, ' ')
+    .trim()
+}
+
+/** Minimal GFM table builder — the rest of this file is bullet lists only. */
+function mdTable(headers: string[], rows: Array<Array<string | number>>): string[] {
+  if (!rows.length) return []
+  return [
+    `| ${headers.map(mdCell).join(' | ')} |`,
+    `|${headers.map(() => '---').join('|')}|`,
+    ...rows.map((row) => `| ${row.map(mdCell).join(' | ')} |`)
+  ]
+}
+
+function pct(share: number): string {
+  return `${(share * 100).toFixed(1)}%`
+}
+
+/**
+ * Context accounting header block.
+ * Must be computed from the raw controller messages, never from the rendered
+ * timeline below: this file prints the same session twice and `clip()` has
+ * already shortened long fields, so size read back from the markdown lies.
+ */
+function contextAccountingSection(
+  attribution?: ContextAttribution | null,
+  history?: ContextAttributionFrame[]
+): string[] {
+  if (!attribution) return []
+  const lines: string[] = ['### 上下文占用账目', '']
+  lines.push(
+    `- 计算口径：按 API \`prompt_tokens\` 锚定的估算（中文约 1 字 ≈ 1 token），未使用官方分词器`,
+    `- 最新 prompt：${attribution.promptTokens.toLocaleString()} tokens ｜ 有效窗口：${attribution.windowTokens.toLocaleString()} tokens ｜ 占比：${attribution.percent}%`,
+    `- 锚定状态：${attribution.anchored ? '已按真实 usage 锚定' : '仅本地估算（Provider 未返回 usage）'}`,
+    `- 快照消息数：${attribution.messageCount} ｜ 已归类：${attribution.measuredTokens.toLocaleString()} tokens`,
+    `- 未归类：${attribution.unaccountedTokens.toLocaleString()} tokens（${pct(attribution.unaccountedShare)}）— 逐轮步骤注入与工具 schema 不随控制器快照持久化`,
+    `- 重复内容浪费：${attribution.duplicateWasteTokens.toLocaleString()} tokens（${pct(attribution.duplicateShare)}）`,
+    ''
+  )
+
+  lines.push(...mdTable(
+    ['分类', 'Token', '占比', '字节'],
+    attribution.categories.map((slice) => [
+      CONTEXT_CATEGORY_LABELS[slice.category],
+      slice.tokens.toLocaleString(),
+      pct(slice.share),
+      slice.bytes > 0 ? formatContextBytes(slice.bytes) : '—'
+    ])
+  ))
+  lines.push('')
+
+  if (attribution.topMessages.length) {
+    lines.push('#### 最大的若干条消息', '')
+    lines.push(...mdTable(
+      ['#', 'role', '工具', '分类', 'Token', '预览'],
+      attribution.topMessages.map((message) => [
+        message.index + 1,
+        message.role,
+        message.name || '—',
+        CONTEXT_CATEGORY_LABELS[message.category],
+        message.tokens.toLocaleString(),
+        message.preview.slice(0, 72)
+      ])
+    ))
+    lines.push('')
+  }
+
+  if (attribution.duplicates.length) {
+    lines.push('#### 重复内容', '')
+    lines.push(...mdTable(
+      ['指纹', '类型', '次数', '浪费 Token', '出现位置', '抽样'],
+      attribution.duplicates.map((group) => [
+        group.fingerprint,
+        group.exact ? '完全相同' : '近似',
+        group.count,
+        group.wastedTokens.toLocaleString(),
+        group.roles.join(' / '),
+        group.sample.slice(0, 60)
+      ])
+    ))
+    lines.push('')
+  }
+
+  if (attribution.byTool.length) {
+    lines.push('#### 工具结果体积', '')
+    lines.push(...mdTable(
+      ['工具', '次数', 'Token', '字节'],
+      attribution.byTool.map((tool) => [
+        tool.name,
+        tool.count,
+        tool.tokens.toLocaleString(),
+        formatContextBytes(tool.bytes)
+      ])
+    ))
+    lines.push('')
+  }
+
+  if (history?.length) {
+    lines.push(`#### 逐轮上下文序列（最近 ${history.length} 帧）`, '')
+    lines.push(...mdTable(
+      ['时间', 'phase', 'prompt', '占比', '最大分类', '重复占比', '锚定'],
+      history.map((frame) => {
+        const top = frame.categories?.[0]
+        return [
+          new Date(frame.computedAt).toISOString(),
+          frame.phase || '—',
+          frame.promptTokens.toLocaleString(),
+          `${frame.percent}%`,
+          top ? `${CONTEXT_CATEGORY_LABELS[top.category]} ${pct(top.share)}` : '—',
+          pct(frame.duplicateShare),
+          frame.anchored ? '是' : '否'
+        ]
+      })
+    ))
+    lines.push('')
+  }
+
+  lines.push(
+    '> **口径警告**：本文件把同一会话渲染了两遍（对话时间线 + 附录消息快照），因此导出体积约为真实上下文的 **1.8 倍**；',
+    '> 且超长字段已被 `clip()` 截断（`CTRL_CONTENT_LIMIT=24000` 等）。上方数字全部来自截断前的原始消息对象，',
+    '> **不要用文件大小或正文长度反推上下文占用**。',
+    ''
+  )
+  return lines
 }
 
 function jsonBlock(value: unknown, limit = TOOL_ARGS_LIMIT): string {
@@ -227,6 +362,9 @@ export interface BuildSessionMarkdownOptions {
   controllerMessages?: ChatMessage[]
   classifierDiagnostics?: ClassifierDiagnostics[]
   providerProtocolDiagnostics?: ProviderProtocolDiagnostic[]
+  /** 最近一次真实 prompt 的分类归因；未提供则不输出上下文账目。 */
+  contextAttribution?: ContextAttribution | null
+  contextAttributionHistory?: ContextAttributionFrame[]
 }
 
 function maskEndpoint(endpoint?: string): string {
@@ -358,6 +496,8 @@ export function buildSessionMarkdown(opts: BuildSessionMarkdownOptions): string 
     for (const item of failedTools) lines.push(`- ${escapeMd(item)}`)
     lines.push('')
   }
+
+  lines.push(...contextAccountingSection(opts.contextAttribution, opts.contextAttributionHistory))
 
   lines.push(...planStepsSection(opts.activePlanSteps, '当前实施计划（完整步骤）'))
 

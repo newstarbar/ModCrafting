@@ -1,5 +1,204 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`StatusBar > renders a segmented bar sized to actual window occupancy 1`] = `
+<div
+  class="statusbar"
+>
+  <span
+    class="statusbar-agent"
+  >
+    <span
+      class="dot dot-idle"
+    />
+    <span
+      class="mc-t"
+    >
+      就绪
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-model stat mc-dim"
+  >
+    ModCrafting
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="会话累计 15,200 tokens（API usage）"
+  >
+    <span
+      class="stat-label"
+    >
+      会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      15K
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前项目累计花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      项目
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-metrics stat"
+    title="当前会话花费约 ￥0.0234（API token × 中文官网人民币单价）"
+  >
+    <span
+      class="stat-label"
+    >
+      本会话
+    </span>
+    <span
+      class="stat-value"
+    >
+      ￥0.0234
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    aria-expanded="false"
+    aria-label="上下文占用归因"
+    class="statusbar-context stat statusbar-context--clickable"
+    role="button"
+    tabindex="0"
+    title="上下文占用约 4%（prompt 40,000 / 有效窗口 128,000）；重复内容约 27%"
+  >
+    <span
+      class="stat-label"
+    >
+      上下文
+    </span>
+    <span
+      class="stat-value"
+    >
+      128k
+    </span>
+    <span
+      class="stat-label"
+    >
+      ·
+    </span>
+    <span
+      class="stat-value"
+    >
+      4
+      %
+    </span>
+    <span
+      class="statusbar-context-bar statusbar-context-bar--safe"
+    >
+      <span
+        class="statusbar-context-bar__frame"
+      >
+        <span
+          class="statusbar-context-bar__track"
+        >
+          <span
+            class="statusbar-context-segments"
+            style="width: 4%;"
+          >
+            <span
+              class="statusbar-context-seg statusbar-context-seg--systemPrompt"
+              style="flex-grow: 0.0045; flex-shrink: 0;"
+              title="系统提示 占 prompt 0%"
+            />
+            <span
+              class="statusbar-context-seg statusbar-context-seg--toolResult"
+              style="flex-grow: 0.00275; flex-shrink: 0;"
+              title="工具结果 占 prompt 0%"
+            />
+            <span
+              class="statusbar-context-seg statusbar-context-seg--assistantText"
+              style="flex-grow: 0.00275; flex-shrink: 0;"
+              title="助手正文 占 prompt 0%"
+            />
+            <span
+              class="statusbar-context-seg statusbar-context-seg--user"
+              style="flex-grow: 0.000375; flex-shrink: 0;"
+              title="用户输入 占 prompt 0%"
+            />
+            <span
+              class="statusbar-context-seg statusbar-context-seg--unaccounted"
+              style="flex-grow: 0.989625; flex-shrink: 0;"
+              title="未随快照持久化（每步注入 + 工具 schema） 占 prompt 99%"
+            />
+          </span>
+        </span>
+      </span>
+    </span>
+    <span
+      class="statusbar-context-dup"
+      title="重复内容约占可见上下文 27%"
+    >
+      重复 
+      27
+      %
+    </span>
+    <span
+      class="statusbar-context-caret"
+    >
+      ▸
+    </span>
+  </span>
+  <span
+    class="stat-sep"
+  >
+    |
+  </span>
+  <span
+    class="statusbar-cache stat"
+    title="缓存命中率 75%（命中 300 / 未命中 100）"
+  >
+    <span
+      class="stat-label"
+    >
+      命中
+    </span>
+    <span
+      class="stat-value"
+    >
+      75%
+    </span>
+  </span>
+</div>
+`;
+
 exports[`StatusBar > renders idle state with minimal usage 1`] = `
 <div
   class="statusbar"
