@@ -8,7 +8,9 @@ ModCrafting 仅支持 Windows x64。安装版和便携版使用同一套首次�
 |---|---|
 | Setup | `%LOCALAPPDATA%\ModCrafting\runtime` |
 | Portable | `PORTABLE_EXECUTABLE_DIR\runtime` |
-| 开发模式 | 仓库 `runtime/` |
+| 开发模式 | 设置里配置的数据目录；未配置时为仓库 `runtime/` |
+
+在「设置 → 修改数据目录」写入的 `runtimePath`（`%APPDATA%\ModCrafting\config.json`）对 Setup 和开发模式都生效，因此 `npm run dev` 会直接复用安装版已下载的工具链；便携版始终使用自身 `runtime/`，不受该配置影响。
 
 Setup 升级和卸载不会删除 `%LOCALAPPDATA%` 中的运行时。旧版位于 exe 邻近目录的完整缓存会在首次启动时迁移并校验；不完整缓存不会被当作完成状态。
 

@@ -25,11 +25,13 @@ function setupRuntimeRoot(): string {
 export function getRuntimeLayout(): RuntimeLayout {
   const edition = getAppEdition()
   const legacyRuntimeRoot = app.isPackaged ? path.join(path.dirname(app.getPath('exe')), 'runtime') : undefined
+  // dev 也复用设置里的数据目录；未配置时留在仓库 runtime/，
+  // 不能走 setupRuntimeRoot() 的兜底（dev 下 exe 在 node_modules/electron/dist）。
   const runtimeRoot = edition === 'portable'
     ? path.join(process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath('exe')), 'runtime')
     : edition === 'full'
       ? setupRuntimeRoot()
-      : path.resolve(__dirname, '..', '..', 'runtime')
+      : getRuntimePathOverride() ?? path.resolve(__dirname, '..', '..', 'runtime')
   return {
     edition,
     runtimeRoot,
