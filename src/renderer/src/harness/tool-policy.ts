@@ -47,7 +47,7 @@ function assign(names: string[], policy: ToolPolicy, out: Record<string, ToolPol
 export const BUILTIN_TOOL_POLICIES: Record<string, ToolPolicy> = (() => {
   const out: Record<string, ToolPolicy> = {}
   assign(['read_file', 'list_directory', 'grep', 'read_error_log', 'explain_code', 'list_templates'], FAST, out)
-  assign(['fabric_docs_search', 'fabric_javadoc_lookup', 'vanilla_mc_wiki_query', 'minecraft_data_lookup', 'mc_wiki_search', 'fabric_meta_version_check', 'fabric_mod_json_validate', 'fabric_log_debugger', 'fabric_mixin_target_lookup', 'fabric_recipe_validate', 'fabric_mixin_validate', 'mc_test_scenario'], KNOWLEDGE, out)
+  assign(['fabric_docs_search', 'fabric_javadoc_lookup', 'vanilla_mc_wiki_query', 'minecraft_data_lookup', 'mc_wiki_search', 'fabric_meta_version_check', 'fabric_mod_json_validate', 'fabric_log_debugger', 'fabric_mixin_target_lookup', 'fabric_recipe_validate', 'fabric_mixin_validate', 'mc_test_scenario', 'read_skill'], KNOWLEDGE, out)
   assign(['write_file', 'edit_file', 'delete_file', 'create_recipe', 'fabric_recipe_generate', 'fabric_content_register', 'fabric_data_assets_generate', 'fabric_mixin_scaffold', 'fabric_mixin_register', 'fabric_template_generate'], withCapabilities(FAST, ['project.write']), out)
   assign(['run_command'], PROCESS, out)
   assign(['trigger_build', 'fast_compile'], BUILD, out)

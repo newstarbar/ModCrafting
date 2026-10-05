@@ -1,5 +1,7 @@
 # 归档索引
 
+- [2026-10-05] [Skill 技能模块落地](./2026-10-05-skill-module.md) — `SKILL.md` 指令包 + `read_skill` 按需加载；能力声明即门控（`knowledge.read` 全程放行）、md-tree-store 通用覆盖层、electron-free 核心便于单测、`resources/` 需强制入库。触发：新增核心模块。
+
 - [2026-10-05] [Harness 反复错误根因修复](./2026-10-05-harness-repeated-failure-root-causes.md) — 嵌套 Mixin `targets=`、证据门跨步采纳与 `evidence_deadlock` 诚实轮次、计划锁定白名单按能力派生、成员未命中提示嵌套类、`reasoning_content` 通用连续性。触发：修复复杂 bug + 调整 Agent 行为规则。
 
 - [2026-10-04] [默认单厂多模型路由（伴厂专家槽）](./2026-10-04-home-companion-routing.md) — DeepSeek 单厂默认含多模态；伴厂仅补短板/第三方检测；游戏测试模型待评测。触发：产品路由策略重构。

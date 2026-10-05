@@ -47,6 +47,7 @@ import type { BuildReport, ExecutionWorkspace, HarnessRunState, LlmProtocol, Pro
 import { compareDiagnosticProgress } from "../../../shared/harness-diagnostics.ts";
 import { knowledgeQueryFingerprint } from "./doc-search-dedup.ts";
 import { isKnowledgeTool } from "./tool-policy.ts";
+import { formatSkillIndex } from "./skill-tools.ts";
 
 /** Marker heading of the live project-structure message injected during execute turns. */
 const PROJECT_INFO_MESSAGE_PREFIX = "## 项目结构（实时刷新）";
@@ -1216,6 +1217,18 @@ export class Controller {
 		return projectInfo;
 	}
 
+	/**
+	 * 技能索引块：仅列出已启用技能的 id 与一句话说明，正文由模型按需经 read_skill 取回。
+	 * 只在 mode 切换重建 system prompt 时计算，启停变更经 invalidateSkillIndex 触发重建。
+	 */
+	private async buildSkillIndex(): Promise<string> {
+		try {
+			return formatSkillIndex(await window.api.listSkills());
+		} catch {
+			return "";
+		}
+	}
+
 	// Build system prompt with Fabric knowledge (tool schemas travel with each request)
 	private async buildSystemPrompt(mode: "chat" | "plan" | "execute"): Promise<string> {
 		const fabricPolicy = buildFabricAgentPolicyPrompt(mode);
@@ -1224,6 +1237,7 @@ export class Controller {
 		// 同 mode 下 updateSystemPrompt 不重建 system prompt（cache 友好）；mode 切换时才重新扫描。
 		const projectInfo = await this.buildProjectInfo();
 		this.lastProjectInfo = projectInfo;
+		const skillIndex = await this.buildSkillIndex();
 
 		if (mode === "chat") {
 			return `# ModCrafting AI 助手
@@ -1244,6 +1258,8 @@ export class Controller {
 ${goalBlock}
 
 ${fabricPolicy}
+
+${skillIndex}
 
 ${projectInfo}`;
 		}
@@ -1314,7 +1330,14 @@ ${goalBlock}
 
 ${fabricPolicy}
 
+${skillIndex}
+
 ${projectInfo}`;
+	}
+
+	/** 技能启停后强制重建 system prompt：下一轮 updateSystemPrompt 会重新取索引。 */
+	invalidateSkillIndex(): void {
+		this.lastSystemMode = null;
 	}
 
 	private async updateSystemPrompt(mode: "chat" | "plan" | "execute"): Promise<void> {

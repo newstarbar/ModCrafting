@@ -161,6 +161,10 @@
 				"to": "fabric-versions.json"
 			},
 			{
+				"from": "resources/skills",
+				"to": "skills"
+			},
+			{
 				"from": "packaging/appIcon.png",
 				"to": "icon.png"
 			}

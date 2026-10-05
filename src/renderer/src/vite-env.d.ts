@@ -278,13 +278,19 @@ interface ModCraftingApi {
   loadAgentConfig: () => Promise<{
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
+    disabledSkills: string[]
     mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
   }>
   saveAgentConfig: (config: {
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
+    disabledSkills?: string[]
     mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
   }) => Promise<{ success: boolean; error?: string }>
+  listSkills: () => Promise<import('../../shared/skills').SkillDescriptor[]>
+  readSkill: (id: string) => Promise<import('../../shared/skills').SkillReadResult>
+  saveSkill: (id: string, content: string) => Promise<import('../../shared/skills').SkillWriteResult>
+  resetSkillOverride: (id: string) => Promise<import('../../shared/skills').SkillWriteResult>
   listKnowledgeFiles: () => Promise<Array<{ path: string; bundled: boolean; overridden: boolean }>>
   knowledgeReadLocal: (relPath: string) => Promise<{ success: boolean; content?: string; source?: 'override' | 'bundled'; error?: string }>
   knowledgeSaveLocal: (relPath: string, content: string) => Promise<{ success: boolean; error?: string }>

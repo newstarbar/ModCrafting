@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { BuildReport, BuildReportOptions, ExecutionWorkspace, ProjectProfile, TaskCheckpoint, WorkspaceManifestEntry, WorkspacePatchEntry } from '../shared/harness-runtime'
+import type { SkillDescriptor, SkillReadResult } from '../shared/skills'
 
 const automationEnabled = process.argv.includes('--automation')
 
@@ -600,12 +601,14 @@ const api = {
   loadAgentConfig: (): Promise<{
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
+    disabledSkills: string[]
     mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
   }> => ipcRenderer.invoke('agentConfig:load'),
 
   saveAgentConfig: (config: {
     knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
     disabledTools: string[]
+    disabledSkills: string[]
     mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
   }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('agentConfig:save', config),
@@ -631,6 +634,19 @@ const api = {
   // Local Fabric source search (Yarn mappings + Fabric API sources)
   searchLocalSources: (keyword: string, maxResults?: number): Promise<string> =>
     ipcRenderer.invoke('knowledge:searchLocalSources', keyword, maxResults),
+
+  // Skills: reusable instruction packs
+  listSkills: (): Promise<SkillDescriptor[]> =>
+    ipcRenderer.invoke('skills:list'),
+
+  readSkill: (id: string): Promise<SkillReadResult> =>
+    ipcRenderer.invoke('skills:read', id),
+
+  saveSkill: (id: string, content: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('skills:save', id, content),
+
+  resetSkillOverride: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('skills:resetOverride', id),
 
   // ── Minecraft structured dataset (minecraft-data) ──
   mcDataLookupBlock: (query: string, version?: string): Promise<McDataLookupResult<McBlockProperties>> =>

@@ -332,6 +332,7 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({
   useEffect(() => {
     const onConfigSaved = (): void => {
       void SessionRuntimeManager.getInstance().reloadTools()
+      SessionRuntimeManager.getInstance().invalidateSkillIndex()
     }
     window.addEventListener('agent-config-saved', onConfigSaved)
     return () => {

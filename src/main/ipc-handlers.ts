@@ -65,6 +65,12 @@ import {
   saveKnowledgeFile
 } from './knowledge-service'
 import {
+  deleteSkillOverride,
+  listSkills,
+  readSkill,
+  saveSkill
+} from './skill-service'
+import {
   lookupBlockById,
   lookupBlockByName,
   lookupItemById,
@@ -900,6 +906,19 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('knowledge:searchLocalSources', async (_event, keyword: string, maxResults?: number) =>
     searchLocalFabricSources(keyword, maxResults ?? 5)
+  )
+
+  // Skills: reusable instruction packs (bundled tree + userData overrides)
+  ipcMain.handle('skills:list', async () => listSkills())
+
+  ipcMain.handle('skills:read', async (_event, id: string) => readSkill(id))
+
+  ipcMain.handle('skills:save', async (_event, id: string, content: string) =>
+    saveSkill(id, content)
+  )
+
+  ipcMain.handle('skills:resetOverride', async (_event, id: string) =>
+    deleteSkillOverride(id)
   )
 
   // ── Minecraft structured dataset (minecraft-data) ──

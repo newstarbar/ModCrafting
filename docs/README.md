@@ -21,6 +21,7 @@
 
 ### AI Harness 系统
 - [harness.md](./harness.md) — Harness 模块清单、工具集、计划阶段门控、护栏机制
+- [skill.md](./skill.md) — Skill 技能模块：SKILL.md 格式、自动发现与按需加载、管理与打包
 - [test-lab-mcp.md](./test-lab-mcp.md) — 真实 Electron 自动化桥、开发专用 MCP、黑盒场景与报告
 - [AI_AGENT_GUIDE.md](./AI_AGENT_GUIDE.md) — AI Agent 当前开发入口与强制验证清单
 

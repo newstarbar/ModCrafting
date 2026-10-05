@@ -1438,4 +1438,11 @@ export class SessionRuntimeManager {
       rt.controller.setRegistry(registry)
     }
   }
+
+  /** 技能启停变更后让各会话重建 system prompt（工具集本身不随技能增减）。 */
+  public invalidateSkillIndex(): void {
+    for (const rt of this.runtimes.values()) {
+      rt.controller.invalidateSkillIndex()
+    }
+  }
 }

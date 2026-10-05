@@ -2,6 +2,7 @@ import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { getRuntimeRoot } from './build-env'
+import { createMdTreeStore, type MdTreeEntry, type MdTreeReadResult, type MdTreeWriteResult } from './md-tree-store'
 
 const MAX_FETCH_CHARS = 12_000
 const FETCH_TIMEOUT_MS = 12_000
@@ -16,9 +17,23 @@ function bundledKnowledgeRoot(): string {
   return path.join(app.getAppPath(), 'resources', 'agent-knowledge')
 }
 
-function userKnowledgeOverridePath(relPath: string): string {
-  const safe = relPath.replace(/\\/g, '/').replace(/^\/+/, '')
-  return path.join(app.getPath('userData'), 'agent-knowledge-overrides', safe)
+function knowledgeStore() {
+  return createMdTreeStore({
+    bundledRoot: bundledKnowledgeRoot(),
+    overrideRoot: path.join(app.getPath('userData'), 'agent-knowledge-overrides')
+  })
+}
+
+export function listKnowledgeFiles(): MdTreeEntry[] {
+  return knowledgeStore().list()
+}
+
+export function readKnowledgeFile(relPath: string): MdTreeReadResult {
+  return knowledgeStore().read(relPath)
+}
+
+export function saveKnowledgeFile(relPath: string, content: string): MdTreeWriteResult {
+  return knowledgeStore().save(relPath, content)
 }
 
 function stripHtml(html: string): string {
@@ -32,78 +47,6 @@ function stripHtml(html: string): string {
     .replace(/&gt;/g, '>')
     .replace(/\s+/g, ' ')
     .trim()
-}
-
-export function listKnowledgeFiles(): { path: string; bundled: boolean; overridden: boolean }[] {
-  const root = bundledKnowledgeRoot()
-  const results: { path: string; bundled: boolean; overridden: boolean }[] = []
-  if (!fs.existsSync(root)) return results
-
-  const walk = (dir: string, prefix: string): void => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
-      const full = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(full, rel)
-      else if (entry.name.endsWith('.md')) {
-        results.push({
-          path: rel.replace(/\\/g, '/'),
-          bundled: true,
-          overridden: fs.existsSync(userKnowledgeOverridePath(rel))
-        })
-      }
-    }
-  }
-  walk(root, '')
-
-  const overrideRoot = path.join(app.getPath('userData'), 'agent-knowledge-overrides')
-  if (fs.existsSync(overrideRoot)) {
-    const walkOverrides = (dir: string, prefix: string): void => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const rel = prefix ? `${prefix}/${entry.name}` : entry.name
-        const full = path.join(dir, entry.name)
-        if (entry.isDirectory()) walkOverrides(full, rel)
-        else if (entry.name.endsWith('.md') && !results.some((r) => r.path === rel.replace(/\\/g, '/'))) {
-          results.push({ path: rel.replace(/\\/g, '/'), bundled: false, overridden: true })
-        }
-      }
-    }
-    walkOverrides(overrideRoot, '')
-  }
-
-  return results.sort((a, b) => a.path.localeCompare(b.path))
-}
-
-export function readKnowledgeFile(relPath: string): { success: boolean; content?: string; source?: 'override' | 'bundled'; error?: string } {
-  const safe = relPath.replace(/\\/g, '/').replace(/^\/+/, '')
-  const override = userKnowledgeOverridePath(safe)
-  if (fs.existsSync(override)) {
-    try {
-      return { success: true, content: fs.readFileSync(override, 'utf-8'), source: 'override' }
-    } catch (err) {
-      return { success: false, error: String(err) }
-    }
-  }
-  const bundled = path.join(bundledKnowledgeRoot(), safe)
-  if (!fs.existsSync(bundled)) {
-    return { success: false, error: `Knowledge file not found: ${safe}` }
-  }
-  try {
-    return { success: true, content: fs.readFileSync(bundled, 'utf-8'), source: 'bundled' }
-  } catch (err) {
-    return { success: false, error: String(err) }
-  }
-}
-
-export function saveKnowledgeFile(relPath: string, content: string): { success: boolean; error?: string } {
-  const safe = relPath.replace(/\\/g, '/').replace(/^\/+/, '')
-  const target = userKnowledgeOverridePath(safe)
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true })
-    fs.writeFileSync(target, content, 'utf-8')
-    return { success: true }
-  } catch (err) {
-    return { success: false, error: String(err) }
-  }
 }
 
 export async function fetchUrlText(url: string, maxChars = MAX_FETCH_CHARS): Promise<{

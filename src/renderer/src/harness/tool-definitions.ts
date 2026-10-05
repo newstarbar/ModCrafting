@@ -2499,6 +2499,7 @@ import { MC_OBSERVER_TOOLS } from "./mc-observer-tools.ts";
 import { minecraftDataLookupTool, mcWikiSearchTool } from "./mc-data-tool.ts";
 import { mcTestScenarioTool } from "./mc-test-scenario-tool.ts";
 import { mcRunTestTool } from "./game-test-runner.ts";
+import { readSkillTool } from "./skill-tools.ts";
 
 export function registerModCraftingTools(registry: Registry, options?: { disabledTools?: string[] }): void {
 	const disabled = new Set(options?.disabledTools || []);
@@ -2539,6 +2540,7 @@ export function registerModCraftingTools(registry: Registry, options?: { disable
 		completeStepTool,
 		mcTestScenarioTool,
 		mcRunTestTool,
+		readSkillTool,
 		...MC_OBSERVER_TOOLS
 	];
 	for (const tool of tools) {

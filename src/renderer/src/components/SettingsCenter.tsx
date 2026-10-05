@@ -11,12 +11,13 @@ import {
 } from '../../../shared/model-routing.ts'
 import type { ApiConfigState, ApiSettingsPayload } from '../types/api-config'
 
-type SettingsSection = 'models' | 'tools' | 'knowledge' | 'runtime' | 'updates' | 'about'
+type SettingsSection = 'models' | 'tools' | 'knowledge' | 'skills' | 'runtime' | 'updates' | 'about'
 
 const SECTION_LABELS: Array<[SettingsSection, string, string]> = [
   ['models', '模型', '主厂商连接与默认策略'],
   ['tools', '工具与 MCP', '能力与外部工具'],
   ['knowledge', '知识库', 'Minecraft 与 Fabric 文档'],
+  ['skills', '技能', '可复用 Agent 流程指令'],
   ['runtime', '运行环境与存储', 'JDK、Gradle 与数据目录'],
   ['updates', '更新', '版本检查'],
   ['about', '关于', 'ModCrafting']
@@ -630,6 +631,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({
   else if (section === 'updates') content = renderUpdates()
   else if (section === 'about') content = <div className="settings-page-content"><h2>关于</h2><div className="settings-card"><p>AI 驱动的我的世界 Fabric 模组开发环境。</p><p className="mc-dim">核心功能：AI 智能体对话 / 代码生成 / 编译终端 / MC 运行管理</p></div></div>
   else if (section === 'knowledge') content = <div className="settings-page-content"><h2>知识库</h2><ToolsPanel mode="knowledge" onConfigSaved={() => setNotice('知识库配置已保存')} /></div>
+  else if (section === 'skills') content = <div className="settings-page-content"><h2>技能</h2><ToolsPanel mode="skills" onConfigSaved={() => setNotice('技能配置已保存')} /></div>
   else if (section === 'models') content = renderModels()
 
   return (

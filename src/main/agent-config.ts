@@ -22,12 +22,14 @@ export interface KnowledgeSourceOverride {
 export interface AgentConfig {
   knowledgeSourceOverrides: KnowledgeSourceOverride[]
   disabledTools: string[]
+  disabledSkills: string[]
   mcpServers: McpServerConfig[]
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
   knowledgeSourceOverrides: [],
   disabledTools: [],
+  disabledSkills: [],
   mcpServers: []
 }
 
@@ -43,6 +45,8 @@ export function loadAgentConfig(): AgentConfig {
     return {
       knowledgeSourceOverrides: Array.isArray(parsed.knowledgeSourceOverrides) ? parsed.knowledgeSourceOverrides : [],
       disabledTools: Array.isArray(parsed.disabledTools) ? parsed.disabledTools : [],
+      // 旧配置文件没有这个字段，缺失即视为全部启用
+      disabledSkills: Array.isArray(parsed.disabledSkills) ? parsed.disabledSkills.filter((id): id is string => typeof id === 'string') : [],
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : []
     }
   } catch {
@@ -52,11 +56,14 @@ export function loadAgentConfig(): AgentConfig {
 
 export function saveAgentConfig(config: AgentConfig): { success: boolean; error?: string } {
   try {
+    // 设置面板按分区保存，缺字段时保留磁盘上的原值，避免关掉某一区就抹掉其他区
+    const existing = loadAgentConfig()
     fs.mkdirSync(app.getPath('userData'), { recursive: true })
     fs.writeFileSync(configPath(), JSON.stringify({
-      knowledgeSourceOverrides: config.knowledgeSourceOverrides || [],
-      disabledTools: config.disabledTools || [],
-      mcpServers: config.mcpServers || []
+      knowledgeSourceOverrides: Array.isArray(config?.knowledgeSourceOverrides) ? config.knowledgeSourceOverrides : existing.knowledgeSourceOverrides,
+      disabledTools: Array.isArray(config?.disabledTools) ? config.disabledTools : existing.disabledTools,
+      disabledSkills: Array.isArray(config?.disabledSkills) ? config.disabledSkills : existing.disabledSkills,
+      mcpServers: Array.isArray(config?.mcpServers) ? config.mcpServers : existing.mcpServers
     }, null, 2), 'utf-8')
     return { success: true }
   } catch (err) {

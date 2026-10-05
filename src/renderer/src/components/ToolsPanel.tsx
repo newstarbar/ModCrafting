@@ -4,7 +4,7 @@ import { FABRIC_KNOWLEDGE_SOURCES } from '../harness/fabric-agent-policy'
 import { Registry } from '../harness/tools'
 import { registerModCraftingTools } from '../harness/tool-definitions'
 
-export type ToolsPanelMode = 'tools' | 'knowledge'
+export type ToolsPanelMode = 'tools' | 'knowledge' | 'skills'
 
 interface KnowledgeSourceRow {
   id: string
@@ -26,6 +26,7 @@ interface McpServerRow {
 interface AgentConfigState {
   knowledgeSourceOverrides: Array<{ id: string; title?: string; url?: string; useFor?: string; enabled?: boolean }>
   disabledTools: string[]
+  disabledSkills?: string[]
   mcpServers: Array<{ id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }>
 }
 
@@ -40,6 +41,10 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
   const [knowledgeFiles, setKnowledgeFiles] = useState<Array<{ path: string; bundled: boolean; overridden: boolean }>>([])
   const [selectedKnowledgeFile, setSelectedKnowledgeFile] = useState<string | null>(null)
   const [knowledgeDraft, setKnowledgeDraft] = useState('')
+  const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; relPath: string; bundled: boolean; overridden: boolean; enabled: boolean }>>([])
+  const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set())
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null)
+  const [skillDraft, setSkillDraft] = useState('')
   const [saveHint, setSaveHint] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -64,6 +69,13 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
           env: JSON.stringify(server.env || {}, null, 2),
           enabled: server.enabled !== false
         })))
+      } else if (mode === 'skills') {
+        const rows = await window.api.listSkills()
+        setSkills(rows)
+        const disabled = new Set(cfg.disabledSkills || [])
+        // 磁盘上可能残留已改名/已删除技能的 id，按当前技能列表重新对齐
+        setDisabledSkills(new Set(rows.filter((row) => disabled.has(row.id)).map((row) => row.id)))
+        setSelectedSkillId((prev) => prev || rows[0]?.id || null)
       } else {
         const files = await window.api.listKnowledgeFiles()
         const overrideMap = new Map((cfg.knowledgeSourceOverrides || []).map((o) => [o.id, o]))
@@ -97,6 +109,15 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
     })()
   }, [mode, selectedKnowledgeFile])
 
+  // 技能正文按整份 SKILL.md 编辑（原样取回，保留未知 frontmatter 字段），保存即写入 userData 覆盖层
+  useEffect(() => {
+    if (mode !== 'skills' || !selectedSkillId) return
+    void (async () => {
+      const res = await window.api.readSkill(selectedSkillId)
+      setSkillDraft(res.success ? (res.raw ?? res.content ?? '') : `读取失败: ${res.error || 'unknown'}`)
+    })()
+  }, [mode, selectedSkillId])
+
   const saveConfig = useCallback(async () => {
     // 分 mode 写入，避免覆盖另一设置分区刚保存的字段
     const existing = await window.api.loadAgentConfig()
@@ -104,6 +125,7 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
       ? {
           knowledgeSourceOverrides: existing.knowledgeSourceOverrides || [],
           disabledTools: [...disabledTools],
+          disabledSkills: existing.disabledSkills || [],
           mcpServers: mcpServers.map((s) => ({
             id: s.id,
             name: s.name,
@@ -115,17 +137,25 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
             enabled: s.enabled
           }))
         }
-      : {
-          knowledgeSourceOverrides: sources.map((s) => ({
-            id: s.id,
-            title: s.title,
-            url: s.url,
-            useFor: s.useFor,
-            enabled: s.enabled
-          })),
-          disabledTools: existing.disabledTools || [],
-          mcpServers: existing.mcpServers || []
-        }
+      : mode === 'skills'
+        ? {
+            knowledgeSourceOverrides: existing.knowledgeSourceOverrides || [],
+            disabledTools: existing.disabledTools || [],
+            disabledSkills: [...disabledSkills],
+            mcpServers: existing.mcpServers || []
+          }
+        : {
+            knowledgeSourceOverrides: sources.map((s) => ({
+              id: s.id,
+              title: s.title,
+              url: s.url,
+              useFor: s.useFor,
+              enabled: s.enabled
+            })),
+            disabledTools: existing.disabledTools || [],
+            disabledSkills: existing.disabledSkills || [],
+            mcpServers: existing.mcpServers || []
+          }
     const res = await window.api.saveAgentConfig(payload)
     if (res.success) {
       setSaveHint('已保存')
@@ -135,7 +165,7 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
     } else {
       setSaveHint(res.error || '保存失败')
     }
-  }, [mode, sources, disabledTools, mcpServers, onConfigSaved])
+  }, [mode, sources, disabledTools, disabledSkills, mcpServers, onConfigSaved])
 
   const saveKnowledgeFile = useCallback(async () => {
     if (!selectedKnowledgeFile) return
@@ -144,6 +174,22 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
     if (res.success) void loadAll()
     window.setTimeout(() => setSaveHint(''), 2000)
   }, [selectedKnowledgeFile, knowledgeDraft, loadAll])
+
+  const saveSkillFile = useCallback(async () => {
+    if (!selectedSkillId) return
+    const res = await window.api.saveSkill(selectedSkillId, skillDraft)
+    setSaveHint(res.success ? '技能已保存为用户版本' : (res.error || '保存失败'))
+    if (res.success) void loadAll()
+    window.setTimeout(() => setSaveHint(''), 2500)
+  }, [selectedSkillId, skillDraft, loadAll])
+
+  const resetSkillFile = useCallback(async () => {
+    if (!selectedSkillId) return
+    const res = await window.api.resetSkillOverride(selectedSkillId)
+    setSaveHint(res.success ? '已恢复内置版本' : (res.error || '恢复失败'))
+    if (res.success) void loadAll()
+    window.setTimeout(() => setSaveHint(''), 2500)
+  }, [selectedSkillId, loadAll])
 
   if (loading) {
     return <div className="tools-panel"><div className="mc-dim">加载 Agent 配置…</div></div>
@@ -321,6 +367,66 @@ const ToolsPanel: React.FC<{ mode: ToolsPanelMode; onConfigSaved?: () => void }>
               onChange={(e) => setKnowledgeDraft(e.target.value)}
             />
             <button type="button" className="btn-primary" onClick={() => void saveKnowledgeFile()}>保存知识库文件</button>
+          </div>
+        </>
+      )}
+
+      {mode === 'skills' && (
+        <>
+          <div className="tools-panel-section">
+            <h3 className="tools-panel-section-title">技能包</h3>
+            <div className="mc-dim" style={{ fontSize: 12, marginBottom: 8 }}>
+              技能是写给 Agent 的可复用流程指令。索引常驻系统提示词，完整正文由 Agent 按需调用 read_skill 取回。
+            </div>
+            {skills.length === 0 && (
+              <div className="mc-dim" style={{ fontSize: 12 }}>未找到技能。内置技能位于应用资源的 skills/ 目录，用户技能位于 userData/skills/。</div>
+            )}
+            {skills.map((skill) => (
+              <div key={skill.id} className="tools-panel-card">
+                <label className="tools-panel-row">
+                  <input
+                    type="checkbox"
+                    checked={!disabledSkills.has(skill.id)}
+                    onChange={(e) => {
+                      const next = new Set(disabledSkills)
+                      if (e.target.checked) next.delete(skill.id)
+                      else next.add(skill.id)
+                      setDisabledSkills(next)
+                    }}
+                  />
+                  <strong>{skill.name}</strong>
+                  <span className="mc-dim" style={{ fontSize: 12, marginLeft: 6 }}>
+                    {skill.id}{skill.overridden ? ' · 用户版本' : ''}
+                  </span>
+                </label>
+                <div className="mc-dim" style={{ fontSize: 12, marginTop: 4 }}>{skill.description}</div>
+              </div>
+            ))}
+            <button type="button" className="btn-primary" onClick={() => void saveConfig()}>保存技能开关</button>
+          </div>
+
+          <div className="tools-panel-section" style={{ marginTop: 20 }}>
+            <h3 className="tools-panel-section-title">技能内容</h3>
+            <select
+              className="tools-panel-input"
+              value={selectedSkillId || ''}
+              onChange={(e) => setSelectedSkillId(e.target.value)}
+            >
+              {skills.map((skill) => (
+                <option key={skill.id} value={skill.id}>
+                  {skill.id}{skill.overridden ? ' (已覆盖)' : ''}
+                </option>
+              ))}
+            </select>
+            <textarea
+              className="tools-panel-textarea tools-panel-editor"
+              value={skillDraft}
+              onChange={(e) => setSkillDraft(e.target.value)}
+            />
+            <button type="button" className="btn-primary" onClick={() => void saveSkillFile()}>保存为用户技能</button>
+            {skills.find((skill) => skill.id === selectedSkillId)?.overridden && (
+              <button type="button" className="btn-ghost" onClick={() => void resetSkillFile()}>恢复内置版本</button>
+            )}
           </div>
         </>
       )}

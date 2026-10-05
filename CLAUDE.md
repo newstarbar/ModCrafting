@@ -44,11 +44,12 @@ npm run knowledge:download    # 下载所有离线知识库
 | 三模式路由 | Chat / Plan / Execute，每轮独立分类 | [docs/harness.md](./docs/harness.md#三模式路由) |
 | 计划阶段门控 | `MAX_READONLY_ROUNDS = 15`，锁定后仍允许只读与知识库工具 | [docs/harness.md](./docs/harness.md#计划阶段门控) |
 | 验收契约 | 每条需求映射到构建、游戏断言或用户确认 | [docs/harness.md](./docs/harness.md#确定性游戏内测试-v2) |
-| 工具集（47） | 文件 / Fabric / 构建 / 游戏 / 用户交互 / 流程控制 | [docs/harness.md](./docs/harness.md#工具集47) |
+| 工具集（48） | 文件 / Fabric / 构建 / 游戏 / 用户交互 / 流程控制 | [docs/harness.md](./docs/harness.md#工具集48) |
 | 证据推进 | 本轮写入产物可跨步采纳；连续两次缺证据进入 `evidence_deadlock` 暂停 | [docs/harness.md](./docs/harness.md#关键护栏) |
 | Test Lab | 隔离 Electron、回放 Provider、MCP、黑盒场景 | [docs/test-lab-mcp.md](./docs/test-lab-mcp.md) |
 | 关键护栏 | 证据推进、修复范围、20/40/3 预算、三态裁决 | [docs/harness.md](./docs/harness.md#关键护栏) |
 | 输出截断 | read_file 默认 400 行；工具输出 32KB；不显示原始大小 | [docs/harness.md](./docs/harness.md#输出截断) |
+| 技能模块 | `SKILL.md` 指令包：索引进系统提示词，正文由 `read_skill` 按需取回，不改工具与门控 | [docs/skill.md](./docs/skill.md) |
 
 ## Minecraft 知识库
 
@@ -66,6 +67,7 @@ npm run knowledge:download    # 下载所有离线知识库
 
 - **工具链下载逻辑双份**：`scripts/toolchain/toolchain-download.mjs` 与 `src/main/toolchain-download.ts` 需同步修改
 - **MC 版本升级**：升级 `resources/fabric-versions.json` 后必须重新运行 `npm run knowledge:download`
+- **内置技能要强制入库**：`.gitignore` 整体忽略 `resources/`，新增 `resources/skills/<id>/SKILL.md` 必须 `git add -f`，否则打包缺技能
 - **AGENTS.md / CLAUDE.md ≤ 150 行**：只保留摘要与索引，详细内容写到 `docs/`
 - **提交前确认**：未包含 API Key、`.env`、个人路径；未提交 `node_modules/`、`release/`、`runtime/`、`resources/jdk-21/`
 
@@ -88,6 +90,7 @@ AI Agent 必须在以下场景触发归档，将工作总结写入 [`docs/archiv
 | [docs/commands.md](./docs/commands.md) | 完整命令清单 |
 | [docs/workflow.md](./docs/workflow.md) | Vibecoding 工作流 |
 | [docs/harness.md](./docs/harness.md) | AI Harness 系统详细说明 |
+| [docs/skill.md](./docs/skill.md) | Skill 技能模块：SKILL.md 格式、加载链路、管理界面 |
 | [docs/test-lab-mcp.md](./docs/test-lab-mcp.md) | Test Lab 应用级自动化与 MCP |
 | [docs/toolchain.md](./docs/toolchain.md) | 离线工具链 |
 | [docs/knowledge-base.md](./docs/knowledge-base.md) | Minecraft 知识库 |

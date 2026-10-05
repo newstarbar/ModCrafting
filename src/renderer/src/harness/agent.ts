@@ -92,6 +92,9 @@ const REPEAT_SUCCESS_THRESHOLD = 2;
 const MAX_FINAL_READINESS_BLOCKS = 3;
 const CONTROL_TOOL_NAMES = ["complete_step"];
 const PLAN_READONLY_TOOL_NAMES = new Set(planToolNames());
+// Chat 回合的固定工具集。提示词与门控必须由同一处派生，否则模型怎么选都违规（见
+// docs/archive/2026-10-05-harness-repeated-failure-root-causes.md 教训 3）。
+const CHAT_TOOL_NAMES = ["read_file", "explain_code", "fabric_docs_search", "read_skill"];
 
 function stableStringify(args: Record<string, unknown>): string {
 	const keys = Object.keys(args).sort();
@@ -639,7 +642,7 @@ export class Agent {
 			let availableTools =
 				phase === "plan" ? this.filterControlTools(this.registry.schemas()).filter((t) => PLAN_READONLY_TOOL_NAMES.has(t.name)) : this.filterControlTools(this.registry.schemas());
 			if (this.runLifecycleMeta.turnMode === "chat") {
-				const chatTools = new Set(["read_file", "explain_code", "fabric_docs_search"]);
+				const chatTools = new Set(CHAT_TOOL_NAMES);
 				availableTools = availableTools.filter((t) => chatTools.has(t.name));
 			}
 			if (this.graceRound) {
@@ -680,7 +683,7 @@ export class Agent {
 				phase,
 				turnId: `${phase}:${step + 1}`,
 				candidateTools: availableTools,
-				...(this.runLifecycleMeta.turnMode === "chat" ? { chatToolNames: new Set(["read_file", "explain_code", "fabric_docs_search"]) } : {})
+				...(this.runLifecycleMeta.turnMode === "chat" ? { chatToolNames: new Set(CHAT_TOOL_NAMES) } : {})
 			});
 
 			// Plan and execute advertise the immutable full catalog so the serialized

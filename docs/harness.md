@@ -57,6 +57,7 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 | `tools.ts` | `Registry`、`Tool` 接口、`ToolContext`。工具有 deadline/取消结果；`executeBatch()` 以最多 4 个并发执行相邻只读工具，并串行执行写入工具 |
 | `tool-policy.ts` | 工具能力、执行类型与超时策略的唯一目录；生成 Plan/工作流推荐工具集合 |
 | `tool-definitions.ts` | 通过 `registerModCraftingTools()` 注册的内置工具 |
+| `skill-tools.ts` | `read_skill` 工具与技能索引渲染（`formatSkillIndex`），见 [skill.md](./skill.md) |
 | `acceptance-contract.ts` | 任务级 requirement 与 build/game/user-confirmation Oracle |
 | `game-test-protocol.ts` / `game-test-runner.ts` | V2 游戏规格、动作、断言、新鲜证据和三态裁决 |
 | `mc-data-tool.ts` | `minecraft_data_lookup` 与 `mc_wiki_search` 工具实现 |
@@ -146,7 +147,17 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - 停止任务会取消 GUI 预览、渲染进程工具和主进程命令/Gradle 子进程；Windows 使用进程树终止避免残留 Java/Gradle。
 - 工具结果统一标记 `succeeded`、`failed`、`timed_out` 或 `cancelled`；工具卡会显示超时/取消终态，不会永久停留在运行中。
 
-## 工具集（47）
+## 技能模块（Skill）
+
+技能是带 frontmatter 的 `SKILL.md` 指令包：索引（id + 一句话）常驻系统提示词，正文由 `read_skill` 按需取回。技能只补充专业细节，不新增工具能力、不参与门控改写。
+
+- 内置树 `resources/skills/<id>/SKILL.md`，用户覆盖 `userData/skills/<id>/SKILL.md`，共用 `src/main/md-tree-store.ts` 的「内置 + 覆盖」文件树实现
+- 启停存 `agent-config.json` 的 `disabledSkills`；设置 → 技能 可开关、编辑、恢复内置
+- `read_skill` 策略为 `knowledge.read`，因此 Plan 白名单、探索锁、只读锁、步骤门与轮次预算全部自动放行
+- 工具注册不随技能启停变化，以保持广播 catalog 逐轮字节稳定（prompt cache）
+- 详见 [skill.md](./skill.md)
+
+## 工具集（48）
 
 工具数量以 `tool-policy.ts` 为准；注册但未声明策略会在启动/测试时失败。
 
@@ -155,12 +166,13 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - `read_file`、`list_directory`、`grep`
 - `read_error_log`、`explain_code`、`list_templates`
 
-### 知识与结构校验（12）
+### 知识与结构校验（13）
 
 - `fabric_docs_search`、`fabric_javadoc_lookup`、`vanilla_mc_wiki_query`
 - `minecraft_data_lookup`、`mc_wiki_search`、`fabric_meta_version_check`
 - `fabric_mod_json_validate`、`fabric_log_debugger`、`fabric_mixin_target_lookup`
 - `fabric_recipe_validate`、`fabric_mixin_validate`、`mc_test_scenario`
+- `read_skill`（技能包按需加载，见 [skill.md](./skill.md)）
 
 ### 项目写入（10）
 
