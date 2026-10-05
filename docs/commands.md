@@ -12,7 +12,20 @@ npm run test             # Harness 单元/回归测试（自动收集 harness-*.
 npm run test:harness     # npm run test 的别名
 npm run test:ui          # UI 组件 snapshot 测试（Vitest + Testing Library）
 npm run test:ui:update   # 更新 UI snapshot 基线
+npm run setup:worktree   # 新 git worktree 环境自举（可重复执行）
 ```
+
+### 新 worktree 环境自举
+
+`npm run setup:worktree`（`scripts/setup-worktree.mjs`）补齐 git worktree 里缺失但被 gitignore 的本地状态，全部步骤幂等、已就绪时秒退：
+
+| 步骤 | 处理 |
+|---|---|
+| 依赖 | `node_modules` 缺失或不含 vitest/jsdom/@testing-library/electron/react 时执行 `npm install` |
+| Electron 二进制 | `node_modules/electron/dist/electron.exe` 缺失时执行 `node node_modules/electron/install.js`（优先用 `%LOCALAPPDATA%\electron\Cache` 里的 zip，不联网） |
+| `src/renderer/src/data/items.ts` | 生成物且已 gitignore；优先从 `git worktree list` 的主 checkout 复制，否则回退 `npm run assets:items` |
+
+非 ModCrafting 目录会直接退出 0。加 `--force` 可强制重装并重做全部步骤。工具链数据目录（JDK/Gradle/Fabric）不在其列：dev 与安装版都读「设置 → 修改数据目录」写入的 `runtimePath`，见 [toolchain.md](./toolchain.md)。
 
 ## Harness Test Lab
 
