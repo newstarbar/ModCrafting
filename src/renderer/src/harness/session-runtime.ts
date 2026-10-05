@@ -22,8 +22,15 @@ import {
   estimateCostDelta,
   contextPercentFromPrompt,
   normalizeSessionUsage,
+  workingContextWindow,
   type UsageStats
 } from '../utils/usage.ts'
+import {
+  buildContextAttribution,
+  toContextFrame,
+  CONTEXT_ATTRIBUTION_ENABLED,
+  CONTEXT_HISTORY_LIMIT
+} from '../utils/context-attribution.ts'
 import type { ChatSession, PersistedMessage } from '../types/chat.ts'
 import {
   serializeDisplayMessages,
@@ -1147,6 +1154,25 @@ export class SessionRuntime {
             model: u.modelId || this.apiConfig.model,
             providerId: u.providerId || this.apiConfig.providerId
           })
+          // Attribution reads the controller snapshot, i.e. what was really sent.
+          // Accounting must never be able to break a run, so failures degrade to none.
+          let attribution = this.usageAccum.attribution ?? null
+          let attributionHistory = this.usageAccum.attributionHistory ?? []
+          if (CONTEXT_ATTRIBUTION_ENABLED && pT > 0) {
+            try {
+              attribution = buildContextAttribution(this.controller.getSnapshot(), {
+                promptTokens: pT,
+                windowTokens: workingContextWindow(
+                  u.modelId || this.apiConfig.model,
+                  u.providerId || this.apiConfig.providerId
+                )
+              })
+              attributionHistory = [...attributionHistory, toContextFrame(attribution)]
+                .slice(-CONTEXT_HISTORY_LIMIT)
+            } catch {
+              attribution = null
+            }
+          }
           this.usageAccum = {
             ...this.usageAccum,
             sessionTokens: this.usageAccum.sessionTokens + stepTokens,
@@ -1157,7 +1183,9 @@ export class SessionRuntime {
             turnCacheMissTokens: this.usageAccum.turnCacheMissTokens + miss,
             lastPromptTokens: pT,
             contextPercent: contextPercentFromPrompt(pT, this.apiConfig.model, this.apiConfig.providerId),
-            cost: this.usageAccum.cost + costDelta
+            cost: this.usageAccum.cost + costDelta,
+            attribution,
+            attributionHistory
           }
           this.onUsageChange?.(this.usageAccum, costDelta > 0 ? { costDelta } : undefined)
         }

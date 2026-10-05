@@ -1146,6 +1146,7 @@ const App: React.FC = () => {
 					toolchainPercent={overlayLocked ? toolchainInit.percent : undefined}
 					projectVersions={projectVersions}
 					mcRuntime={mcRuntimeSlot}
+					attribution={usage.attribution ?? null}
 				/>
 			)}
 		</>

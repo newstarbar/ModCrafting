@@ -3454,6 +3454,268 @@ body,
 	animation-duration: 0.65s;
 }
 
+/* ── Context attribution (segmented bar + breakdown popover) ── */
+
+.statusbar-context {
+	position: relative;
+}
+
+.statusbar-context--clickable {
+	cursor: pointer;
+}
+
+.statusbar-context-segments {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: row;
+}
+
+.statusbar-context-seg {
+	height: 100%;
+	min-width: 1px;
+	flex-basis: 0;
+	image-rendering: pixelated;
+	background-size: 8px 8px;
+	background-repeat: repeat;
+	border-right: 1px solid rgba(0, 0, 0, 0.55);
+	transition: flex-grow 0.3s ease;
+}
+
+.statusbar-context-seg--systemPrompt { background-color: #2a6eb8; background-image: url("../assets/mc/block/water_flow.png"); }
+.statusbar-context-seg--harnessInjected { background-color: #7b5cc4; }
+.statusbar-context-seg--user { background-color: var(--mc-aqua, #45d3c8); }
+.statusbar-context-seg--toolResult { background-color: var(--mc-green, #5fbf3f); }
+.statusbar-context-seg--assistantText { background-color: var(--mc-yellow, #d9b23c); }
+.statusbar-context-seg--assistantToolArgs { background-color: #c58a3f; }
+.statusbar-context-seg--imageParts { background-color: #4ec9c0; }
+.statusbar-context-seg--unaccounted { background-color: #4a4640; }
+
+.statusbar-context-dup {
+	margin-left: 4px;
+	padding: 0 4px;
+	font-size: 10px;
+	line-height: 14px;
+	color: #fff;
+	background: var(--error, #b3352c);
+	border-radius: var(--radius-sm, 2px);
+}
+
+.statusbar-context-caret {
+	margin-left: 3px;
+	font-size: 10px;
+	color: var(--text-muted, #8a857c);
+	transition: transform var(--transition, 150ms ease);
+}
+
+.statusbar-context-caret.is-open {
+	transform: rotate(90deg);
+}
+
+.context-breakdown {
+	/* Placement (position/top/left/transform) is set inline: the popover is
+	   portalled to <body> because .statusbar is a clipping scroll container. */
+	z-index: 1200;
+	width: 480px;
+	max-width: calc(100vw - 24px);
+	max-height: min(62vh, 520px);
+	overflow-y: auto;
+	box-sizing: border-box;
+	padding: 10px 12px;
+	color: var(--text-primary, #e8e3d9);
+	background: var(--bg-surface, #201d1a);
+	border: 4px solid transparent;
+	border-image: url("../assets/mc/popup/background.png") 6 / 4px / 0 stretch;
+	box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.55));
+	cursor: default;
+	text-align: left;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.context-breakdown__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 6px;
+}
+
+.context-breakdown__title {
+	font-size: 13px;
+	color: var(--text-primary, #e8e3d9);
+}
+
+.context-breakdown__close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	color: var(--text-muted, #8a857c);
+	background: transparent;
+	border: none;
+	border-radius: var(--radius-sm, 2px);
+	cursor: pointer;
+}
+
+.context-breakdown__close:hover {
+	color: var(--text-primary, #e8e3d9);
+	background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.context-breakdown__summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+	margin-bottom: 8px;
+	color: var(--text-secondary, #b7b0a4);
+}
+
+.context-breakdown__summary b {
+	color: var(--text-primary, #e8e3d9);
+}
+
+.context-breakdown__tag {
+	padding: 0 6px;
+	font-size: 10px;
+	border-radius: var(--radius-sm, 2px);
+	border: 1px solid var(--border-color, #4a4640);
+}
+
+.context-breakdown__tag--api {
+	color: var(--success, #5fbf3f);
+	border-color: var(--success, #5fbf3f);
+}
+
+.context-breakdown__tag--est {
+	color: var(--warning, #d9b23c);
+	border-color: var(--warning, #d9b23c);
+}
+
+.context-breakdown__table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-bottom: 6px;
+}
+
+.context-breakdown__table th,
+.context-breakdown__table td {
+	padding: 2px 4px;
+	text-align: right;
+	border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+}
+
+.context-breakdown__table th:first-child,
+.context-breakdown__table td:first-child {
+	text-align: left;
+}
+
+.context-breakdown__table th {
+	font-weight: 400;
+	color: var(--text-muted, #8a857c);
+}
+
+.context-breakdown__swatch {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin-right: 5px;
+	vertical-align: middle;
+	border: 1px solid rgba(0, 0, 0, 0.5);
+}
+
+.context-breakdown__swatch--systemPrompt { background: #2a6eb8; }
+.context-breakdown__swatch--harnessInjected { background: #7b5cc4; }
+.context-breakdown__swatch--user { background: var(--mc-aqua, #45d3c8); }
+.context-breakdown__swatch--toolResult { background: var(--mc-green, #5fbf3f); }
+.context-breakdown__swatch--assistantText { background: var(--mc-yellow, #d9b23c); }
+.context-breakdown__swatch--assistantToolArgs { background: #c58a3f; }
+.context-breakdown__swatch--imageParts { background: #4ec9c0; }
+.context-breakdown__swatch--unaccounted { background: #4a4640; }
+
+.context-breakdown__note,
+.context-breakdown__disclaimer {
+	margin: 6px 0 0;
+	font-size: 11px;
+	color: var(--text-muted, #8a857c);
+}
+
+.context-breakdown__section {
+	margin-top: 10px;
+}
+
+.context-breakdown__section-title {
+	margin: 0 0 4px;
+	font-size: 11px;
+	font-weight: 400;
+	color: var(--text-secondary, #b7b0a4);
+}
+
+.context-breakdown__list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.context-breakdown__list li {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	padding: 2px 0;
+	border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+}
+
+.context-breakdown__list--tools li {
+	justify-content: space-between;
+}
+
+.context-breakdown__badge {
+	flex-shrink: 0;
+	padding: 0 4px;
+	font-size: 10px;
+	color: #fff;
+	border-radius: var(--radius-sm, 2px);
+}
+
+.context-breakdown__badge--exact { background: var(--error, #b3352c); }
+.context-breakdown__badge--near { background: var(--warning, #d9b23c); color: #201d1a; }
+
+.context-breakdown__waste {
+	flex-shrink: 0;
+	color: var(--error, #b3352c);
+}
+
+.context-breakdown__roles,
+.context-breakdown__who {
+	flex-shrink: 0;
+	max-width: 150px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-secondary, #b7b0a4);
+}
+
+.context-breakdown__tok {
+	flex-shrink: 0;
+	color: var(--text-primary, #e8e3d9);
+}
+
+.context-breakdown__idx {
+	flex-shrink: 0;
+	color: var(--text-muted, #8a857c);
+}
+
+.context-breakdown__sample {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 11px;
+	color: var(--text-muted, #8a857c);
+}
+
 @keyframes mc-water-flow {
 	from {
 		background-position: 0 0;

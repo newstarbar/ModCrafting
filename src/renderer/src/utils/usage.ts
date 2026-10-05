@@ -6,6 +6,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   effectiveContextWindow,
 } from '../harness/context-compact.ts'
+import type { ContextAttribution, ContextAttributionFrame } from './context-attribution.ts'
 
 export interface UsageStats {
   sessionTokens: number
@@ -18,6 +19,10 @@ export interface UsageStats {
   contextPercent: number
   lastPromptTokens: number
   cost: number
+  /** Category split of the last real prompt; absent until a usage event lands. */
+  attribution?: ContextAttribution | null
+  /** Bounded in-memory growth series (never persisted to disk). */
+  attributionHistory?: ContextAttributionFrame[]
 }
 
 export const EMPTY_USAGE: UsageStats = {
@@ -30,7 +35,9 @@ export const EMPTY_USAGE: UsageStats = {
   turns: 0,
   contextPercent: 0,
   lastPromptTokens: 0,
-  cost: 0
+  cost: 0,
+  attribution: null,
+  attributionHistory: []
 }
 
 export interface UsagePricingContext {
@@ -165,6 +172,10 @@ export function normalizeSessionUsage(
     turns: coerceUsageNumber(raw.turns),
     lastPromptTokens,
     contextPercent: contextPercentFromPrompt(lastPromptTokens, model, providerId),
-    cost: coerceUsageNumber(raw.cost)
+    cost: coerceUsageNumber(raw.cost),
+    // Attribution is recomputed from the live controller snapshot, so a restored
+    // session must not resurrect a stale category split.
+    attribution: null,
+    attributionHistory: []
   }
 }

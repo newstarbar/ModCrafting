@@ -1717,6 +1717,8 @@ const ChatPanel = forwardRef<ChatPanelRef, ChatPanelProps>(function ChatPanel({
               ),
               classifierDiagnostics: ctrl?.getClassifierDiagnosticsSnapshot(),
               providerProtocolDiagnostics: ctrl?.getProviderProtocolDiagnosticsSnapshot(),
+              contextAttribution: getActiveRuntime()?.usageAccum?.attribution ?? null,
+              contextAttributionHistory: getActiveRuntime()?.usageAccum?.attributionHistory ?? [],
             })
             const result = await window.api.sessionExport(md, 'mc-session-diag')
             if (result.cancelled) return

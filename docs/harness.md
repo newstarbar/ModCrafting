@@ -214,6 +214,28 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 - 接近 token 上限触发 LLM 摘要
 - 跨轮诊断保留（近期 5 条用户反馈 + 2 条助手摘要）
 
+## 上下文占用归因
+
+单一百分比在 1M 窗口模型上没有诊断价值（整轮会话可能只占 2~3%，却已经把四分之一的上下文浪费在复读上），因此在状态栏占比条之下做**分类归因**。
+
+| 要点 | 说明 |
+|------|------|
+| 计算位置 | `session-runtime.ts` 的 `EventKind.Usage` 分支；读 `controller.getSnapshot()`，**不改请求热路径** |
+| 分类 | 系统提示 / 宿主注入指令 / 用户输入 / 工具结果 / 助手正文 / 工具调用参数 / 图片输入 / 未归类 |
+| 绝对值口径 | 各分类按估算比例 **锚定到 API 真实 `prompt_tokens`**；估算只允许缩小、不允许放大 |
+| `unaccounted` | 逐轮步骤注入与工具 schema 不随控制器快照持久化，显式列为残差；它同时是自检项——占比异常即分类有漏 |
+| 重复检测 | 两级：`exact`（原文哈希）与 `near`（剥行号 gutter / 路径 / 数字 / 空白后哈希）；`duplicateShare` 分母是**已测量部分**，避免被 `unaccounted` 稀释 |
+| CJK 修正 | 中文约 1 字 ≈ 1 token；不能沿用 `context-compact.ts` 的 `len/4`（对中文低估约 4 倍） |
+| 图片 | 每张图片按固定估算，**绝不按 base64 长度估 token** |
+| 无 usage 时 | 退回纯估算并标记 `estimated`；状态栏退回改动前的单色 `__fill` 条 |
+| 导出 | 诊断 Markdown 头部新增 `### 上下文占用账目`；必须由截断前的原始消息对象计算（导出体积≈真实上下文 1.8 倍，且 `clip()` 已截字段） |
+| 提示不干预 | 超阈值与高重复只发 `Notice`/徽标，不暂停任务、不参与预算 |
+| 分段条语义 | 分段堆叠的**总宽度 = 窗口占用率**（右侧留空即剩余额度），容器内部再按各类占 prompt 的比例分配；不得让构成吃掉占用 |
+| 浮层渲染 | `.statusbar` 有 `overflow-x: auto` 会裁剪绝对定位子元素，因此明细浮层经 `createPortal` 挂到 `document.body` 并按锚点 `getBoundingClientRect()` 定位 |
+| 关闭开关 | `CONTEXT_ATTRIBUTION_ENABLED = false` 时行为完全回到现状 |
+
+模块：`src/renderer/src/utils/context-attribution.ts`；UI：`components/ContextBreakdown.tsx` + `components/StatusBar.tsx`；测试：`scripts/test/harness-context-attribution.test.ts`。
+
 ## 输出截断
 
 | 工具 | 限制 | 截断消息 |
@@ -223,11 +245,26 @@ Harness 系统是 ModCrafting 的 AI Agent 核心，位于 `src/renderer/src/har
 
 不显示原始文件大小/字节数，避免误导。
 
+## 请求前缀与成本不变量
+
+Agent 循环每轮重发全量上下文，DeepSeek 按**序列化前缀**自动命中缓存；前缀一旦分叉，整段上下文按未命中价重算。以下不变量必须由测试守住，违反会直接反映为账单倍数：
+
+| 不变量 | 位置 | 原因 |
+|--------|------|------|
+| 向 Provider 声明**恒定全量**工具目录；步骤/阶段限制只在**校验期**由 `ActiveToolSnapshot` 拦截（`blocked: [tool_inactive]`） | `agent.ts`、`tool-call-validator.ts` | 逐轮增删 tools 成员会让前缀分叉；快照本就为每个注册工具算 `inactiveReasons`，无需靠"少声明"来禁 |
+| system prompt 不再内联工具散文清单 | `controller.ts: buildSystemPrompt` | 与 `body.tools` 的 schema description 重复计费（实测约 7.7K 字符/轮） |
+| 实时项目结构信息追加在**消息尾部**且仅在内容变化时重写，禁止覆写 `messages[0..1]` | `controller.ts: refreshProjectInfoMessage` | 原地覆写 index 1 会作废其后整条消息前缀 |
+| 拒绝/踢回文案不得枚举全量工具名（该文本会永久留在历史里重放） | `tool-call-validator.ts` | 一次写入、每轮重放 |
+| 上下文窗口解析必须带 `providerId` | `agent.ts: contextWindowFor` | 漏传会落到 128k 兜底，压缩阈值降到约 64k，几乎每轮触发 auto-compact 并全量失效缓存 |
+| thinking 模型的 `reasoning_content` 必须随 assistant 轮次回传；Provider 拒绝时就地剥离重试，不切换模型 | `chat-message.ts`、`fetch-retry.ts`、`agent.ts` | 缺失即 400；切备用模型会同样丢推理历史 |
+
 ## 多模型协作路由
 
 每轮先用规则提取 `RoutingSignals`（任务模板、难度、是否需视觉/诊断、是否歧义），歧义时由 router 模型 refinement（失败则 fail-open 回退规则）。`RouteDecision` 同时给出全量 `roles` 与本轮真正会执行的 `activeRoles`；协作轨迹只排队 `activeRoles`，避免「展示但不运行」的假委派。
 
 路由固定使用十种职责：router、coordinator、explorer、planner、implementer、debugger、codeReviewer、visualReviewer、verifier、summarizer。预设可为角色声明 `byDifficulty`（simple/standard/complex）模型池；运行时按难度选择 primary/fallback。UI/GUI 必须有可用的视觉审查模型，缺失时暂停并引导到设置中心；Minecraft 内容在勘探阶段先要求查询 `minecraft_data_lookup`。
+
+**档位与用户选择**：routed 模式下用户在输入框选定的模型即该厂商的**廉价档**——`simple` / `standard` 一律用它，路由只允许在 `complex` 或用户显式选择 `deep` / `code` 预设时升级到强模型；缺判定结果时兜底为 `simple`（降级而非升档）。提示词长度不参与难度判定（长描述或粘贴长目标不得自动升档）。视觉职责仍强制要求可用视觉模型，用户所选模型不满足时保留目录里的视觉候选。
 
 **默认单厂多模型**：内置策略基于主厂商（默认 DeepSeek）的 Flash / Pro / 多模态梯队协作，视觉审查默认走主厂多模态，不要求第二把 Key。可选「伴厂商」最多 1 个，仅挂到专家槽（`codeReviewer` 第三方审查、可选 `visualReviewer` 游戏/视觉审查预留），用于补短板或交叉检测；游戏测试推荐模型待评测，本阶段不钦定。≥3 厂混搭仅出现在用户自定义预设。
 

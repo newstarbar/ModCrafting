@@ -1,5 +1,7 @@
 # 归档索引
 
+- [2026-10-05] [上下文窗口归因可视化](./2026-10-05-context-attribution-visualization.md) — 状态栏占比条改为分类分段堆叠 + 明细浮层，诊断导出新增 `### 上下文占用账目`；拉取式读控制器快照、锚定 API prompt_tokens、CJK 修正、exact/near 重复检测与 `unaccounted` 诚实残差。触发：新增核心可观测性模块。
+
 - [2026-10-05] [Harness 反复错误根因修复](./2026-10-05-harness-repeated-failure-root-causes.md) — 嵌套 Mixin `targets=`、证据门跨步采纳与 `evidence_deadlock` 诚实轮次、计划锁定白名单按能力派生、成员未命中提示嵌套类、`reasoning_content` 通用连续性。触发：修复复杂 bug + 调整 Agent 行为规则。
 
 - [2026-10-04] [默认单厂多模型路由（伴厂专家槽）](./2026-10-04-home-companion-routing.md) — DeepSeek 单厂默认含多模态；伴厂仅补短板/第三方检测；游戏测试模型待评测。触发：产品路由策略重构。
