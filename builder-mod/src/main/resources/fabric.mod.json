@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "modcrafting_builder",
+  "version": "${version}",
+  "name": "ModCrafting Builder",
+  "description": "Server-side void studio dimension for previewing, editing and applying ModCrafting buildings.",
+  "authors": ["ModCrafting"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.modcrafting.builder.ModCraftingBuilder"]
+  },
+  "custom": {
+    "modcrafting": {
+      "builderProtocol": 1,
+      "studioDimension": "modcrafting_builder:studio"
+    }
+  },
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
