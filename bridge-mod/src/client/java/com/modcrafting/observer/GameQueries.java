@@ -84,6 +84,8 @@ public final class GameQueries {
         out.put("armorToughness", round(player.getAttributeValue(EntityAttributes.ARMOR_TOUGHNESS)));
         out.put("knockbackResistance", round(player.getAttributeValue(EntityAttributes.KNOCKBACK_RESISTANCE)));
         out.put("scoreboardTags", new ArrayList<>(player.getCommandTags()));
+        var playerTeam = player.getScoreboardTeam();
+        if (playerTeam != null) out.put("team", playerTeam.getName());
         out.put("food", player.getHungerManager().getFoodLevel());
         // Keep the semantic alias used by persisted game-test contracts. The
         // vanilla field is commonly called food, while project requirements
@@ -685,6 +687,8 @@ public final class GameQueries {
         m.put("name", entity.getName().getString());
         m.put("uuid", entity.getUuidAsString());
 		m.put("tags", new ArrayList<>(entity.getCommandTags()));
+        var team = entity.getScoreboardTeam();
+        if (team != null) m.put("team", team.getName());
         m.put("x", round(entity.getX()));
         m.put("y", round(entity.getY()));
         m.put("z", round(entity.getZ()));

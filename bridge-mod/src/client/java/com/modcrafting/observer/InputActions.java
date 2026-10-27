@@ -56,6 +56,8 @@ public final class InputActions {
         if ("mouse_click".equals(action) && body.get("x") != null && body.get("y") != null) {
             return clickAt(body);
         }
+        // press_key was used by older Agent prompts; keep it as a readable alias.
+        if ("press_key".equals(action)) action = "key_press";
         return switch (action) {
             case "key_down", "key_up", "key_press" -> keyAction(action, body);
             case "mouse_click" -> mouseClick(body);
@@ -67,7 +69,7 @@ public final class InputActions {
 			case "set_text" -> setText(body);
             case "forward", "back", "left", "right", "jump", "sneak", "sprint",
                  "use", "attack", "inventory", "drop", "swap_hands" -> preset(action, body);
-            default -> error("BAD_REQUEST", "未知 action: " + action);
+            default -> error("BAD_REQUEST", "未知 action: " + action + "。支持 key_down/key_up/key_press、mouse_click/mouse_move/scroll、click_at/click_widget/click_slot、set_text、forward/back/left/right/jump/sneak/sprint/use/attack/inventory/drop/swap_hands。");
         };
     }
 
@@ -201,7 +203,9 @@ public final class InputActions {
                 "screenAfter", screen.getClass().getSimpleName()
             );
         } catch (Exception e) {
-            return error("CLICK_FAILED", "click_slot 失败: " + e.getMessage());
+            String detail = e.getMessage();
+            if (detail == null || detail.isBlank()) detail = e.getClass().getSimpleName();
+            return error("CLICK_FAILED", "click_slot 失败: " + detail + "；请先用 minecraft_widgets 检查容器界面和槽位。");
         }
     }
 

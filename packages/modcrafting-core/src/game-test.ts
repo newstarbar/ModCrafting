@@ -1,8 +1,19 @@
 import { GAME_TEST_WORLD, pointerValue, validateGameTestSpec, type GameAction, type GameAssertion, type GameTestSpec, type GameTestVerdict } from './domain.ts'
 import { acceptanceVerdict, createAcceptanceReport, type AcceptanceReport } from './acceptance.ts'
 
-export const SUPPORTED_GAME_ASSERTIONS = ['inventory_contains', 'block_equals', 'entity_exists', 'snapshot_value', 'snapshot_changed'] as const
+export const SUPPORTED_GAME_ASSERTIONS = ['inventory_contains', 'block_equals', 'entity_exists', 'entity_attribute', 'entity_name', 'entity_team', 'snapshot_value', 'snapshot_changed'] as const
 export type GameTestCode = 'INVALID_SPEC' | 'CAPABILITY_UNAVAILABLE' | 'EVIDENCE_MISSING' | 'ENVIRONMENT_UNAVAILABLE' | 'CLEANUP_FAILED' | 'ASSERTION_FAILED' | 'OK'
+/** Explains why a live test cannot produce trustworthy evidence, before any job or game action starts. */
+export function unsupportedGameTestEvidence(spec: { assertions: Array<{ type: string; source?: string; tag?: string }> }): string[] {
+  const reasons: string[] = []
+  spec.assertions.forEach((assertion, index) => {
+    if (assertion.type === 'hud_text') reasons.push(`assertions[${index}]: hud_text 需要 HUD 文本快照，当前测试组件无法提供`)
+    if (assertion.type === 'command_result') reasons.push(`assertions[${index}]: command_result 需要服务器命令返回值，当前测试组件无法提供`)
+    if (assertion.source && /Trace$/.test(assertion.source)) reasons.push(`assertions[${index}]: ${assertion.source} 是历史/渲染轨迹，不是当前操作后的新鲜证据`)
+    if (assertion.type === 'entity_exists' && assertion.tag) reasons.push(`assertions[${index}]: entity_exists 的 tag 过滤需要服务端实体标签，客户端快照无法证明`)
+  })
+  return reasons
+}
 type Snapshot = Record<string, unknown>
 type BridgeResult = { ok: boolean; data: Snapshot }
 export interface GameTestAdapter {
@@ -42,6 +53,26 @@ export function evaluateGameAssertion(assertion: GameAssertion, before: Snapshot
     const found = after.entities.some((item) => (!assertion.entityType || item.type === assertion.entityType) && (!assertion.tag || item.tags.includes(assertion.tag)))
     if (!found && after.entities.length >= 64) return missing('Observer entity query may be truncated')
     return evidence(found === (assertion.exists ?? true), `Entity match=${found}; Observer radius=32, maximum=64`)
+  }
+  if (assertion.type === 'entity_attribute' || assertion.type === 'entity_name' || assertion.type === 'entity_team') {
+    if (!Array.isArray(after.entities) || after.entities.some((item) => !record(item) || item.ok === false)) return missing('Entity query evidence is missing or invalid')
+    const target = assertion.target
+    const rows = (after.entities as Array<Record<string, unknown>>).filter((item) => (!target.entityType || item.type === target.entityType) && (!target.name || item.name === target.name) && (!target.team || item.team === target.team))
+    if (!rows.length) return evidence(false, `No entity matched ${JSON.stringify(target)}`)
+    const entity = rows[0]
+    if (assertion.type === 'entity_attribute') {
+      const value = entity[assertion.attribute]
+      if (typeof value !== 'number' || !Number.isFinite(value)) return missing(`Entity attribute ${assertion.attribute} was not observed`)
+      const passed = (assertion.equals === undefined || value === assertion.equals) && (assertion.atLeast === undefined || value >= assertion.atLeast) && (assertion.atMost === undefined || value <= assertion.atMost)
+      return evidence(passed, `${assertion.attribute}=${value} for ${String(entity.type)}`)
+    }
+    if (assertion.type === 'entity_name') {
+      if (typeof entity.name !== 'string') return missing('Entity name was not observed')
+      const passed = assertion.equals !== undefined ? entity.name === assertion.equals : entity.name.includes(assertion.contains!)
+      return evidence(passed, `Observed name "${entity.name}"`)
+    }
+    if (typeof entity.team !== 'string') return missing('Entity scoreboard team was not observed')
+    return evidence(entity.team === assertion.team, `Observed team "${entity.team}"`)
   }
   if (assertion.type === 'snapshot_value' || assertion.type === 'snapshot_changed') {
     const afterSource = after[assertion.source]

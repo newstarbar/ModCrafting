@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync, readFileSync, statSync, lstatSync, copyFileSync, openSync, closeSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync, readFileSync, statSync, lstatSync, copyFileSync, openSync, closeSync, unlinkSync, renameSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { DEFAULT_TEST_PROFILE, FABRIC_TARGET, GAME_TEST_WORLD, testProfileSchema, validateGameTestSpec, type GameAction, type GameTestSpec, type TestProfile } from './domain.ts'
 import { executeGameTest, SUPPORTED_GAME_ASSERTIONS } from './game-test.ts'
-import { JobManager, SystemToolchainProvider, bridgeRequest, createRuntimePaths, readBridgeDiscovery, prepareAssets, writeGameTestReport, type BridgeDiscovery, type DownloadableAsset } from './node.ts'
+import { JobManager, SystemToolchainProvider, bridgeRequest, createRuntimePaths, discoveryPath, portIsListening, readBridgeDiscovery, prepareAssets, writeGameTestReport, type BridgeDiscovery, type DownloadableAsset } from './node.ts'
 import { assertBuildId, prepareStudioInbox, readStudioDiscovery, readStudioOutbox, studioRequest, StudioError, type StudioDiscovery, type StudioOutbox, type StudioResult } from './building-studio.ts'
-import type { RuntimePaths, CoreEnvironmentStatus, CoreCapabilities, LocalAssetStatus, GameInstance, GameRuntimeStatus, JobSnapshot, CoreFailure, BridgeResult, CoreRuntimeState } from './contracts.ts'
+import type { RuntimePaths, CoreEnvironmentStatus, CoreCapabilities, LocalAssetStatus, GameInstance, GameRuntimeStatus, JobSnapshot, CoreFailure, BridgeResult, CoreRuntimeState, JavaCandidate, JavaStatus } from './contracts.ts'
 import { SessionRegistry } from './sessions.ts'
 
 export class CoreError extends Error {
@@ -26,6 +26,44 @@ function filesUnder(directory: string): string[] {
     const file = path.join(directory, entry.name)
     return entry.isDirectory() ? filesUnder(file) : entry.isFile() ? [file] : []
   })
+}
+export type SnapshotOptions = {
+  radius?: number
+  includeRecipes?: boolean
+  includeTraces?: boolean
+  traceLimit?: number
+  includeBlocks?: boolean
+  entityLimit?: number
+  recipeLimit?: number
+  full?: boolean
+}
+function stripItemFingerprints(value: unknown): void {
+  if (Array.isArray(value)) { for (const item of value) stripItemFingerprints(item); return }
+  if (!value || typeof value !== 'object') return
+  const record = value as Record<string, unknown>
+  delete record.componentFingerprint
+  for (const item of Object.values(record)) stripItemFingerprints(item)
+}
+export function compactSnapshot(result: BridgeResult, options: SnapshotOptions): BridgeResult {
+  if (!result.ok || options.full || !result.data || typeof result.data !== 'object') return result
+  const data = { ...result.data }
+  const omitted: Record<string, number> = {}
+  const trim = (key: string, limit: number, fromEnd = false) => {
+    const value = data[key]
+    if (!Array.isArray(value)) return
+    if (limit <= 0) { if (value.length) omitted[key] = value.length; data[key] = []; return }
+    if (value.length <= limit) return
+    omitted[key] = value.length - limit
+    data[key] = fromEnd ? value.slice(value.length - limit) : value.slice(0, limit)
+  }
+  trim('entities', options.entityLimit ?? 16)
+  trim('recipes', options.includeRecipes ? options.recipeLimit ?? 100 : 0)
+  for (const key of ['hudTrace', 'renderTrace', 'combatTrace']) trim(key, options.includeTraces ? options.traceLimit ?? 20 : 0, true)
+  if (!options.includeBlocks) { if (Array.isArray(data.blocks) && data.blocks.length) omitted.blocks = data.blocks.length; delete data.blocks }
+  for (const key of ['player', 'serverPlayer', 'inventory', 'containerSlots', 'cursorStack', 'screen']) if (data[key]) stripItemFingerprints(data[key])
+  data.compact = true
+  data.omitted = omitted
+  return { ...result, data }
 }
 function pidIsAlive(pid?: number): boolean {
   if (!Number.isInteger(pid) || !pid) return false
@@ -68,6 +106,13 @@ function acquireFileLease(file: string, metadata: Record<string, unknown>, busyC
 }
 export type BundledObserver = { jarBase64: string; sha256: string; version: string; protocol: 2 }
 export type BundledBuilder = { jarBase64: string; sha256: string; version: string; protocol: 1 }
+export type ToolchainProvider = Pick<SystemToolchainProvider, 'status' | 'startGradle'> & {
+  preflight?: (projectPath?: string) => JavaStatus
+  scanJavas?: () => Promise<JavaCandidate[]>
+  configureJava?: (javaHome: string) => Promise<{ configPath: string; javaHome: string; version?: string }>
+  clearJava?: () => { configPath?: string; removed: boolean }
+  readJavaConfig?: () => { path?: string; javaHome?: string; error?: string }
+}
 /** Companion artifact receipt produced by product:stage, also used by the standalone Bench. */
 export function loadBundledObserver(directory: string): BundledObserver {
   const receipt = JSON.parse(readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
@@ -103,11 +148,21 @@ export function localAssetStatus(paths: RuntimePaths, observer?: BundledObserver
     { name: 'base-mods', path: path.join(paths.assetsRoot, 'base-mods'), kind: 'observer' }
   ]
   return checks.map((check) => {
+    const withRemediation = (row: LocalAssetStatus): LocalAssetStatus => {
+      if (row.status === 'present') return row
+      const assetName = check.name === 'fabric-docs' ? 'agent-knowledge' : check.name
+      return {
+        ...row,
+        remediation: check.name === 'base-mods'
+          ? '游戏测试组件随完整插件包提供；请重新安装当前版本的完整插件，不能通过资源下载修复。'
+          : `调用 modcrafting_prepare_assets({ names: ["${assetName}"] }) 下载或修复这项知识资源。`
+      }
+    }
     if (check.kind === 'observer') {
       try { observerBytes(observer); return { name: check.name, path: `bundled:observer/${observer!.version}`, status: 'present' as const } }
-      catch (cause) { return { name: check.name, path: check.path, status: existsSync(check.path) ? 'invalid' as const : 'missing' as const, error: String(cause) } }
+      catch (cause) { return withRemediation({ name: check.name, path: check.path, status: existsSync(check.path) ? 'invalid' as const : 'missing' as const, error: String(cause) }) }
     }
-    if (!existsSync(check.path)) return { name: check.name, path: check.path, status: 'missing' }
+    if (!existsSync(check.path)) return withRemediation({ name: check.name, path: check.path, status: 'missing' })
     try {
       if (check.kind === 'object' || check.kind === 'array') {
         const value = JSON.parse(readFileSync(check.path, 'utf8'))
@@ -117,7 +172,7 @@ export function localAssetStatus(paths: RuntimePaths, observer?: BundledObserver
         if (!files.some((file) => check.kind === 'observer' ? /modcrafting-observer.*\.jar$/i.test(path.basename(file)) : check.kind === 'markdown' ? file.endsWith('.md') : true)) throw Error('Required resource files are missing')
       }
       return { name: check.name, path: check.path, status: 'present' }
-    } catch { return { name: check.name, path: check.path, status: 'invalid', error: 'Local resource layout is invalid; prepare assets explicitly' } }
+    } catch { return withRemediation({ name: check.name, path: check.path, status: 'invalid', error: 'Local resource layout is invalid; prepare assets explicitly' }) }
   })
 }
 
@@ -143,7 +198,7 @@ export class FabricRuntime {
   private preparations = new Map<string, ReturnType<typeof prepareAssets>>()
   private preparationState = new Map<string, { phase: string; blockedReason?: string; screen?: Record<string, unknown> }>()
   private buildQueues = new Map<string, Promise<void>>()
-  private toolchain: Pick<SystemToolchainProvider, 'status' | 'startGradle'>
+  private toolchainProvider: ToolchainProvider
   private sessions: SessionRegistry
   private observer?: BundledObserver
   private builder?: BundledBuilder
@@ -151,8 +206,8 @@ export class FabricRuntime {
   readonly paths: RuntimePaths
   readonly version: string
   get backendId(): string { return this.sessions.backendId }
-  constructor(options: { paths: RuntimePaths; version: string; observer?: BundledObserver; builder?: BundledBuilder; scaffoldIncludesWrapper?: boolean; toolchain?: Pick<SystemToolchainProvider, 'status' | 'startGradle'> }) {
-    this.paths = options.paths; this.version = options.version; this.observer = options.observer; this.builder = options.builder; this.scaffoldIncludesWrapper = Boolean(options.scaffoldIncludesWrapper); this.toolchain = options.toolchain ?? new SystemToolchainProvider(options.paths.dataRoot)
+  constructor(options: { paths: RuntimePaths; version: string; observer?: BundledObserver; builder?: BundledBuilder; scaffoldIncludesWrapper?: boolean; toolchain?: ToolchainProvider }) {
+    this.paths = options.paths; this.version = options.version; this.observer = options.observer; this.builder = options.builder; this.scaffoldIncludesWrapper = Boolean(options.scaffoldIncludesWrapper); this.toolchainProvider = options.toolchain ?? new SystemToolchainProvider(options.paths.dataRoot)
     this.sessions = new SessionRegistry(options.paths.dataRoot)
   }
   studioInfo() {
@@ -208,7 +263,37 @@ export class FabricRuntime {
   }
   async environmentStatus(projectPath?: string): Promise<CoreEnvironmentStatus> {
     const scoped = projectRuntimePaths(this.paths, projectPath)
-    return { ...(await this.toolchain.status(projectPath)), contractVersion: 1, paths: scoped, assets: localAssetStatus(scoped, this.observer), capabilities: { ...CORE_CAPABILITIES, toolchain: { ...CORE_CAPABILITIES.toolchain, scaffoldIncludesWrapper: this.scaffoldIncludesWrapper } } }
+    const status = await this.toolchainProvider.status(projectPath)
+    const assets = localAssetStatus(scoped, this.observer)
+    const missingAssets = assets.filter((asset) => asset.status !== 'present' && asset.name !== 'base-mods')
+    return {
+      ...status,
+      remediation: [...status.remediation, ...missingAssets.map((asset) => asset.remediation).filter((value): value is string => Boolean(value))],
+      contractVersion: 1, paths: scoped, assets,
+      capabilities: { ...CORE_CAPABILITIES, toolchain: { ...CORE_CAPABILITIES.toolchain, scaffoldIncludesWrapper: this.scaffoldIncludesWrapper } }
+    }
+  }
+  async toolchain(request: { action: 'read' | 'scan' | 'write' | 'clear'; javaHome?: string; projectPath?: string }) {
+    const provider = this.toolchainProvider
+    if (request.action === 'scan') {
+      if (!provider.scanJavas) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持 JDK 扫描。')
+      return { ok: true, action: 'scan', config: provider.readJavaConfig?.(), candidates: await provider.scanJavas() }
+    }
+    if (request.action === 'write') {
+      if (!request.javaHome) throw new CoreError('INVALID_ARGUMENT', '写入工具链配置时需要 javaHome 绝对路径。')
+      if (!provider.configureJava) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持工具链配置。')
+      const configured = await provider.configureJava(request.javaHome)
+      const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
+      return { ok: status.java.ok, action: 'write', ...configured, java: status.java }
+    }
+    if (request.action === 'clear') {
+      if (!provider.clearJava) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持工具链配置。')
+      const cleared = provider.clearJava()
+      const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
+      return { ok: status.java.ok, action: 'clear', ...cleared, java: status.java }
+    }
+    const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
+    return { ok: status.java.ok, action: 'read', config: provider.readJavaConfig?.(), java: status.java, candidates: status.java.candidates }
   }
   async prepareAssets(names: DownloadableAsset[] = ['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'], projectPath?: string) {
     if (projectPath) resolveProjectPath(projectPath)
@@ -232,7 +317,9 @@ export class FabricRuntime {
   }
   startBuild(projectPath: string, task = 'build', requestedSessionId?: string) {
     if (!/^[A-Za-z][A-Za-z0-9:.-]*$/.test(task)) throw new CoreError('INVALID_ARGUMENT', 'Invalid Gradle task')
-    const sessionId = this.sessionId(requestedSessionId), root = resolveProjectPath(projectPath)
+    const root = resolveProjectPath(projectPath)
+    this.toolchainProvider.preflight?.(root)
+    const sessionId = this.sessionId(requestedSessionId)
     this.sessions.bindProject(sessionId, root)
     this.sessions.update(sessionId, { phase: '正在构建', currentModule: 'build', recommendedModules: ['build'] })
     const key = process.platform === 'win32' ? root.toLowerCase() : root
@@ -252,7 +339,7 @@ export class FabricRuntime {
           catch (cause) { if (!(cause instanceof CoreError) || cause.code !== 'PROJECT_BUSY') throw cause; await delay(500) }
         }
         if (job.cancelled()) return { ok: false, task, code: 'CANCELLED' }
-        const child = await this.toolchain.startGradle(root, task, { onLog: (_, line) => job.output.push(line) })
+        const child = await this.toolchainProvider.startGradle(root, task, { onLog: (_, line) => job.output.push(line) })
         job.setChild(child); const code = await waitForChild(child)
         if (job.cancelled()) return { ok: false, task, exitCode: code, code: 'CANCELLED' }
         if (code !== 0) throw new CoreError('BUILD_FAILED', `Gradle ${task} exited ${code}`)
@@ -283,7 +370,12 @@ export class FabricRuntime {
       return key(current.gameDirectory) === key(gameDir)
     })) throw new CoreError('INSTANCE_CONFLICT', '这个会话的测试游戏仍在运行或正在关闭。')
     const existingDiscovery = readBridgeDiscovery(gameDir)
-    if (existingDiscovery) throw new CoreError('INSTANCE_CONFLICT', '这个测试目录中仍有可响应的 Minecraft 实例。请在原会话停止它后再启动。')
+    if (existingDiscovery) {
+      if (portIsListening(existingDiscovery.port)) throw new CoreError('INSTANCE_CONFLICT', `这个测试目录中仍有可响应的 Minecraft 实例（端口 ${existingDiscovery.port}）。请在原会话停止它后再启动。`)
+      const stalePath = `${discoveryPath(gameDir)}.stale-${Date.now()}`
+      try { renameSync(discoveryPath(gameDir), stalePath) }
+      catch (cause) { throw new CoreError('BRIDGE_STALE_CLEANUP_FAILED', `Minecraft 实例已退出，但残留桥接标记无法隔离：${String(cause)}。请检查测试目录权限，不要直接删除整个会话目录。`) }
+    }
     // Fail on a missing/incompatible bundled bridge before claiming the project lease.
     const bytes = observerBytes(this.observer)
     const builder = this.builder ? builderBytes(this.builder) : undefined
@@ -291,6 +383,7 @@ export class FabricRuntime {
     if (conflicts.length) throw new CoreError('OBSERVER_CONFLICT', '游戏目录里有另一份测试组件。请选择新的测试目录，保留原目录供检查。')
     const builderConflicts = builder ? filesUnder(path.join(gameDir, 'mods')).filter((file) => /modcrafting-builder.*\.jar$/i.test(path.basename(file)) && path.basename(file) !== 'modcrafting-builder.jar') : []
     if (builderConflicts.length) throw new CoreError('BUILDER_CONFLICT', '游戏目录里有另一份建筑工作室组件。请选择新的测试目录，保留原目录供检查。')
+    this.toolchainProvider.preflight?.(root)
     const gameLeasePath = path.join(this.paths.dataRoot, 'project-leases', `${createHash('sha256').update(key(root)).digest('hex')}.game.lock`)
     const releaseGameLease = acquireFileLease(gameLeasePath, { projectPath: root, sessionId, operation: 'game' }, 'PROJECT_BUSY', '这个工程已在另一个任务会话中运行游戏。请先结束原会话的 Minecraft。')
     try {
@@ -304,7 +397,7 @@ export class FabricRuntime {
     const gameArgs = `--args=--gameDir \"${gameDir.replace(/\\/g, '/')}\" --width=${profile.window.width} --height=${profile.window.height}`
     const jobId = this.jobs.start('minecraft', async (job) => {
       try {
-        const child = await this.toolchain.startGradle(root, 'runClient', { onLog: (_, line) => job.output.push(line) }, [gameArgs])
+        const child = await this.toolchainProvider.startGradle(root, 'runClient', { onLog: (_, line) => job.output.push(line) }, [gameArgs])
         job.setChild(child); const code = await waitForChild(child)
         if (job.cancelled()) return { exitCode: code, code: 'CANCELLED' }
         if (code !== 0) throw new CoreError('CLIENT_FAILED', `Minecraft runClient exited ${code}`)
@@ -424,13 +517,42 @@ export class FabricRuntime {
     return { ok: true, ...current, job, bridgeReady, canRunTests, preparation: { ...prep, ...(preparationJob ? { job: preparationJob } : {}) }, capabilities: capabilities?.data, ...(!canRunTests ? { code: incompatible ? 'OBSERVER_UPDATE_REQUIRED' : prep.phase === 'failed' ? 'GAME_PREPARATION_FAILED' : 'GAME_NOT_READY', message: incompatible ? '游戏测试组件版本不匹配，请停止并用新版插件重启游戏。' : prep.blockedReason || '游戏仍在准备中；进入专用测试世界后才会运行测试。' } : {}) }
   }
   stopClient(id?: string, requestedSessionId?: string) { const sessionId = this.sessionId(requestedSessionId); return this.stopJob(this.instance(id, sessionId).jobId, sessionId) }
-  async snapshot(id?: string, spec?: GameTestSpec, requestedSessionId?: string): Promise<BridgeResult> {
+  async snapshot(id?: string, spec?: GameTestSpec, requestedSessionId?: string, options?: SnapshotOptions): Promise<BridgeResult> {
     const sessionId = this.sessionId(requestedSessionId)
-    return this.snapshotFor(this.instance(id, sessionId), spec)
+    const value = await this.snapshotFor(this.instance(id, sessionId), spec, options)
+    return options ? compactSnapshot(value, options) : value
   }
-  private async snapshotFor(current: GameInstance, spec?: GameTestSpec): Promise<BridgeResult> {
-    const blocks = spec?.assertions.filter((value) => value.type === 'block_equals').map(({ x, y, z }) => ({ x, y, z })) || [{ x: 0, y: 100, z: 4 }]
-    return bridgeRequest(await this.readyDiscovery(current), 'POST', '/v2/snapshot', { blocks, entityRadius: 32, includeRecipes: true })
+  async entityQuery(query: { type?: string; name?: string; tag?: string; team?: string; radius?: number; limit?: number }, id?: string, requestedSessionId?: string): Promise<BridgeResult> {
+    const radius = Math.min(64, Math.max(1, query.radius ?? 32)), limit = Math.min(64, Math.max(1, query.limit ?? 32))
+    const snapshot = await this.snapshot(id, undefined, requestedSessionId, { radius, includeRecipes: false, includeTraces: false, includeBlocks: false, entityLimit: 64 })
+    if (!snapshot.ok) return snapshot
+    const rows = Array.isArray(snapshot.data.entities) ? snapshot.data.entities as Record<string, unknown>[] : []
+    const wantedType = query.type ? (query.type.includes(':') ? query.type : `minecraft:${query.type}`) : undefined
+    const name = query.name?.toLowerCase()
+    const filtered = rows.filter((row) => (!wantedType || row.type === wantedType) && (!name || String(row.name || '').toLowerCase().includes(name)) && (!query.tag || (Array.isArray(row.tags) && row.tags.includes(query.tag))) && (!query.team || row.team === query.team))
+    return { ok: true, status: snapshot.status, data: { ok: true, radius, total: rows.length, entities: filtered.slice(0, limit) } }
+  }
+  async widgets(id?: string, requestedSessionId?: string): Promise<BridgeResult> {
+    const snapshot = await this.snapshot(id, undefined, requestedSessionId, { radius: 1, includeRecipes: false, includeTraces: false, includeBlocks: false, entityLimit: 1 })
+    if (!snapshot.ok) return snapshot
+    const data = snapshot.data
+    return { ok: true, status: snapshot.status, data: { ok: true, screen: data.screen, widgets: data.widgets, containerSlots: data.containerSlots, containerHandlerType: data.containerHandlerType, cursorStack: data.cursorStack } }
+  }
+  async entityNbt(selector: string, path: string, id?: string, requestedSessionId?: string): Promise<BridgeResult> {
+    if (!/^@[a-z](?:\[[^\]\n]+\])?$/.test(selector)) throw new CoreError('INVALID_ARGUMENT', 'selector 必须是一个 Minecraft 实体选择器，例如 @e[tag=test,limit=1]。')
+    if (!/^[A-Za-z0-9_.:\[\]"'-]+$/.test(path)) throw new CoreError('INVALID_ARGUMENT', 'path 必须是单个 NBT 路径，不能包含空格或命令分隔符。')
+    return this.command(`data get entity ${selector} ${path}`, id, requestedSessionId)
+  }
+  private async snapshotFor(current: GameInstance, spec?: GameTestSpec, options?: SnapshotOptions): Promise<BridgeResult> {
+    const full = !options || options.full === true
+    const blocks = full || options?.includeBlocks ? (spec?.assertions.filter((value) => value.type === 'block_equals').map(({ x, y, z }) => ({ x, y, z })) || [{ x: 0, y: 100, z: 4 }]) : []
+    return bridgeRequest(await this.readyDiscovery(current), 'POST', '/v2/snapshot', {
+      blocks,
+      entityRadius: full ? 32 : options?.radius ?? 16,
+      includeRecipes: full || options?.includeRecipes === true,
+      includeTraces: full || options?.includeTraces === true,
+      traceLimit: full ? 0 : options?.traceLimit ?? 20
+    })
   }
   async command(command: string, id?: string, requestedSessionId?: string) { const sessionId = this.sessionId(requestedSessionId); return bridgeRequest(await this.readyDiscovery(this.instance(id, sessionId)), 'POST', '/v2/command', { command }) }
   async input(action: string, args?: Record<string, unknown>, id?: string, requestedSessionId?: string) { const sessionId = this.sessionId(requestedSessionId); return bridgeRequest(await this.readyDiscovery(this.instance(id, sessionId)), 'POST', '/v1/input', { ...(args || {}), action }) }

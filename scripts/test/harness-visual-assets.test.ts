@@ -6,8 +6,69 @@ import os from 'node:os'
 import path from 'node:path'
 import { itemImage, textureImage, prepareVisualAssets } from '../../packages/modcrafting-core/src/visual-assets.ts'
 import { createRuntimePaths } from '../../packages/modcrafting-core/src/node.ts'
+import { articulatedHumanoidBoxes, entityAppearanceSchema, orderedEntityBoxes, poseEntityBoxes, transformEntityPoint, type EntityBox, type EntityVector } from '../../packages/modcrafting-core/src/entity-appearance.ts'
+import { generateContent } from '../../packages/modcrafting-core/src/content-codegen.ts'
+import { newContentObject } from '../../packages/modcrafting-core/src/content-model.ts'
 
 const png = Buffer.from('89504e470d0a1a0a00000000', 'hex')
+const nearVector = (actual: EntityVector, expected: EntityVector) => actual.forEach((value, axis) => assert.ok(Math.abs(value - expected[axis]) < 1e-8, `${actual} != ${expected}`))
+const rigAppearance = (boxes: EntityBox[]) => ({ version: 1 as const, mode: 'custom' as const, textureSize: [256, 256] as [number, number], boxes })
+
+test('Articulated preset validates and rejects missing, self, cyclic or duplicate parent IDs', () => {
+  const boxes = articulatedHumanoidBoxes()
+  assert.equal(entityAppearanceSchema.safeParse(rigAppearance(boxes)).success, true)
+  for (const parent of ['missing', 'pelvis', 'head']) {
+    assert.equal(entityAppearanceSchema.safeParse(rigAppearance(boxes.map((box, index) => index === 0 ? { ...box, parent } : box))).success, false)
+  }
+  assert.equal(entityAppearanceSchema.safeParse(rigAppearance([...boxes, boxes[0]])).success, false)
+  const ordered = orderedEntityBoxes([...boxes].reverse())
+  for (const box of ordered) if (box.parent) assert.ok(ordered.findIndex(parent => parent.id === box.parent) < ordered.indexOf(box))
+})
+
+test('Nested waist and elbow rotation keep the shared joint position attached', () => {
+  const boxes = articulatedHumanoidBoxes().map(box => ({ ...box, rotation: (box.id === 'torso' ? [38, 17, -12] : box.id === 'arm_left_upper' ? [-20, 6, 25] : box.id === 'arm_left_lower' ? [-65, 0, 0] : box.rotation) as EntityVector }))
+  for (const box of boxes.filter(box => box.parent)) {
+    nearVector(transformEntityPoint(boxes, box.id, box.pivot), transformEntityPoint(boxes, box.parent!, box.pivot))
+  }
+  const rest = articulatedHumanoidBoxes(), head = rest.find(box => box.id === 'head')!
+  assert.notDeepEqual(transformEntityPoint(boxes, head.id, head.origin), transformEntityPoint(rest, head.id, head.origin))
+  const calf = rest.find(box => box.id === 'leg_left_lower')!
+  nearVector(transformEntityPoint(boxes, calf.id, calf.origin), calf.origin)
+})
+
+test('Preview rotations follow Minecraft ZYX matrix order and unposed model coordinates', () => {
+  const box: EntityBox = { id: 'root', name: 'root', origin: [0, 0, 0], size: [2, 2, 2], pivot: [0, 0, 0], rotation: [90, 90, 0] }
+  nearVector(transformEntityPoint([box], 'root', [0, 1, 0]), [1, 0, 0])
+  nearVector(transformEntityPoint(articulatedHumanoidBoxes(), 'head', [2, -39, 1]), [2, -39, 1])
+})
+
+test('Pose sampling preserves rest rotations, fades gait and does not leak across frozen frames or living entities', () => {
+  const boxes = articulatedHumanoidBoxes().map(box => ({ ...box, rotation: [5, 9, -3] as EntityVector, deathRotation: [30, 15, 20] as EntityVector }))
+  const before = JSON.stringify(boxes), corpse = poseEntityBoxes(boxes, 0.3, 1, 0.7)
+  for (let frame = 0; frame < 100; frame++) assert.deepEqual(poseEntityBoxes(boxes, 0.3, 1, 0.7), corpse)
+  assert.equal(JSON.stringify(boxes), before)
+  assert.deepEqual(poseEntityBoxes(boxes, 0, 0, 0).map(box => box.rotation), boxes.map(box => box.rotation))
+  assert.deepEqual(poseEntityBoxes(boxes, 0.3, 1, 1).map(box => box.rotation), boxes.map(() => [35, 24, 17]))
+  const walk = poseEntityBoxes(articulatedHumanoidBoxes(), 0, 1)
+  assert.equal(walk.find(box => box.id === 'leg_left_lower')!.rotation[0], 0)
+  assert.ok(walk.find(box => box.id === 'leg_right_lower')!.rotation[0] > 0)
+})
+
+test('Java hierarchy uses parent-relative pivots, a single foot offset and reset-before-additive animation', () => {
+  const boxes = articulatedHumanoidBoxes().reverse()
+  boxes.find(box => box.id === 'torso')!.deathRotation = [30, 10, 5]
+  const value = { ...newContentObject('entity', 'rig_test'), texture: 'rig_test:entity/rig', appearance: rigAppearance(boxes) }
+  const java = generateContent(value).files.find(file => file.path.endsWith('/ContentEntityModel.java'))!.content
+  assert.match(java, /part_pelvis = root\.addChild\("pelvis"[\s\S]*?ModelTransform\.of\(0\.0f, 8\.0f, 0\.0f/)
+  assert.match(java, /part_torso = part_pelvis\.addChild\("torso"[\s\S]*?ModelTransform\.of\(0\.0f, -4\.0f, 0\.0f/)
+  assert.match(java, /part_leg_left_lower = part_leg_left_upper\.addChild\("leg_left_lower"[\s\S]*?ModelTransform\.of\(0\.0f, 8\.0f, 0\.0f/)
+  assert.match(java, /this\.part_arm_left_lower = this\.part_arm_left_upper\.getChild\("arm_left_lower"\)/)
+  assert.ok(java.indexOf('super.setAngles(state);') < java.indexOf('part_torso.pitch +='))
+  assert.doesNotMatch(java, /\.pitch =|\.yaw =|\.roll =/)
+  assert.match(java, /part_torso\.roll \+= \(float\) Math\.toRadians\(5\.0\) \* death/)
+  assert.equal(generateContent(value, true).files.some(file => file.path.startsWith('src/client/java/') && file.path.endsWith('/ContentEntityModel.java')), true)
+})
+
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'modcrafting-visuals-')), paths = createRuntimePaths(path.join(root, 'data')), project = path.join(root, 'project')
   const cache = path.join(paths.assetsRoot, 'minecraft-textures/1.21.4')

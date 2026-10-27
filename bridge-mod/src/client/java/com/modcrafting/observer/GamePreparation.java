@@ -198,7 +198,8 @@ public final class GamePreparation {
 
     private static void openOrCreate(MinecraftClient client, Screen parent) {
         try {
-            LevelStorage storage = LevelStorage.create(client.runDirectory.toPath());
+            // Vanilla builds LevelStorage on runDirectory/saves; using runDirectory alone makes every restart miss the existing test world.
+            LevelStorage storage = LevelStorage.create(client.runDirectory.toPath().resolve("saves"));
             if (storage.levelExists(TEST_WORLD)) {
                 Path target = storage.resolve(TEST_WORLD);
                 Map<String, Object> marker = readMarker(target.resolve(OWNER_FILE));

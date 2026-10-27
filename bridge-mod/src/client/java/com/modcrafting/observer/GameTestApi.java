@@ -163,9 +163,12 @@ public final class GameTestApi {
         double radius = body != null && body.get("entityRadius") != null ? Math.max(1, Math.min(64, doubleValue(body.get("entityRadius")))) : 32;
         Map<String, Object> nearby = GameQueries.nearby(radius);
         out.put("entities", nearby.getOrDefault("entities", List.of()));
-        out.put("hudTrace", ObservationTrace.hudSnapshot());
-        out.put("renderTrace", ObservationTrace.renderSnapshot());
-        out.put("combatTrace", ObservationTrace.combatSnapshot());
+        boolean includeTraces = body == null || !Boolean.FALSE.equals(body.get("includeTraces"));
+        int traceLimit = body != null && body.get("traceLimit") != null ? Math.max(0, Math.min(512, number(body.get("traceLimit")))) : 0;
+        out.put("hudTrace", traceSlice(ObservationTrace.hudSnapshot(), includeTraces, traceLimit));
+        out.put("renderTrace", traceSlice(ObservationTrace.renderSnapshot(), includeTraces, traceLimit));
+        out.put("combatTrace", traceSlice(ObservationTrace.combatSnapshot(), includeTraces, traceLimit));
+        out.put("tracesIncluded", includeTraces);
         out.put("observerSessionId", ModCraftingObserverClient.OBSERVER_SESSION_ID);
         out.put("capabilityRevision", 5);
         out.put("traceCursors", Map.of(
@@ -173,6 +176,7 @@ public final class GameTestApi {
                 "renderTrace", maxSequence(ObservationTrace.renderSnapshot()),
                 "combatTrace", maxSequence(ObservationTrace.combatSnapshot())
         ));
+        boolean includeRecipes = body == null || !Boolean.FALSE.equals(body.get("includeRecipes"));
         List<String> recipes = new ArrayList<>();
         MinecraftServer server = client.getServer();
         if (server != null) {
@@ -181,8 +185,15 @@ public final class GameTestApi {
         } else {
             out.put("recipeQuerySupported", false);
         }
-        out.put("recipes", recipes);
+        out.put("recipeCount", recipes.size());
+        if (includeRecipes) out.put("recipes", recipes);
         return out;
+    }
+
+    private static List<Map<String, Object>> traceSlice(List<Map<String, Object>> values, boolean include, int limit) {
+        if (!include) return List.of();
+        if (limit <= 0 || values.size() <= limit) return values;
+        return new ArrayList<>(values.subList(values.size() - limit, values.size()));
     }
 
     /** Restricted, structured state controls used only by strict deterministic tests. */

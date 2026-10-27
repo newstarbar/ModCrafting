@@ -17,10 +17,15 @@ export type GameAction =
   | { type: 'command'; command: string; label?: string }
   | { type: 'input'; action: string; args?: Record<string, unknown>; label?: string }
   | { type: 'wait'; ms: number; label?: string }
+export interface EntityTarget { entityType?: string; name?: string; team?: string }
+export type EntityAttributeName = 'health' | 'maxHealth' | 'attackDamage' | 'movementSpeed'
 export type GameAssertion =
   | { type: 'inventory_contains'; itemId: string; countAtLeast?: number }
   | { type: 'block_equals'; x: number; y: number; z: number; blockId: string }
   | { type: 'entity_exists'; entityType?: string; tag?: string; exists?: boolean }
+  | { type: 'entity_attribute'; target: EntityTarget; attribute: EntityAttributeName; equals?: number; atLeast?: number; atMost?: number }
+  | { type: 'entity_name'; target: EntityTarget; contains?: string; equals?: string }
+  | { type: 'entity_team'; target: EntityTarget; team: string }
   | { type: 'snapshot_value'; source: string; pointer: string; equals: unknown }
   | { type: 'snapshot_changed'; source: string; pointer: string; from?: unknown; to?: unknown }
   | { type: 'hud_text'; text: string; match?: 'exact' | 'contains' }
@@ -63,10 +68,14 @@ const actionSchema = z.discriminatedUnion('type', [
 ])
 const source = z.enum(['player', 'serverPlayer', 'screen', 'containerSlots', 'entity', 'inventory', 'blocks', 'entities', 'renderTrace', 'hudTrace', 'combatTrace'])
 const pointer = text.refine((value) => value.startsWith('/') && !/~(?![01])/.test(value) && !value.slice(1).split('/').some((key) => ['__proto__', 'prototype', 'constructor'].includes(key.replace(/~1/g, '/').replace(/~0/g, '~'))), 'requires a safe JSON pointer')
+const entityTarget = z.object({ entityType: registryId.optional(), name: text.optional(), team: text.optional() }).strict().refine((value) => Boolean(value.entityType || value.name || value.team), 'target requires entityType, name or team')
 const assertionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inventory_contains'), itemId: registryId, countAtLeast: z.number().int().positive().optional() }).strict(),
   z.object({ type: z.literal('block_equals'), x: z.number().int(), y: z.number().int(), z: z.number().int(), blockId: registryId }).strict(),
   z.object({ type: z.literal('entity_exists'), entityType: registryId.optional(), tag: text.optional(), exists: z.boolean().optional() }).strict().refine((value) => Boolean(value.entityType || value.tag), 'entity assertion requires type or tag'),
+  z.object({ type: z.literal('entity_attribute'), target: entityTarget, attribute: z.enum(['health', 'maxHealth', 'attackDamage', 'movementSpeed']), equals: z.number().optional(), atLeast: z.number().optional(), atMost: z.number().optional() }).strict().refine((value) => value.equals !== undefined || value.atLeast !== undefined || value.atMost !== undefined, 'requires equals, atLeast or atMost'),
+  z.object({ type: z.literal('entity_name'), target: entityTarget, contains: text.optional(), equals: text.optional() }).strict().refine((value) => Boolean(value.contains || value.equals), 'entity_name requires contains or equals'),
+  z.object({ type: z.literal('entity_team'), target: entityTarget, team: text }).strict(),
   z.object({ type: z.literal('snapshot_value'), source, pointer, equals: z.json() }).strict(),
   z.object({ type: z.literal('snapshot_changed'), source, pointer, from: z.json().optional(), to: z.json().optional() }).strict(),
   z.object({ type: z.literal('hud_text'), text, match: z.enum(['exact', 'contains']).optional() }).strict(),

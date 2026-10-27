@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { executeGameTest, evaluateGameAssertion, validateGameTestSpec, GAME_TEST_WORLD, JobManager, type GameTestSpec, type GameAssertion, type GameTestAdapter } from '../../packages/modcrafting-core/src/index.ts'
 
 const spec = (assertion: GameAssertion = { type: 'inventory_contains', itemId: 'minecraft:stone' }): GameTestSpec => ({ version: 2, id: 'fixture', featureType: 'new_item', subject: {}, setup: [], actions: [{ type: 'wait', ms: 0 }], assertions: [assertion], cleanup: [{ type: 'command', command: 'fixture-cleanup' }] })
-const snapshot = (extra: Record<string, unknown> = {}) => ({ ok: true, worldName: GAME_TEST_WORLD, requestId: 'fixture', observedAt: 100, inventory: { ok: true, hotbar: [], main: [{ id: 'minecraft:stone', count: 2 }], armor: [], offhand: [] }, blocks: [{ x: 1, y: 100, z: 2, blockId: 'minecraft:stone' }], entities: [{ type: 'minecraft:pig', tags: ['fixture'] }], player: { health: 20 }, ...extra })
+const snapshot = (extra: Record<string, unknown> = {}) => ({ ok: true, worldName: GAME_TEST_WORLD, requestId: 'fixture', observedAt: 100, inventory: { ok: true, hotbar: [], main: [{ id: 'minecraft:stone', count: 2 }], armor: [], offhand: [] }, blocks: [{ x: 1, y: 100, z: 2, blockId: 'minecraft:stone' }], entities: [{ type: 'minecraft:pig', name: 'Fixture Pig', team: 'fixture_team', tags: ['fixture'], health: 20, maxHealth: 20, attackDamage: 2, movementSpeed: 0.25 }], player: { health: 20 }, ...extra })
 function fake(options: { before?: Record<string, unknown>; after?: Record<string, unknown>; world?: string; throwAction?: boolean; failCleanup?: boolean; throwSnapshot?: boolean; cancelled?: boolean } = {}) {
   let count = 0
   const calls: string[] = []
@@ -37,6 +37,11 @@ const invalid: Array<[string, unknown]> = [
   ['unknown source', { ...spec(), assertions: [{ type: 'snapshot_value', source: 'unknown', pointer: '/health', equals: 20 }] }],
   ['unsafe pointer', { ...spec(), assertions: [{ type: 'snapshot_value', source: 'player', pointer: '/__proto__', equals: {} }] }],
   ['unfiltered entities', { ...spec(), assertions: [{ type: 'entity_exists' }] }],
+  ['entity attribute without target', { ...spec(), assertions: [{ type: 'entity_attribute', target: {}, attribute: 'health', equals: 20 }] }],
+  ['entity attribute without comparison', { ...spec(), assertions: [{ type: 'entity_attribute', target: { entityType: 'minecraft:pig' }, attribute: 'health' }] }],
+  ['entity attribute unknown attribute', { ...spec(), assertions: [{ type: 'entity_attribute', target: { entityType: 'minecraft:pig' }, attribute: 'luck', equals: 1 }] }],
+  ['entity name without expected value', { ...spec(), assertions: [{ type: 'entity_name', target: { entityType: 'minecraft:pig' } }] }],
+  ['entity team without team', { ...spec(), assertions: [{ type: 'entity_team', target: { entityType: 'minecraft:pig' } }] }],
   ['bad count', { ...spec(), assertions: [{ type: 'inventory_contains', itemId: 'minecraft:stone', countAtLeast: 0 }] }],
   ['unknown action', { ...spec(), actions: [{ type: 'exec' }] }],
   ['negative wait', { ...spec(), actions: [{ type: 'wait', ms: -1 }] }],
@@ -71,6 +76,10 @@ for (const assertion of [
   { type: 'inventory_contains', itemId: 'minecraft:stone', countAtLeast: 2 },
   { type: 'block_equals', x: 1, y: 100, z: 2, blockId: 'minecraft:stone' },
   { type: 'entity_exists', entityType: 'minecraft:pig', tag: 'fixture', exists: true },
+  { type: 'entity_attribute', target: { entityType: 'minecraft:pig' }, attribute: 'maxHealth', equals: 20 },
+  { type: 'entity_attribute', target: { entityType: 'minecraft:pig' }, attribute: 'attackDamage', atLeast: 2 },
+  { type: 'entity_name', target: { entityType: 'minecraft:pig' }, contains: 'Fixture' },
+  { type: 'entity_team', target: { entityType: 'minecraft:pig' }, team: 'fixture_team' },
   { type: 'snapshot_value', source: 'player', pointer: '/health', equals: 20 },
   { type: 'snapshot_changed', source: 'player', pointer: '/health', from: 19, to: 20 }
 ] as GameAssertion[]) test(`Fresh supported ${assertion.type} can PASS`, async () => {
@@ -92,6 +101,21 @@ for (const assertion of [
   const value = await executeGameTest(spec(assertion), adapter, 'fixture-version', 'fixture')
   assert.equal(value.verdict, 'INCONCLUSIVE')
   assert.equal(value.code, 'CAPABILITY_UNAVAILABLE')
+})
+
+test('Entity attribute/name/team mismatches are FAIL; missing observed fields are INCONCLUSIVE', async () => {
+  for (const [assertion, entities, verdict, code] of [
+    [{ type: 'entity_attribute', target: { entityType: 'minecraft:pig' }, attribute: 'maxHealth', equals: 21 }, undefined, 'FAIL', 'ASSERTION_FAILED'],
+    [{ type: 'entity_attribute', target: { entityType: 'minecraft:pig' }, attribute: 'maxHealth', equals: 20 }, [{ type: 'minecraft:pig' }], 'INCONCLUSIVE', 'EVIDENCE_MISSING'],
+    [{ type: 'entity_name', target: { entityType: 'minecraft:pig' }, equals: 'Other Pig' }, undefined, 'FAIL', 'ASSERTION_FAILED'],
+    [{ type: 'entity_team', target: { entityType: 'minecraft:pig' }, team: 'other_team' }, undefined, 'FAIL', 'ASSERTION_FAILED'],
+    [{ type: 'entity_attribute', target: { entityType: 'minecraft:sheep' }, attribute: 'maxHealth', equals: 20 }, undefined, 'FAIL', 'ASSERTION_FAILED']
+  ] as Array<[GameAssertion, undefined | Array<Record<string, unknown>>, string, string]>) {
+    const { adapter } = fake({ after: entities ? { entities } : {} })
+    const value = await executeGameTest(spec(assertion), adapter, 'fixture-version', 'fixture')
+    assert.equal(value.verdict, verdict)
+    assert.equal(value.code, code)
+  }
 })
 
 test('Observed mismatch is FAIL; missing inventory is INCONCLUSIVE', async () => {

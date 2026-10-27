@@ -68,6 +68,19 @@ test('GUI contracts reject duplicate IDs, overflow, broken bindings, invalid wid
   f.save(f.value); assert.throws(() => f.preview({ ...f.value, id: 'gui_test:other' }), /快捷键/)
   assert.throws(() => f.preview({ ...f.value, id: 'other:outside' }), /命名空间/)
 })
+test('GUI image elements reference painted textures in generated HUD code', () => {
+  const f = fixture(), value: GuiLayout = { ...newGuiLayout('gui_test', 'hud-overlay'), id: 'gui_test:image_hud', elements: [{ ...newGuiElement('image', 'health_icon'), texture: 'gui_test:gui/health_bar', width: 64, height: 16 }] }
+  const texture = path.join(f.project, 'src/main/resources/assets/gui_test/textures/gui/health_bar.png'); mkdirSync(path.dirname(texture), { recursive: true }); writeFileSync(texture, Buffer.from('89504e470d0a1a0a00000000', 'hex'))
+  const saved = f.save(value)
+  assert.equal(saved.editable, true, saved.reason)
+  const file = saved.files.find(file => file.endsWith('GuiClient.java'))!
+  const source = readFileSync(path.join(f.project, file), 'utf8')
+  assert.match(source, /drawTexture\(RenderLayer::getGuiTextured/)
+  assert.match(source, /"textures\/"/)
+  const layout = saved.files.find(file => file.endsWith('image_hud.json'))!
+  assert.match(readFileSync(path.join(f.project, layout), 'utf8'), /gui_test:gui\/health_bar/)
+})
+
 test('Legacy grid/edge geometry clamps moves and resizes, honors disabled snapping and viewport anchors', () => {
   const layout = newGuiLayout('gui_test'), element = { ...newGuiElement('label', 'moving'), x: 24, y: 24, width: 64, height: 24 }
   layout.elements = [element, { ...element, id: 'other', x: 80, y: 80 }]

@@ -1,6 +1,6 @@
 # 独立 Core 业务与展示契约
 
-契约版本：1，日期：2026-10-18。当前目标为 Windows x64 / Fabric 1.21.4。实现为 packages/modcrafting-core/src/contracts.ts、runtime.ts、sessions.ts、node.ts、game-test.ts；不依赖 Electron、MCP SDK、模型 API 或旧 Harness。
+契约版本：1，日期：2026-10-25。当前目标为 Windows x64 / Fabric 1.21.4。实现为 packages/modcrafting-core/src/contracts.ts、runtime.ts、sessions.ts、node.ts、game-test.ts；不依赖 Electron、MCP SDK、模型 API 或旧 Harness。
 
 ## 入口与状态所有者
 
@@ -12,21 +12,24 @@
 
 | 业务 | Core 入口 | 主要结果 |
 |---|---|---|
-| 环境、资源与能力 | runtime.environmentStatus(projectPath?) | CoreEnvironmentStatus；contractVersion、paths、assets、capabilities 与原工具链字段 |
+| 环境、资源与能力 | runtime.environmentStatus(projectPath?) | CoreEnvironmentStatus；contractVersion、paths、assets、capabilities；JavaStatus 含来源、候选和 configPath |
+| 工具链选择 | runtime.toolchain({action, javaHome?, projectPath?}) | read/scan/write/clear；写入经探针验证的 JDK 21 并持久化 toolchain.json |
 | 资源准备 | runtime.prepareAssets() | ok、assets[].ok/error/path、dataRoot、localAssets |
-| 项目检查/创建/校验 | inspectFabricProject、scaffoldFabricProject、validateFabricProject；检查已有路径用 resolveProjectPath | FabricProject、检查项；脚手架不自动生成 Wrapper |
-| 标准数据与知识 | lookupMinecraftData、searchFabricDocs、searchWiki | 已有结构化查询/命中/缺失诊断；Wiki 当前为关键词索引查询 |
+| 项目检查/创建/校验 | inspectFabricProject、scaffoldFabricProject、validateFabricProject；检查已有路径用 resolveProjectPath | FabricProject、checks、文件级 ProjectDiagnostic；脚手架不自动生成 Wrapper |
+| 标准数据与知识 | lookupMinecraftData、searchFabricDocs、searchWiki | 结构化查询；缺失时返回 ASSET_NOT_READY 与可执行的 prepare_assets 提示；Wiki 当前为关键词索引查询 |
+| 生物外观 | contentWorkspace 的 entity appearance、layoutEntityBoxes、generateContent | 基型皮肤或自定义方块模型；自动 UV、PNG 事务写入、生成 EntityModel/LivingEntityRenderer；3D 预览为近似效果 |
+| 通用纹理 | textureWorkspace；GUI image 元素 | GUI 血条/Buff 图标/HUD 图片保存到 assets/<modid>/textures/gui；revision 与原子写入；GUI 代码按纹理 ID 绘制 |
 | 会话生命周期 | createSession、readSession、resumeSession、updateSession、endSession | 持久化 sessionId；恢复时由单个 backend 独占 |
 | 测试配置 | getTestProfile、setTestProfile | 版本化 TestProfile；默认仅写当前 session，显式选择后才写工程默认 |
 | 构建 | runtime.startBuild(projectPath, task?, sessionId) | session 所有的 jobId；同工程排队、跨进程互斥 |
 | 游戏运行与状态 | runClient、runtimeStatus、stopClient(sessionId) | session 专属实例、配置快照、准备 job；GameRuntimeStatus |
-| 游戏观察与控制 | snapshot、command、input | BridgeResult；只使用本地 Observer 的允许路径 |
-| 截图 | runtime.screenshot(instanceId?) | BridgeResult.data.path；本阶段仅 Core API，未增加 MCP 截图工具 |
+| 游戏观察与控制 | snapshot、entityQuery、widgets、entityNbt、command、input | BridgeResult；compact snapshot 默认省略配方/trace/物品指纹；只使用本地 Observer 的允许路径 |
+| 截图 | runtime.screenshot(instanceId?, sessionId?)；MCP minecraft_screenshot | 默认 BridgeResult.data.path + 元数据；inline=true 才返回 base64；不是自动 PASS |
 | 确定性测试 | startTest(spec, instanceId?, sessionId) | 等待该会话实例 canRunTests 后执行；jobId、scenarioId、按 session 保存的报告 |
 | 任务日志与停止 | jobStatus、stopJob、close | JobSnapshot / CoreFailure、最近 300 条日志；只停止本 runtime 拥有的进程 |
 | 可选视图状态 | runtime.state() | CoreRuntimeState，contractVersion=1，jobs 与 instances；无需 UI 持有另一份任务映射 |
 
-当前插件提供 28 个工具。`modcrafting_session` 创建、恢复、更新展示意图并结束会话；`modcrafting_test_profile` 读取/写入测试配置；`minecraft_test_template` 返回可用的 GameTestSpec 和真实输入 Schema。`fabric_texture_workspace` 为 AI 物品贴图提供提示词包、PNG 导入、MC 像素化、质检、候选、revision 保存与内容绑定；它不调用任何图像模型。`fabric_voxel_workspace` 为 AI 3D 体素模型提供模板、校验、ASCII 预览与 revision 保存；宿主 Agent 只写紧凑的语义 DSL，编译全部在插件内确定性完成。`minecraft_build_studio` 通过随包建筑工作室组件打开/提交/应用结构，要求组件存在且测试世界就绪。构建、游戏、状态、停止、测试与报告访问都要求并校验 sessionId；省略实例时只在当前会话中选择，不再使用全局最近实例。响应继续包含 structuredContent 及其 JSON 文本，沿用 [MCP 结构化结果规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content)。
+当前插件注册 36 个工具（本地线 28 个 + PR #5 的工具链/GUI 纹理等，合并去重后实测）。`modcrafting_session` 创建、恢复、更新展示意图并结束会话；`modcrafting_test_profile` 读取/写入测试配置；`minecraft_test_template` 返回可用的 GameTestSpec 和真实输入 Schema；`modcrafting_toolchain` 读取/扫描/保存/清除 JDK 21 选择；`minecraft_snapshot` 默认返回精简观测，`minecraft_entity_query`/`minecraft_widgets`/`minecraft_entity_nbt` 提供定向读取；`minecraft_log_read` 分页读取长日志；`minecraft_screenshot` 默认只返回路径。`fabric_texture_workspace` 为 AI 物品贴图提供提示词包、PNG 导入、MC 像素化、质检、候选、revision 保存与内容绑定；它不调用任何图像模型。`fabric_gui_texture_workspace` 管理 GUI/HUD 纹理（PR #5 集成）。`fabric_voxel_workspace` 为 AI 3D 体素模型提供模板、校验、ASCII 预览与 revision 保存；宿主 Agent 只写紧凑的语义 DSL，编译全部在插件内确定性完成。`minecraft_build_studio` 通过随包建筑工作室组件打开/提交/应用结构，要求组件存在且测试世界就绪。构建、游戏、状态、停止、测试与报告访问都要求并校验 sessionId；省略实例时只在当前会话中选择，不再使用全局最近实例。响应继续包含 structuredContent 及其 JSON 文本，沿用 [MCP 结构化结果规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content)。
 
 ## 贴图工作区
 
@@ -51,7 +54,7 @@
 
 ## 环境与资源语义
 
-environmentStatus.ok 沿用系统工具链检查结果，不能解释为所有资源、游戏或验收已就绪。必须分别读取 assets、runtimeStatus.bridgeReady 和 `canRunTests`。
+environmentStatus.ok 沿用系统工具链检查结果，不能解释为所有资源、游戏或验收已就绪。必须分别读取 assets、runtimeStatus.bridgeReady 和 `canRunTests`。JavaStatus 会报告选中的 JDK 来源（configured / modcrafting-env / java-home / path / discovered）、候选列表和可选配置路径；显式指向不存在的目录会失败，显式 JDK 版本不对时允许继续发现可用 JDK 21。`remediation` 会合并缺少知识资源的修复提示。
 
 | 资源 | 当前消费路径，相对 runtime 数据根 |
 |---|---|
@@ -61,15 +64,15 @@ environmentStatus.ok 沿用系统工具链检查结果，不能解释为所有�
 | Fabric 文档 | 优先旧 knowledge/agent-knowledge/fabric；否则 assets/agent-knowledge/fabric |
 | Observer V2 | 当前插件包内经 SHA-256 校验的组件；启动时复制到 session 游戏目录。旧缓存不作为兼容来源 |
 
-LocalAssetStatus.status 为 missing / present / invalid。present 只证明本地文件与基本布局/JSON 形状存在，不认证资源来源、内容完整性、JAR 兼容性或知识查询结果；不能代替真实构建/Observer 验证。
+LocalAssetStatus.status 为 missing / present / invalid，缺失或无效时带 remediation。present 只证明本地文件与基本布局/JSON 形状存在，不认证资源来源、内容完整性、JAR 兼容性或知识查询结果；不能代替真实构建/Observer 验证。base-mods 只能通过完整插件包修复，不能靠资源下载。
 
 Observer 来源与知识缓存分开。完整插件内置当前源码构建的 Observer V2，并于每次启动验证 SHA-256 后复制到会话游戏目录；知识资源准备不会下载/覆盖桥接组件。桥接握手成功也不代表测试世界就绪，继续读取独立准备状态。
 
 runtime 构造和环境诊断不会下载或创建资源。MCP 启动仍沿用 P1 的数据目录可写检查，但不触发 prepareAssets。资源准备需显式调用，写入独立 dataRoot；同一 runtime 内并发请求合并为一次准备，避免既有 PID staging 冲突。
 
-知识资源通过 `modcrafting_prepare_assets` 按需准备，下载失败时保留资源名和可操作原因。Observer V2 独立随插件构建并校验 SHA-256；资源准备不下载或覆盖游戏桥接组件。
+知识资源通过 `modcrafting_prepare_assets` 按需准备，下载失败时保留资源名和可操作原因。缺少知识资源时 `lookupMinecraftData`、`fabric_docs_search`、`searchWiki` 返回 ASSET_NOT_READY（坏 JSON 为 ASSET_INVALID）和精确的 prepare_assets 参数，不再返回 ok=true 的空结果。`fabric_docs_search` 按词分词并按命中数、词频和路径加权排序，返回 matchedTerms/searchedFiles；不再要求整句精确子串。Observer V2 独立随插件构建并校验 SHA-256；资源准备不下载或覆盖游戏桥接组件。资源压缩包解压使用相对路径调用 tar，兼容 Windows 上 GNU tar 对盘符的解析差异。
 
-工具链来自系统 JDK 21 和工程 Wrapper，automaticDownload=false。Core scaffold 默认不写 Wrapper；完整 MCP 包会注入仓库固定的 Windows Wrapper。资源准备不安装 JDK/Gradle；需要 Windows tar，Wrapper 与对应依赖由明确的工程环境提供。
+工具链来自系统 JDK 21 和工程 Wrapper，automaticDownload=false。JDK 解析顺序为 toolchain.json → MODCRAFTING_JAVA_HOME → JAVA_HOME → PATH → 常见安装目录扫描；显式坏路径不会被 PATH 静默掩盖。`modcrafting_toolchain write` 会实际执行候选 JDK 并检查 javac，成功后将绝对路径写入数据根的 toolchain.json，使系统 JAVA_HOME 过期时无需重启 Qoder。Core scaffold 默认不写 Wrapper；完整 MCP 包会注入仓库固定的 Windows Wrapper。资源准备不安装 JDK/Gradle；需要 Windows tar，Wrapper 与对应依赖由明确的工程环境提供。
 
 ## 任务、实例与错误
 
@@ -79,8 +82,9 @@ JobSnapshot 包含 id、kind、sessionId、status、startedAt、finishedAt、out
 - 客户端/构建非零退出为 failed，分别为 CLIENT_FAILED / BUILD_FAILED。
 - stopped 表示停止请求已接受；进程终止和 callback 可能稍后结束，result.code=CANCELLED 区分主动停止。close 复用现有进程树停止机制，退出处理遵循 [Node 子进程 close 语义](https://nodejs.org/api/child_process.html#event-close)。
 - interrupted 表示后端重启时旧任务仍未结束。任务/报告元数据保留，但不宣称旧子进程仍可由新后端控制。
-- 缺失任务为 ok=false / JOB_NOT_FOUND；非法 Gradle 参数为 INVALID_ARGUMENT；缺路径为 PROJECT_UNAVAILABLE；缺系统工具链/Wrapper 为 ENVIRONMENT_UNAVAILABLE；缺基础模组为 ASSET_UNAVAILABLE。
-- 缺实例为 INSTANCE_UNAVAILABLE；活跃或仍在停止回调中的实例占用相同 gameDirectory 时为 INSTANCE_CONFLICT；未运行或缺桥为 OBSERVER_UNAVAILABLE。未知内部失败为 JOB_FAILED 或保留 Node errno；MCP 的其他操作异常为 OPERATION_FAILED。
+- 缺失任务为 ok=false / JOB_NOT_FOUND；非法 Gradle 参数为 INVALID_ARGUMENT；缺路径为 PROJECT_UNAVAILABLE；缺系统工具链/Wrapper 为 ENVIRONMENT_UNAVAILABLE；缺基础模组为 ASSET_UNAVAILABLE。工具链写入的非法路径为 INVALID_ARGUMENT，不是 JDK 21 为 JDK21_REQUIRED，后端不支持配置/扫描为 ENVIRONMENT_UNAVAILABLE。
+- `fabric_validate` 的 diagnostics 逐文件给出 error/warning，覆盖 1.21.4 版本、items 模型定义、模型 parent、纹理、blockstates、语言 JSON、配方目录和 Mixin 配置；`checks.resourceReferences` 以是否存在 error 级诊断为准。
+- 缺实例为 INSTANCE_UNAVAILABLE；活跃或仍在停止回调中的实例占用相同 gameDirectory 时为 INSTANCE_CONFLICT；未运行或缺桥为 OBSERVER_UNAVAILABLE。启动前若发现残留 `modcrafting-bridge.json`，会检查端口是否仍在监听：已退出则重命名为 `.stale-<timestamp>` 后继续，仍在监听才返回 INSTANCE_CONFLICT；隔离失败返回 BRIDGE_STALE_CLEANUP_FAILED。未知内部失败为 JOB_FAILED 或保留 Node errno；MCP 的其他操作异常为 OPERATION_FAILED。
 
 BridgeResult 保留 ok、HTTP status、data 与 error；查询失败还应读取 Observer data.code。CoreError 的 code 可直接供调用者分类，无需根据自然语言日志猜测。
 
@@ -92,9 +96,9 @@ startTest 在启动时固定当前 session 的实例，避免另一任务将动�
 
 场景仍为 GameTestSpec version=2，严格校验后执行；报告摘要为 reportVersion=1。CoreCapabilities.contractVersion=1 是业务/展示契约版本，三种版本各自独立。
 
-支持 inventory_contains、block_equals、entity_exists、snapshot_value、snapshot_changed。实体查询半径 32、上限 64；live 标签过滤、HUD、command_result 与 trace 来源断言仍为能力不足。Observer 原始 capabilities 出现某字段，不表示 Core 已支持对应可信断言。
+支持 inventory_contains、block_equals、entity_exists、entity_attribute、entity_name、entity_team、snapshot_value、snapshot_changed。实体属性断言使用 Observer 快照中的 health/maxHealth/attackDamage/movementSpeed；名称和队伍来自同一快照。live 标签过滤、HUD、command_result 与 trace 来源断言仍为能力不足。Observer 原始 capabilities 出现某字段，不表示 Core 已支持对应可信断言。
 
-PASS 需要有效断言、独立新鲜快照及完整清理；观测不匹配为 FAIL；能力/环境/证据不足及清理失败为 INCONCLUSIVE。有效场景缺实例时，MCP 为兼容保留 ENVIRONMENT_UNAVAILABLE / INCONCLUSIVE；Core 直接调用通过 CoreError 细分原因。
+PASS 需要有效断言、独立新鲜快照及完整清理；观测不匹配为 FAIL；能力/环境/证据不足及清理失败为 INCONCLUSIVE。有效场景缺实例时，MCP 为兼容保留 ENVIRONMENT_UNAVAILABLE / INCONCLUSIVE；Core 直接调用通过 CoreError 细分原因。MCP `minecraft_test_start` 会在启动游戏任务前拒绝 HUD、command_result、trace、live entity tag 和 visualOnly 断言，分别返回 CAPABILITY_UNAVAILABLE / MANUAL_ACCEPTANCE_REQUIRED；Core `startTest` 与 live Bench 仍会执行这些场景并生成带 unavailable 证据的 INCONCLUSIVE 报告，不能把这种报告当作 PASS。`minecraft_command` 对 `execute if` 条件不成立返回 ok=true、condition=false，避免把正常未命中误报为命令失败。截图由 `minecraft_screenshot` 提供，只是人工验收证据；默认不内嵌 base64。
 
 ## 会话与工作台隔离
 
@@ -103,6 +107,8 @@ PASS 需要有效断言、独立新鲜快照及完整清理；观测不匹配为
 同工程源码和可视化写回继续共享现有 revision/冲突保护；构建全局排队。同一工程运行游戏时，其他会话收到占用提示，不停止已有实例；不同工程可并行。实例目录必须在会话专属根下，job status/stop 和报告路径必须匹配 session。
 
 Agent 可用 `modcrafting_session.update` 更新 phase、recommendedModules 和 currentModule。浏览器工作台采用侧栏导航和单一主区域；用户手动切换后暂停自动导航，重新启用“跟随 Agent”后恢复。内容/配方/GUI 编辑器草稿按 session/工程存于标签页，恢复前检查工程 revision，不自动保存。会话和 backend 标识用于路由，旧请求在切换时取消并丢弃迟到响应。
+
+生物内容可带 `appearance`：`base` 模式绘制 64×32（猪）或 64×64（僵尸）基型 UV 纹理；`custom` 模式用最多 32 个方块部件描述几何，自动打包到 256×256（或用户指定方形）UV 纹理，并生成 `EntityModel`/`LivingEntityRenderer`。纹理 PNG 与生成文件在同一 content workspace 事务中写入，manifest 记录 PNG SHA-256；外部修改会让对象转为只读。自定义模型仍复用所选猪/僵尸基型的 AI、碰撞尺寸和实体属性；3D 预览只用于近似检查，最终以游戏内渲染为准。
 
 ## 浏览器工作台接入约定
 

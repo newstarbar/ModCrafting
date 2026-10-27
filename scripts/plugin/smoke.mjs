@@ -85,7 +85,9 @@ const call = async (client, name, args = {}) => {
   return decoded
 }
 let toolCount = 0, sessionId
-await session({ MODCRAFTING_DATA: data, PATH: fixtures }, async (client, transport) => {
+// An explicitly broken JAVA_HOME stays an error even on machines with a discoverable JDK 21.
+// Use a separate data root for toolchain configuration tests; this keeps startup deterministic.
+await session({ MODCRAFTING_DATA: data, PATH: fixtures, JAVA_HOME: path.join(scope, 'missing-jdk'), MODCRAFTING_JAVA_HOME: '' }, async (client, transport) => {
   assert.equal(client.getServerVersion().version, manifest.version)
   assert.ok(transport.sent.some((message) => message.method === 'initialize'))
   assert.ok(transport.sent.some((message) => message.method === 'notifications/initialized'))
@@ -93,7 +95,7 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures }, async (client, transpo
   toolCount = tools.length
   const names = tools.map((tool) => tool.name)
   assert.equal(new Set(names).size, names.length)
-  for (const name of ['modcrafting_session', 'modcrafting_test_profile', 'minecraft_test_template', 'modcrafting_environment_status', 'fabric_project_inspect', 'fabric_validate', 'fabric_recipe_workspace', 'fabric_content_workspace', 'fabric_texture_workspace', 'fabric_gui_workspace', 'minecraft_test_start', 'minecraft_test_status', 'minecraft_build_studio']) assert.ok(names.includes(name), `Missing ${name}`)
+  for (const name of ['modcrafting_session', 'modcrafting_test_profile', 'minecraft_test_template', 'modcrafting_environment_status', 'modcrafting_toolchain', 'fabric_project_inspect', 'fabric_validate', 'fabric_recipe_workspace', 'fabric_content_workspace', 'fabric_texture_workspace', 'fabric_gui_workspace', 'fabric_voxel_workspace', 'minecraft_test_start', 'minecraft_test_status', 'minecraft_build_studio', 'minecraft_snapshot', 'minecraft_screenshot', 'minecraft_entity_query', 'minecraft_widgets', 'minecraft_entity_nbt', 'minecraft_log_read']) assert.ok(names.includes(name), `Missing ${name}`)
   const ajv = new Ajv({ strict: false, validateFormats: false })
   for (const tool of tools) assert.equal(ajv.validateSchema(tool.inputSchema), true, `Invalid schema: ${tool.name}`)
   assert.equal((await call(client, 'fabric_gui_workspace', { action: 'template', projectPath: path.join(fixtures, 'valid'), layoutType: 'hud-overlay' })).value.layoutType, 'hud-overlay');
@@ -121,6 +123,14 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures }, async (client, transpo
   assert.equal(environment.capabilities.toolchain.scaffoldIncludesWrapper, true)
   assert.equal(environment.capabilities.entityQuery.tagFilters, false)
   assert.equal(environment.capabilities.toolchain.automaticDownload, false)
+  assert.ok(environment.java.candidates.some((candidate) => candidate.source === 'java-home' && candidate.error), 'the broken JAVA_HOME must be diagnosed')
+  assert.ok(environment.remediation.some((line) => line.includes('modcrafting_toolchain')), 'Java remediation must offer the no-restart toolchain switch')
+  const toolchain = await call(client, 'modcrafting_toolchain', { action: 'read' })
+  assert.equal(toolchain.java.ok, false)
+  assert.ok(toolchain.java.configPath.endsWith('toolchain.json'))
+  const coldDocs = await call(client, 'fabric_docs_search', { query: 'registry' })
+  assert.equal(coldDocs.ok, false); assert.equal(coldDocs.code, 'ASSET_NOT_READY')
+  assert.deepEqual(coldDocs.remediation.arguments.names, ['agent-knowledge'])
   const newProject = path.join(scope, 'new-scaffold-with-wrapper')
   const created = await call(client, 'fabric_project_scaffold', { projectPath: newProject, modId: 'new_scaffold', modName: 'New Scaffold' })
   assert.equal(created.project.valid, true)
@@ -149,6 +159,13 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures }, async (client, transpo
   const noGame = await call(client, 'minecraft_test_start', { sessionId, spec: gameSpec })
   assert.equal(noGame.code, 'ENVIRONMENT_UNAVAILABLE')
   assert.equal(noGame.verdict, 'INCONCLUSIVE')
+  const unsupported = await call(client, 'minecraft_test_start', { sessionId, spec: { ...gameSpec, id: 'unsupported_game', assertions: [{ type: 'hud_text', text: 'old' }] } })
+  assert.equal(unsupported.code, 'CAPABILITY_UNAVAILABLE')
+  assert.equal(unsupported.verdict, 'INCONCLUSIVE')
+  const visual = await call(client, 'minecraft_test_start', { sessionId, spec: { ...gameSpec, id: 'visual_game', visualOnly: true } })
+  assert.equal(visual.code, 'MANUAL_ACCEPTANCE_REQUIRED')
+  const badToolchain = await call(client, 'modcrafting_toolchain', { action: 'write', javaHome: path.join(scope, 'missing-jdk') })
+  assert.equal(badToolchain.code, 'JDK21_REQUIRED')
   const missingJob = await call(client, 'minecraft_test_status', { sessionId, jobId: 'fixture-not-running' })
   assert.equal(missingJob.ok, false)
   assert.equal(missingJob.code, 'JOB_NOT_FOUND')

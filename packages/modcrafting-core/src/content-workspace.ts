@@ -4,18 +4,20 @@ import path from 'node:path'
 import { z } from 'zod'
 import { contentObjectSchema, contentKinds, contentForms, newContentObject, type ContentObject, type ContentDocument, type ContentFile } from './content-model.ts'
 import { generateContent } from './content-codegen.ts'
+import { baseTextureSize, validateEntityTexture, validatePixelTexture } from './entity-appearance.ts'
 import { inspectFabricProject, lookupMinecraftData } from './node.ts'
 import { CoreError, projectRuntimePaths } from './runtime.ts'
 import type { RuntimePaths } from './contracts.ts'
 
 const revisionSchema = z.string().regex(/^[a-f0-9]{64}$/)
+const texturePng = z.string().min(1).max(8_000_000).optional()
 const fields = { projectPath: z.string().min(1), value: contentObjectSchema, expectedRevision: revisionSchema.nullable() }
 export const contentRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('template'), projectPath: fields.projectPath, kind: z.enum(contentKinds) }).strict(),
   z.object({ action: z.literal('list'), projectPath: fields.projectPath }).strict(),
   z.object({ action: z.literal('read'), projectPath: fields.projectPath, id: z.string().min(1) }).strict(),
-  z.object({ action: z.literal('preview'), ...fields }).strict(),
-  z.object({ action: z.literal('save'), ...fields, previewRevision: revisionSchema }).strict()
+  z.object({ action: z.literal('preview'), ...fields, texturePng }).strict(),
+  z.object({ action: z.literal('save'), ...fields, previewRevision: revisionSchema, texturePng }).strict()
 ])
 export type ContentRequest = z.input<typeof contentRequestSchema>
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -70,20 +72,53 @@ function textureFile(value: ContentObject) {
   const [ns, name] = value.texture.split(':')
   return `src/main/resources/assets/${ns}/textures/${name}.png`
 }
-function previewImage(paths: RuntimePaths | undefined, root: string, value: ContentObject, compiledPng?: Buffer): string | undefined {
-  if (compiledPng) return 'data:image/png;base64,' + compiledPng.toString('base64')
+function previewImage(paths: RuntimePaths | undefined, root: string, value: ContentObject, png?: Buffer): string | undefined {
+  if (png) return 'data:image/png;base64,' + png.toString('base64')
   const file = textureFile(value)
-  const png = value.texture.startsWith('minecraft:')
+  const image = value.texture.startsWith('minecraft:')
     ? paths && bytes(paths.assetsRoot, `minecraft-textures/1.21.4/${file.slice('src/main/resources/'.length)}`)
     : bytes(root, file)
-  return png && png.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'data:image/png;base64,' + png.toString('base64') : undefined
+  return image && image.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'data:image/png;base64,' + image.toString('base64') : undefined
 }
-function validateResources(paths: RuntimePaths, root: string, value: ContentObject) {
+function decodeTexturePng(raw?: string): Buffer | undefined {
+  if (raw === undefined) return undefined
+  const encoded = raw.replace(/^data:image\/png;base64,/, '').replace(/\s+/g, '')
+  if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) fail('INVALID_ARGUMENT', 'texturePng 必须是 PNG base64')
+  const buffer = Buffer.from(encoded, 'base64')
+  if (!buffer.length) fail('INVALID_ARGUMENT', 'texturePng 不能为空')
+  return buffer
+}
+function validateContentTexture(root: string, value: ContentObject, supplied?: Buffer): Buffer | undefined {
+  if (value.kind === 'entity' && value.appearance) {
+    const custom = value.appearance.mode === 'custom'
+    const expected = custom ? value.appearance.textureSize : baseTextureSize(value.parameters.baseEntity)
+    if (custom && value.texture.startsWith('minecraft:')) fail('CONTENT_RESOURCE_MISSING', '自定义模型必须使用工程内 PNG 纹理')
+    if (!custom && value.texture.startsWith('minecraft:')) {
+      if (supplied) fail('CONTENT_RESOURCE_MISSING', '绘制纹理需要把纹理引用改为工程路径')
+      return undefined
+    }
+    const png = supplied ?? bytes(root, textureFile(value))
+    if (!png) fail('CONTENT_RESOURCE_MISSING', '请先绘制并保存生物纹理：' + textureFile(value))
+    const problem = validateEntityTexture(png, expected as [number, number])
+    if (problem) fail('CONTENT_RESOURCE_MISSING', problem)
+    return png
+  }
+  if (value.texture.startsWith('minecraft:')) {
+    if (supplied) fail('CONTENT_RESOURCE_MISSING', '绘制纹理需要把纹理引用改为工程路径')
+    return undefined
+  }
+  const png = supplied ?? bytes(root, textureFile(value))
+  if (!png) fail('CONTENT_RESOURCE_MISSING', '请先绘制并保存纹理：' + textureFile(value))
+  const problem = validatePixelTexture(png)
+  if (problem) fail('CONTENT_RESOURCE_MISSING', problem)
+  return png
+}
+function validateResources(paths: RuntimePaths, root: string, value: ContentObject, suppliedTexture?: Buffer) {
   const knowledge = projectRuntimePaths(paths, root)
   if (!value.voxel) {
     const vanilla = value.texture.startsWith('minecraft:')
     if (!vanilla) {
-      const png = bytes(root, textureFile(value))
+      const png = suppliedTexture ?? bytes(root, textureFile(value))
       if (!png || png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') fail('CONTENT_RESOURCE_MISSING', '工程纹理必须是已存在的 PNG：' + textureFile(value))
     } else if (value.kind === 'entity') {
       if (!['minecraft:entity/pig/pig', 'minecraft:entity/zombie/zombie'].includes(value.texture)) fail('CONTENT_RESOURCE_MISSING', '原版生物纹理目前支持猪或僵尸；其他纹理请放入工程')
@@ -121,9 +156,13 @@ function readManaged(root: string, modId: string, id: string, image = false, pat
     document.files = owned
     document.revision = hash(JSON.stringify(tracked.map(file => [file, bytes(root, file)?.toString('base64') ?? null])))
     if (!stored.files || JSON.stringify(Object.keys(stored.files).sort()) !== JSON.stringify([...owned].sort())) throw Error('生成文件清单不匹配，请交由 Agent 检查')
+    const storedTexture = stored.texture && typeof stored.texture === 'object' ? stored.texture as { path?: unknown; sha256?: unknown } : undefined
+    if (storedTexture && (typeof storedTexture.path !== 'string' || typeof storedTexture.sha256 !== 'string')) throw Error('纹理清单格式无效，保留源码并交由 Agent 检查')
+    if (storedTexture && (storedTexture.path !== textureFile(value) || !bytes(root, storedTexture.path) || hash(bytes(root, storedTexture.path)!) !== storedTexture.sha256)) throw Error('绘制纹理已被外部修改，保留源码并交由 Agent 合并：' + String(storedTexture.path))
     for (const target of generatedAll) {
       const current = bytes(root, target.path)
-      if (!current || hash(current) !== stored.files[target.path] || hash(target.content) !== stored.files[target.path]) throw Error('生成文件已被外部修改，保留源码并交由 Agent 合并：' + target.path)
+      // Saved hashes detect external edits; generator evolution is applied only through preview/save.
+      if (!current || hash(current) !== stored.files[target.path]) throw Error('生成文件已被外部修改，保留源码并交由 Agent 合并：' + target.path)
     }
     const metadata = objectJson(root, sharedFiles(modId)[0])
     if (!entrypoints(metadata, 'main').includes(generated.main) || generated.client && !entrypoints(metadata, 'client').includes(generated.client)) throw Error('生成的 Fabric 入口已被外部修改')
@@ -133,15 +172,19 @@ function readManaged(root: string, modId: string, id: string, image = false, pat
   } catch (cause) { document.editable = false; document.reason = String(cause) }
   return document
 }
-function preview(paths: RuntimePaths, root: string, modId: string, value: ContentObject, expected: string | null) {
-  const name = idName(value.id, modId), file = manifestPath(name), exists = bytes(root, file)
+function preview(paths: RuntimePaths, root: string, modId: string, value: ContentObject, expected: string | null, suppliedTexture?: string) {
+  const name = idName(value.id, modId), file = manifestPath(name), exists = bytes(root, file), textureBytes = decodeTexturePng(suppliedTexture)
   const existing = exists ? readManaged(root, modId, value.id) : undefined
   if (existing) {
     if (existing.revision !== expected) fail('CONTENT_CONFLICT', '对象或相关文件已改变，草稿已保留；重新读取比较后再应用')
     if (!existing.editable) fail('CONTENT_READ_ONLY', existing.reason || '对象不可安全编辑')
     if (existing.value!.kind !== value.kind) fail('CONTENT_READ_ONLY', '已有对象不能改变注册类型；请新建不同 ID')
   } else if (expected !== null) fail('CONTENT_CONFLICT', '原对象已被移走，不能按旧版本写入')
-  validateResources(paths, root, value)
+  validateResources(paths, root, value, textureBytes)
+  // Voxel objects compile their atlas PNG through generated assets; a painted texture is not part of that flow.
+  const contentTexture = value.voxel ? undefined : validateContentTexture(root, value, textureBytes)
+  const texturePath = contentTexture ? textureFile(value) : undefined
+  const textureSha256 = contentTexture ? hash(contentTexture) : undefined
   const generated = generateContent(value, splitClient(root))
   const generatedAll: Array<{ path: string; content: string | Buffer }> = [...generated.files, ...generated.assets]
   if (existing) {
@@ -168,7 +211,7 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: Conten
     if (!exists && Object.hasOwn(lang, generated.langKey)) fail('CONTENT_READ_ONLY', '同名语言键已存在，请先由 Agent 核对')
     targets.push({ path: file, content: json({ ...lang, [generated.langKey]: value.displayName }) })
   }
-  targets.push({ path: file, content: json({ version: 1, value, files: Object.fromEntries(generatedAll.map(target => [target.path, hash(target.content)])) }) })
+  targets.push({ path: file, content: json({ version: 1, value, files: Object.fromEntries(generatedAll.map(target => [target.path, hash(target.content)])), ...(texturePath && textureSha256 ? { texture: { path: texturePath, sha256: textureSha256 } } : {}) }) })
   const changes: ContentFile[] = targets.map(target => {
     const binary = Buffer.isBuffer(target.content)
     const before = bytes(root, target.path)
@@ -179,8 +222,9 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: Conten
       ...(binary ? { binary: true, size: (target.content as Buffer).length } : {})
     }
   })
-  const context = [...sharedFiles(modId).slice(3), ...(value.texture.startsWith('minecraft:') || value.voxel ? [] : [textureFile(value)])].map(file => [file, bytes(root, file)?.toString('base64') ?? null])
-  return { ok: true, value, files: changes, image: previewImage(paths, root, value, generated.previewPng), previewRevision: hash(JSON.stringify({ changes, context })) }
+  const context = [...sharedFiles(modId).slice(3), ...(texturePath ? [texturePath] : []), ...(value.texture.startsWith('minecraft:') || value.voxel || texturePath ? [] : [textureFile(value)])].map(file => [file, file === texturePath ? contentTexture?.toString('base64') ?? null : bytes(root, file)?.toString('base64') ?? null])
+  const previousTexture = texturePath ? bytes(root, texturePath) : undefined
+  return { ok: true, value, files: changes, image: previewImage(paths, root, value, generated.previewPng ?? contentTexture), texture: texturePath ? { path: texturePath, base64: contentTexture!.toString('base64'), sha256: textureSha256, beforeSha256: previousTexture ? hash(previousTexture) : null, width: contentTexture!.readUInt32BE(16), height: contentTexture!.readUInt32BE(20) } : undefined, previewRevision: hash(JSON.stringify({ changes, context })) }
 }
 
 export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Record<string, unknown> {
@@ -202,7 +246,7 @@ export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Reco
     for (const [id, files] of unmanaged) documents.push({ id, editable: false, reason: '已有手写/第三方内容；参数无法可靠反向解析，交由 Agent 修改', revision: hash(JSON.stringify(files.map(file => bytes(root, file)?.toString('base64')))), files })
     return { ok: true, documents }
   }
-  if (request.action === 'preview') return preview(paths, root, modId, request.value, request.expectedRevision)
+  if (request.action === 'preview') return preview(paths, root, modId, request.value, request.expectedRevision, request.texturePng)
   const lock = safe(path.join(root, '.modcrafting/content.lock'))
   mkdirSync(path.dirname(lock), { recursive: true })
   try { writeFileSync(lock, String(process.pid), { flag: 'wx' }) } catch { return fail('CONTENT_BUSY', '工程内容正在保存或存在未恢复事务，请检查 content.lock；不自动删除') }
@@ -213,8 +257,9 @@ export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Reco
     return file.binary ? current.equals(Buffer.from(file.before, 'base64')) : current.toString('utf8') === file.before
   }
   const payloadOf = (file: ContentFile): string | Buffer => file.binary ? Buffer.from(file.after, 'base64') : file.after
+  let textureWritten: { target: string; before: Buffer | null; after: Buffer } | undefined
   try {
-    const planned = preview(paths, root, modId, request.value, request.expectedRevision)
+    const planned = preview(paths, root, modId, request.value, request.expectedRevision, request.texturePng)
     if (planned.previewRevision !== request.previewRevision) fail('CONTENT_CONFLICT', '预览后内容发生改变，请重新预览；草稿保持不变')
     const backup = safe(path.join(paths.dataRoot, 'content-backups', hash(root), randomUUID() + '.json'))
     mkdirSync(path.dirname(backup), { recursive: true }); writeFileSync(backup, json({ objectId: request.value.id, files: planned.files }), { flag: 'wx' })
@@ -229,8 +274,27 @@ export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Reco
       }
       written.push(file)
     }
+    const texture = planned.texture as { path: string; beforeSha256: string | null; base64: string } | undefined
+    if (texture) {
+      const target = safe(path.join(root, texture.path)), before = bytes(root, texture.path), after = Buffer.from(texture.base64, 'base64')
+      if ((before ? hash(before) : null) !== texture.beforeSha256 || existsSync(target) && lstatSync(target).nlink > 1) fail('CONTENT_CONFLICT', '保存时纹理发生修改或存在硬链接：' + texture.path)
+      mkdirSync(path.dirname(target), { recursive: true })
+      if (!before) writeFileSync(target, after, { flag: 'wx' })
+      else {
+        const temporary = target + '.modcrafting-' + randomUUID() + '.tmp'
+        try { writeFileSync(temporary, after, { flag: 'wx' }); renameSync(temporary, target) } finally { if (existsSync(temporary)) unlinkSync(temporary) }
+      }
+      textureWritten = { target, before, after }
+    }
     return { ok: true, document: readManaged(root, modId, request.value.id, true, paths), backup }
   } catch (cause) {
+    if (textureWritten) {
+      const current = bytes(root, path.relative(root, textureWritten.target))
+      if (current && hash(current) === hash(textureWritten.after)) {
+        if (textureWritten.before) writeFileSync(textureWritten.target, textureWritten.before)
+        else unlinkSync(textureWritten.target)
+      }
+    }
     for (const file of written.reverse()) {
       const current = bytes(root, file.path)
       const after = Buffer.from(file.after, 'base64')

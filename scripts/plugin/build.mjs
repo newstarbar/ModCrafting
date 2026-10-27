@@ -46,8 +46,10 @@ if (values['builder-jar']) {
 const wrapper = { batch: (await readFile(path.join(root, 'bridge-mod/gradlew.bat'), 'utf8')).replace(/\r?\n/g, '\r\n'), properties: (await readFile(path.join(root, 'bridge-mod/gradle/wrapper/gradle-wrapper.properties'), 'utf8')).replace(/\r\n/g, '\n'), jarBase64: (await readFile(path.join(root, 'bridge-mod/gradle/wrapper/gradle-wrapper.jar'))).toString('base64') }
 await mkdir(dist, { recursive: true })
 // Embed the optional React view in the existing self-contained entry; Stage stays nine files.
-const view = await build({ entryPoints: [path.join(root, 'packages/modcrafting-view/src/main.tsx')], absWorkingDir: root, bundle: true, platform: 'browser', format: 'esm', target: 'es2023', jsx: 'automatic', minify: true, legalComments: 'eof', define: { 'process.env.NODE_ENV': '"production"' }, write: false, metafile: true })
+const view = await build({ entryPoints: [path.join(root, 'packages/modcrafting-view/src/main.tsx')], absWorkingDir: root, bundle: true, platform: 'browser', format: 'esm', target: 'es2023', jsx: 'automatic', jsxImportSource: 'react', minify: true, legalComments: 'eof', define: { 'process.env.NODE_ENV': '"production"' }, write: false, metafile: true })
 if (Object.values(view.metafile.outputs).some((output) => output.imports.some((entry) => entry.external))) throw Error('Browser view has an external runtime dependency')
+// Type-check uses the automatic JSX runtime; the bundle must use it too or bare React.createElement crashes the page.
+if (/React\.createElement/.test(view.outputFiles[0].text)) throw Error('Browser view bundle contains classic React.createElement; JSX automatic runtime is required')
 const webAssets = {
   html: '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ModCrafting · Fabric 工作台</title><link rel="stylesheet" href="/view.css"></head><body><div id="root"></div><script type="module" src="/view.js"></script></body></html>',
   js: view.outputFiles[0].text,

@@ -1,8 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, linkSync, symlinkSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync, existsSync, linkSync, symlinkSync, rmSync } from 'node:fs'
 import path from 'node:path'
-import { createRuntimePaths, ensureRuntimePaths, contentWorkspace, newContentObject, contentObjectSchema, contentKinds, type ContentRequest, type ContentDocument, type ContentObject } from '../../packages/modcrafting-core/src/index.ts'
+import sharp from 'sharp'
+import { createRuntimePaths, ensureRuntimePaths, contentWorkspace, newContentObject, contentObjectSchema, contentKinds, customTextureSize, defaultEntityBox, layoutEntityBoxes, type ContentRequest, type ContentDocument, type ContentObject, type ContentFile } from '../../packages/modcrafting-core/src/index.ts'
+import { generateContent } from '../../packages/modcrafting-core/src/content-codegen.ts'
 
 function fixture() {
   mkdirSync('temp', { recursive: true }); const root = mkdtempSync(path.resolve('temp/content-unit-')), project = path.join(root, 'project'), paths = createRuntimePaths(path.join(root, 'data'))
@@ -78,16 +81,172 @@ test('A late hard-link conflict rolls back only newly written owned files and pr
   assert.equal(existsSync(path.join(f.project, 'src/main/java/modcrafting/generated/content_test/o_new_item/content/ModItems.java')), false)
   assert.equal(existsSync(path.join(f.project, '.modcrafting/content.lock')), false)
 })
-test('Texture resources must exist and supported PNG bytes are returned as an authenticated-view payload', () => {
+test('Texture resources must exist and supported PNG bytes are returned as an authenticated-view payload', async () => {
   const f = fixture(), value = { ...f.value, texture: 'content_test:item/custom' }
   assert.throws(() => f.preview(value), /PNG/)
-  const file = path.join(f.project, 'src/main/resources/assets/content_test/textures/item/custom.png'); mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, Buffer.from('89504e470d0a1a0a00000000', 'hex'))
+  const file = path.join(f.project, 'src/main/resources/assets/content_test/textures/item/custom.png'); mkdirSync(path.dirname(file), { recursive: true })
+  const png = await sharp({ create: { width: 16, height: 16, channels: 4, background: { r: 200, g: 100, b: 50, alpha: 1 } } }).png().toBuffer()
+  writeFileSync(file, png)
   const saved = f.save(value); assert.ok(saved.image?.startsWith('data:image/png;base64,')); assert.equal(saved.editable, true)
 })
+test('Painted item/food/block textures save PNG bytes and update the generated model reference', async () => {
+  const f = fixture(), png = await sharp({ create: { width: 16, height: 16, channels: 4, background: { r: 30, g: 180, b: 90, alpha: 1 } } }).png().toBuffer(), texturePng = 'data:image/png;base64,' + png.toString('base64')
+  for (const [kind, category] of [['item', 'item'], ['food', 'item'], ['block', 'block'], ['tool', 'item'], ['armor', 'item']] as const) {
+    const value = { ...newContentObject(kind, 'content_test'), id: `content_test:painted_${kind}`, texture: `content_test:${category}/painted_${kind}` }
+    const preview = f.call({ action: 'preview', value, expectedRevision: null, texturePng }) as Record<string, any>
+    const saved = f.call({ action: 'save', value, expectedRevision: null, previewRevision: preview.previewRevision, texturePng }).document as ContentDocument
+    assert.equal(saved.editable, true, saved.reason)
+    const file = path.join(f.project, `src/main/resources/assets/content_test/textures/${category}/painted_${kind}.png`)
+    assert.deepEqual(readFileSync(file), png)
+    assert.ok(saved.image?.startsWith('data:image/png;base64,'))
+  }
+  const model = readFileSync(path.join(f.project, 'src/main/resources/assets/content_test/models/item/painted_item.json'), 'utf8')
+  assert.match(model, /content_test:item\/painted_item/)
+  const block = readFileSync(path.join(f.project, 'src/main/resources/assets/content_test/models/block/painted_block.json'), 'utf8')
+  assert.match(block, /content_test:block\/painted_block/)
+})
+
 test('Vanilla appearance uses an optional local cache without copying textures into the mod', () => {
   const f = fixture(), file = path.join(f.paths.assetsRoot, 'minecraft-textures/1.21.4/assets/minecraft/textures/item/iron_ingot.png')
   mkdirSync(path.dirname(file), { recursive: true }); const png = Buffer.from('89504e470d0a1a0a00000000', 'hex'); writeFileSync(file, png)
   assert.equal(f.preview(f.value).image, 'data:image/png;base64,' + png.toString('base64'))
   const saved = f.save(f.value); assert.ok(saved.image)
   assert.equal(existsSync(path.join(f.project, 'src/main/resources/assets/minecraft')), false)
+})
+test('Custom creature appearance saves a PNG atomically and generates model/renderer files', async () => {
+  const f = fixture(), boxes = [defaultEntityBox(0), { ...defaultEntityBox(1), id: 'head', name: '头', origin: [-4, 16, -4] as [number, number, number], pivot: [0, 20, 0] as [number, number, number] }]
+  const layout = layoutEntityBoxes(boxes, customTextureSize())
+  const value: ContentObject = { ...newContentObject('entity', 'content_test'), id: 'content_test:custom_creature', texture: 'content_test:entity/custom_creature', appearance: { version: 1, mode: 'custom', textureSize: layout.textureSize, boxes } }
+  const png = await sharp({ create: { width: 256, height: 256, channels: 4, background: { r: 20, g: 120, b: 200, alpha: 1 } } }).png().toBuffer()
+  const texturePng = 'data:image/png;base64,' + png.toString('base64')
+  const preview = f.call({ action: 'preview', value, expectedRevision: null, texturePng }) as Record<string, any>
+  assert.equal(preview.ok, true)
+  assert.equal(preview.texture.path, 'src/main/resources/assets/content_test/textures/entity/custom_creature.png')
+  assert.equal(preview.texture.width, 256)
+  const saved = f.call({ action: 'save', value, expectedRevision: null, previewRevision: preview.previewRevision, texturePng }).document as ContentDocument
+  assert.equal(saved.editable, true, saved.reason)
+  assert.ok(saved.files.some(file => file.endsWith('ContentEntityModel.java')))
+  assert.ok(saved.files.some(file => file.endsWith('ContentEntityRenderer.java')))
+  assert.deepEqual(readFileSync(path.join(f.project, preview.texture.path)), png)
+  assert.match(readFileSync(path.join(f.project, saved.files.find(file => file.endsWith('ContentEntityModel.java'))!), 'utf8'), /TexturedModelData|EntityModel/)
+  const read = f.call({ action: 'read', id: value.id }).document as ContentDocument
+  assert.equal(read.editable, true)
+  assert.ok(read.image?.startsWith('data:image/png;base64,'))
+  writeFileSync(path.join(f.project, preview.texture.path), Buffer.concat([png, Buffer.from([0])]))
+  const stale = f.call({ action: 'read', id: value.id }).document as ContentDocument
+  assert.equal(stale.editable, false)
+  assert.match(stale.reason!, /纹理|外部修改/)
+  assert.throws(() => f.preview(value, saved.revision), /改变|纹理/)
+})
+
+const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
+function snapshotFiles(root: string) {
+  return readdirSync(root, { recursive: true }).map(file => path.join(root, String(file))).sort()
+    .filter(file => statSync(file).isFile()).map(file => [file, readFileSync(file), statSync(file, { bigint: true }).mtimeNs])
+}
+async function legacyCreatureFixture(splitClient = false) {
+  const f = fixture()
+  if (splitClient) writeFileSync(path.join(f.project, 'build.gradle'), 'loom { splitEnvironmentSourceSets() }\n')
+  const value: ContentObject = { ...newContentObject('entity', 'content_test'), id: 'content_test:legacy_creature', texture: 'content_test:entity/legacy_creature', appearance: { version: 1, mode: 'custom', textureSize: customTextureSize(), boxes: [defaultEntityBox(0)] } }
+  const [width, height] = customTextureSize()
+  const png = await sharp({ create: { width, height, channels: 4, background: { r: 20, g: 120, b: 200, alpha: 1 } } }).png().toBuffer()
+  const texturePng = png.toString('base64'), planned = f.call({ action: 'preview', value, expectedRevision: null, texturePng })
+  const saved = f.call({ action: 'save', value, expectedRevision: null, previewRevision: planned.previewRevision, texturePng }).document as ContentDocument
+  assert.equal(saved.editable, true, saved.reason)
+  const generated = generateContent(saved.value!, splitClient), model = generated.files.find(file => file.path.endsWith('/ContentEntityModel.java'))!
+  const manifestFile = path.join(f.project, '.modcrafting/content/legacy_creature.json'), stored = JSON.parse(readFileSync(manifestFile, 'utf8'))
+  // Simulate earlier generator bytes with their saved hash, rather than an untracked source edit.
+  const legacySource = model.content + '\n// Previous creature generator output.\n'
+  writeFileSync(path.join(f.project, model.path), legacySource)
+  stored.files[model.path] = sha256(legacySource)
+  writeFileSync(manifestFile, JSON.stringify(stored, null, 2) + '\n')
+  return { ...f, value, saved, generated, model, legacySource, manifestFile, stored, png, textureFile: path.join(f.project, stored.texture.path) }
+}
+
+test('Saved legacy creature output stays editable without writes and upgrades only through preview/save', async t => {
+  for (const splitClient of [false, true]) await t.test(splitClient ? 'split client sources' : 'combined sources', async () => {
+    const f = await legacyCreatureFixture(splitClient), before = snapshotFiles(f.root)
+    const read = f.call({ action: 'read', id: f.value.id }).document as ContentDocument
+    assert.equal(read.editable, true, read.reason)
+    assert.deepEqual(read.value, f.saved.value)
+    assert.notEqual(read.revision, f.saved.revision)
+    assert.deepEqual(f.call({ action: 'read', id: f.value.id }).document, read)
+    assert.equal((f.call({ action: 'list' }).documents as ContentDocument[])[0].editable, true)
+    assert.deepEqual(snapshotFiles(f.root), before)
+
+    const planned = f.preview(f.value, read.revision), files = planned.files as ContentFile[]
+    assert.deepEqual(files.find(file => file.path === f.model.path), { path: f.model.path, before: f.legacySource, after: f.model.content })
+    const manifestChange = files.find(file => file.path === '.modcrafting/content/legacy_creature.json')!
+    assert.equal(JSON.parse(manifestChange.before!).files[f.model.path], sha256(f.legacySource))
+    assert.equal(JSON.parse(manifestChange.after).files[f.model.path], sha256(f.model.content))
+    assert.deepEqual(snapshotFiles(f.root), before)
+    assert.throws(() => f.preview(f.value, f.saved.revision), { code: 'CONTENT_CONFLICT' })
+    assert.throws(() => f.call({ action: 'save', value: f.value, expectedRevision: f.saved.revision, previewRevision: planned.previewRevision }), { code: 'CONTENT_CONFLICT' })
+    assert.throws(() => f.call({ action: 'save', value: { ...f.value, displayName: 'Changed after preview' }, expectedRevision: read.revision, previewRevision: planned.previewRevision }), { code: 'CONTENT_CONFLICT' })
+    assert.deepEqual(snapshotFiles(f.root), before)
+
+    const result = f.call({ action: 'save', value: f.value, expectedRevision: read.revision, previewRevision: planned.previewRevision }), upgraded = result.document as ContentDocument
+    assert.equal(upgraded.editable, true, upgraded.reason)
+    assert.notEqual(upgraded.revision, read.revision)
+    for (const file of files) assert.equal(readFileSync(path.join(f.project, file.path), 'utf8'), file.after)
+    for (const file of f.generated.files) assert.equal(readFileSync(path.join(f.project, file.path), 'utf8'), file.content)
+    const stored = JSON.parse(readFileSync(f.manifestFile, 'utf8'))
+    assert.deepEqual(stored.files, Object.fromEntries(f.generated.files.map(file => [file.path, sha256(file.content)])))
+    assert.deepEqual(stored.texture, f.stored.texture)
+    assert.deepEqual(readFileSync(f.textureFile), f.png)
+    const backup = JSON.parse(readFileSync(result.backup as string, 'utf8'))
+    assert.equal(backup.objectId, f.value.id)
+    assert.deepEqual(backup.files, files)
+    assert.equal(existsSync(path.join(f.project, '.modcrafting/content.lock')), false)
+    const after = snapshotFiles(f.root)
+    assert.throws(() => f.preview(f.value, read.revision), { code: 'CONTENT_CONFLICT' })
+    assert.throws(() => f.call({ action: 'save', value: f.value, expectedRevision: read.revision, previewRevision: planned.previewRevision }), { code: 'CONTENT_CONFLICT' })
+    assert.deepEqual(f.call({ action: 'read', id: f.value.id }).document, upgraded)
+    assert.ok((f.preview(f.value, upgraded.revision).files as ContentFile[]).every(file => file.before === file.after))
+    assert.deepEqual(snapshotFiles(f.root), after)
+  })
+})
+
+test('Generator upgrades retain manifest, owned path, texture, entrypoint and name protections', async t => {
+  const cases: { name: string; change: (f: Awaited<ReturnType<typeof legacyCreatureFixture>>) => void; reason: RegExp }[] = [
+    { name: 'external Java edit', change: f => { writeFileSync(path.join(f.project, f.model.path), f.legacySource + '// User edit\n') }, reason: /生成文件已被外部修改/ },
+    { name: 'missing owned file', change: f => { unlinkSync(path.join(f.project, f.model.path)) }, reason: /生成文件已被外部修改/ },
+    { name: 'stored hash mismatch', change: f => { f.stored.files[f.model.path] = sha256(f.model.content) }, reason: /生成文件已被外部修改/ },
+    { name: 'missing manifest file entry', change: f => { delete f.stored.files[f.model.path] }, reason: /生成文件清单不匹配/ },
+    { name: 'extra manifest file entry', change: f => { f.stored.files['src/main/java/Unowned.java'] = sha256('unowned') }, reason: /生成文件清单不匹配/ },
+    { name: 'relocated manifest file entry', change: f => { f.stored.files['../outside.java'] = f.stored.files[f.model.path]; delete f.stored.files[f.model.path] }, reason: /生成文件清单不匹配/ },
+    { name: 'source set path change', change: f => { writeFileSync(path.join(f.project, 'build.gradle'), 'loom { splitEnvironmentSourceSets() }\n') }, reason: /生成文件清单不匹配/ },
+    { name: 'unsupported manifest version', change: f => { f.stored.version = 2 }, reason: /不支持的声明版本/ },
+    { name: 'manifest ID mismatch', change: f => { f.stored.value.id = 'content_test:other_creature' }, reason: /内容 ID 与声明文件名不一致/ },
+    { name: 'external texture edit', change: f => { writeFileSync(f.textureFile, Buffer.concat([f.png, Buffer.from([0])])) }, reason: /绘制纹理已被外部修改/ },
+    { name: 'missing texture', change: f => { unlinkSync(f.textureFile) }, reason: /绘制纹理已被外部修改/ },
+    { name: 'texture path mismatch', change: f => { f.stored.texture.path = '../outside.png' }, reason: /绘制纹理已被外部修改/ },
+    { name: 'texture hash mismatch', change: f => { f.stored.texture.sha256 = sha256('other texture') }, reason: /绘制纹理已被外部修改/ },
+    { name: 'invalid texture manifest', change: f => { f.stored.texture.sha256 = 123 }, reason: /纹理清单格式无效/ },
+    ...(['main', 'client'] as const).map(type => ({ name: `missing ${type} entrypoint`, change: (f: Awaited<ReturnType<typeof legacyCreatureFixture>>) => {
+      const file = path.join(f.project, 'src/main/resources/fabric.mod.json'), metadata = JSON.parse(readFileSync(file, 'utf8'))
+      metadata.entrypoints[type] = metadata.entrypoints[type].filter((entry: unknown) => entry !== f.generated[type])
+      writeFileSync(file, JSON.stringify(metadata))
+    }, reason: /Fabric 入口已被外部修改/ })),
+    ...['zh_cn', 'en_us'].map(locale => ({ name: `external ${locale} name edit`, change: (f: Awaited<ReturnType<typeof legacyCreatureFixture>>) => {
+      const file = path.join(f.project, `src/main/resources/assets/content_test/lang/${locale}.json`), lang = JSON.parse(readFileSync(file, 'utf8'))
+      lang[f.generated.langKey] = 'External name'; writeFileSync(file, JSON.stringify(lang))
+    }, reason: /对象名称已被外部修改/ }))
+  ]
+  for (const scenario of cases) await t.test(scenario.name, async () => {
+    const f = await legacyCreatureFixture(), original = f.call({ action: 'read', id: f.value.id }).document as ContentDocument
+    assert.equal(original.editable, true, original.reason)
+    const planned = f.preview(f.value, original.revision)
+    scenario.change(f)
+    writeFileSync(f.manifestFile, JSON.stringify(f.stored, null, 2) + '\n')
+    const before = snapshotFiles(f.root), read = f.call({ action: 'read', id: f.value.id }).document as ContentDocument
+    assert.equal(read.editable, false)
+    assert.match(read.reason!, scenario.reason)
+    assert.notEqual(read.revision, original.revision)
+    assert.throws(() => f.preview(f.value, original.revision), { code: 'CONTENT_CONFLICT' })
+    assert.throws(() => f.call({ action: 'save', value: f.value, expectedRevision: original.revision, previewRevision: planned.previewRevision }), { code: 'CONTENT_CONFLICT' })
+    assert.throws(() => f.preview(f.value, read.revision), { code: 'CONTENT_READ_ONLY' })
+    assert.throws(() => f.call({ action: 'save', value: f.value, expectedRevision: read.revision, previewRevision: planned.previewRevision }), { code: 'CONTENT_READ_ONLY' })
+    assert.deepEqual(snapshotFiles(f.root), before)
+  })
 })

@@ -20,6 +20,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.item.ItemStack;
@@ -77,6 +78,7 @@ public final class GuiClient implements ClientModInitializer {
         for (JsonElement element: elements()) {
             JsonObject e=element.getAsJsonObject(); int x=dx+num(e,"x"), y=dy+num(e,"y"), w=num(e,"width"), h=num(e,"height"); String type=str(e,"type");
             if(type.equals("panel")) ctx.fill(x,y,x+w,y+h,color(e));
+            if(type.equals("image")) { String ref=e.has("texture")?str(e,"texture"):"minecraft:item/iron_ingot"; int split=ref.indexOf(':'); Identifier texture=Identifier.of(ref.substring(0,split),"textures/"+ref.substring(split+1)+".png"); ctx.drawTexture(RenderLayer::getGuiTextured,texture,x,y,0f,0f,w,h,w,h); }
             if(type.equals("label")) { ctx.enableScissor(x,y,x+w,y+h); ctx.drawText(c.textRenderer,text(e),x,y,color(e),e.get("shadow").getAsBoolean()); ctx.disableScissor(); }
             if(type.equals("slot")) {
                 ctx.fill(x,y,x+w,y+h,0xff454545);ctx.fill(x+1,y+1,x+w-1,y+h-1,0xff8b8b8b);

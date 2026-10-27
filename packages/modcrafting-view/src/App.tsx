@@ -7,16 +7,25 @@ import { RecipeEditor } from './RecipeEditor.tsx'
 import { ContentEditor } from './ContentEditor.tsx'
 import { GuiEditor } from './GuiEditor.tsx'
 import { TextureStudio } from './TextureStudio.tsx'
+import { TextureWorkspace } from './TextureWorkspace.tsx'
 import { ModelEditor } from './ModelEditor.tsx'
 
-type Module = 'overview' | 'content' | 'textures' | 'recipe' | 'gui' | 'model' | 'build' | 'game' | 'tests' | 'reports'
+type Module = 'overview' | 'content' | 'textures' | 'paint' | 'recipe' | 'gui' | 'model' | 'build' | 'game' | 'tests' | 'reports'
 const modules: Array<{ id: Module; label: string; icon: string }> = [
-  { id: 'overview', label: '概览', icon: '⌂' }, { id: 'content', label: '内容', icon: '◇' }, { id: 'textures', label: '贴图', icon: '▩' }, { id: 'recipe', label: '配方', icon: '▦' },
+  { id: 'overview', label: '概览', icon: '⌂' }, { id: 'content', label: '内容', icon: '◇' }, { id: 'textures', label: '贴图', icon: '▩' }, { id: 'paint', label: '纹理画板', icon: '▧' }, { id: 'recipe', label: '配方', icon: '▦' },
   { id: 'gui', label: '界面', icon: '▣' }, { id: 'model', label: '模型', icon: '⬡' }, { id: 'build', label: '构建', icon: '⚒' }, { id: 'game', label: '游戏', icon: '▶' },
   { id: 'tests', label: '测试', icon: '✓' }, { id: 'reports', label: '报告', icon: '▤' }
 ]
 const labels: Record<string, string> = { build: '构建', minecraft: 'Minecraft', minecraft_prepare: '准备测试世界', game_test: '游戏测试', running: '进行中', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '服务重启时中断', present: '已准备', missing: '尚未准备', invalid: '需要更新或修复', PASS: '通过', FAIL: '未通过', INCONCLUSIVE: '暂时无法验证' }
 const empty: CoreRuntimeState = { contractVersion: 1, jobs: [], instances: [] }
+class WorkspaceBoundary extends React.Component<React.PropsWithChildren, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  render() {
+    if (!this.state.error) return this.props.children
+    return <section className="panel" role="alert"><h2>这个工作区加载失败</h2><p>侧边栏仍然可用；可以切换到其他工作区，或清除本页草稿后重试。</p><pre>{this.state.error.message}</pre><button onClick={() => this.setState({ error: null })}>重试</button></section>
+  }
+}
 function Badge({ value }: { value: string }) { return <span title={value} className={`badge badge-${value}`}>{labels[value] || value}</span> }
 function download(value: unknown, name: string) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }))
@@ -181,6 +190,7 @@ export function App() {
     if (activeModule === 'overview') return overview()
     if (activeModule === 'content') return project?.valid ? <ContentEditor key={`${sessionId}:content:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>内容工作区</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'textures') return project?.valid ? <TextureStudio key={`${sessionId}:textures:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>贴图工作区</h2><p>请先关联一个有效工程。</p></section>
+    if (activeModule === 'paint') return project?.valid ? <TextureWorkspace key={`${sessionId}:paint:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>纹理画板</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'recipe') return project?.valid ? <RecipeEditor key={`${sessionId}:recipe:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>配方工作区</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'gui') return project?.valid ? <GuiEditor key={`${sessionId}:gui:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>界面工作区</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'model') return project?.valid ? <ModelEditor key={`${sessionId}:model:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>模型工作区</h2><p>请先关联一个有效工程。</p></section>
@@ -199,7 +209,7 @@ export function App() {
     {(pending || notice) && <div role="status" className="message top-message">{pending ? `${pending}…` : notice}</div>}
     <div className="workbench-shell"><aside className="workbench-sidebar" aria-label="工作区导航"><p className="eyebrow">工作区</p>{modules.map(row => <button key={row.id} aria-current={activeModule === row.id ? 'page' : undefined} onClick={() => navigate(row.id)}><span aria-hidden>{row.icon}</span>{row.label}{currentTask?.recommendedModules.includes(row.id) && <i title="Agent 当前推荐" />}</button>)}<details><summary>更多工具</summary><p className="muted">知识库和 Fabric 工具由聊天 Agent 按任务调用。日志收在页面底部的诊断区。</p></details></aside>
       <main className="workbench-main"><div className="module-heading"><div><p className="eyebrow">{project?.minecraftVersion ? `FABRIC ${project.minecraftVersion}` : 'MODCRAFTING FABRIC'}</p><h1>{modules.find(row => row.id === activeModule)?.label}</h1></div><div><strong>{currentTask?.phase || '等待任务阶段'}</strong><small>Agent 推荐：{currentTask?.recommendedModules.map(id => modules.find(row => row.id === id)?.label || id).join('、') || '概览'}</small></div></div>
-        {moduleContent}
+        <WorkspaceBoundary key={`${sessionId}:${activeModule}`}>{moduleContent}</WorkspaceBoundary>
         <details className="panel diagnostics"><summary>诊断与日志 · {sessionJobs.length} 个会话任务</summary>{sessionJobs.toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => void run('读取报告', async () => setReport(await request(`/api/report/${encodeURIComponent(job.id)}`))) } />)}</details>
       </main>
     </div>

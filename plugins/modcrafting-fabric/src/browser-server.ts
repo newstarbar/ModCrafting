@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, isPng } from '../../../packages/modcrafting-core/src/index.ts'
+import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, guiTextureWorkspace, guiTextureRequestSchema, isPng } from '../../../packages/modcrafting-core/src/index.ts'
 import { guiWorkspace, guiRequestSchema } from '../../../packages/modcrafting-core/src/gui-workspace.ts'
 import { visualAssets } from '../../../packages/modcrafting-core/src/visual-assets.ts'
 import { gameTestTemplate, gameTestSpecSchema, testProfileSchema, type GameFeatureType } from '../../../packages/modcrafting-core/src/domain.ts'
@@ -29,7 +29,8 @@ const actionSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('runtime'), instanceId: instanceId.optional() }).strict(),
   z.object({ operation: z.literal('snapshot'), instanceId: instanceId.optional() }).strict(),
   z.object({ operation: z.literal('screenshot'), instanceId: instanceId.optional() }).strict(),
-  z.object({ operation: z.literal('test'), instanceId: instanceId.optional(), spec: gameTestSpecSchema }).strict()
+  z.object({ operation: z.literal('test'), instanceId: instanceId.optional(), spec: gameTestSpecSchema }).strict(),
+  z.object({ operation: z.literal('gui-texture'), request: guiTextureRequestSchema }).strict()
 ])
 export type BrowserAction = z.input<typeof actionSchema>
 export type BrowserAssets = { html: string; js: string; css: string }
@@ -151,6 +152,7 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
         case 'run': value = runtime.runClient(action.projectPath, undefined, sessionId); break
         case 'stop': value = runtime.stopJob(action.jobId, sessionId); break
         case 'runtime': value = await runtime.runtimeStatus(action.instanceId, sessionId); break
+        case 'gui-texture': value = guiTextureWorkspace(action.request); break
         case 'snapshot': value = await runtime.snapshot(action.instanceId, undefined, sessionId); break
         case 'test': value = runtime.startTest(action.spec, action.instanceId, sessionId); break
         case 'screenshot': {

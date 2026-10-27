@@ -1,6 +1,10 @@
 import { generateCustomBlockBundle, generateCustomFoodBundle, generateCustomItemBundle, type GeneratedAsset, type GeneratedFile } from './template-codegen.ts'
 import { compileVoxel } from './voxel-codegen.ts'
 import type { ContentObject } from './content-model.ts'
+import { entityBoxMotion, layoutEntityBoxes, orderedEntityBoxes } from './entity-appearance.ts'
+
+const javaFloat = (value: number) => Number.isInteger(value) ? `${value}.0f` : `${value}f`
+const javaRadians = (degrees: number) => `(float) Math.toRadians(${Number.isInteger(degrees) ? `${degrees}.0` : degrees})`
 
 /** Isolate each supported object; never patch a handwritten initializer or aggregate ModItems class. */
 export function generateContent(value: ContentObject, splitClient = false): { files: GeneratedFile[]; assets: GeneratedAsset[]; main: string; client?: string; langKey: string; previewPng?: Buffer } {
@@ -67,7 +71,9 @@ public class ModItems {
 `
   }
   if (value.kind === 'entity') {
-    const zombie = p.baseEntity === 'zombie', cls = zombie ? 'ZombieEntity' : 'PigEntity', entityPkg = zombie ? 'mob' : 'passive', renderer = zombie ? 'ZombieEntityRenderer' : 'PigEntityRenderer', state = zombie ? 'ZombieEntityRenderState' : 'PigEntityRenderState'
+    const zombie = p.baseEntity === 'zombie', cls = zombie ? 'ZombieEntity' : 'PigEntity', entityPkg = zombie ? 'mob' : 'passive'
+    const custom = value.appearance?.mode === 'custom'
+    const clientFolder = `${splitClient ? 'src/client/java' : 'src/main/java'}/${folder}`
     files.push({ path: `${java}/ContentEntity.java`, content: `package ${pkg};
 import net.minecraft.entity.*;
 import net.minecraft.entity.${entityPkg}.${cls};
@@ -92,7 +98,76 @@ public class ModEntities {
         FabricDefaultAttributeRegistry.register(VALUE, ${cls}.${zombie ? 'createZombieAttributes' : 'createPigAttributes'}().add(EntityAttributes.MAX_HEALTH, ${p.health}).add(EntityAttributes.MOVEMENT_SPEED, ${p.movementSpeed}).add(EntityAttributes.ATTACK_DAMAGE, ${p.attackDamage}));
     }
 }
-` }, { path: `${splitClient ? 'src/client/java' : 'src/main/java'}/${folder}/ContentClient.java`, content: `package ${pkg};
+` })
+    if (custom) {
+      const boxes = value.appearance!.boxes as import('./entity-appearance.ts').EntityBox[]
+      const layout = layoutEntityBoxes(boxes, value.appearance!.textureSize as import('./entity-appearance.ts').EntityTextureSize)
+      const ordered = orderedEntityBoxes(boxes)
+      const byId = new Map(boxes.map(box => [box.id, box]))
+      const parts = ordered.map(box => {
+        const region = layout.regions.find(region => region.boxId === box.id)!
+        const origin = box.origin.map((value, axis) => value - box.pivot[axis])
+        const parent = box.parent ? byId.get(box.parent)! : undefined
+        // Only root parts receive vanilla's +24px foot offset; descendants use parent-relative pivots.
+        const pivot = box.pivot.map((value, axis) => value - (parent?.pivot[axis] ?? 0) + (!parent && axis === 1 ? 24 : 0))
+        return `        ModelPartData part_${box.id} = ${parent ? `part_${parent.id}` : 'root'}.addChild("${box.id}", ModelPartBuilder.create().uv(${region.u}, ${region.v})${box.mirror ? '.mirrored()' : ''}.cuboid(${origin.map(javaFloat).join(', ')}, ${box.size.map(javaFloat).join(', ')}), ModelTransform.of(${pivot.map(javaFloat).join(', ')}, ${box.rotation.map(javaRadians).join(', ')}));`
+      }).join('\n')
+      const fields = ordered.map(box => `    private final ModelPart part_${box.id};`).join('\n')
+      const bind = ordered.map(box => `        this.part_${box.id} = ${box.parent ? `this.part_${box.parent}` : 'this.root'}.getChild("${box.id}");`).join('\n')
+      const poses = ordered.flatMap(box => {
+        const motion = entityBoxMotion(box)
+        const swing = ({ none: '', walk_left: 'wave * 0.7f', walk_right: '-wave * 0.7f', knee_left: 'Math.max(0.0f, -wave) * 0.9f', knee_right: 'Math.max(0.0f, wave) * 0.9f', arm_left: '-wave * 0.35f', arm_right: 'wave * 0.35f' })[motion]
+        return [
+          ...(swing ? [`        part_${box.id}.pitch += (${swing}) * amplitude;`] : []),
+          ...(box.deathRotation ?? []).flatMap((degrees, axis) => degrees ? [`        part_${box.id}.${['pitch', 'yaw', 'roll'][axis]} += ${javaRadians(degrees)} * death;`] : [])
+        ]
+      }).join('\n')
+      files.push({ path: `${clientFolder}/ContentEntityModel.java`, content: `package ${pkg};
+import net.minecraft.client.model.*;
+import net.minecraft.client.render.entity.model.EntityModel;
+import net.minecraft.client.render.entity.state.LivingEntityRenderState;
+public class ContentEntityModel extends EntityModel<LivingEntityRenderState> {
+${fields}
+    public ContentEntityModel() {
+        super(createTexturedModelData().createModel());
+${bind}
+    }
+    private static TexturedModelData createTexturedModelData() {
+        ModelData data = new ModelData();
+        ModelPartData root = data.getRoot();
+${parts}
+        return TexturedModelData.of(data, ${layout.textureSize[0]}, ${layout.textureSize[1]});
+    }
+    @Override public void setAngles(LivingEntityRenderState state) {
+        super.setAngles(state);
+        float t = Math.max(0.0f, Math.min(1.0f, state.deathTime / 20.0f));
+        float death = t * t * (3.0f - 2.0f * t);
+        float wave = (float) Math.cos(state.limbFrequency);
+        float amplitude = state.limbAmplitudeMultiplier * (1.0f - death);
+${poses}
+    }
+}
+` }, { path: `${clientFolder}/ContentEntityRenderer.java`, content: `package ${pkg};
+import net.minecraft.client.render.entity.EntityRendererFactory;
+import net.minecraft.client.render.entity.LivingEntityRenderer;
+import net.minecraft.client.render.entity.state.LivingEntityRenderState;
+import net.minecraft.util.Identifier;
+public class ContentEntityRenderer extends LivingEntityRenderer<ContentEntity, LivingEntityRenderState, ContentEntityModel> {
+    public ContentEntityRenderer(EntityRendererFactory.Context context) { super(context, new ContentEntityModel(), 0.5f); }
+    @Override public Identifier getTexture(LivingEntityRenderState state) { return Identifier.of("${value.texture.split(':')[0]}", "textures/${value.texture.split(':')[1]}.png"); }
+    @Override public LivingEntityRenderState createRenderState() { return new LivingEntityRenderState(); }
+}
+` })
+      files.push({ path: `${clientFolder}/ContentClient.java`, content: `package ${pkg};
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+public class ContentClient implements ClientModInitializer {
+    public void onInitializeClient() { EntityRendererRegistry.register(ModEntities.VALUE, ContentEntityRenderer::new); }
+}
+` })
+    } else {
+      const renderer = zombie ? 'ZombieEntityRenderer' : 'PigEntityRenderer', state = zombie ? 'ZombieEntityRenderState' : 'PigEntityRenderState'
+      files.push({ path: `${clientFolder}/ContentClient.java`, content: `package ${pkg};
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.minecraft.client.render.entity.${renderer};
@@ -106,6 +181,7 @@ public class ContentClient implements ClientModInitializer {
     }
 }
 ` })
+    }
     init = 'ModEntities.registerModEntities();'; client = pkg + '.ContentClient'
   } else files.push({ path: `src/main/resources/assets/${modId}/items/${name}.json`, content: JSON.stringify({ model: { type: 'minecraft:model', model: `${modId}:item/${name}` } }, null, 2) + '\n' })
   files.push({ path: `${java}/Content.java`, content: `package ${pkg};

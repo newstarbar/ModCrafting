@@ -124,7 +124,8 @@ test('Cold asset preparation uses proxy fallback and the layouts consumed by Cor
     const source = path.join(f.root, 'zip-source', name), target = path.join(source, file)
     await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, data)
     const archive = path.join(f.root, `${name}.zip`)
-    const zip = spawnSync('tar', ['-a', '-cf', archive, '-C', source, file.split('/')[0]], { encoding: 'utf8', windowsHide: true, timeout: 5000 })
+    // Relative output avoids GNU tar treating the C: drive in -f as a remote host; Core extracts fixtures with the same tar.
+    const zip = spawnSync('tar', ['-a', '-cf', `${name}.zip`, '-C', source, file.split('/')[0]], { cwd: f.root, encoding: 'utf8', windowsHide: true, timeout: 5000 })
     assert.equal(zip.status, 0, zip.stderr)
     archives.set(`${name}.zip`, new Uint8Array(await readFile(archive)))
   }
@@ -140,7 +141,7 @@ test('Cold asset preparation uses proxy fallback and the layouts consumed by Cor
   }
   try {
     const result = await f.runtime.prepareAssets()
-    assert.equal(result.ok, true); assert.equal(proxyAttempts, 4); assert.equal(directAttempts, 4)
+    assert.equal(result.ok, true, JSON.stringify(result.assets)); assert.equal(proxyAttempts, 4); assert.equal(directAttempts, 4)
     assert.ok(result.localAssets.filter(row => row.name !== 'base-mods').every((row) => row.status === 'present'))
     assert.equal(result.localAssets.find(row => row.name === 'base-mods')?.status, 'missing')
     assert.equal(lookupMinecraftData(f.paths, 'item', 'stone').ok, true)
@@ -235,7 +236,7 @@ test('A queued game test keeps its session-owned instance while another project 
   const result = await finished(f.runtime, testJob.jobId)
   assert.equal(result.status, 'completed'); assert.equal(result.result?.verdict, 'PASS')
   assert.equal(observerA.requests.filter((row) => row.api === '/v2/command').length, 2)
-  assert.equal(observerB.requests.length, 0)
+  assert.equal(observerB.requests.filter((row) => ['/v2/command', '/v2/snapshot'].includes(row.api)).length, 0, 'the queued test must not drive the other session bridge')
   const saved = JSON.parse(await readFile(String(result.result?.reportPath), 'utf8'))
   assert.equal(saved.instanceId, a.instanceId); assert.equal(saved.gameDirectory, a.gameDirectory)
   assert.equal(JSON.stringify(saved).includes('fixture-private-token'), false)

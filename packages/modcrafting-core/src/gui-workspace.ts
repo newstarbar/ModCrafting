@@ -85,6 +85,10 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: GuiLay
     const items = recipeWorkspace(paths, { action: 'catalog', projectPath: root }).items as RecipeItem[]
     for (const element of customSlots) if (!items.some(item => item.id === element.itemId)) fail('INVALID_GUI_ITEM', '展示物品未出现在工程资源目录中：' + element.itemId)
   }
+  for (const element of value.elements.filter(element => element.type === 'image' && element.texture && !element.texture.startsWith('minecraft:'))) {
+    const [namespace, ...parts] = element.texture!.split(':'), relative = `src/main/resources/assets/${namespace}/textures/${parts.join(':')}.png`
+    if (namespace !== modId || !bytes(root, relative)) fail('GUI_TEXTURE_MISSING', '界面图片纹理不存在：' + element.texture + '（请先在纹理工作区绘制并保存）')
+  }
   const generated = generateGui(value, split(root)), metadataFile = shared(modId)[0], metadata = object(root, metadataFile)
   if (!exists) for (const target of generated.files) if (bytes(root, target.path)) fail('GUI_READ_ONLY', '已有文件不受此编辑器管理，不能覆盖：' + target.path)
   const client = clients(metadata); metadata.entrypoints = { ...metadata.entrypoints, client: client.includes(generated.client) ? client : [...client, generated.client] }
