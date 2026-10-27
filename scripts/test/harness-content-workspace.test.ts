@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, linkSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, linkSync, symlinkSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { createRuntimePaths, ensureRuntimePaths, contentWorkspace, newContentObject, contentObjectSchema, contentKinds, type ContentRequest, type ContentDocument, type ContentObject } from '../../packages/modcrafting-core/src/index.ts'
 
@@ -9,8 +9,8 @@ function fixture() {
   ensureRuntimePaths(paths); mkdirSync(path.join(project, 'src/main/resources'), { recursive: true })
   writeFileSync(path.join(project, 'src/main/resources/fabric.mod.json'), JSON.stringify({ schemaVersion: 1, id: 'content_test', version: '1', depends: { minecraft: '1.21.4' }, entrypoints: { main: ['custom.Existing', { adapter: 'kotlin', value: 'custom.Kotlin' }] } }))
   writeFileSync(path.join(project, 'gradlew.bat'), '@echo fixture'); writeFileSync(path.join(project, 'gradle.properties'), 'minecraft_version=1.21.4\n')
-  mkdirSync(path.join(paths.knowledgeRoot, 'minecraft-data/1.21.4'), { recursive: true })
-  writeFileSync(path.join(paths.knowledgeRoot, 'minecraft-data/1.21.4/index.json'), JSON.stringify({ itemsById: Object.fromEntries(['iron_ingot', 'apple', 'iron_pickaxe', 'iron_chestplate', 'diamond_sword', 'diamond_pickaxe', 'diamond_chestplate'].map(id => ['minecraft:' + id, { id: 'minecraft:' + id, name: id }])), blocksById: { 'minecraft:stone': { id: 'minecraft:stone', hardness: 1.5 } }, entitiesById: { 'minecraft:pig': { id: 'minecraft:pig' }, 'minecraft:zombie': { id: 'minecraft:zombie' } } }))
+  mkdirSync(path.join(project, '.modcrafting/knowledge/minecraft-data/1.21.4'), { recursive: true })
+  writeFileSync(path.join(project, '.modcrafting/knowledge/minecraft-data/1.21.4/index.json'), JSON.stringify({ itemsById: Object.fromEntries(['iron_ingot', 'apple', 'iron_pickaxe', 'iron_chestplate', 'diamond_sword', 'diamond_pickaxe', 'diamond_chestplate'].map(id => ['minecraft:' + id, { id: 'minecraft:' + id, name: id }])), blocksById: { 'minecraft:stone': { id: 'minecraft:stone', hardness: 1.5 } }, entitiesById: { 'minecraft:pig': { id: 'minecraft:pig' }, 'minecraft:zombie': { id: 'minecraft:zombie' } } }))
   const call = (args: Record<string, unknown>) => contentWorkspace(paths, { projectPath: project, ...args } as ContentRequest)
   const preview = (value: ContentObject, expectedRevision: string | null = null) => call({ action: 'preview', value, expectedRevision })
   const save = (value: ContentObject, expectedRevision: string | null = null) => call({ action: 'save', value, expectedRevision, previewRevision: preview(value, expectedRevision).previewRevision }).document as ContentDocument
@@ -24,7 +24,7 @@ test('Content templates expose all validated defaults without writing project fi
     assert.deepEqual(template.value, newContentObject(kind, 'content_test'))
     assert.ok(Array.isArray(template.fields) && template.fields.length > 0)
   }
-  assert.equal(existsSync(path.join(f.project, '.modcrafting')), false)
+  assert.equal(existsSync(path.join(f.project, '.modcrafting/content')), false)
 })
 
 test('Six declarative types round-trip without replacing existing entrypoints, sources or other objects', () => {
@@ -45,7 +45,7 @@ test('Six declarative types round-trip without replacing existing entrypoints, s
 })
 test('Preview is read-only, mandatory on save, and detects changes in shared files after confirmation', () => {
   const f = fixture(), planned = f.preview(f.value)
-  assert.equal(existsSync(path.join(f.project, '.modcrafting')), false)
+  assert.equal(existsSync(path.join(f.project, '.modcrafting/content')), false)
   const file = path.join(f.project, 'src/main/resources/fabric.mod.json'), content = readFileSync(file, 'utf8'); writeFileSync(file, content + '\n')
   assert.throws(() => f.call({ action: 'save', value: f.value, expectedRevision: null, previewRevision: planned.previewRevision }), /预览后/)
   assert.equal(existsSync(path.join(f.project, '.modcrafting/content/new_item.json')), false)
@@ -66,7 +66,7 @@ test('Unsupported handwritten resources, invalid parameters and linked directori
   const block = newContentObject('block', 'content_test'); block.parameters.hardness = -0.5
   assert.equal(contentObjectSchema.safeParse(block).success, false)
   assert.throws(() => f.preview({ ...f.value, id: 'content_test:../escape' }))
-  const outside = path.join(f.root, 'outside'); mkdirSync(outside); symlinkSync(outside, path.join(f.project, '.modcrafting'), 'junction')
+  const outside = path.join(f.root, 'outside'); mkdirSync(outside); rmSync(path.join(f.project, '.modcrafting'), { recursive: true, force: true }); symlinkSync(outside, path.join(f.project, '.modcrafting'), 'junction')
   assert.throws(() => f.call({ action: 'list' }), /链接|junction/)
 })
 test('A late hard-link conflict rolls back only newly written owned files and preserves user files', () => {

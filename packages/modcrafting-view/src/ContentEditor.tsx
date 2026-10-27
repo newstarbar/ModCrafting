@@ -78,13 +78,15 @@ export function ContentEditor({ projectPath, modId }: { projectPath: string; mod
           </div>
           {draft.kind === 'tool' && draft.parameters.toolType === 'sword' && <p className="muted">剑使用原版剑的挖掘规则，不应用采集工具的挖掘速度参数。</p>}
           <p className="muted" role="status">{visuals.loading ? '正在读取本地素材…' : visuals.ready ? showImage ? '已读取关联贴图' : '此资源没有可用贴图，请核对纹理路径或工程 PNG。' : visuals.message}<button disabled={visuals.loading} onClick={visuals.retry}>重新读取贴图</button></p>
-          <label>关联纹理<input aria-label="关联纹理" disabled={busy} value={draft.texture} onChange={event => change({ ...draft, texture: event.target.value })} /></label><p className="muted">{draft.texture} → {`assets/${draft.texture.replace(':', '/textures/')}.png`}。原版资源由游戏提供；自定义 PNG 须已放入工程，应用后可读回实际纹理。生物纹理沿用所选基型布局。</p>
+          {draft.voxel ? <p className="muted">此对象使用 3D 体素模型，纹理图集由插件自动生成（{draft.texture}）。请到“模型”页编辑外观，本页只调参数。</p> : <>
+            <label>关联纹理<input aria-label="关联纹理" disabled={busy} value={draft.texture} onChange={event => change({ ...draft, texture: event.target.value })} /></label><p className="muted">{draft.texture} → {`assets/${draft.texture.replace(':', '/textures/')}.png`}。原版资源由游戏提供；自定义 PNG 须已放入工程，应用后可读回实际纹理。生物纹理沿用所选基型布局。</p>
+          </>}
           {issues.length > 0 && <p className="error" role="alert">{issues.map(issue => issue.message).join('；')}</p>}
           <div className="row content-save"><button disabled={busy || !validation.success} onClick={() => void run(async () => { setPreview(await request({ action: 'preview', value: draft, expectedRevision: document?.revision ?? null })); setMessage('已生成待应用变更，确认文件后应用') })}>预览参数变更</button><button className="primary" disabled={busy || !preview || !validation.success} onClick={() => void run(async () => {
             const value = (await request({ action: 'save', value: draft, expectedRevision: document?.revision ?? null, previewRevision: preview!.previewRevision! })).document!
             setDocument(value); setDraft(value.value!); setDirty(false); setPreview(undefined); await refresh(); setMessage('参数已写入并读回。Agent 可通过 fabric_content_workspace 接续；重新构建/启动游戏后验证实际属性。')
           })}>确认应用到工程</button>{document && <button disabled={busy} onClick={() => void run(() => load(document))}>重新加载参数</button>}</div>
-          {preview && <div className="content-diff"><h3>将应用到 {draft.id}</h3>{preview.files?.filter(file => file.before !== file.after).map(file => <details key={file.path}><summary>{file.before === null ? '新建' : '更新'} · {file.path}</summary><div className="columns"><div><h4>当前文件</h4><pre>{file.before ?? '尚不存在，不覆盖其他文件'}</pre></div><div><h4>待应用内容</h4><pre>{file.after}</pre></div></div></details>)}</div>}
+          {preview && <div className="content-diff"><h3>将应用到 {draft.id}</h3>{preview.files?.filter(file => file.before !== file.after).map(file => <details key={file.path}><summary>{file.before === null ? '新建' : '更新'} · {file.path}</summary>{file.binary ? <div className="binary-diff"><img src={`data:image/png;base64,${file.after}`} alt={file.path} /><p className="muted">二进制 PNG · {file.size} 字节</p></div> : <div className="columns"><div><h4>当前文件</h4><pre>{file.before ?? '尚不存在，不覆盖其他文件'}</pre></div><div><h4>待应用内容</h4><pre>{file.after}</pre></div></div>}</details>)}</div>}
         </>}
         {error && <p role="alert" className="message error">{error}</p>}{message && <p role="status" className="connected">{message}</p>}
       </div>

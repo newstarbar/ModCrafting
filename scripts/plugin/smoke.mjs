@@ -77,6 +77,8 @@ for (const valid of [true, false]) {
   await writeFile(path.join(project, 'gradlew.bat'), '@echo off\r\nexit /b 99\r\n') // Never executed: metadata only.
   await writeFile(path.join(project, 'gradle.properties'), 'minecraft_version=1.21.4\n')
 }
+const textureSource = path.join(fixtures, 'texture.png')
+await writeFile(textureSource, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAI0lEQVR4XmP4z/D/PyV4OBowLeoEXoyuftSA4WkAqXgYGAAAJELrn3xHf+oAAAAASUVORK5CYII=', 'base64'))
 const call = async (client, name, args = {}) => {
   const value = await bounded(client.callTool({ name, arguments: args }), `tools/call ${name}`)
   const decoded = value.structuredContent || JSON.parse(value.content.find((entry) => entry.type === 'text').text)
@@ -91,12 +93,22 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures }, async (client, transpo
   toolCount = tools.length
   const names = tools.map((tool) => tool.name)
   assert.equal(new Set(names).size, names.length)
-  for (const name of ['modcrafting_session', 'modcrafting_test_profile', 'minecraft_test_template', 'modcrafting_environment_status', 'fabric_project_inspect', 'fabric_validate', 'fabric_recipe_workspace', 'fabric_content_workspace', 'fabric_gui_workspace', 'minecraft_test_start', 'minecraft_test_status']) assert.ok(names.includes(name), `Missing ${name}`)
+  for (const name of ['modcrafting_session', 'modcrafting_test_profile', 'minecraft_test_template', 'modcrafting_environment_status', 'fabric_project_inspect', 'fabric_validate', 'fabric_recipe_workspace', 'fabric_content_workspace', 'fabric_texture_workspace', 'fabric_gui_workspace', 'minecraft_test_start', 'minecraft_test_status', 'minecraft_build_studio']) assert.ok(names.includes(name), `Missing ${name}`)
   const ajv = new Ajv({ strict: false, validateFormats: false })
   for (const tool of tools) assert.equal(ajv.validateSchema(tool.inputSchema), true, `Invalid schema: ${tool.name}`)
   assert.equal((await call(client, 'fabric_gui_workspace', { action: 'template', projectPath: path.join(fixtures, 'valid'), layoutType: 'hud-overlay' })).value.layoutType, 'hud-overlay');
   assert.deepEqual((await call(client, 'fabric_gui_workspace', { action: 'list', projectPath: path.join(fixtures, 'valid') })).documents, []);
   const content = await call(client, 'fabric_content_workspace', { action: 'list', projectPath: path.join(fixtures, 'valid') }); assert.ok(content.ok);
+  const texture = await call(client, 'fabric_texture_workspace', { action: 'prompt', projectPath: path.join(fixtures, 'valid'), description: 'copper sword', itemId: 'smoke_fixture:copper_sword', size: 16 });
+  assert.equal(texture.target.textureId, 'smoke_fixture:item/copper_sword');
+  assert.match(texture.prompt, /16x16/);
+  const importedTexture = await call(client, 'fabric_texture_workspace', { action: 'import', projectPath: path.join(fixtures, 'valid'), textureId: 'smoke_fixture:item/smoke_texture', sourcePath: textureSource, options: { size: 16, background: 'auto', trim: true, padding: 1, pixelize: false, paletteSize: 12, outline: 0 } });
+  assert.ok(importedTexture.candidateId); assert.ok(importedTexture.image.startsWith('data:image/png;base64,'));
+  const texturePreview = await call(client, 'fabric_texture_workspace', { action: 'preview', projectPath: path.join(fixtures, 'valid'), textureId: 'smoke_fixture:item/smoke_texture', pixelsBase64: importedTexture.pixels.base64, width: 16, height: 16, analyzeOnly: true });
+  assert.match(texturePreview.previewRevision, /^[a-f0-9]{64}$/);
+  const savedTexture = await call(client, 'fabric_texture_workspace', { action: 'save', projectPath: path.join(fixtures, 'valid'), textureId: 'smoke_fixture:item/smoke_texture', pixelsBase64: importedTexture.pixels.base64, width: 16, height: 16, expectedRevision: null, previewRevision: texturePreview.previewRevision });
+  assert.equal(savedTexture.ok, true); assert.match(savedTexture.revision, /^[a-f0-9]{64}$/);
+  assert.equal((await call(client, 'fabric_texture_workspace', { action: 'read', projectPath: path.join(fixtures, 'valid'), textureId: 'smoke_fixture:item/smoke_texture' })).exists, true);
   const environment = await call(client, 'modcrafting_environment_status')
   assert.equal(environment.platform, process.platform)
   assert.equal(environment.target.minecraft, '1.21.4')
@@ -113,6 +125,9 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures }, async (client, transpo
   const created = await call(client, 'fabric_project_scaffold', { projectPath: newProject, modId: 'new_scaffold', modName: 'New Scaffold' })
   assert.equal(created.project.valid, true)
   sessionId = (await call(client, 'modcrafting_session', { action: 'create', name: 'MCP protocol smoke', projectPath: newProject })).session.sessionId
+  const studio = await call(client, 'minecraft_build_studio', { action: 'status', sessionId })
+  assert.equal(studio.ok, false)
+  assert.ok(['INSTANCE_UNAVAILABLE', 'BUILDER_UNAVAILABLE'].includes(studio.code), `Unexpected studio status code: ${studio.code}`)
   assert.deepEqual((await call(client, 'fabric_recipe_workspace', { action: 'list', projectPath: newProject })).recipes, [])
   assert.equal((await readFile(path.join(newProject, 'gradle/wrapper/gradle-wrapper.jar'))).subarray(0, 2).toString(), 'PK')
   assert.match(await readFile(path.join(newProject, 'gradle/wrapper/gradle-wrapper.properties'), 'utf8'), /distributionSha256Sum=[a-f0-9]{64}/)

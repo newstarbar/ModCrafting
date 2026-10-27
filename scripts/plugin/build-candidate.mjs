@@ -25,14 +25,15 @@ const script = (label, file, args = []) => run(label, process.execPath, [path.jo
 const lastJson = (text) => JSON.parse(text.trim().split(/\r?\n/).filter((line) => line.startsWith('{')).at(-1))
 const bench = lastJson(script('bench-build', 'scripts/bench/build.mjs')).outputDirectory
 if (process.platform !== 'win32') throw Error('Observer candidate build currently supports Windows x64 only')
+const builder = lastJson(script('builder-build', 'scripts/plugin/build-builder.mjs', values.offline ? ['--offline'] : []))
 run('observer-build', 'cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat', 'build', '--no-daemon', ...(values.offline ? ['--offline'] : [])], path.join(root, 'bridge-mod'))
 const properties = readFileSync(path.join(root, 'bridge-mod/gradle.properties'), 'utf8')
 const version = properties.match(/^mod_version=([\w.+-]+)$/m)?.[1], name = properties.match(/^archives_base_name=([\w-]+)$/m)?.[1]
 if (!version || !name) throw Error('Invalid Observer artifact identity')
 const observer = path.join(root, 'bridge-mod/build/libs', `${name}-${version}.jar`), sources = path.join(root, 'bridge-mod/build/libs', `${name}-${version}-sources.jar`)
 if (!existsSync(observer) || !existsSync(sources)) throw Error('Observer build did not produce runtime and source jars')
-script('plugin-build', 'scripts/plugin/build.mjs', ['--observer-jar', observer]); script('plugin-stage', 'scripts/plugin/stage.mjs')
+script('plugin-build', 'scripts/plugin/build.mjs', ['--observer-jar', observer, '--builder-jar', builder.jar]); script('plugin-stage', 'scripts/plugin/stage.mjs')
 const product = lastJson(script('product-stage', 'scripts/plugin/stage-product.mjs', ['--bench-dir', bench, '--observer-jar', observer, '--observer-sources', sources])).directory
 const distribution = lastJson(script('host-stage', 'scripts/plugin/stage-hosts.mjs', ['--product-dir', product]))
-const result = { ok: true, directory, product, distribution: distribution.directory, coreBundleSha256: distribution.coreBundleSha256, offlineGradle: Boolean(values.offline), sourcePolicy: 'current checkout only; no historical temp artifacts', nativeHostAcceptance: false }
+const result = { ok: true, directory, product, distribution: distribution.directory, coreBundleSha256: distribution.coreBundleSha256, builder: { version: builder.version, sha256: builder.sha256 }, offlineGradle: Boolean(values.offline), sourcePolicy: 'current checkout only; no historical temp artifacts', nativeHostAcceptance: false }
 writeFileSync(path.join(directory, 'candidate.json'), JSON.stringify(result, null, 2) + '\n', { flag: 'wx' }); console.log(JSON.stringify(result))

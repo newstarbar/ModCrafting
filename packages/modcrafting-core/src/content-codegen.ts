@@ -1,13 +1,16 @@
-import { generateCustomBlockBundle, generateCustomFoodBundle, generateCustomItemBundle, type GeneratedFile } from './template-codegen.ts'
+import { generateCustomBlockBundle, generateCustomFoodBundle, generateCustomItemBundle, type GeneratedAsset, type GeneratedFile } from './template-codegen.ts'
+import { compileVoxel } from './voxel-codegen.ts'
 import type { ContentObject } from './content-model.ts'
 
 /** Isolate each supported object; never patch a handwritten initializer or aggregate ModItems class. */
-export function generateContent(value: ContentObject, splitClient = false): { files: GeneratedFile[]; main: string; client?: string; langKey: string } {
+export function generateContent(value: ContentObject, splitClient = false): { files: GeneratedFile[]; assets: GeneratedAsset[]; main: string; client?: string; langKey: string; previewPng?: Buffer } {
   const [modId, name] = value.id.split(':'), p = value.parameters
   const groupId = `modcrafting.generated.${modId.replaceAll('-', '_')}.o_${name}`, pkg = groupId + '.content', folder = pkg.replaceAll('.', '/')
   const config = { modId, groupId, javaPackage: 'content' }
   const input = { config, name, displayName: value.displayName, mcVersion: '1.21.4', formFields: { ...p, specialFeatures: 'none', customRender: 'no', hasDurability: Number(p.durability) > 0 ? 'yes' : 'no', isMeat: 'no' } }
   const main = pkg + '.Content', java = `src/main/java/${folder}`, files: GeneratedFile[] = []
+  const assets: GeneratedAsset[] = []
+  let previewPng: Buffer | undefined
   let init = '', client: string | undefined
   const base = value.kind === 'block' ? generateCustomBlockBundle(input) : value.kind === 'food' ? generateCustomFoodBundle(input) : value.kind === 'entity' ? undefined : generateCustomItemBundle({ ...input, formFields: { ...input.formFields, hasDurability: 'no', maxStackSize: p.maxStackSize ?? 1 } })
   if (base) {
@@ -21,6 +24,15 @@ export function generateContent(value: ContentObject, splitClient = false): { fi
       if (file.path.endsWith('ModItems.java') && value.kind === 'item' && Number(p.durability) > 0) file.content = file.content.replace(`.maxCount(${p.maxStackSize})`, `.maxCount(1).maxDamage(${p.durability})`)
       if (file.path.endsWith('ModItems.java') && value.kind === 'food') file.content = file.content.replace('new FoodComponent.Builder()', `new FoodComponent.Builder()${p.alwaysEdible ? '.alwaysEdible()' : ''}`).replace('new Item.Settings().registryKey(itemKey);', `new Item.Settings().registryKey(itemKey).maxCount(${p.maxStackSize});`)
     }
+  }
+  const voxel = value.voxel && (value.kind === 'block' || value.kind === 'item') ? compileVoxel(value) : null
+  if (voxel) {
+    for (const model of voxel.models) {
+      const target = files.find(file => file.path === model.path)
+      if (target) target.content = model.content
+    }
+    assets.push(...voxel.assets)
+    previewPng = voxel.previewPng
   }
   if (value.kind === 'tool' || value.kind === 'armor') {
     const imports = 'import net.minecraft.item.*;\nimport net.minecraft.item.equipment.*;\nimport java.util.Map;'
@@ -106,5 +118,5 @@ public class Content implements ModInitializer {
     public void onInitialize() { ${init} }
 }
 ` })
-  return { files, main, client, langKey: `${value.kind === 'entity' ? 'entity' : value.kind === 'block' ? 'block' : 'item'}.${modId}.${name}` }
+  return { files, assets, main, client, langKey: `${value.kind === 'entity' ? 'entity' : value.kind === 'block' ? 'block' : 'item'}.${modId}.${name}`, ...(previewPng ? { previewPng } : {}) }
 }

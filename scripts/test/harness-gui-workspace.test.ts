@@ -10,7 +10,7 @@ function fixture() {
   ensureRuntimePaths(paths); mkdirSync(path.join(project, 'src/main/resources'), { recursive: true })
   writeFileSync(path.join(project, 'src/main/resources/fabric.mod.json'), JSON.stringify({ schemaVersion: 1, id: 'gui_test', version: '1', entrypoints: { main: ['custom.Main'], client: [{ adapter: 'kotlin', value: 'custom.Client' }] } }))
   writeFileSync(path.join(project, 'gradlew.bat'), '@echo fixture'); writeFileSync(path.join(project, 'gradle.properties'), 'minecraft_version=1.21.4\n')
-  mkdirSync(path.join(paths.knowledgeRoot, 'minecraft-data/1.21.4'), { recursive: true }); writeFileSync(path.join(paths.knowledgeRoot, 'minecraft-data/1.21.4/index.json'), JSON.stringify({ itemsById: { 'minecraft:iron_ingot': { id: 'minecraft:iron_ingot' } } }))
+  mkdirSync(path.join(project, '.modcrafting/knowledge/minecraft-data/1.21.4'), { recursive: true }); writeFileSync(path.join(project, '.modcrafting/knowledge/minecraft-data/1.21.4/index.json'), JSON.stringify({ itemsById: { 'minecraft:iron_ingot': { id: 'minecraft:iron_ingot' } } }))
   const call = (value: Record<string, unknown>) => guiWorkspace(paths, { projectPath: project, ...value } as GuiRequest)
   const preview = (value: GuiLayout, expectedRevision: string | null = null) => call({ action: 'preview', value, expectedRevision })
   const save = (value: GuiLayout, expectedRevision: string | null = null) => call({ action: 'save', value, expectedRevision, previewRevision: preview(value, expectedRevision).previewRevision }).document as GuiDocument
@@ -19,7 +19,7 @@ function fixture() {
 test('Three GUI layout types round-trip with native client resources and preserve unrelated entrypoints', () => {
   const f = fixture()
   assert.deepEqual(f.call({ action: 'template', layoutType: 'custom-screen' }).value, f.value)
-  assert.equal(existsSync(path.join(f.project, '.modcrafting')), false)
+  assert.equal(existsSync(path.join(f.project, '.modcrafting/gui')), false)
   for (const [index, type] of (['custom-screen', 'option-list', 'hud-overlay'] as const).entries()) {
     const value = { ...newGuiLayout('gui_test', type), id: 'gui_test:layout_' + index, keyCode: 71 + index, elements: [newGuiElement('label', 'heading')] }
     const saved = f.save(value); assert.equal(saved.editable, true, saved.reason); assert.deepEqual(saved.value, value)
@@ -31,7 +31,7 @@ test('Three GUI layout types round-trip with native client resources and preserv
 })
 test('GUI preview never writes; shared-file changes and preview changes reject stale saves', () => {
   const f = fixture(), plan = f.preview(f.value)
-  assert.equal(existsSync(path.join(f.project, '.modcrafting')), false)
+  assert.equal(existsSync(path.join(f.project, '.modcrafting/gui')), false)
   writeFileSync(path.join(f.project, 'build.gradle'), '// Agent edit\n')
   assert.throws(() => f.call({ action: 'save', value: f.value, expectedRevision: null, previewRevision: plan.previewRevision }), /预览后/)
   assert.equal(existsSync(path.join(f.project, '.modcrafting/gui/new_screen.json')), false)

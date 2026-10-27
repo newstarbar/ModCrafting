@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { contentObjectSchema, contentKinds, contentForms, newContentObject, type ContentObject, type ContentDocument, type ContentFile } from './content-model.ts'
 import { generateContent } from './content-codegen.ts'
 import { inspectFabricProject, lookupMinecraftData } from './node.ts'
-import { CoreError } from './runtime.ts'
+import { CoreError, projectRuntimePaths } from './runtime.ts'
 import type { RuntimePaths } from './contracts.ts'
 
 const revisionSchema = z.string().regex(/^[a-f0-9]{64}$/)
@@ -70,7 +70,8 @@ function textureFile(value: ContentObject) {
   const [ns, name] = value.texture.split(':')
   return `src/main/resources/assets/${ns}/textures/${name}.png`
 }
-function previewImage(paths: RuntimePaths | undefined, root: string, value: ContentObject): string | undefined {
+function previewImage(paths: RuntimePaths | undefined, root: string, value: ContentObject, compiledPng?: Buffer): string | undefined {
+  if (compiledPng) return 'data:image/png;base64,' + compiledPng.toString('base64')
   const file = textureFile(value)
   const png = value.texture.startsWith('minecraft:')
     ? paths && bytes(paths.assetsRoot, `minecraft-textures/1.21.4/${file.slice('src/main/resources/'.length)}`)
@@ -78,26 +79,29 @@ function previewImage(paths: RuntimePaths | undefined, root: string, value: Cont
   return png && png.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'data:image/png;base64,' + png.toString('base64') : undefined
 }
 function validateResources(paths: RuntimePaths, root: string, value: ContentObject) {
-  const vanilla = value.texture.startsWith('minecraft:')
-  if (!vanilla) {
-    const png = bytes(root, textureFile(value))
-    if (!png || png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') fail('CONTENT_RESOURCE_MISSING', '工程纹理必须是已存在的 PNG：' + textureFile(value))
-  } else if (value.kind === 'entity') {
-    if (!['minecraft:entity/pig/pig', 'minecraft:entity/zombie/zombie'].includes(value.texture)) fail('CONTENT_RESOURCE_MISSING', '原版生物纹理目前支持猪或僵尸；其他纹理请放入工程')
-  } else {
-    const kind = value.texture.startsWith('minecraft:block/') ? 'block' : 'item'
-    if (!value.texture.startsWith(`minecraft:${kind}/`)) fail('CONTENT_RESOURCE_MISSING', '使用原版 item/ 或 block/ 纹理引用')
-    const query = 'minecraft:' + value.texture.split('/').slice(1).join('/')
-    if (!lookupMinecraftData(paths, kind, query).ok) fail('CONTENT_RESOURCE_MISSING', '知识库无法确认原版纹理关联：' + query)
+  const knowledge = projectRuntimePaths(paths, root)
+  if (!value.voxel) {
+    const vanilla = value.texture.startsWith('minecraft:')
+    if (!vanilla) {
+      const png = bytes(root, textureFile(value))
+      if (!png || png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') fail('CONTENT_RESOURCE_MISSING', '工程纹理必须是已存在的 PNG：' + textureFile(value))
+    } else if (value.kind === 'entity') {
+      if (!['minecraft:entity/pig/pig', 'minecraft:entity/zombie/zombie'].includes(value.texture)) fail('CONTENT_RESOURCE_MISSING', '原版生物纹理目前支持猪或僵尸；其他纹理请放入工程')
+    } else {
+      const kind = value.texture.startsWith('minecraft:block/') ? 'block' : 'item'
+      if (!value.texture.startsWith(`minecraft:${kind}/`)) fail('CONTENT_RESOURCE_MISSING', '使用原版 item/ 或 block/ 纹理引用')
+      const query = 'minecraft:' + value.texture.split('/').slice(1).join('/')
+      if (!lookupMinecraftData(knowledge, kind, query).ok) fail('CONTENT_RESOURCE_MISSING', '知识库无法确认原版纹理关联：' + query)
+    }
   }
   // Knowledge checks precede registration generation; missing data never becomes a guessed baseline.
   const baseline = value.kind === 'block' ? ['block', 'minecraft:stone'] : value.kind === 'entity' ? ['entity', `minecraft:${value.parameters.baseEntity}`] : ['item', value.kind === 'food' ? 'minecraft:apple' : 'minecraft:iron_ingot']
-  if (!lookupMinecraftData(paths, baseline[0] as 'block' | 'entity' | 'item', baseline[1]).ok) fail('ASSET_UNAVAILABLE', '原版基准知识不可用，请先准备知识数据')
+  if (!lookupMinecraftData(knowledge, baseline[0] as 'block' | 'entity' | 'item', baseline[1]).ok) fail('ASSET_UNAVAILABLE', '原版基准知识不可用，请先准备知识数据')
   if (value.kind === 'tool' || value.kind === 'armor') {
     const material = String(value.parameters.material)
     const prefix = material === 'wood' ? 'wooden' : material === 'gold' ? 'golden' : material
     const item = `minecraft:${prefix}_${value.kind === 'tool' ? value.parameters.toolType : value.parameters.armorType}`
-    if (!lookupMinecraftData(paths, 'item', item).ok) fail('ASSET_UNAVAILABLE', '知识库无法确认所选材质/部位基准：' + item)
+    if (!lookupMinecraftData(knowledge, 'item', item).ok) fail('ASSET_UNAVAILABLE', '知识库无法确认所选材质/部位基准：' + item)
   }
 }
 function readManaged(root: string, modId: string, id: string, image = false, paths?: RuntimePaths): ContentDocument {
@@ -110,12 +114,14 @@ function readManaged(root: string, modId: string, id: string, image = false, pat
     const value = contentObjectSchema.parse(stored.value)
     if (value.id !== id) throw Error('内容 ID 与声明文件名不一致')
     document.value = value; document.kind = value.kind
-    const generated = generateContent(value, splitClient(root)), owned = generated.files.map(file => file.path)
-    const tracked = [...new Set([file, ...owned, ...sharedFiles(modId), ...(value.texture.startsWith('minecraft:') ? [] : [textureFile(value)])])].sort()
+    const generated = generateContent(value, splitClient(root))
+    const generatedAll: Array<{ path: string; content: string | Buffer }> = [...generated.files, ...generated.assets]
+    const owned = generatedAll.map(target => target.path)
+    const tracked = [...new Set([file, ...owned, ...sharedFiles(modId), ...(value.texture.startsWith('minecraft:') || value.voxel ? [] : [textureFile(value)])])].sort()
     document.files = owned
     document.revision = hash(JSON.stringify(tracked.map(file => [file, bytes(root, file)?.toString('base64') ?? null])))
     if (!stored.files || JSON.stringify(Object.keys(stored.files).sort()) !== JSON.stringify([...owned].sort())) throw Error('生成文件清单不匹配，请交由 Agent 检查')
-    for (const target of generated.files) {
+    for (const target of generatedAll) {
       const current = bytes(root, target.path)
       if (!current || hash(current) !== stored.files[target.path] || hash(target.content) !== stored.files[target.path]) throw Error('生成文件已被外部修改，保留源码并交由 Agent 合并：' + target.path)
     }
@@ -123,43 +129,58 @@ function readManaged(root: string, modId: string, id: string, image = false, pat
     if (!entrypoints(metadata, 'main').includes(generated.main) || generated.client && !entrypoints(metadata, 'client').includes(generated.client)) throw Error('生成的 Fabric 入口已被外部修改')
     for (const file of sharedFiles(modId).slice(1, 3)) if (objectJson(root, file)[generated.langKey] !== value.displayName) throw Error('对象名称已被外部修改：' + file)
     document.editable = true
-    if (image) document.image = previewImage(paths, root, value)
+    if (image) document.image = previewImage(paths, root, value, generated.previewPng)
   } catch (cause) { document.editable = false; document.reason = String(cause) }
   return document
 }
 function preview(paths: RuntimePaths, root: string, modId: string, value: ContentObject, expected: string | null) {
   const name = idName(value.id, modId), file = manifestPath(name), exists = bytes(root, file)
-  if (exists) {
-    const current = readManaged(root, modId, value.id)
-    if (current.revision !== expected) fail('CONTENT_CONFLICT', '对象或相关文件已改变，草稿已保留；重新读取比较后再应用')
-    if (!current.editable) fail('CONTENT_READ_ONLY', current.reason || '对象不可安全编辑')
-    if (current.value!.kind !== value.kind) fail('CONTENT_READ_ONLY', '已有对象不能改变注册类型；请新建不同 ID')
+  const existing = exists ? readManaged(root, modId, value.id) : undefined
+  if (existing) {
+    if (existing.revision !== expected) fail('CONTENT_CONFLICT', '对象或相关文件已改变，草稿已保留；重新读取比较后再应用')
+    if (!existing.editable) fail('CONTENT_READ_ONLY', existing.reason || '对象不可安全编辑')
+    if (existing.value!.kind !== value.kind) fail('CONTENT_READ_ONLY', '已有对象不能改变注册类型；请新建不同 ID')
   } else if (expected !== null) fail('CONTENT_CONFLICT', '原对象已被移走，不能按旧版本写入')
   validateResources(paths, root, value)
   const generated = generateContent(value, splitClient(root))
+  const generatedAll: Array<{ path: string; content: string | Buffer }> = [...generated.files, ...generated.assets]
+  if (existing) {
+    for (const target of generatedAll) {
+      if (!existing.files.includes(target.path) && bytes(root, target.path)) fail('CONTENT_READ_ONLY', '目标文件已存在且不受当前对象管理，不能覆盖：' + target.path)
+    }
+  }
   if (!exists) {
     const resourcePrefix = `src/main/resources/assets/${modId}`
     for (const target of [`${resourcePrefix}/items/${name}.json`, `${resourcePrefix}/models/item/${name}.json`, `${resourcePrefix}/models/block/${name}.json`]) if (bytes(root, target)) fail('CONTENT_READ_ONLY', '已有资源未受此编辑器管理，不能覆盖：' + target)
     for (const file of walk(root, 'src/main/java').filter(file => file.endsWith('.java'))) {
       if (bytes(root, file)?.toString('utf8').includes(JSON.stringify(name))) fail('CONTENT_READ_ONLY', '源码已有同名 ID 引用，请交由 Agent 核对：' + file)
     }
-    for (const target of generated.files) if (bytes(root, target.path)) fail('CONTENT_READ_ONLY', '目标文件已存在，不能覆盖：' + target.path)
+    for (const target of generatedAll) if (bytes(root, target.path)) fail('CONTENT_READ_ONLY', '目标文件已存在，不能覆盖：' + target.path)
   }
   const metadataFile = sharedFiles(modId)[0], metadata = objectJson(root, metadataFile)
   metadata.entrypoints = { ...metadata.entrypoints }
   for (const [type, entry] of [['main', generated.main], ['client', generated.client]]) if (entry) {
     const entries = entrypoints(metadata, type); metadata.entrypoints[type] = entries.includes(entry) ? entries : [...entries, entry]
   }
-  const targets = [...generated.files, { path: metadataFile, content: json(metadata) }]
+  const targets = [...generatedAll, { path: metadataFile, content: json(metadata) }]
   for (const file of sharedFiles(modId).slice(1, 3)) {
     const lang = objectJson(root, file)
     if (!exists && Object.hasOwn(lang, generated.langKey)) fail('CONTENT_READ_ONLY', '同名语言键已存在，请先由 Agent 核对')
     targets.push({ path: file, content: json({ ...lang, [generated.langKey]: value.displayName }) })
   }
-  targets.push({ path: file, content: json({ version: 1, value, files: Object.fromEntries(generated.files.map(file => [file.path, hash(file.content)])) }) })
-  const changes: ContentFile[] = targets.map(file => ({ path: file.path, before: bytes(root, file.path)?.toString('utf8') ?? null, after: file.content }))
-  const context = [...sharedFiles(modId).slice(3), ...(value.texture.startsWith('minecraft:') ? [] : [textureFile(value)])].map(file => [file, bytes(root, file)?.toString('base64') ?? null])
-  return { ok: true, value, files: changes, image: previewImage(paths, root, value), previewRevision: hash(JSON.stringify({ changes, context })) }
+  targets.push({ path: file, content: json({ version: 1, value, files: Object.fromEntries(generatedAll.map(target => [target.path, hash(target.content)])) }) })
+  const changes: ContentFile[] = targets.map(target => {
+    const binary = Buffer.isBuffer(target.content)
+    const before = bytes(root, target.path)
+    return {
+      path: target.path,
+      before: before ? (binary ? before.toString('base64') : before.toString('utf8')) : null,
+      after: binary ? (target.content as Buffer).toString('base64') : target.content as string,
+      ...(binary ? { binary: true, size: (target.content as Buffer).length } : {})
+    }
+  })
+  const context = [...sharedFiles(modId).slice(3), ...(value.texture.startsWith('minecraft:') || value.voxel ? [] : [textureFile(value)])].map(file => [file, bytes(root, file)?.toString('base64') ?? null])
+  return { ok: true, value, files: changes, image: previewImage(paths, root, value, generated.previewPng), previewRevision: hash(JSON.stringify({ changes, context })) }
 }
 
 export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Record<string, unknown> {
@@ -186,27 +207,38 @@ export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Reco
   mkdirSync(path.dirname(lock), { recursive: true })
   try { writeFileSync(lock, String(process.pid), { flag: 'wx' }) } catch { return fail('CONTENT_BUSY', '工程内容正在保存或存在未恢复事务，请检查 content.lock；不自动删除') }
   const written: ContentFile[] = []
+  const sameBefore = (current: Buffer | null, file: ContentFile): boolean => {
+    if (file.before === null) return current === null
+    if (!current) return false
+    return file.binary ? current.equals(Buffer.from(file.before, 'base64')) : current.toString('utf8') === file.before
+  }
+  const payloadOf = (file: ContentFile): string | Buffer => file.binary ? Buffer.from(file.after, 'base64') : file.after
   try {
     const planned = preview(paths, root, modId, request.value, request.expectedRevision)
     if (planned.previewRevision !== request.previewRevision) fail('CONTENT_CONFLICT', '预览后内容发生改变，请重新预览；草稿保持不变')
     const backup = safe(path.join(paths.dataRoot, 'content-backups', hash(root), randomUUID() + '.json'))
     mkdirSync(path.dirname(backup), { recursive: true }); writeFileSync(backup, json({ objectId: request.value.id, files: planned.files }), { flag: 'wx' })
     for (const file of planned.files.filter(file => file.before !== file.after)) {
-      const target = safe(path.join(root, file.path)), current = bytes(root, file.path)?.toString('utf8') ?? null
-      if (current !== file.before || existsSync(target) && lstatSync(target).nlink > 1) fail('CONTENT_CONFLICT', '保存时文件发生修改或存在硬链接：' + file.path)
+      const target = safe(path.join(root, file.path)), current = bytes(root, file.path) ?? null
+      if (!sameBefore(current, file) || existsSync(target) && lstatSync(target).nlink > 1) fail('CONTENT_CONFLICT', '保存时文件发生修改或存在硬链接：' + file.path)
       mkdirSync(path.dirname(target), { recursive: true })
-      if (file.before === null) writeFileSync(target, file.after, { flag: 'wx' })
+      if (file.before === null) writeFileSync(target, payloadOf(file), { flag: 'wx' })
       else {
         const temporary = target + '.modcrafting-' + randomUUID() + '.tmp'
-        try { writeFileSync(temporary, file.after, { flag: 'wx' }); renameSync(temporary, target) } finally { if (existsSync(temporary)) unlinkSync(temporary) }
+        try { writeFileSync(temporary, payloadOf(file), { flag: 'wx' }); renameSync(temporary, target) } finally { if (existsSync(temporary)) unlinkSync(temporary) }
       }
       written.push(file)
     }
     return { ok: true, document: readManaged(root, modId, request.value.id, true, paths), backup }
   } catch (cause) {
-    for (const file of written.reverse()) if (bytes(root, file.path)?.toString('utf8') === file.after) {
-      if (file.before === null) unlinkSync(safe(path.join(root, file.path)))
-      else writeFileSync(safe(path.join(root, file.path)), file.before)
+    for (const file of written.reverse()) {
+      const current = bytes(root, file.path)
+      const after = Buffer.from(file.after, 'base64')
+      const unchanged = file.binary ? current !== null && current.equals(after) : current?.toString('utf8') === file.after
+      if (unchanged) {
+        if (file.before === null) unlinkSync(safe(path.join(root, file.path)))
+        else writeFileSync(safe(path.join(root, file.path)), file.binary ? Buffer.from(file.before, 'base64') : file.before)
+      }
     }
     throw cause
   } finally { unlinkSync(lock) }

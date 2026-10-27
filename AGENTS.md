@@ -36,6 +36,11 @@ pnpm run plugin:qoder -- --source ABSOLUTE_CANDIDATE_PLUGIN_DIR
 - 不恢复 Electron、旧 Harness、安装器、旧发布脚本或 Desktop 用户数据迁移链路到 `release`。
 - 大功能、主流程修复或构建链调整后更新 `docs/archive/`；不要把真实 Qoder 模型聊天、游戏玩法和离线 Smoke 混为同一验收结论。
 
+## 版本号
+
+- 语义：`X.Y.Z` 中 Z（第三位）= 本地开发/测试验证更新，每轮本地验证递增；Y（第二位）= GitHub 发行版变更；X（第一位）= 大版本更新。
+- 升版本同步三处：根 `package.json`、`plugins/modcrafting-fabric/.codex-plugin/plugin.json`、`plugins/modcrafting-fabric/compatibility.json`，再重跑 `candidate:build` 与 `stage-qoder` 出新包。
+
 ## 分支与交付
 
 - `release` 是当前发布主线；`main` 是只读历史版本。除非用户明确要求，不向 `main` 合并新产品实现。

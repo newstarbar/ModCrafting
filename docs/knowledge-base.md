@@ -17,7 +17,7 @@ MCP 工具按需读取 Fabric/Minecraft 开发知识。没有资源时返回缺�
 { "names": ["minecraft-data", "agent-knowledge"] }
 ```
 
-成功、缺失和无效资源按项返回。已存在且健康的资源会复用；调用只写入当前后端 `MODCRAFTING_DATA` 下的资源目录，不修改 Minecraft 安装、工程源码或其他 session 的游戏目录。
+成功、缺失和无效资源按项返回。已存在且健康的资源会复用。`modcrafting_prepare_assets` 支持可选 `projectPath`：传入时资源写入该工程目录下的 `.modcrafting/knowledge`（Fabric 文档在 `.modcrafting/assets`），随工程存放，不占用用户全局目录；未传入时写入当前后端 `MODCRAFTING_DATA` 下的资源目录。`minecraft_data_lookup`、`mc_wiki_search`、`fabric_docs_search` 和配方/内容工作区按相同规则读取：有 `projectPath` 读工程内知识库，否则读后端目录。资源准备不修改 Minecraft 安装、工程源码或其他 session 的游戏目录。新建工程由脚手架自动把 `.modcrafting/` 写入 `.gitignore`；已有工程建议自行加入 `.gitignore`。
 
 ## 数据来源与更新
 

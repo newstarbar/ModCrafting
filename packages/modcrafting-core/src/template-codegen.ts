@@ -15,6 +15,11 @@ export interface GeneratedFile {
   content: string
 }
 
+export interface GeneratedAsset {
+  path: string
+  content: Buffer
+}
+
 export interface TemplateCodegenResult {
   files: GeneratedFile[]
   /** Extra registration calls to ensure exist in main initializer */

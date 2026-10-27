@@ -1,5 +1,9 @@
 # 归档索引
 
+- [2026-10-26] [AI 3D 体素模型专项功能](./2026-10-26-ai-voxel-model.md) — `fabric_voxel_workspace` 语义体素 DSL + 确定性编译（贪心网格/图集/PNG）+ Three.js 体素画布；方块/物品首轮闭环；128/131 回归（3 项为既有无关失败）。触发：大功能自动归档。
+
+- [2026-10-26] [知识库随工程存放](./2026-10-26-project-knowledge-storage.md) — 四个知识工具与工作区校验支持 projectPath，知识资源默认存入工程 `.modcrafting/`，后端目录兜底；122/123 回归（1 项为既有未跟踪残留）。触发：主流程存储位置变更自动归档。
+
 - [2026-10-19] [Fabric Plugin GitHub Actions 与 Release 规则](./2026-10-19-plugin-github-release.md) — 将 CI 改为当前插件与工作台验证；按版本 tag 构建 Observer V2、Qoder 桌面 ZIP 和跨宿主发布包，显式校验分支/版本并保留旧 Desktop Release 历史。
 
 - [2026-10-18] [测试实例准备、任务会话隔离与工作台重排](./2026-10-18-test-session-workbench.md) — session 配置和归属、真实首次启动自动进专用世界、Agent 推荐的单工作区及窄屏导航；插件 114/114 回归与首次启动真实玩法验收。触发：运行时、Agent 行为及工作台流程大改自动归档。

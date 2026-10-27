@@ -1,6 +1,6 @@
 {
   "name": "modcrafting-fabric",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "description": "Develop and deterministically validate Fabric 1.21.4 mods from Codex.",
   "author": {
     "name": "newstarbar",

@@ -4,17 +4,17 @@
 
 ## 当前分支
 
-`release` 基于 GitHub 原 `main` 的 `307720e`（Qoder 原生插件合并提交），产品版本为 `0.1.2`。该发布线已移除旧 Electron/Desktop 源码、旧 Harness、旧 Windows 安装/发布链与 Desktop 迁移工具；原 `main` 保留历史记录。
+`release` 基于 GitHub 原 `main` 的 `307720e`（Qoder 原生插件合并提交），产品版本为 `0.1.3`。版本号语义见 AGENTS.md：Z（第三位）= 本地开发/测试验证更新，Y（第二位）= GitHub 发行版变更，X（第一位）= 大版本更新。该发布线已移除旧 Electron/Desktop 源码、旧 Harness、旧 Windows 安装/发布链与 Desktop 迁移工具；原 `main` 保留历史记录。
 
 | 项目 | 本分支状态 |
 |---|---|
 | 旧 Desktop 源码、依赖和命令清理 | 已完成 |
 | Core 与浏览器类型检查 | 通过 |
 | 插件回归 | 107/107 通过 |
-| 插件结构校验与 MCP Smoke | 通过；Smoke 列出 26 个工具 |
+| 插件结构校验与 MCP Smoke | 通过；Smoke 列出 28 个工具 |
 | Fabric Bench fixture | 21/21 用例符合预期：5 PASS、5 FAIL、11 INCONCLUSIVE |
 | 完整候选构建 | 离线源码构建通过；Observer V2、插件、产品和三宿主分发均通过 Stage |
-| Qoder ZIP | 0.1.2，14 个文件；根清单、MCP 配置、命令、Skills、bundle 与兼容性文件齐全 |
+| Qoder ZIP | 0.1.3，14 个文件；根清单、MCP 配置、命令、Skills、bundle 与兼容性文件齐全 |
 | 空目录首次启动与真实游戏 | 尚未在该发布候选上重跑；当前不宣称 Minecraft 验收通过 |
 | Qoder 新聊天的真实模型行为 | 待已登录的 Qoder 桌面宿主复验 |
 

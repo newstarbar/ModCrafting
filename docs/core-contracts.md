@@ -26,7 +26,28 @@
 | 任务日志与停止 | jobStatus、stopJob、close | JobSnapshot / CoreFailure、最近 300 条日志；只停止本 runtime 拥有的进程 |
 | 可选视图状态 | runtime.state() | CoreRuntimeState，contractVersion=1，jobs 与 instances；无需 UI 持有另一份任务映射 |
 
-当前插件提供 26 个工具。`modcrafting_session` 创建、恢复、更新展示意图并结束会话；`modcrafting_test_profile` 读取/写入测试配置；`minecraft_test_template` 返回可用的 GameTestSpec 和真实输入 Schema。构建、游戏、状态、停止、测试与报告访问都要求并校验 sessionId；省略实例时只在当前会话中选择，不再使用全局最近实例。响应继续包含 structuredContent 及其 JSON 文本，沿用 [MCP 结构化结果规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content)。
+当前插件提供 28 个工具。`modcrafting_session` 创建、恢复、更新展示意图并结束会话；`modcrafting_test_profile` 读取/写入测试配置；`minecraft_test_template` 返回可用的 GameTestSpec 和真实输入 Schema。`fabric_texture_workspace` 为 AI 物品贴图提供提示词包、PNG 导入、MC 像素化、质检、候选、revision 保存与内容绑定；它不调用任何图像模型。`fabric_voxel_workspace` 为 AI 3D 体素模型提供模板、校验、ASCII 预览与 revision 保存；宿主 Agent 只写紧凑的语义 DSL，编译全部在插件内确定性完成。`minecraft_build_studio` 通过随包建筑工作室组件打开/提交/应用结构，要求组件存在且测试世界就绪。构建、游戏、状态、停止、测试与报告访问都要求并校验 sessionId；省略实例时只在当前会话中选择，不再使用全局最近实例。响应继续包含 structuredContent 及其 JSON 文本，沿用 [MCP 结构化结果规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content)。
+
+## 贴图工作区
+
+`fabric_texture_workspace` 的动作是 `prompt`、`import`、`preview`、`read`、`list`、`save`、`bind`。`textureId` 必须为 `<modid>:item/<小写名称>`，目标文件为 `src/main/resources/assets/<modid>/textures/item/<name>.png`。首版源图只接受 PNG（本地 `sourcePath`、base64 或浏览器上传 token），上限 16MB / 4096×4096；输出支持 16/32/64，要求二进制 Alpha。
+
+- `prompt` 只读，返回 prompt、负向词、目标路径、标准轮廓提示和检查清单；宿主 Agent 负责实际生图。
+- `import` 保存 AI 源图与处理结果为 runtime 候选（`texture-library/<projectHash>/<name>/<candidateId>`），每个纹理最多 20 个。
+- `preview` 只读；`analyzeOnly=true` 用于保存前校验当前画布像素，不重新量化。
+- `save` 必须同时匹配当前 PNG 的 `expectedRevision` 和预览的 `previewRevision`；使用 `texture.lock`、备份和临时文件原子替换。硬性质检失败（尺寸、空图、半透明 Alpha、伪放大）拒绝保存；其他问题返回 warning。
+- `bind` 读取 content 对象，设置 `texture` 后依次调用 content preview/save；内容 revision 不匹配时返回 `CONTENT_CONFLICT`，不绕过现有保护。
+- 浏览器 POST `/api/texture-source` 接受 ≤8MB PNG 并受 Bearer token、backend、session 校验；普通 `/api/action` 仍限制 256KB。保存贴图后必须重建并重启 Minecraft，Observer 截图只作视觉证据。
+
+## 体素模型工作区
+
+`fabric_voxel_workspace` 的动作是 `template`、`list`、`read`、`validate`、`preview`、`save`；`validate` 纯函数校验，不需要 projectPath。DSL 存放在 content 对象的 `voxel` 字段（仅 block/item），随 `.modcrafting/content/<name>.json` 走统一的 revision / 冲突检查 / 备份回滚。
+
+- `size` 每轴 1..32 且总体素 ≤32768；`palette` 1..26 个小写符号，值为 `#rrggbb` 或 `{color, pattern: flat|noise|checker, top?, side?, bottom?}`。
+- `layers` 为按 Y 层的 RLE 字符串（`(\d{1,4})?[a-z.]`，`-` 为空层，x 优先，长度和必须等于 x*z）；`ops` 为 box 原语（from/to 闭区间、hollow、mirror x|z|xz），在 layers 之后按数组顺序求值。
+- `optimize`：贪心合并 cuboid、调色板量化（0-8）、2×2×2 降采样、移除悬浮体素、cuboid 上限（默认 1500，≤4000，超出报 `VOXEL_TOO_COMPLEX`）。
+- 编译产物：贪心合并后的 block model elements、`textures/block/<name>_atlas.png`（16px tile + 1px gutter，确定性噪声，字节级可复现）与 `<name>_particle.png`、1.21.4 `items/<id>.json` 定义。图片是受管二进制：ContentFile 用 `binary` + base64 传输，外部改写后对象转只读。
+- 浏览器“模型”页提供 Three.js 体素画布（旋转/增设/涂色/擦除/镜像/锁定层/撤销重做）；含 `ops` 的对象只读展示，需显式“转为可编辑层”压平后才能编辑。保存后需重建并重启 Minecraft 才能看到新外观。
 
 ## 环境与资源语义
 

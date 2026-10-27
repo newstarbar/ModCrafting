@@ -12,8 +12,8 @@ function fixture() {
   writeFileSync(path.join(project, 'src/main/resources/fabric.mod.json'), JSON.stringify({ schemaVersion: 1, id: 'recipe_test', version: '1', depends: { minecraft: '1.21.4' } }))
   writeFileSync(path.join(project, 'gradle.properties'), 'minecraft_version=1.21.4\n')
   writeFileSync(path.join(project, 'gradlew.bat'), '@echo fixture')
-  mkdirSync(path.join(paths.knowledgeRoot, 'minecraft-data/1.21.4'), { recursive: true })
-  writeFileSync(path.join(paths.knowledgeRoot, 'minecraft-data/1.21.4/index.json'), JSON.stringify({ itemsById: { 'minecraft:iron_ingot': { name: 'Iron Ingot', stackSize: 64 }, 'minecraft:gold_ingot': { name: 'Gold Ingot', stackSize: 64 }, 'minecraft:air': { name: 'Air', stackSize: 64 } } }))
+  mkdirSync(path.join(project, '.modcrafting/knowledge/minecraft-data/1.21.4'), { recursive: true })
+  writeFileSync(path.join(project, '.modcrafting/knowledge/minecraft-data/1.21.4/index.json'), JSON.stringify({ itemsById: { 'minecraft:iron_ingot': { name: 'Iron Ingot', stackSize: 64 }, 'minecraft:gold_ingot': { name: 'Gold Ingot', stackSize: 64 }, 'minecraft:air': { name: 'Air', stackSize: 64 } } }))
   const call = (request: Record<string, unknown>) => recipeWorkspace(paths, { ...request, projectPath: project } as RecipeRequest)
   const draft = newRecipeDraft(); draft.grid[0][0] = { itemId: 'minecraft:iron_ingot', count: 1 }; draft.outputItem = 'minecraft:gold_ingot'; draft.outputCount = 2
   return { root, project, paths, call, draft, content: recipeContentFromDraft(draft) }

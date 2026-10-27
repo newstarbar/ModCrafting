@@ -8,17 +8,18 @@ import * as os from 'node:os'
 import {
   FabricRuntime, CoreError, guiWorkspace, guiRequestSchema, createRuntimePaths, ensureRuntimePaths, resolveProjectPath,
   inspectFabricProject, lookupMinecraftData, scaffoldFabricProject, searchFabricDocs, contentWorkspace, contentRequestSchema,
-  searchWiki, validateFabricProject, recipeWorkspace, recipeRequestSchema, gameTestSpecSchema, gameTestTemplate,
-  testProfileSchema, type GameFeatureType, type ProjectWrapper
+  searchWiki, projectRuntimePaths, validateFabricProject, recipeWorkspace, recipeRequestSchema, gameTestSpecSchema, gameTestTemplate,
+  textureWorkspace, textureRequestSchema, testProfileSchema, type GameFeatureType, type ProjectWrapper, voxelWorkspace, voxelRequestSchema
 } from '../../../packages/modcrafting-core/src/index.ts'
 import { startBrowserView, type BrowserAssets } from './browser-server.ts'
 import { openWorkbench } from './workbench.ts'
-import type { BundledObserver } from '../../../packages/modcrafting-core/src/runtime.ts'
+import type { BundledBuilder, BundledObserver } from '../../../packages/modcrafting-core/src/runtime.ts'
 
 declare const __PLUGIN_VERSION__: string
 declare const __WEB_ASSETS__: BrowserAssets
 declare const __PROJECT_WRAPPER__: ProjectWrapper
 declare const __OBSERVER__: BundledObserver | undefined
+declare const __BUILDER__: BundledBuilder | undefined
 const configuredData = process.env.MODCRAFTING_DATA ?? process.env.QODER_PLUGIN_DATA ?? process.env.PLUGIN_DATA ?? process.env.CODEX_PLUGIN_DATA
 if (configuredData !== undefined && (!configuredData.trim() || !path.isAbsolute(configuredData))) {
   throw new Error('INVALID_DATA_DIRECTORY: use an absolute writable MODCRAFTING_DATA / PLUGIN_DATA / CODEX_PLUGIN_DATA directory')
@@ -30,7 +31,7 @@ try {
   const probe = path.join(paths.dataRoot, `.write-check-${process.pid}`)
   fs.writeFileSync(probe, '', { flag: 'wx' }); fs.unlinkSync(probe)
 } catch { throw new Error('INVALID_DATA_DIRECTORY: plugin data directory is not writable') }
-const runtime = new FabricRuntime({ paths, version: __PLUGIN_VERSION__, observer: __OBSERVER__, scaffoldIncludesWrapper: true })
+const runtime = new FabricRuntime({ paths, version: __PLUGIN_VERSION__, observer: __OBSERVER__, builder: __BUILDER__, scaffoldIncludesWrapper: true })
 const browserEnabled = process.argv.includes('--web') || process.argv.includes('--web-only')
 const portArgument = process.argv.find((value) => value.startsWith('--web-port='))
 if (portArgument && !browserEnabled) throw Error('Use --web with --web-port')
@@ -38,13 +39,21 @@ const browser = browserEnabled ? await startBrowserView(runtime, __WEB_ASSETS__,
 if (browser) process.stderr.write(`ModCrafting browser: ${browser.url}\n`)
 
 function result(value: Record<string, unknown>) { return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }], structuredContent: value } }
+function imageResult(value: Record<string, unknown>, image?: unknown) {
+  const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
+  if (typeof image === 'string') {
+    const match = /^data:(image\/png);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(image)
+    if (match) content.push({ type: 'image' as const, data: match[2], mimeType: match[1] })
+  }
+  return { content, structuredContent: value }
+}
 function error(message: string, extra: Record<string, unknown> = {}) { return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: message, ...extra }, null, 2) }], isError: true } }
 function failure(cause: unknown) { return error(String(cause), { code: cause instanceof CoreError ? cause.code : 'OPERATION_FAILED' }) }
 
 function buildServer(): McpServer {
   ensureRuntimePaths(paths)
   const server = new McpServer({ name: 'modcrafting-fabric', version: __PLUGIN_VERSION__ })
-  server.registerTool('modcrafting_session', { description: 'Create or manage an isolated task session. Create once at the start of a task, then pass its returned sessionId to every build, game, test, status, stop, and workbench call. Resume before continuing an old session; ending it stops only its jobs and preserves reports.', inputSchema: z.object({ action: z.enum(['create', 'read', 'resume', 'update', 'end']), sessionId: z.string().optional(), name: z.string().optional(), projectPath: z.string().optional(), phase: z.string().optional(), currentModule: z.enum(['overview', 'content', 'recipe', 'gui', 'build', 'game', 'tests', 'reports']).optional(), recommendedModules: z.array(z.enum(['overview', 'content', 'recipe', 'gui', 'build', 'game', 'tests', 'reports'])).optional() }) }, async (request) => {
+  server.registerTool('modcrafting_session', { description: 'Create or manage an isolated task session. Create once at the start of a task, then pass its returned sessionId to every build, game, test, status, stop, and workbench call. Resume before continuing an old session; ending it stops only its jobs and preserves reports.', inputSchema: z.object({ action: z.enum(['create', 'read', 'resume', 'update', 'end']), sessionId: z.string().optional(), name: z.string().optional(), projectPath: z.string().optional(), phase: z.string().optional(), currentModule: z.enum(['overview', 'content', 'textures', 'recipe', 'gui', 'model', 'build', 'game', 'tests', 'reports']).optional(), recommendedModules: z.array(z.enum(['overview', 'content', 'textures', 'recipe', 'gui', 'model', 'build', 'game', 'tests', 'reports'])).optional() }) }, async (request) => {
     try {
       if (request.action === 'create') return result({ ok: true, session: runtime.createSession({ name: request.name, projectPath: request.projectPath }) })
       if (!request.sessionId) throw new CoreError('SESSION_REQUIRED', '除 create 外都需要 sessionId。')
@@ -63,7 +72,7 @@ function buildServer(): McpServer {
     } catch (cause) { return failure(cause) }
   })
   server.registerTool('minecraft_test_template', { description: 'Return a valid GameTestSpec v2 starting template. Edit this object rather than guessing fields; unsupported assertions remain explicitly reported as inconclusive.', inputSchema: z.object({ featureType: z.enum(['new_item', 'new_block', 'new_recipe', 'entity_behavior', 'player_interaction', 'hud_gui']).default('new_item') }) }, async ({ featureType }) => result({ ok: true, spec: gameTestTemplate(featureType as GameFeatureType), schema: gameTestSpecSchema.toJSONSchema() }))
-  server.registerTool('modcrafting_open_workbench', { description: 'Open the visual workbench for this task session. Pass sessionId and the current project; the workbench shows only that session. Returns a link if automatic opening does not work.', inputSchema: z.object({ sessionId: z.string().optional(), projectPath: z.string().optional(), view: z.enum(['overview', 'content', 'recipe', 'gui', 'build', 'game', 'tests', 'reports']).default('overview'), open: z.boolean().default(true) }) }, async (request) => {
+  server.registerTool('modcrafting_open_workbench', { description: 'Open the visual workbench for this task session. Pass sessionId and the current project; the workbench shows only that session. Returns a link if automatic opening does not work.', inputSchema: z.object({ sessionId: z.string().optional(), projectPath: z.string().optional(), view: z.enum(['overview', 'content', 'textures', 'recipe', 'gui', 'model', 'build', 'game', 'tests', 'reports']).default('overview'), open: z.boolean().default(true) }) }, async (request) => {
     try {
       const projectPath = request.projectPath ? resolveProjectPath(request.projectPath) : undefined
       const sessionId = request.sessionId || runtime.createSession({ name: '可视化任务', projectPath }).sessionId
@@ -74,12 +83,14 @@ function buildServer(): McpServer {
   })
   server.registerTool('fabric_gui_workspace', { description: 'Get templates and list/read declarative Screen, configuration and HUD layouts; preview generated Fabric client files before save. Save requires expectedRevision and previewRevision. Unknown or externally modified Java stays read-only; display slots do not implement server containers.', inputSchema: guiRequestSchema }, async request => { try { return result(guiWorkspace(paths, request)) } catch (cause) { return failure(cause) } })
   server.registerTool('fabric_content_workspace', { description: 'List/read supported declarative item, food, block, entity, tool and armor parameters. Preview changes before save; save requires matching expectedRevision and previewRevision. Handwritten or externally modified generated sources remain read-only.', inputSchema: contentRequestSchema }, async (request) => { try { return result(contentWorkspace(runtime.paths, request)) } catch (cause) { return failure(cause) } })
+  server.registerTool('fabric_voxel_workspace', { description: 'AI-authored Minecraft-style voxel block/item models. The host agent writes the compact voxel DSL (palette + RLE layers + box ops); this tool never calls an AI service. Workflow: call template for a valid starting object and JSON schema, edit the DSL, call validate to get structured errors, ASCII previews and stats, then preview and save through the content workspace (expectedRevision + previewRevision required; conflicts stay read-only). Compile output is Fabric 1.21.4 model JSON plus a 16px PNG atlas; remind the user to rebuild and check in game. The browser model module is the visual editor for the same DSL.', inputSchema: voxelRequestSchema }, async (request) => { try { return result(voxelWorkspace(runtime.paths, request)) } catch (cause) { return failure(cause) } })
+  server.registerTool('fabric_texture_workspace', { description: 'AI item-texture workspace. Run the whole loop yourself in one turn without asking the user to do manual steps: call prompt to get a generation brief, generate a square PNG with your own image tool, then import (sourcePath/sourceBase64/sourceToken), save, and bind when a content object exists or is being created. The tool removes the background, applies Minecraft-aware pixelization/palette/outline/dither rules, returns quality warnings, and stores candidates. preview is read-only; save needs expectedRevision and previewRevision. Only PNG is accepted; remind the user to rebuild and restart Minecraft for visual validation. The browser workbench textures module is an optional pixel-level polish surface for unsatisfied users, not a required manual step.', inputSchema: textureRequestSchema }, async (request) => { try { const value = textureWorkspace(runtime.paths, request); return imageResult(value, value.image) } catch (cause) { return failure(cause) } })
   server.registerTool('fabric_recipe_workspace', { description: 'List/read Fabric 1.21.4 recipes, search the vanilla/project item catalog, or save a validated recipe using expectedRevision from the last read (null only for new files). Shared with the visual recipe editor; refuses external-edit conflicts and unsupported formats.', inputSchema: recipeRequestSchema }, async (request) => { try { return result(recipeWorkspace(paths, request)) } catch (cause) { return failure(cause) } })
-  server.registerTool('modcrafting_environment_status', { description: 'Check project, Java, cache paths and resource compatibility without downloads. An empty folder is a new-project state, not a broken installation. Explain results in plain language; use modcrafting_open_workbench for browser opening.', inputSchema: z.object({ projectPath: z.string().optional() }) }, async ({ projectPath: value }) => { try { return result({ ...await runtime.environmentStatus(value), version: __PLUGIN_VERSION__, projectState: value ? inspectFabricProject(value).valid ? 'existing_project' : 'needs_project' : 'no_project_selected', observer: { bundled: Boolean(__OBSERVER__), version: __OBSERVER__?.version, protocol: __OBSERVER__?.protocol }, ...(browser ? { browserUrl: browser.url, browser: { available: true, opened: false } } : {}) }) } catch (cause) { return failure(cause) } })
-  server.registerTool('modcrafting_prepare_assets', { description: 'Prepare missing knowledge resources in the configured data directory. Choose only the names needed; healthy resources are reused. The matching game-test component is bundled and never replaced by old release downloads.', inputSchema: z.object({ names: z.array(z.enum(['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'])).min(1).optional() }) }, async ({ names }) => { try { return result(await runtime.prepareAssets(names)) } catch (cause) { return failure(cause) } })
-  server.registerTool('minecraft_data_lookup', { description: 'Look up standard Minecraft block, item, entity, enchantment, or recipe data before writing Fabric registration code.', inputSchema: z.object({ kind: z.enum(['block', 'item', 'entity', 'enchantment', 'recipe']), query: z.string().min(1) }) }, async ({ kind, query }) => result(lookupMinecraftData(paths, kind, query)))
-  server.registerTool('fabric_docs_search', { description: 'Search downloaded Fabric documentation by keyword.', inputSchema: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(20).default(8) }) }, async ({ query, limit }) => result(searchFabricDocs(paths, query, limit)))
-  server.registerTool('mc_wiki_search', { description: 'Search the downloaded Chinese Minecraft knowledge index.', inputSchema: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(20).default(8) }) }, async ({ query, limit }) => result(searchWiki(paths, query, limit)))
+  server.registerTool('modcrafting_environment_status', { description: 'Check project, Java, cache paths and resource compatibility without downloads. An empty folder is a new-project state, not a broken installation. Explain results in plain language; use modcrafting_open_workbench for browser opening.', inputSchema: z.object({ projectPath: z.string().optional() }) }, async ({ projectPath: value }) => { try { return result({ ...await runtime.environmentStatus(value), version: __PLUGIN_VERSION__, projectState: value ? inspectFabricProject(value).valid ? 'existing_project' : 'needs_project' : 'no_project_selected', observer: { bundled: Boolean(__OBSERVER__), version: __OBSERVER__?.version, protocol: __OBSERVER__?.protocol }, builder: runtime.studioInfo(), ...(browser ? { browserUrl: browser.url, browser: { available: true, opened: false } } : {}) }) } catch (cause) { return failure(cause) } })
+  server.registerTool('modcrafting_prepare_assets', { description: 'Prepare missing knowledge resources. Pass projectPath to store them inside that workspace under .modcrafting/knowledge (recommended; travels with the project). Omit to use the backend data directory. Choose only the names needed; healthy resources are reused. The matching game-test component is bundled and never replaced by old release downloads.', inputSchema: z.object({ names: z.array(z.enum(['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'])).min(1).optional(), projectPath: z.string().optional() }) }, async ({ names, projectPath }) => { try { return result(await runtime.prepareAssets(names, projectPath)) } catch (cause) { return failure(cause) } })
+  server.registerTool('minecraft_data_lookup', { description: 'Look up standard Minecraft block, item, entity, enchantment, or recipe data before writing Fabric registration code. Pass the same projectPath used for preparation so the project knowledge base is read; errors name the directory that was searched.', inputSchema: z.object({ kind: z.enum(['block', 'item', 'entity', 'enchantment', 'recipe']), query: z.string().min(1), projectPath: z.string().optional() }) }, async ({ kind, query, projectPath }) => result(lookupMinecraftData(projectRuntimePaths(paths, projectPath), kind, query)))
+  server.registerTool('fabric_docs_search', { description: 'Search downloaded Fabric documentation by keyword. Pass the projectPath used for preparation to search the project copy; otherwise the backend data directory is searched.', inputSchema: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(20).default(8), projectPath: z.string().optional() }) }, async ({ query, limit, projectPath }) => result(searchFabricDocs(projectRuntimePaths(paths, projectPath), query, limit)))
+  server.registerTool('mc_wiki_search', { description: 'Search the downloaded Chinese Minecraft knowledge index. Pass the projectPath used for preparation to search the project copy; otherwise the backend data directory is searched.', inputSchema: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(20).default(8), projectPath: z.string().optional() }) }, async ({ query, limit, projectPath }) => result(searchWiki(projectRuntimePaths(paths, projectPath), query, limit)))
   server.registerTool('fabric_project_inspect', { description: 'Inspect a Fabric project without modifying it.', inputSchema: z.object({ projectPath: z.string().min(1) }) }, async ({ projectPath: value }) => { try { return result({ ok: true, project: inspectFabricProject(resolveProjectPath(value)) }) } catch (cause) { return failure(cause) } })
   server.registerTool('fabric_project_scaffold', { description: 'Create an empty Fabric 1.21.4 project with the pinned Gradle Wrapper. The destination must not already contain files; the first build may download Gradle and dependencies.', inputSchema: z.object({ projectPath: z.string().min(1), modId: z.string().min(2), modName: z.string().min(1) }) }, async ({ projectPath: value, modId, modName }) => { try { return result({ ok: true, project: await scaffoldFabricProject(value, modId, modName, __PROJECT_WRAPPER__) }) } catch (cause) { return failure(cause) } })
   server.registerTool('fabric_validate', { description: 'Validate Fabric metadata, Gradle Wrapper and Minecraft version constraints.', inputSchema: z.object({ projectPath: z.string().min(1) }) }, async ({ projectPath: value }) => { try { return result(validateFabricProject(resolveProjectPath(value))) } catch (cause) { return failure(cause) } })
@@ -100,6 +111,48 @@ function buildServer(): McpServer {
     }
   })
   server.registerTool('minecraft_test_status', { description: 'Read a deterministic Minecraft test job and report owned by this session.', inputSchema: z.object({ sessionId: z.string().uuid(), jobId: z.string().min(1) }) }, async ({ sessionId, jobId }) => result(runtime.jobStatus(jobId, sessionId)))
+  server.registerTool('minecraft_build_studio', {
+    description: 'Open a saved structure NBT in the in-game void studio, read back in-game edits, and apply a build to the session test world. Requires the bundled builder component and a ready test world (canRunTests=true). This is the in-game half of the building workflow; the visual building workspace produces the structure file.',
+    inputSchema: z.object({
+      action: z.enum(['status', 'open', 'commit', 'apply', 'undo', 'exit', 'clear']),
+      sessionId: z.string().uuid(),
+      instanceId: z.string().optional(),
+      projectPath: z.string().optional(),
+      buildId: z.string().regex(/^[a-z0-9_]{1,64}$/).optional(),
+      structurePath: z.string().min(1).optional(),
+      x: z.number().int().optional(),
+      y: z.number().int().optional(),
+      z: z.number().int().optional(),
+      force: z.boolean().default(false),
+      teleport: z.boolean().default(true),
+      token: z.string().min(1).optional()
+    })
+  }, async (request) => {
+    try {
+      if (request.projectPath) runtime.updateSession(request.sessionId, { projectPath: resolveProjectPath(request.projectPath) })
+      switch (request.action) {
+        case 'status': return result(await runtime.studioStatus(request.instanceId, request.sessionId))
+        case 'open': {
+          if (!request.buildId || !request.structurePath) throw new CoreError('INVALID_ARGUMENT', 'open 需要 buildId 和 structurePath。')
+          if (!path.isAbsolute(request.structurePath)) throw new CoreError('INVALID_ARGUMENT', 'structurePath 必须是绝对路径。')
+          return result(await runtime.studioOpen({ buildId: request.buildId, structurePath: request.structurePath, force: request.force }, request.instanceId, request.sessionId))
+        }
+        case 'commit': {
+          if (!request.buildId) throw new CoreError('INVALID_ARGUMENT', 'commit 需要 buildId。')
+          return result(await runtime.studioCommit(request.buildId, request.instanceId, request.sessionId))
+        }
+        case 'apply': {
+          if (!request.buildId || request.x === undefined || request.y === undefined || request.z === undefined) throw new CoreError('INVALID_ARGUMENT', 'apply 需要 buildId 和 x/y/z。')
+          if (request.structurePath && !path.isAbsolute(request.structurePath)) throw new CoreError('INVALID_ARGUMENT', 'structurePath 必须是绝对路径。')
+          return result(await runtime.studioApply({ buildId: request.buildId, structurePath: request.structurePath, x: request.x, y: request.y, z: request.z, force: request.force, teleport: request.teleport }, request.instanceId, request.sessionId))
+        }
+        case 'undo': return result(await runtime.studioUndo(request.token, request.instanceId, request.sessionId))
+        case 'exit': return result(await runtime.studioExit(request.instanceId, request.sessionId))
+        case 'clear': return result(await runtime.studioClear(request.buildId, request.force, request.instanceId, request.sessionId))
+        default: throw new CoreError('INVALID_ARGUMENT', '未知的 studio 操作。')
+      }
+    } catch (cause) { return failure(cause) }
+  })
   return server
 }
 

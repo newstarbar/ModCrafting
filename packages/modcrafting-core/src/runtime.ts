@@ -4,7 +4,8 @@ import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { DEFAULT_TEST_PROFILE, FABRIC_TARGET, GAME_TEST_WORLD, testProfileSchema, validateGameTestSpec, type GameAction, type GameTestSpec, type TestProfile } from './domain.ts'
 import { executeGameTest, SUPPORTED_GAME_ASSERTIONS } from './game-test.ts'
-import { JobManager, SystemToolchainProvider, bridgeRequest, readBridgeDiscovery, prepareAssets, writeGameTestReport, type BridgeDiscovery, type DownloadableAsset } from './node.ts'
+import { JobManager, SystemToolchainProvider, bridgeRequest, createRuntimePaths, readBridgeDiscovery, prepareAssets, writeGameTestReport, type BridgeDiscovery, type DownloadableAsset } from './node.ts'
+import { assertBuildId, prepareStudioInbox, readStudioDiscovery, readStudioOutbox, studioRequest, StudioError, type StudioDiscovery, type StudioOutbox, type StudioResult } from './building-studio.ts'
 import type { RuntimePaths, CoreEnvironmentStatus, CoreCapabilities, LocalAssetStatus, GameInstance, GameRuntimeStatus, JobSnapshot, CoreFailure, BridgeResult, CoreRuntimeState } from './contracts.ts'
 import { SessionRegistry } from './sessions.ts'
 
@@ -66,6 +67,7 @@ function acquireFileLease(file: string, metadata: Record<string, unknown>, busyC
   throw new CoreError(busyCode, busyMessage)
 }
 export type BundledObserver = { jarBase64: string; sha256: string; version: string; protocol: 2 }
+export type BundledBuilder = { jarBase64: string; sha256: string; version: string; protocol: 1 }
 /** Companion artifact receipt produced by product:stage, also used by the standalone Bench. */
 export function loadBundledObserver(directory: string): BundledObserver {
   const receipt = JSON.parse(readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
@@ -73,10 +75,22 @@ export function loadBundledObserver(directory: string): BundledObserver {
   observerBytes(observer)
   return observer
 }
+export function loadBundledBuilder(directory: string): BundledBuilder {
+  const receipt = JSON.parse(readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
+  const builder = { ...receipt, jarBase64: readFileSync(path.join(directory, 'modcrafting-builder.jar')).toString('base64') } as BundledBuilder
+  builderBytes(builder)
+  return builder
+}
 function observerBytes(observer?: BundledObserver): Buffer {
   if (!observer) throw new CoreError('OBSERVER_UPDATE_REQUIRED', '插件缺少配套的游戏测试组件，请更新完整插件包；重新下载旧资源无法修复。')
   const bytes = Buffer.from(observer.jarBase64, 'base64')
   if (observer.protocol !== 2 || createHash('sha256').update(bytes).digest('hex') !== observer.sha256) throw new CoreError('OBSERVER_UPDATE_REQUIRED', '游戏测试组件校验失败，请重新安装完整插件包。')
+  return bytes
+}
+function builderBytes(builder?: BundledBuilder): Buffer {
+  if (!builder) throw new CoreError('BUILDER_UPDATE_REQUIRED', '插件缺少建筑工作室组件，请更新完整插件包。')
+  const bytes = Buffer.from(builder.jarBase64, 'base64')
+  if (builder.protocol !== 1 || createHash('sha256').update(bytes).digest('hex') !== builder.sha256) throw new CoreError('BUILDER_UPDATE_REQUIRED', '建筑工作室组件校验失败，请重新安装完整插件包。')
   return bytes
 }
 export function localAssetStatus(paths: RuntimePaths, observer?: BundledObserver): LocalAssetStatus[] {
@@ -112,6 +126,12 @@ export function resolveProjectPath(value: string): string {
   if (!existsSync(root) || !statSync(root).isDirectory()) throw new CoreError('PROJECT_UNAVAILABLE', 'projectPath does not exist or is not a directory')
   return root
 }
+
+/** Knowledge assets follow the workspace (.modcrafting inside it) when a project is known; the backend data root otherwise. */
+export function projectRuntimePaths(paths: RuntimePaths, projectPath?: string): RuntimePaths {
+  if (!projectPath) return paths
+  return createRuntimePaths(path.join(path.resolve(projectPath), '.modcrafting'))
+}
 const waitForChild = (child: ChildProcess) => new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('close', (value) => resolve(value ?? -1)) })
 
 /** One owner of build/game/test jobs, reusable by MCP, Bench and optional views. */
@@ -126,13 +146,17 @@ export class FabricRuntime {
   private toolchain: Pick<SystemToolchainProvider, 'status' | 'startGradle'>
   private sessions: SessionRegistry
   private observer?: BundledObserver
+  private builder?: BundledBuilder
   private scaffoldIncludesWrapper: boolean
   readonly paths: RuntimePaths
   readonly version: string
   get backendId(): string { return this.sessions.backendId }
-  constructor(options: { paths: RuntimePaths; version: string; observer?: BundledObserver; scaffoldIncludesWrapper?: boolean; toolchain?: Pick<SystemToolchainProvider, 'status' | 'startGradle'> }) {
-    this.paths = options.paths; this.version = options.version; this.observer = options.observer; this.scaffoldIncludesWrapper = Boolean(options.scaffoldIncludesWrapper); this.toolchain = options.toolchain ?? new SystemToolchainProvider(options.paths.dataRoot)
+  constructor(options: { paths: RuntimePaths; version: string; observer?: BundledObserver; builder?: BundledBuilder; scaffoldIncludesWrapper?: boolean; toolchain?: Pick<SystemToolchainProvider, 'status' | 'startGradle'> }) {
+    this.paths = options.paths; this.version = options.version; this.observer = options.observer; this.builder = options.builder; this.scaffoldIncludesWrapper = Boolean(options.scaffoldIncludesWrapper); this.toolchain = options.toolchain ?? new SystemToolchainProvider(options.paths.dataRoot)
     this.sessions = new SessionRegistry(options.paths.dataRoot)
+  }
+  studioInfo() {
+    return this.builder ? { bundled: true, version: this.builder.version, protocol: this.builder.protocol } : { bundled: false }
   }
   createSession(input: { name?: string; projectPath?: string } = {}) {
     return this.sessions.create({ ...input, projectPath: input.projectPath ? resolveProjectPath(input.projectPath) : undefined })
@@ -183,24 +207,27 @@ export class FabricRuntime {
     return { ok: true, sessionId, profile, savedAsProjectDefault: Boolean(options.saveAsProjectDefault) }
   }
   async environmentStatus(projectPath?: string): Promise<CoreEnvironmentStatus> {
-    return { ...(await this.toolchain.status(projectPath)), contractVersion: 1, paths: this.paths, assets: localAssetStatus(this.paths, this.observer), capabilities: { ...CORE_CAPABILITIES, toolchain: { ...CORE_CAPABILITIES.toolchain, scaffoldIncludesWrapper: this.scaffoldIncludesWrapper } } }
+    const scoped = projectRuntimePaths(this.paths, projectPath)
+    return { ...(await this.toolchain.status(projectPath)), contractVersion: 1, paths: scoped, assets: localAssetStatus(scoped, this.observer), capabilities: { ...CORE_CAPABILITIES, toolchain: { ...CORE_CAPABILITIES.toolchain, scaffoldIncludesWrapper: this.scaffoldIncludesWrapper } } }
   }
-  async prepareAssets(names: DownloadableAsset[] = ['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge']) {
+  async prepareAssets(names: DownloadableAsset[] = ['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'], projectPath?: string) {
+    if (projectPath) resolveProjectPath(projectPath)
+    const scoped = projectRuntimePaths(this.paths, projectPath)
     // Serialize overlapping selections because extraction uses PID-based staging directories.
-    const key = [...new Set(names)].sort().join(',')
-    const present = localAssetStatus(this.paths, this.observer)
+    const key = `${scoped.dataRoot}|${[...new Set(names)].sort().join(',')}`
+    const present = localAssetStatus(scoped, this.observer)
     const needed = [...new Set(names)].filter(name => present.find(row => row.name === (name === 'agent-knowledge' ? 'fabric-docs' : name))?.status !== 'present')
     let work = this.preparations.get(key)
     if (!work) {
       const previous = Promise.allSettled([...this.preparations.values()])
-      work = previous.then(() => prepareAssets(this.paths, needed))
+      work = previous.then(() => prepareAssets(scoped, needed))
       this.preparations.set(key, work)
     }
     try {
       const assets = await work
-      const localAssets = localAssetStatus(this.paths, this.observer)
+      const localAssets = localAssetStatus(scoped, this.observer)
       const ready = names.every(name => localAssets.find(row => row.name === (name === 'agent-knowledge' ? 'fabric-docs' : name))?.status === 'present')
-      return { ok: ready && assets.every(asset => asset.ok), assets, dataRoot: this.paths.dataRoot, localAssets }
+      return { ok: ready && assets.every(asset => asset.ok), assets, dataRoot: scoped.dataRoot, localAssets }
     } finally { if (this.preparations.get(key) === work) this.preparations.delete(key) }
   }
   startBuild(projectPath: string, task = 'build', requestedSessionId?: string) {
@@ -259,8 +286,11 @@ export class FabricRuntime {
     if (existingDiscovery) throw new CoreError('INSTANCE_CONFLICT', '这个测试目录中仍有可响应的 Minecraft 实例。请在原会话停止它后再启动。')
     // Fail on a missing/incompatible bundled bridge before claiming the project lease.
     const bytes = observerBytes(this.observer)
+    const builder = this.builder ? builderBytes(this.builder) : undefined
     const conflicts = filesUnder(path.join(gameDir, 'mods')).filter((file) => /modcrafting-observer.*\.jar$/i.test(path.basename(file)) && path.basename(file) !== 'modcrafting-observer.jar')
     if (conflicts.length) throw new CoreError('OBSERVER_CONFLICT', '游戏目录里有另一份测试组件。请选择新的测试目录，保留原目录供检查。')
+    const builderConflicts = builder ? filesUnder(path.join(gameDir, 'mods')).filter((file) => /modcrafting-builder.*\.jar$/i.test(path.basename(file)) && path.basename(file) !== 'modcrafting-builder.jar') : []
+    if (builderConflicts.length) throw new CoreError('BUILDER_CONFLICT', '游戏目录里有另一份建筑工作室组件。请选择新的测试目录，保留原目录供检查。')
     const gameLeasePath = path.join(this.paths.dataRoot, 'project-leases', `${createHash('sha256').update(key(root)).digest('hex')}.game.lock`)
     const releaseGameLease = acquireFileLease(gameLeasePath, { projectPath: root, sessionId, operation: 'game' }, 'PROJECT_BUSY', '这个工程已在另一个任务会话中运行游戏。请先结束原会话的 Minecraft。')
     try {
@@ -270,6 +300,7 @@ export class FabricRuntime {
     // Use the component built with this plugin. A historical release cache is not a compatibility contract.
     mkdirSync(path.join(gameDir, 'mods'), { recursive: true })
     writeFileSync(path.join(gameDir, 'mods', 'modcrafting-observer.jar'), bytes)
+    if (builder) writeFileSync(path.join(gameDir, 'mods', 'modcrafting-builder.jar'), builder)
     const gameArgs = `--args=--gameDir \"${gameDir.replace(/\\/g, '/')}\" --width=${profile.window.width} --height=${profile.window.height}`
     const jobId = this.jobs.start('minecraft', async (job) => {
       try {
@@ -290,6 +321,69 @@ export class FabricRuntime {
     this.syncSession(sessionId)
     return { ok: true, instanceId, jobId, preparationJobId, gameDirectory: gameDir, sessionId, profile }
     } catch (cause) { releaseGameLease(); throw cause }
+  }
+  private studioDiscovery(current: GameInstance): StudioDiscovery {
+    const job = this.jobStatus(current.jobId, current.sessionId)
+    if (!('status' in job) || job.status !== 'running') throw new CoreError('BUILDER_UNAVAILABLE', 'Minecraft instance is not running')
+    const discovery = readStudioDiscovery(current.gameDirectory)
+    if (!discovery) throw new CoreError('BUILDER_UNAVAILABLE', '建筑工作室组件尚未就绪；等待游戏进入测试世界，或使用包含 builder 组件的完整插件包。')
+    if (discovery.protocol !== 1) throw new CoreError('BUILDER_UPDATE_REQUIRED', '建筑工作室组件版本不匹配，请停止并用新版插件重启游戏。')
+    return discovery
+  }
+  private async withStudio<T>(work: () => Promise<T>): Promise<T> {
+    try { return await work() } catch (cause) { if (cause instanceof StudioError) throw new CoreError(cause.code, cause.message); throw cause }
+  }
+  private async requireGameReady(current: GameInstance, sessionId: string): Promise<void> {
+    const status = await this.runtimeStatus(current.instanceId, sessionId)
+    if (!status.canRunTests) throw new CoreError('GAME_NOT_READY', status.message || '游戏尚未进入测试世界。')
+  }
+  async studioStatus(id?: string, requestedSessionId?: string): Promise<StudioResult> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    return studioRequest(this.studioDiscovery(current), 'GET', '/v1/studio/status', undefined, 15_000)
+  }
+  async studioOpen(input: { buildId: string; structurePath: string; force?: boolean }, id?: string, requestedSessionId?: string): Promise<StudioResult> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    await this.requireGameReady(current, sessionId)
+    return this.withStudio(async () => {
+      assertBuildId(input.buildId)
+      const discovery = this.studioDiscovery(current)
+      prepareStudioInbox(current.gameDirectory, input.buildId, input.structurePath)
+      return studioRequest(discovery, 'POST', '/v1/studio/open', { buildId: input.buildId, force: Boolean(input.force) })
+    })
+  }
+  async studioCommit(buildId: string, id?: string, requestedSessionId?: string): Promise<StudioResult & { outbox?: StudioOutbox | null }> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    return this.withStudio(async () => {
+      assertBuildId(buildId)
+      const discovery = this.studioDiscovery(current)
+      const result = await studioRequest(discovery, 'POST', '/v1/studio/commit', { buildId })
+      return result.ok ? { ...result, outbox: readStudioOutbox(current.gameDirectory, buildId) } : result
+    })
+  }
+  async studioApply(input: { buildId: string; structurePath?: string; x: number; y: number; z: number; force?: boolean; teleport?: boolean }, id?: string, requestedSessionId?: string): Promise<StudioResult> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    await this.requireGameReady(current, sessionId)
+    return this.withStudio(async () => {
+      assertBuildId(input.buildId)
+      const discovery = this.studioDiscovery(current)
+      if (input.structurePath) prepareStudioInbox(current.gameDirectory, input.buildId, input.structurePath)
+      return studioRequest(discovery, 'POST', '/v1/studio/apply', { buildId: input.buildId, x: input.x, y: input.y, z: input.z, force: Boolean(input.force), teleport: input.teleport !== false })
+    })
+  }
+  async studioUndo(token?: string, id?: string, requestedSessionId?: string): Promise<StudioResult> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    return this.withStudio(async () => studioRequest(this.studioDiscovery(current), 'POST', '/v1/studio/undo', token ? { token } : {}))
+  }
+  async studioExit(id?: string, requestedSessionId?: string): Promise<StudioResult> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    return this.withStudio(async () => studioRequest(this.studioDiscovery(current), 'POST', '/v1/studio/exit', {}))
+  }
+  async studioClear(buildId?: string, force = false, id?: string, requestedSessionId?: string): Promise<StudioResult> {
+    const sessionId = this.sessionId(requestedSessionId), current = this.instance(id, sessionId)
+    return this.withStudio(async () => {
+      if (buildId) assertBuildId(buildId)
+      return studioRequest(this.studioDiscovery(current), 'POST', '/v1/studio/clear', { buildId, force })
+    })
   }
   private instance(id: string | undefined, sessionId: string): GameInstance {
     const sessionInstances = [...this.instances.values()].filter((value) => value.sessionId === sessionId)

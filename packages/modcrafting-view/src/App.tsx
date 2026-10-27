@@ -6,11 +6,13 @@ import { IconFolder, IconWrench, IconGamepad, IconPlay, IconSquare as IconStop }
 import { RecipeEditor } from './RecipeEditor.tsx'
 import { ContentEditor } from './ContentEditor.tsx'
 import { GuiEditor } from './GuiEditor.tsx'
+import { TextureStudio } from './TextureStudio.tsx'
+import { ModelEditor } from './ModelEditor.tsx'
 
-type Module = 'overview' | 'content' | 'recipe' | 'gui' | 'build' | 'game' | 'tests' | 'reports'
+type Module = 'overview' | 'content' | 'textures' | 'recipe' | 'gui' | 'model' | 'build' | 'game' | 'tests' | 'reports'
 const modules: Array<{ id: Module; label: string; icon: string }> = [
-  { id: 'overview', label: '概览', icon: '⌂' }, { id: 'content', label: '内容', icon: '◇' }, { id: 'recipe', label: '配方', icon: '▦' },
-  { id: 'gui', label: '界面', icon: '▣' }, { id: 'build', label: '构建', icon: '⚒' }, { id: 'game', label: '游戏', icon: '▶' },
+  { id: 'overview', label: '概览', icon: '⌂' }, { id: 'content', label: '内容', icon: '◇' }, { id: 'textures', label: '贴图', icon: '▩' }, { id: 'recipe', label: '配方', icon: '▦' },
+  { id: 'gui', label: '界面', icon: '▣' }, { id: 'model', label: '模型', icon: '⬡' }, { id: 'build', label: '构建', icon: '⚒' }, { id: 'game', label: '游戏', icon: '▶' },
   { id: 'tests', label: '测试', icon: '✓' }, { id: 'reports', label: '报告', icon: '▤' }
 ]
 const labels: Record<string, string> = { build: '构建', minecraft: 'Minecraft', minecraft_prepare: '准备测试世界', game_test: '游戏测试', running: '进行中', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '服务重启时中断', present: '已准备', missing: '尚未准备', invalid: '需要更新或修复', PASS: '通过', FAIL: '未通过', INCONCLUSIVE: '暂时无法验证' }
@@ -128,7 +130,7 @@ export function App() {
     <section className="panel"><h2><IconFolder />工程与环境</h2>
       <form className="row project-form" onSubmit={event => { event.preventDefault(); void run('检查工程', open) }}><label className="grow">Fabric 工程路径<input value={path} onChange={event => setPath(event.target.value)} placeholder="输入工程文件夹绝对路径" /></label><button className="primary" disabled={disabled || !path.trim()}>打开工程</button></form>
       {project && <div className="project-info"><strong>{project.modId || '未识别 mod ID'}</strong><Badge value={project.valid ? 'PASS' : 'FAIL'} /><span>{project.minecraftVersion}</span><code>{project.path}</code>{project.errors.map(value => <p className="error" key={value}>{value}</p>)}</div>}
-      <div className="row"><button disabled={disabled} onClick={() => void run('检查环境', async () => setEnvironment(await action({ operation: 'environment', projectPath: project?.path })))}>刷新环境</button><button disabled={disabled} onClick={() => void run('准备资料', async () => { const value = await action<{ ok: boolean }>({ operation: 'prepare' }); setNotice(value.ok ? '离线知识资料已准备好。游戏测试组件随插件提供。' : '部分资料未准备好，请查看环境信息。'); setEnvironment(await action({ operation: 'environment', projectPath: project?.path })) })}>准备离线资料</button></div>
+      <div className="row"><button disabled={disabled} onClick={() => void run('检查环境', async () => setEnvironment(await action({ operation: 'environment', projectPath: project?.path })))}>刷新环境</button><button disabled={disabled} onClick={() => void run('准备资料', async () => { const value = await action<{ ok: boolean }>({ operation: 'prepare', projectPath: project?.path }); setNotice(value.ok ? '离线知识资料已准备好。游戏测试组件随插件提供。' : '部分资料未准备好，请查看环境信息。'); setEnvironment(await action({ operation: 'environment', projectPath: project?.path })) })}>准备离线资料</button></div>
       {environment && <details className="environment-details"><summary>环境详情</summary><div className="checks"><div><span>系统 JDK 21</span><Badge value={environment.java.ok ? 'PASS' : 'FAIL'} /><small>{environment.java.version || environment.java.error}</small></div><div><span>工程 Wrapper</span><Badge value={environment.gradleWrapper ? 'PASS' : 'FAIL'} /></div><div><span>游戏测试桥</span><Badge value={game?.bridgeReady ? 'PASS' : 'INCONCLUSIVE'} /><small>{game?.bridgeReady ? '已连接；仍需等世界准备完成' : '等待 Minecraft 启动'}</small></div></div>{environment.remediation.map(value => <p className="error" key={value}>{value}</p>)}<details><summary>资源目录</summary><code>{environment.paths.dataRoot}</code>{environment.assets.map(value => <div className="row asset" key={value.name}><strong>{value.name}</strong><Badge value={value.status} /><code>{value.path}</code></div>)}</details></details>}
     </section>
     <section className="panel"><h2>当前任务</h2><p>{currentTask?.phase || '等待 Agent 更新任务状态'}</p><p className="muted">推荐工作区：{currentTask?.recommendedModules.map(id => modules.find(row => row.id === id)?.label || id).join('、') || '概览'}</p><div className="row"><button onClick={() => navigate('content')}>编辑内容</button><button onClick={() => navigate('game')}>准备游戏</button><button onClick={() => navigate('reports')}>查看本会话报告</button></div></section>
@@ -178,8 +180,10 @@ export function App() {
   const moduleContent = (() => {
     if (activeModule === 'overview') return overview()
     if (activeModule === 'content') return project?.valid ? <ContentEditor key={`${sessionId}:content:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>内容工作区</h2><p>请先关联一个有效工程。</p></section>
+    if (activeModule === 'textures') return project?.valid ? <TextureStudio key={`${sessionId}:textures:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>贴图工作区</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'recipe') return project?.valid ? <RecipeEditor key={`${sessionId}:recipe:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>配方工作区</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'gui') return project?.valid ? <GuiEditor key={`${sessionId}:gui:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>界面工作区</h2><p>请先关联一个有效工程。</p></section>
+    if (activeModule === 'model') return project?.valid ? <ModelEditor key={`${sessionId}:model:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>模型工作区</h2><p>请先关联一个有效工程。</p></section>
     if (activeModule === 'build') return buildView()
     if (activeModule === 'game') return gameView()
     if (activeModule === 'tests') return testsView()

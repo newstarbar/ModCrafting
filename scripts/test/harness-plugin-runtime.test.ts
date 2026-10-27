@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fixtureObserver } from './fixtures/observer.ts'
-import { FabricRuntime, CoreError, createRuntimePaths, localAssetStatus, lookupMinecraftData, searchFabricDocs, FABRIC_TARGET, GAME_TEST_WORLD, DEFAULT_TEST_PROFILE, type TestProfile, type GameTestSpec, type JobSnapshot } from '../../packages/modcrafting-core/src/index.ts'
+import { FabricRuntime, CoreError, createRuntimePaths, localAssetStatus, lookupMinecraftData, projectRuntimePaths, searchFabricDocs, FABRIC_TARGET, GAME_TEST_WORLD, DEFAULT_TEST_PROFILE, type TestProfile, type GameTestSpec, type JobSnapshot } from '../../packages/modcrafting-core/src/index.ts'
 
 async function fixture(t: { after: (work: () => Promise<void>) => void }, withMods = false, clientExit?: number) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'modcrafting-core-runtime-'))
@@ -145,6 +145,34 @@ test('Cold asset preparation uses proxy fallback and the layouts consumed by Cor
     assert.equal(result.localAssets.find(row => row.name === 'base-mods')?.status, 'missing')
     assert.equal(lookupMinecraftData(f.paths, 'item', 'stone').ok, true)
     assert.equal(existsSync(path.join(f.paths.assetsRoot, 'base-mods')), false)
+  } finally { globalThis.fetch = fetchBefore }
+})
+test('Project-scoped preparation stores knowledge under the workspace and leaves the backend root untouched', async (t) => {
+  const f = await fixture(t); const fetchBefore = globalThis.fetch
+  const source = path.join(f.root, 'zip-source', 'minecraft-data'), member = `minecraft-data/${FABRIC_TARGET.minecraft}/index.json`
+  await mkdir(path.dirname(path.join(source, member)), { recursive: true })
+  await writeFile(path.join(source, member), JSON.stringify({ itemsById: { 'minecraft:stone': { id: 'minecraft:stone' } } }))
+  const archive = path.join(f.root, 'minecraft-data.zip')
+  assert.equal(spawnSync('tar', ['-a', '-cf', archive, '-C', source, 'minecraft-data'], { encoding: 'utf8', windowsHide: true, timeout: 5000 }).status, 0)
+  const body = new Uint8Array(await readFile(archive))
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.startsWith('https://api.github.com/')) return new Response(JSON.stringify([{ tag_name: `knowledge-${FABRIC_TARGET.minecraft}-fixture`, assets: [{ name: 'minecraft-data.zip', browser_download_url: 'https://github.com/fixture/minecraft-data.zip' }] }]))
+    if (url.startsWith('https://gh.xmly.dev/')) return new Response('', { status: 503 })
+    assert.ok(url.startsWith('https://github.com/fixture/')); return new Response(body)
+  }
+  try {
+    const result = await f.runtime.prepareAssets(['minecraft-data'], f.project)
+    assert.equal(result.ok, true)
+    assert.equal(result.dataRoot, path.join(f.project, '.modcrafting'))
+    const scoped = projectRuntimePaths(f.paths, f.project)
+    assert.equal(lookupMinecraftData(scoped, 'item', 'stone').ok, true)
+    assert.equal(lookupMinecraftData(f.paths, 'item', 'stone').ok, false)
+    assert.ok(String(lookupMinecraftData(f.paths, 'item', 'stone').error).includes(f.paths.knowledgeRoot))
+    assert.equal(existsSync(f.paths.knowledgeRoot), false, 'backend knowledge root stays untouched')
+    const status = await f.runtime.environmentStatus(f.project)
+    assert.equal(status.paths.dataRoot, path.join(f.project, '.modcrafting'))
+    assert.equal(status.assets.find(row => row.name === 'minecraft-data')?.status, 'present')
   } finally { globalThis.fetch = fetchBefore }
 })
 test('Core build jobs expose logs, terminal errors and stable missing-job codes', async (t) => {

@@ -3,10 +3,11 @@ import test from 'node:test'
 import { spawn } from 'node:child_process'
 import { createServer, request as httpRequest } from 'node:http'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fixtureObserver } from './fixtures/observer.ts'
-import { FabricRuntime, createRuntimePaths, FABRIC_TARGET, GAME_TEST_WORLD, validateGameTestSpec, type GameTestSpec, type JobSnapshot } from '../../packages/modcrafting-core/src/index.ts'
+import { FabricRuntime, createRuntimePaths, encodePng, FABRIC_TARGET, GAME_TEST_WORLD, validateGameTestSpec, type GameTestSpec, type JobSnapshot } from '../../packages/modcrafting-core/src/index.ts'
 import { startBrowserView } from '../../plugins/modcrafting-fabric/src/browser-server.ts'
 
 const assets = { html: '<!doctype html><title>fixture view</title>', js: '/* fixture */', css: 'body{color:white}' }
@@ -154,4 +155,33 @@ test('Browser texture batches require authentication, a supported project, and b
   assert.equal(result.ok, true); assert.equal(result.ready, true); assert.ok(result.items['minecraft:apple'].startsWith('data:image/png;base64,')); assert.equal(result.textures['minecraft:../secret'], null)
   assert.equal((await f.call({ ...batch, itemIds: Array(81).fill('minecraft:apple') })).code, 'INVALID_ARGUMENT')
   assert.equal((await fetch(f.url.origin + '/api/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(batch) })).status, 401)
+})
+
+test('Browser texture upload, import, preview and save share authentication and revision checks', async (t) => {
+  const f = await fixture(t)
+  await mkdir(path.join(f.project, 'src/main/resources'), { recursive: true })
+  await writeFile(path.join(f.project, 'src/main/resources/fabric.mod.json'), JSON.stringify({ schemaVersion: 1, id: 'texture_view', version: '1', depends: { minecraft: '1.21.4' }, entrypoints: { main: [] } }))
+  await writeFile(path.join(f.project, 'gradlew.bat'), '@echo fixture'); await writeFile(path.join(f.project, 'gradle.properties'), 'minecraft_version=1.21.4\n')
+  const source = { width: 64, height: 64, data: new Uint8ClampedArray(64 * 64 * 4) }
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+    const index = (y * 64 + x) * 4, inside = Math.abs(x - 32) + Math.abs(y - 32) < 22
+    source.data[index] = inside ? 120 : 255; source.data[index + 1] = inside ? 70 : 0; source.data[index + 2] = inside ? 180 : 255; source.data[index + 3] = 255
+  }
+  const png = Buffer.from(encodePng(source))
+  const unauthenticated = await fetch(f.url.origin + '/api/texture-source', { method: 'POST', headers: { 'content-type': 'image/png' }, body: png })
+  assert.equal(unauthenticated.status, 401)
+  const upload = await fetch(f.url.origin + '/api/texture-source', { method: 'POST', headers: { ...f.headers, 'content-type': 'image/png' }, body: png })
+  const uploaded = await upload.json() as { sourceToken: string }
+  assert.equal(upload.status, 200); assert.match(uploaded.sourceToken, /^[a-f0-9-]{36}\.png$/i)
+  const invalid = await fetch(f.url.origin + '/api/texture-source', { method: 'POST', headers: { ...f.headers, 'content-type': 'image/png' }, body: 'not png' })
+  assert.equal(invalid.status, 400)
+  const tooLarge = await fetch(f.url.origin + '/api/texture-source', { method: 'POST', headers: { ...f.headers, 'content-type': 'image/png' }, body: 'x'.repeat(8 * 1024 * 1024 + 1) })
+  assert.equal(tooLarge.status, 413)
+  const imported = await f.call({ operation: 'texture', request: { action: 'import', projectPath: f.project, textureId: 'texture_view:item/test', sourceToken: uploaded.sourceToken, options: { size: 16, background: 'auto', trim: true, pixelize: true, paletteSize: 12, outline: 1 } } })
+  assert.equal(imported.ok, true); assert.ok(imported.image.startsWith('data:image/png;base64,')); assert.ok(imported.candidateId)
+  const preview = await f.call({ operation: 'texture', request: { action: 'preview', projectPath: f.project, textureId: 'texture_view:item/test', pixelsBase64: imported.pixels.base64, width: 16, height: 16, analyzeOnly: true } })
+  assert.equal(preview.ok, true); assert.match(preview.previewRevision, /^[a-f0-9]{64}$/)
+  const saved = await f.call({ operation: 'texture', request: { action: 'save', projectPath: f.project, textureId: 'texture_view:item/test', pixelsBase64: imported.pixels.base64, width: 16, height: 16, expectedRevision: null, previewRevision: preview.previewRevision } })
+  assert.equal(saved.ok, true); assert.match(saved.revision, /^[a-f0-9]{64}$/)
+  assert.equal(existsSync(path.join(f.project, 'src/main/resources/assets/texture_view/textures/item/test.png')), true)
 })

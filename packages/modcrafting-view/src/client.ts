@@ -23,6 +23,16 @@ export async function request<T>(route: string, action?: BrowserAction): Promise
   return value
 }
 export const action = <T,>(value: BrowserAction) => request<T>('/api/action', value)
+export async function uploadTextureSource(file: File): Promise<{ sourceToken: string; size: number }> {
+  const response = await fetch('/api/texture-source', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'x-modcrafting-backend': initialBackendId, 'x-modcrafting-session': activeSessionId, 'content-type': 'image/png' },
+    body: file
+  })
+  const value = await response.json()
+  if (!response.ok || value.ok === false) throw Error(`${value.code || 'OPERATION_FAILED'}: ${value.error || JSON.stringify(value)}`)
+  return value
+}
 export const state = () => request<CoreRuntimeState>('/api/state')
 export async function selectSession(sessionId: string): Promise<boolean> {
   const selected = await action<{ readOnly: boolean }>({ operation: 'select_session', sessionId })

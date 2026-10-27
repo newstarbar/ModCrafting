@@ -1,7 +1,7 @@
 {
 	"name": "modcrafting",
 	"type": "module",
-	"version": "0.1.2",
+	"version": "0.1.5",
 	"description": "ModCrafting Fabric Core, MCP tools, and visual workbench",
 	"author": "newstarbar",
 	"license": "GPL-3.0",
@@ -38,6 +38,7 @@
 		"plugin:smoke": "node scripts/plugin/smoke.mjs",
 		"plugin:typecheck": "tsc --noEmit --module nodenext --moduleResolution nodenext --target es2022 --allowImportingTsExtensions --esModuleInterop --skipLibCheck plugins/modcrafting-fabric/src/mcp-server.ts packages/modcrafting-core/src/index.ts scripts/bench/run-fabric-bench.ts scripts/bench/run-fabric-bench-live.ts",
 		"candidate:build": "node scripts/plugin/build-candidate.mjs",
+		"builder:build": "node scripts/plugin/build-builder.mjs",
 		"release:package": "node scripts/release/package-release.mjs",
 		"acceptance:first-use": "node --experimental-strip-types scripts/acceptance/run-first-use.mjs",
 		"docs:sync-fabric": "node --experimental-strip-types scripts/sync-fabric-docs-knowledge.ts"
@@ -54,11 +55,14 @@
 		"@types/node": "^22.20.5",
 		"@types/react": "^19.1.2",
 		"@types/react-dom": "^19.1.2",
+		"@types/three": "^0.186.0",
 		"ajv": "^8.20.0",
 		"esbuild": "0.28.2",
+		"fast-png": "8.0.0",
 		"react": "^19.1.0",
 		"react-dom": "^19.1.0",
 		"sharp": "^0.35.2",
+		"three": "^0.186.1",
 		"typescript": "^5.8.3",
 		"unzipper": "^0.12.3",
 		"zod": "4.4.3"

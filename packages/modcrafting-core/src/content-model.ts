@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { templateSchemas, type FormField } from './template-schemas.ts'
+import { voxelDslSchema } from './voxel-dsl.ts'
 
 export const contentKinds = ['item', 'food', 'block', 'entity', 'tool', 'armor'] as const
 export type ContentKind = typeof contentKinds[number]
@@ -19,7 +20,8 @@ export const contentForms: Record<ContentKind, { title: string; icon: string; te
 const resource = /^[a-z0-9_.-]+:[a-z0-9_/-]+$/
 export const contentObjectSchema = z.object({
   kind: z.enum(contentKinds), id: z.string().regex(/^[a-z0-9_-]+:[a-z][a-z0-9_]{0,47}$/), displayName: z.string().trim().min(1).max(80),
-  texture: z.string().regex(resource), parameters: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean()]))
+  texture: z.string().regex(resource), parameters: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean()])),
+  voxel: voxelDslSchema.optional()
 }).strict().superRefine((value, context) => {
   const fields = contentForms[value.kind].fields
   for (const field of fields) {
@@ -34,10 +36,11 @@ export const contentObjectSchema = z.object({
   if (value.kind === 'item' && Number(value.parameters.durability) > 0 && value.parameters.maxStackSize !== 1) context.addIssue({ code: 'custom', path: ['parameters', 'maxStackSize'], message: '有耐久的物品最大堆叠必须为 1' })
   if (value.kind === 'block' && Number(value.parameters.hardness) < 0 && value.parameters.hardness !== -1) context.addIssue({ code: 'custom', path: ['parameters', 'hardness'], message: '负硬度仅支持 −1（不可破坏）' })
   if (value.texture.split(/[:/]/).some(part => !part || part === '.' || part === '..')) context.addIssue({ code: 'custom', path: ['texture'], message: '纹理引用不允许空段或路径穿越' })
+  if (value.voxel && !['block', 'item'].includes(value.kind)) context.addIssue({ code: 'custom', path: ['voxel'], message: '体素模型目前只支持 block 和 item 类型' })
 })
 export type ContentObject = z.infer<typeof contentObjectSchema>
 export function newContentObject(kind: ContentKind, modId: string): ContentObject {
   return { kind, id: `${modId}:new_${kind}`, displayName: `新${contentForms[kind].title}`, texture: contentForms[kind].texture, parameters: Object.fromEntries(contentForms[kind].fields.map(field => [field.key, field.defaultValue!])) }
 }
-export type ContentFile = { path: string; before: string | null; after: string }
+export type ContentFile = { path: string; before: string | null; after: string; binary?: boolean; size?: number }
 export type ContentDocument = { id: string; kind?: ContentKind; value?: ContentObject; editable: boolean; reason?: string; revision: string; files: string[]; image?: string }

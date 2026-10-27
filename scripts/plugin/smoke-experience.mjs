@@ -21,7 +21,7 @@ const call = async (name, args = {}) => {
 try {
   await client.connect(transport)
   const tools = (await client.listTools()).tools
-  assert.equal(tools.length, 26)
+  assert.equal(tools.length, 28)
   const environment = await call('modcrafting_environment_status')
   assert.equal(environment.observer.bundled, true); assert.equal(environment.observer.protocol, 2)
   assert.equal(environment.version, client.getServerVersion().version)

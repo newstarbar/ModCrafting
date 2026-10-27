@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { FABRIC_TARGET } from './domain.ts'
 import { inspectFabricProject } from './node.ts'
 import type { RuntimePaths } from './contracts.ts'
-import { CoreError } from './runtime.ts'
+import { CoreError, projectRuntimePaths } from './runtime.ts'
 import { validateRecipeContent } from './recipe-format.ts'
 
 export const recipeRequestSchema = z.discriminatedUnion('action', [
@@ -56,7 +56,7 @@ function readDocument(root: string, recipeId: string): RecipeDocument {
   return { recipeId, file: path.relative(root, file).replaceAll('\\', '/'), revision: hash(bytes), content, editable: validation.valid, errors: validation.errors, warnings: validation.warnings }
 }
 function catalog(paths: RuntimePaths, root: string): RecipeItem[] {
-  const file = path.join(paths.knowledgeRoot, 'minecraft-data', FABRIC_TARGET.minecraft, 'index.json')
+  const file = path.join(projectRuntimePaths(paths, root).knowledgeRoot, 'minecraft-data', FABRIC_TARGET.minecraft, 'index.json')
   if (!existsSync(file)) throw new CoreError('ASSET_UNAVAILABLE', '请先准备 minecraft-data 知识数据；不自动下载资源')
   const data = JSON.parse(readFileSync(file, 'utf8')) as { itemsById?: Record<string, Record<string, unknown>> }
   if (!data.itemsById) throw new CoreError('ASSET_UNAVAILABLE', 'minecraft-data 缺少 itemsById')

@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.AccessibilityOnboardingScreen;
+import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
@@ -152,7 +153,38 @@ public final class GamePreparation {
             openOrCreate(client, screen);
             return;
         }
+        if (screen instanceof ConfirmScreen confirm) {
+            if (acceptExperimentalWarning(confirm)) return;
+            fail("游戏停在无法识别的确认界面：" + simpleName + " · " + (confirm.getTitle() == null ? "" : confirm.getTitle().getString()), "保留当前画面和任务日志；确认是否有额外的首次启动提示或模组弹窗。");
+            return;
+        }
         if (screen != null) fail("游戏停在无法识别的界面：" + simpleName, "保留当前画面和任务日志；确认是否有额外的首次启动提示或模组弹窗。");
+    }
+
+    /**
+     * A custom dimension data pack marks the session-owned test world as experimental.
+     * Only the experimental/backup warning may be accepted automatically; other confirmations stay blocked.
+     */
+    private static boolean acceptExperimentalWarning(ConfirmScreen screen) {
+        String title = screen.getTitle() == null ? "" : screen.getTitle().getString().toLowerCase(java.util.Locale.ROOT);
+        if (!title.contains("experimental") && !title.contains("实验")) return false;
+        ButtonWidget fallback = null;
+        for (var child : screen.children()) {
+            if (!(child instanceof ButtonWidget button) || !button.active || !button.visible) continue;
+            if (fallback == null) fallback = button;
+            var message = button.getMessage();
+            String key = message != null && message.getContent() instanceof TranslatableTextContent text ? text.getKey() : "";
+            if ("gui.proceed".equals(key) || "gui.continue".equals(key) || "selectWorld.experimental.confirm".equals(key)) {
+                button.onClick(button.getX() + button.getWidth() / 2.0, button.getY() + button.getHeight() / 2.0);
+                return true;
+            }
+        }
+        // ConfirmScreen adds its affirmative button first; only reached for the guarded experimental title.
+        if (fallback != null) {
+            fallback.onClick(fallback.getX() + fallback.getWidth() / 2.0, fallback.getY() + fallback.getHeight() / 2.0);
+            return true;
+        }
+        return false;
     }
 
     public static boolean isTestWorld(MinecraftServer server) {

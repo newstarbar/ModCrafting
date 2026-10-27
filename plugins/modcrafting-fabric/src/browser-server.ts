@@ -1,9 +1,9 @@
 import { createServer } from 'node:http'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema } from '../../../packages/modcrafting-core/src/index.ts'
+import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, isPng } from '../../../packages/modcrafting-core/src/index.ts'
 import { guiWorkspace, guiRequestSchema } from '../../../packages/modcrafting-core/src/gui-workspace.ts'
 import { visualAssets } from '../../../packages/modcrafting-core/src/visual-assets.ts'
 import { gameTestTemplate, gameTestSpecSchema, testProfileSchema, type GameFeatureType } from '../../../packages/modcrafting-core/src/domain.ts'
@@ -18,10 +18,11 @@ const actionSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('gui'), request: guiRequestSchema }).strict(),
   z.object({ operation: z.literal('visuals'), projectPath, itemIds: z.array(z.string().min(1).max(200)).max(80), textureIds: z.array(z.string().min(1).max(200)).max(16) }).strict(),
   z.object({ operation: z.literal('content'), request: contentRequestSchema }).strict(),
+  z.object({ operation: z.literal('texture'), request: textureRequestSchema }).strict(),
   z.object({ operation: z.literal('recipe'), request: recipeRequestSchema }).strict(),
   z.object({ operation: z.literal('project'), projectPath }).strict(),
   z.object({ operation: z.literal('environment'), projectPath: projectPath.optional() }).strict(),
-  z.object({ operation: z.literal('prepare') }).strict(),
+  z.object({ operation: z.literal('prepare'), projectPath: projectPath.optional() }).strict(),
   z.object({ operation: z.literal('build'), projectPath, task: z.string().regex(/^[A-Za-z][A-Za-z0-9:.-]*$/).default('build') }).strict(),
   z.object({ operation: z.literal('run'), projectPath }).strict(),
   z.object({ operation: z.literal('stop'), jobId: z.string().min(1) }).strict(),
@@ -70,6 +71,23 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
         if (relative.startsWith('..') || path.isAbsolute(relative) || !(await stat(file)).isFile()) throw new CoreError('REPORT_UNAVAILABLE', 'Report is outside the runtime report directory')
         json(200, JSON.parse(await readFile(file, 'utf8'))); return
       }
+      if (request.method === 'POST' && url.pathname === '/api/texture-source') {
+        const type = String(request.headers['content-type'] || '')
+        if (!type.startsWith('image/png') && !type.startsWith('application/octet-stream')) { json(415, { ok: false, code: 'PNG_REQUIRED', error: '只接受 PNG 源图' }); return }
+        const parts: Buffer[] = []; let length = 0
+        for await (const part of request) {
+          length += part.length
+          if (length > 8 * 1024 * 1024) { json(413, { ok: false, code: 'SOURCE_TOO_LARGE', error: '源图超过 8MB' }); return }
+          parts.push(part)
+        }
+        const bytes = Buffer.concat(parts)
+        if (!isPng(bytes)) { json(400, { ok: false, code: 'SOURCE_INVALID', error: '文件不是有效的 PNG' }); return }
+        const uploadRoot = path.join(runtime.paths.dataRoot, 'texture-uploads', sessionId)
+        await mkdir(uploadRoot, { recursive: true })
+        const sourceToken = randomUUID() + '.png'
+        await writeFile(path.join(uploadRoot, sourceToken), bytes, { flag: 'wx' })
+        json(200, { ok: true, sourceToken, size: bytes.length }); return
+      }
       if (request.method !== 'POST' || url.pathname !== '/api/action') { json(404, { ok: false, code: 'NOT_FOUND' }); return }
       if (!request.headers['content-type']?.startsWith('application/json')) { json(415, { ok: false, code: 'JSON_REQUIRED' }); return }
       const parts: Buffer[] = []; let length = 0
@@ -101,6 +119,12 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
           runtime.updateSession(sessionId, { projectPath: project.path })
           value = contentWorkspace(runtime.paths, action.request); break
         }
+        case 'texture': {
+          const project = inspectFabricProject(resolveProjectPath(action.request.projectPath))
+          if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
+          runtime.updateSession(sessionId, { projectPath: project.path })
+          value = textureWorkspace(runtime.paths, action.request, { uploadRoot: path.join(runtime.paths.dataRoot, 'texture-uploads', sessionId) }); break
+        }
         case 'recipe': {
           const project = inspectFabricProject(resolveProjectPath(action.request.projectPath))
           if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
@@ -122,7 +146,7 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
           value = { ok: true, project }; break
         }
         case 'environment': value = await runtime.environmentStatus(action.projectPath); break
-        case 'prepare': value = await runtime.prepareAssets(); break
+        case 'prepare': value = await runtime.prepareAssets(undefined, action.projectPath); break
         case 'build': value = runtime.startBuild(action.projectPath, action.task, sessionId); break
         case 'run': value = runtime.runClient(action.projectPath, undefined, sessionId); break
         case 'stop': value = runtime.stopJob(action.jobId, sessionId); break
