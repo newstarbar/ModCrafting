@@ -70,11 +70,14 @@ export async function stageClaude({ check = false } = {}) {
   const copies = new Map()
   for (const name of skills) copies.set(path.join(plugin, 'skills', name, 'SKILL.md'), path.join(fabric, 'skills', name, 'SKILL.md'))
 
+  // Git normalises EOL on checkout (Windows runners get CRLF), so drift is a
+  // content comparison, not a byte comparison.
+  const normalize = (value) => (value === undefined ? undefined : value.replace(/\r\n/g, '\n'))
   const drift = []
   for (const [file, content] of outputs) {
     if (check) {
       const current = existsSync(file) ? await readFile(file, 'utf8') : undefined
-      if (current !== content) drift.push(path.relative(root, file))
+      if (normalize(current) !== normalize(content)) drift.push(path.relative(root, file))
     } else {
       await mkdir(path.dirname(file), { recursive: true })
       await writeFile(file, content)
@@ -83,7 +86,7 @@ export async function stageClaude({ check = false } = {}) {
   for (const [target, source] of copies) {
     if (check) {
       const current = existsSync(target) ? await readFile(target, 'utf8') : undefined
-      if (current !== await readFile(source, 'utf8')) drift.push(path.relative(root, target))
+      if (normalize(current) !== normalize(await readFile(source, 'utf8'))) drift.push(path.relative(root, target))
     } else {
       await mkdir(path.dirname(target), { recursive: true })
       await copyFile(source, target)
