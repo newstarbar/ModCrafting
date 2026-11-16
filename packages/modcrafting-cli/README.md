@@ -18,7 +18,7 @@ modcrafting uninstall [--host <id>|--all-detected]
 modcrafting versions
 ```
 
-`install` 的 bundle 来源优先级：`--from-zip` > `--bundle-dir` > `~/.modcrafting/versions/<v>` 缓存 > GitHub Release 下载。下载后会对照 `SHA256SUMS` 与包内 `bundle.json` 双重校验。
+`install` 的 bundle 来源优先级：`--from-zip` > `--bundle-dir` > `~/.modcrafting/versions/<v>` 缓存 > GitHub Release 下载。未指定 `--bundle-version` 时默认使用 CLI 自身版本，不做 `latest` 回退；`--bundle-version` 接受 `0.1.8` 或 `v0.1.8`，但必须对应已发布的 tag。下载后会对照 `SHA256SUMS` 与包内 `bundle.json` 双重校验。
 
 ## 会写什么
 

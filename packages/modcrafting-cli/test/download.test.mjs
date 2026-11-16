@@ -61,6 +61,28 @@ test('downloads, verifies and caches a bundle', async () => {
   })
 })
 
+test('accepts a v-prefixed --bundle-version', async () => {
+  const zip = zipOf(makeBundle('v-prefix', '9.9.4'), 'modcrafting-bundle/')
+  const digest = sha256(zip)
+  const requested = []
+  await withServer((request, response) => {
+    requested.push(request.url)
+    if (request.url === '/v9.9.4/ModCrafting-MCP-v9.9.4.zip') return response.writeHead(200).end(zip)
+    if (request.url === '/v9.9.4/ModCrafting-Fabric-SHA256SUMS-v9.9.4.txt') return response.writeHead(200).end(`${digest}  ModCrafting-MCP-v9.9.4.zip\n`)
+    response.writeHead(404).end('no')
+  }, async (base) => {
+    const home = makeHome('v-prefix')
+    const result = await runAsync(['install', '--host', 'cursor', '--bundle-version', 'v9.9.4', '--json'], {
+      home,
+      env: { MODCRAFTING_RELEASE_BASE: base, MODCRAFTING_NO_NETWORK: '' }
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.json.bundle.version, '9.9.4')
+    assert.equal(requested.some((url) => url.startsWith('/v9.9.4/')), true)
+    assert.equal(requested.some((url) => url.includes('vv9.9.4')), false)
+  })
+})
+
 test('rejects a bundle whose checksum does not match', async () => {
   const zip = zipOf(makeBundle('bad-sum', '9.9.8'))
   await withServer((request, response) => {
@@ -87,7 +109,7 @@ test('a 404 explains the offline alternative', async () => {
       env: { MODCRAFTING_RELEASE_BASE: base, MODCRAFTING_NO_NETWORK: '' }
     })
     assert.equal(result.status, 4)
-    assert.match(result.json.message, /--from-zip/)
+    assert.match(result.json.message, /已作为 Release 发布|--from-zip/)
   })
 })
 

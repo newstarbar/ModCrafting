@@ -61,6 +61,7 @@
 		"cli:pack:check": "node scripts/release/check-npm-pack.mjs",
 		"release:npm": "node scripts/release/package-npm.mjs",
 		"release:npm:publish": "node scripts/release/publish-npm.mjs",
+		"release:upload": "node scripts/release/upload-release.mjs",
 		"release:offline": "node scripts/release/package-offline.mjs",
 		"acceptance:first-use": "node --experimental-strip-types scripts/acceptance/run-first-use.mjs",
 		"docs:sync-fabric": "node --experimental-strip-types scripts/sync-fabric-docs-knowledge.ts"

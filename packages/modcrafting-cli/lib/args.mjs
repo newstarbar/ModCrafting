@@ -68,8 +68,13 @@ export function parseArgs(argv) {
   }
   options.fromZip = options.values.get('from-zip')
   options.bundleDir = options.values.get('bundle-dir')
-  options.bundleVersion = options.values.get('bundle-version')
+  options.bundleVersion = normalizeVersion(options.values.get('bundle-version'))
   return options
+}
+
+/** Accept both 0.1.8 and v0.1.8; release tags always carry the v prefix. */
+export function normalizeVersion(value) {
+  return typeof value === 'string' ? value.trim().replace(/^v(?=\d)/i, '') : value
 }
 
 export function exitFor(error) {
@@ -118,7 +123,7 @@ export const HELP = `ModCrafting Fabric 安装器
 获取 bundle：
   --from-zip <file>        从本地 ZIP 安装（离线包/QQ 群包）
   --bundle-dir <dir>       使用已解包的 bundle 目录（含 bundle.json）
-  --bundle-version <v>     指定版本（默认最新 Release 或已缓存的最新版）
+  --bundle-version <v>     指定版本（默认与 CLI 版本一致；可写 0.1.8 或 v0.1.8）
   --no-network             不联网；必须配合 --from-zip 或 --bundle-dir
 
 写入控制：

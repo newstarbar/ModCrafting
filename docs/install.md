@@ -11,7 +11,7 @@ npx -y github:newstarbar/ModCrafting#release install --auto --json
 ## 前置条件
 
 - Node.js 22.15 或更新版本（`node --version`）。
-- 首次安装需要能访问 GitHub Releases；被墙/代理环境请用[离线包](#离线包qq-群下载)。
+- 首次安装需要能访问 GitHub Releases，且 `v<CLI 版本>` 已经发布（否则下载 404）；被墙/代理环境请用[离线包](#离线包qq-群下载)。
 - 游戏构建与实机测试还需要 JDK 21 与 Minecraft 1.21.4，这与安装无关。
 
 ## 命令
@@ -24,7 +24,7 @@ npx -y github:newstarbar/ModCrafting#release install --auto --json
 | `install --dry-run` | 只打印将要写入的内容 |
 | `install --print-snippet` | 只输出配置片段，不写任何文件 |
 | `install --from-zip <zip>` | 从离线 ZIP 安装 |
-| `install --bundle-version <v>` | 指定 bundle 版本 |
+| `install --bundle-version <v>` | 指定 bundle 版本；必须是已发布的 tag（`0.1.8` 或 `v0.1.8`） |
 | `mcp --remove` | 只移除 MCP 条目 |
 | `skills --remove` | 只移除技能 |
 | `doctor` | 只读体检（配置、技能、缓存、Node） |

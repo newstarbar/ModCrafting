@@ -64,34 +64,19 @@ jobs:
           "directory=$($result.directory)" >> $env:GITHUB_OUTPUT
           "notes=$($result.notesFile)" >> $env:GITHUB_OUTPUT
           "prerelease=$($result.prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-      - name: Publish stable GitHub Release
-        if: steps.package.outputs.prerelease != 'true'
+      - name: Publish GitHub Release (idempotent)
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.package.outputs.prerelease }}
           RELEASE_DIRECTORY: ${{ steps.package.outputs.directory }}
-          RELEASE_NOTES: ${{ steps.package.outputs.notes }}
         shell: pwsh
         run: |
-          $assets = @(Get-ChildItem -LiteralPath $env:RELEASE_DIRECTORY -File | Where-Object Name -ne 'release-notes.md' | ForEach-Object FullName)
-          $expected = @('ModCrafting-Fabric-Qoder-Plugin-', 'ModCrafting-Fabric-Multi-Host-', 'ModCrafting-MCP-', 'ModCrafting-Skills-', 'ModCrafting-Offline-', 'ModCrafting-Fabric-Release-Info-', 'ModCrafting-Fabric-SHA256SUMS-')
-          foreach ($prefix in $expected) { if (-not ($assets | Where-Object { (Split-Path $_ -Leaf).StartsWith($prefix) })) { throw "Missing release asset: $prefix" } }
-          gh release create "$env:RELEASE_TAG" @assets --verify-tag --latest --title "ModCrafting Fabric $env:RELEASE_TAG" --notes-file $env:RELEASE_NOTES
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed.' }
+          $arguments = @('scripts/release/upload-release.mjs', '--directory', $env:RELEASE_DIRECTORY, '--tag', $env:RELEASE_TAG)
+          if ($env:PRERELEASE -eq 'true') { $arguments += '--prerelease' } else { $arguments += '--latest' }
+          node @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Release publishing failed (exit $LASTEXITCODE)" }
       - name: Build npm tarballs
         run: pnpm run release:npm
-      - name: Publish prerelease GitHub Release
-        if: steps.package.outputs.prerelease == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_DIRECTORY: ${{ steps.package.outputs.directory }}
-          RELEASE_NOTES: ${{ steps.package.outputs.notes }}
-        shell: pwsh
-        run: |
-          $assets = @(Get-ChildItem -LiteralPath $env:RELEASE_DIRECTORY -File | Where-Object Name -ne 'release-notes.md' | ForEach-Object FullName)
-          $expected = @('ModCrafting-Fabric-Qoder-Plugin-', 'ModCrafting-Fabric-Multi-Host-', 'ModCrafting-MCP-', 'ModCrafting-Skills-', 'ModCrafting-Offline-', 'ModCrafting-Fabric-Release-Info-', 'ModCrafting-Fabric-SHA256SUMS-')
-          foreach ($prefix in $expected) { if (-not ($assets | Where-Object { (Split-Path $_ -Leaf).StartsWith($prefix) })) { throw "Missing release asset: $prefix" } }
-          gh release create "$env:RELEASE_TAG" @assets --verify-tag --prerelease --latest=false --title "ModCrafting Fabric $env:RELEASE_TAG" --notes-file $env:RELEASE_NOTES
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub prerelease creation failed.' }
       - name: Publish npm packages (skipped without NPM_TOKEN)
         if: ${{ env.NPM_TOKEN != '' }}
         env:

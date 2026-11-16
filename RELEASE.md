@@ -18,7 +18,7 @@ CI 只拥有 `contents: read` 权限。它不上传候选安装包、不访问�
 1. 在 `release` 分支更新根 `package.json` 和 `plugins/modcrafting-fabric/.codex-plugin/plugin.json` 的产品版本，并完成 [候选验收记录](docs/candidate-validation.md) 中适用的人工验收。
 2. 创建并推送与 `package.json` 完全一致的版本 tag，例如 `v0.2.0`。稳定版使用 `vMAJOR.MINOR.PATCH`；预发布版可使用 `v0.2.0-rc.1`。
 3. `.github/workflows/release.yml` 复用 CI 检查，并拒绝版本不匹配或不属于 `release` 历史的 tag。随后在 Windows x64 / JDK 21 上从当前 tag 构建完整 Observer V2 候选包。
-4. Actions 创建 7 类资产：Qoder 桌面 Plugin ZIP、多宿主插件包、MCP bundle ZIP、Skills ZIP、离线安装 ZIP、构建信息 JSON、SHA-256 清单，并发布到 GitHub Releases。稳定版显式标记为 Latest，以免旧 Desktop 的 `v1.0.x` 标签继续显示为新产品；预发布版标记为 prerelease，不抢占 Latest。
+4. Actions 创建 7 类资产：Qoder 桌面 Plugin ZIP、多宿主插件包、MCP bundle ZIP、Skills ZIP、离线安装 ZIP、构建信息 JSON、SHA-256 清单，并发布到 GitHub Releases。稳定版显式标记为 Latest，以免旧 Desktop 的 `v1.0.x` 标签继续显示为新产品；预发布版标记为 prerelease，不抢占 Latest。创建/上传是幂等的：重跑同一 tag 时已存在则走 `gh release upload --clobber` 并重新断言状态，不再因 422 失败；也可本地用 `pnpm run release:upload -- --directory <目录> --tag <tag>` 补传。
 5. Release 创建后，若仓库配置了 `NPM_TOKEN` secret，Actions 会发布 `modcrafting`、`modcrafting-mcp`、`modcrafting-skills` 三个 npm 包（已存在的版本跳过）；没有凭据时该步骤整体跳过，`npx github:...` 通道不受影响。
 
 tag 是发布触发器。GitHub Actions 不会自行递增版本或创建 tag；不得把旧版 `v1.0.x` tag 重用于新产品。旧 Release 留作历史记录，不由此流程改写或删除。

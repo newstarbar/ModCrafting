@@ -26,6 +26,7 @@ test('no arguments prints help', () => {
   const result = run([], { home })
   assert.equal(result.status, 0)
   assert.match(result.stdout, /ModCrafting Fabric 安装器/)
+  assert.match(result.stdout, /默认与 CLI 版本一致/)
 })
 
 test('--version prints the CLI version', () => {

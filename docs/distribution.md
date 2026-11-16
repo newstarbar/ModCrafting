@@ -11,10 +11,12 @@ bundle:stage      → temp/bundle-artifacts/modcrafting-bundle   （+ bundle.jso
 candidate:build   → temp/candidate-artifacts/run-*/{product,distribution,candidate.json}
 release:npm       → temp/npm-artifacts/{modcrafting,modcrafting-mcp,modcrafting-skills}-<v>.tgz
 release:offline   → temp/offline-artifacts/ModCrafting-Offline-v<v>.zip
-release:package   → 8 个 Release 资产（含 SHA256SUMS 与 Release-Info）
+release:package   → 7 个 Release 资产（含 SHA256SUMS 与 Release-Info）
 ```
 
 `bundle:stage` 必须在 `plugin:stage` 之后、`release:package` 之前运行；CI 已按此顺序接线。
+
+资产可重入：`pnpm run release:upload -- --directory <本地 release 目录> --tag v0.1.8`。Release 不存在时创建，已存在时用 `gh release upload --clobber` 覆盖并重新断言 Latest/prerelease；上传前会按 `SHA256SUMS` 逐个校验 7 个文件。
 
 ## bundle.json 契约
 

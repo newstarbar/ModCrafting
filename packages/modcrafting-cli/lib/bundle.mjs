@@ -7,7 +7,7 @@ import path from 'node:path'
 import { ensureDir, exists, sha256, copyTree, readText, statSafe } from './fsx.mjs'
 import { versionsDir, stagingDir, inside } from './paths.mjs'
 import { readZip } from './zip.mjs'
-import { CliError, EXIT } from './args.mjs'
+import { CliError, EXIT, normalizeVersion } from './args.mjs'
 import { download, releaseAssetUrl, releaseSumsUrl, parseSums } from './fetch.mjs'
 
 export const BUNDLE_NAME = 'modcrafting-fabric'
@@ -152,7 +152,7 @@ export async function downloadBundle(version, { noNetwork = false, timeout = 120
   try {
     bytes = await download(url, { timeout })
   } catch (cause) {
-    throw bundleError(`下载 bundle 失败：${cause.message}\n如处于代理或内网环境，请改用 --from-zip 安装离线包（QQ 群下载的 ZIP）。`, { url })
+    throw bundleError(`下载 bundle 失败：${cause.message}\n请确认 ${tag} 已作为 Release 发布（--bundle-version 必须对应已发布 tag）；代理或内网环境请改用 --from-zip 安装离线包。`, { url })
   }
   try {
     const sums = parseSums((await download(sumsUrl, { timeout })).toString('utf8'))
@@ -181,7 +181,7 @@ export async function resolveBundle(options, { defaultVersion } = {}) {
   if (options.fromZip) return installFromZip(options.fromZip)
   if (options.bundleDir) return useBundleDir(options.bundleDir)
 
-  const wanted = options.bundleVersion ?? defaultVersion
+  const wanted = normalizeVersion(options.bundleVersion ?? defaultVersion)
   const cached = cachedVersions()
   const noNetwork = options.flags?.has('no-network') || Boolean(process.env.MODCRAFTING_NO_NETWORK)
 
