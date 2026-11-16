@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto'
 import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { stageQoder, createPortableZip } from '../plugin/stage-qoder.mjs'
 import { stageHosts } from '../plugin/stage-hosts.mjs'
+import { zipDirectory } from './zip-dir.mjs'
+import { packageOffline } from './package-offline.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -47,16 +50,40 @@ const outputRoot = path.resolve(values['output-root'])
 if (inside(product, outputRoot) || inside(distribution, outputRoot) || inside(path.dirname(candidateFile), outputRoot)) throw Error('Release output must be outside candidate inputs')
 await mkdir(outputRoot, { recursive: true })
 if ((await lstat(outputRoot)).isSymbolicLink()) throw Error('Release output must not be a junction or symlink')
+const bundleDirectory = path.join(root, 'temp/bundle-artifacts/modcrafting-bundle')
+const bundleManifestFile = path.join(bundleDirectory, 'bundle.json')
+if (!existsSync(bundleManifestFile)) throw Error('Missing runtime bundle: run "pnpm run bundle:stage" after plugin:stage')
+const bundleManifest = JSON.parse(await readFile(bundleManifestFile, 'utf8'))
+if (bundleManifest.version !== packageJson.version) throw Error('Bundle version does not match package.json')
+if (bundleManifest.files?.['dist/mcp-server.js'] !== candidate.coreBundleSha256) throw Error('Bundle fingerprint does not match the candidate receipt')
+
 const outputDirectory = await mkdtemp(path.join(outputRoot, 'modcrafting-release-'))
 const stagingRoot = await mkdtemp(path.join(outputRoot, '.modcrafting-stage-'))
 
 const qoderZip = path.join(outputDirectory, `ModCrafting-Fabric-Qoder-Plugin-${tag}.zip`)
 const hostsZip = path.join(outputDirectory, `ModCrafting-Fabric-Multi-Host-${tag}.zip`)
+const mcpZip = path.join(outputDirectory, `ModCrafting-MCP-${tag}.zip`)
+const skillsZip = path.join(outputDirectory, `ModCrafting-Skills-${tag}.zip`)
+let offline
 try {
   const qoder = await stageQoder({ source: path.join(product, 'plugin'), outputRoot: path.join(stagingRoot, 'qoder') })
   const hosts = await stageHosts(product, path.join(stagingRoot, 'hosts'))
   await cp(qoder.zip, qoderZip, { errorOnExist: true, force: false })
   createPortableZip(hosts.directory, hostsZip)
+  zipDirectory(bundleDirectory, mcpZip)
+  const skillsStage = path.join(stagingRoot, 'skills')
+  await cp(path.join(bundleDirectory, 'skills'), path.join(skillsStage, 'skills'), { recursive: true })
+  const index = []
+  for (const name of bundleManifest.skills) {
+    const markdown = await readFile(path.join(bundleDirectory, 'skills', name, 'SKILL.md'), 'utf8')
+    const description = /^description:\s*(.+)$/m.exec(markdown)?.[1]?.trim() ?? ''
+    index.push({ name, description, path: `skills/${name}/SKILL.md`, sha256: sha256(Buffer.from(markdown)) })
+  }
+  await writeFile(path.join(skillsStage, 'index.json'), `${JSON.stringify({ name: 'modcrafting-fabric', version: bundleManifest.version, skills: index }, null, 2)}\n`)
+  await cp(path.join(bundleDirectory, 'LICENSE'), path.join(skillsStage, 'LICENSE'))
+  zipDirectory(skillsStage, skillsZip)
+  offline = await packageOffline({ tag, output: path.join(stagingRoot, 'offline') })
+  await cp(offline.file, path.join(outputDirectory, offline.filename), { errorOnExist: true, force: false })
 } finally {
   await rm(stagingRoot, { recursive: true })
 }
@@ -71,7 +98,13 @@ const releaseInfo = {
   target: productManifest.target,
   observer: { version: productManifest.observer?.version, protocol: productManifest.observer?.declaredProtocol, sha256: observerSha256 },
   coreBundleSha256: candidate.coreBundleSha256,
-  packages: { qoder: path.basename(qoderZip), multiHost: path.basename(hostsZip) },
+  packages: {
+    qoder: path.basename(qoderZip),
+    multiHost: path.basename(hostsZip),
+    mcp: path.basename(mcpZip),
+    skills: path.basename(skillsZip),
+    offline: path.basename(path.join(outputDirectory, offline.filename))
+  },
   validation: {
     githubActions: githubActionsRun ? `checks passed in run ${process.env.GITHUB_RUN_ID}` : 'not verified by local packaging',
     minecraftGameplay: 'not run by this workflow',
@@ -80,7 +113,7 @@ const releaseInfo = {
 }
 const infoFile = path.join(outputDirectory, `ModCrafting-Fabric-Release-Info-${tag}.json`)
 await writeFile(infoFile, `${JSON.stringify(releaseInfo, null, 2)}\n`, { flag: 'wx' })
-const assets = [qoderZip, hostsZip, infoFile]
+const assets = [qoderZip, hostsZip, mcpZip, skillsZip, path.join(outputDirectory, offline.filename), infoFile]
 const sums = (await Promise.all(assets.map(async file => `${sha256(await readFile(file))}  ${path.basename(file)}`))).join('\n') + '\n'
 const checksums = path.join(outputDirectory, `ModCrafting-Fabric-SHA256SUMS-${tag}.txt`)
 await writeFile(checksums, sums, { flag: 'wx' })
@@ -94,11 +127,14 @@ const notes = `# ModCrafting Fabric ${tag}\n\n` +
   '此版本属于 `release` 发布主线，面向 Fabric 1.21.4，提供 Qoder 桌面 Plugin 和跨宿主插件包。\n\n' +
   '## 下载与安装\n\n' +
   `- **Qoder 桌面版**：下载 \`${path.basename(qoderZip)}\`，在 Qoder Plugin 管理界面导入。\n` +
+  `- **一句话安装（推荐）**：\`npx -y github:newstarbar/ModCrafting#${tag} install --auto --json\`\n` +
   `- **Codex / Claude Code / Qoder CLI**：下载 \`${path.basename(hostsZip)}\`，按压缩包中的 README 和宿主目录配置。\n` +
-  `- **校验**：\`${path.basename(checksums)}\` 包含产品 ZIP 与构建信息的 SHA-256。\n\n` +
+  `- **仅 MCP / 仅技能**：\`${path.basename(mcpZip)}\`、\`${path.basename(skillsZip)}\`。\n` +
+  `- **离线安装（QQ 群）**：\`${offline.filename}\`，解压后双击 install.cmd 或把包内 PROMPT.md 发给 Agent。\n` +
+  `- **校验**：\`${path.basename(checksums)}\` 包含全部资产与构建信息的 SHA-256。\n\n` +
   '## 验收范围\n\n' +
   `${verificationSummary} 该工作流不登录 Qoder、不启动交互式 Minecraft；真实宿主聊天与实机玩法结果需按仓库的候选验收记录单独确认。\n`
 await writeFile(notesFile, notes, { flag: 'wx' })
 
-const result = { ok: true, tag, version: packageJson.version, prerelease, directory: outputDirectory, qoderZip, hostsZip, infoFile, checksums, notesFile }
+const result = { ok: true, tag, version: packageJson.version, prerelease, directory: outputDirectory, qoderZip, hostsZip, mcpZip, skillsZip, offlineZip: path.join(outputDirectory, offline.filename), infoFile, checksums, notesFile }
 console.log(JSON.stringify(result))

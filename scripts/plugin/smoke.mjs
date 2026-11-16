@@ -7,6 +7,7 @@ import { Client, isJSONRPCRequest, isJSONRPCNotification, isJSONRPCResultRespons
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import Ajv from 'ajv/dist/2020.js'
 import { validatePlugin } from './validate.mjs'
+import { EXPECTED_TOOL_COUNT } from './tool-count.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const source = path.resolve(process.argv[2] || path.join(root, 'temp/plugin-artifacts/modcrafting-fabric'))
@@ -93,11 +94,42 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures, JAVA_HOME: path.join(sco
   assert.ok(transport.sent.some((message) => message.method === 'notifications/initialized'))
   const { tools } = await bounded(client.listTools(), 'tools/list')
   toolCount = tools.length
+  // Drift gate: the packaged tool count and the source registration count must agree with the
+  // shared constant, so host smoke tests can never silently validate a stale number again.
+  assert.equal(toolCount, EXPECTED_TOOL_COUNT, 'tools/list count differs from scripts/plugin/tool-count.mjs')
+  const serverSource = await readFile(path.join(root, 'plugins/modcrafting-fabric/src/mcp-server.ts'), 'utf8')
+  assert.equal((serverSource.match(/\bserver\.registerTool\(/g) || []).length, EXPECTED_TOOL_COUNT, 'EXPECTED_TOOL_COUNT is stale; update scripts/plugin/tool-count.mjs')
   const names = tools.map((tool) => tool.name)
   assert.equal(new Set(names).size, names.length)
   for (const name of ['modcrafting_session', 'modcrafting_test_profile', 'minecraft_test_template', 'modcrafting_environment_status', 'modcrafting_toolchain', 'fabric_project_inspect', 'fabric_validate', 'fabric_recipe_workspace', 'fabric_content_workspace', 'fabric_texture_workspace', 'fabric_gui_workspace', 'fabric_voxel_workspace', 'minecraft_test_start', 'minecraft_test_status', 'minecraft_build_studio', 'minecraft_snapshot', 'minecraft_screenshot', 'minecraft_entity_query', 'minecraft_widgets', 'minecraft_entity_nbt', 'minecraft_log_read']) assert.ok(names.includes(name), `Missing ${name}`)
   const ajv = new Ajv({ strict: false, validateFormats: false })
   for (const tool of tools) assert.equal(ajv.validateSchema(tool.inputSchema), true, `Invalid schema: ${tool.name}`)
+  // Every tool must carry a host-facing title and full hint set; hosts use these for approval,
+  // parallelism and permission prompts, so a silent default is a bug rather than a fallback.
+  for (const tool of tools) {
+    assert.ok(typeof tool.title === 'string' && tool.title.length > 0, `Missing title: ${tool.name}`)
+    assert.ok(tool.annotations, `Missing annotations: ${tool.name}`)
+    for (const hint of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']) assert.equal(typeof tool.annotations[hint], 'boolean', `annotations.${hint} must be boolean: ${tool.name}`)
+  }
+  assert.equal(tools.filter((tool) => tool.annotations.readOnlyHint).length, 16, 'read-only tool count changed; update src/output.ts deliberately')
+  assert.deepEqual(tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name).sort(), ['fabric_job_stop', 'minecraft_build_studio', 'minecraft_command', 'minecraft_stop_client', 'minecraft_test_start'])
+  // Inline cards: exactly the tools that render well as a read-only card declare a ui:// resource.
+  assert.deepEqual(tools.filter((tool) => tool._meta?.ui?.resourceUri).map((tool) => tool.name).sort(), [
+    'fabric_gui_texture_workspace', 'fabric_job_status', 'fabric_project_inspect', 'fabric_texture_workspace',
+    'fabric_validate', 'minecraft_runtime_status', 'minecraft_screenshot', 'minecraft_test_status',
+    'modcrafting_environment_status', 'modcrafting_session'
+  ])
+  const { resources } = await bounded(client.listResources(), 'resources/list')
+  assert.equal(resources.length, 3, 'exactly three UI cards are expected')
+  for (const resource of resources) {
+    assert.match(resource.uri, /^ui:\/\/modcrafting\/[a-z]+\.html$/)
+    assert.equal(resource.mimeType, 'text/html;profile=mcp-app')
+    const read = await bounded(client.readResource({ uri: resource.uri }), `resources/read ${resource.uri}`)
+    const html = read.contents[0].text
+    assert.ok(Buffer.byteLength(html) < 256 * 1024, 'the host stops inlining HTML above 256KB')
+    assert.ok(html.includes('<div id="root">'), 'the card needs a mount point')
+    assert.equal(/<script src=|<link\b|src="https?:|href="https?:/.test(html), false, 'cards must be self-contained: no external script, stylesheet or link')
+  }
   assert.equal((await call(client, 'fabric_gui_workspace', { action: 'template', projectPath: path.join(fixtures, 'valid'), layoutType: 'hud-overlay' })).value.layoutType, 'hud-overlay');
   assert.deepEqual((await call(client, 'fabric_gui_workspace', { action: 'list', projectPath: path.join(fixtures, 'valid') })).documents, []);
   const content = await call(client, 'fabric_content_workspace', { action: 'list', projectPath: path.join(fixtures, 'valid') }); assert.ok(content.ok);
@@ -195,6 +227,54 @@ await session({ MODCRAFTING_DATA: path.join(scope, 'unexpected-exit') }, async (
   await assert.rejects(bounded(client.listTools(), 'request after unexpected exit', 2000), (error) => !String(error).includes('HARD_TIMEOUT'))
 })
 
-const summary = { ok: true, node: process.version, toolCount, protocol: ['initialize', 'notifications/initialized', 'tools/list', 'tools/call'], isolatedModules: true, missingJavaDiagnosed: true, realGame: 'not run', scope }
+// `--text=digest` may only shrink the model-facing text; structuredContent stays complete.
+await session({ MODCRAFTING_DATA: path.join(scope, 'digest') }, async (client) => {
+  const reply = await client.callTool({ name: 'modcrafting_environment_status', arguments: {} })
+  const text = reply.content.find((entry) => entry.type === 'text').text
+  assert.ok(text.length <= 3200, `digest text must stay under 3.2KB, got ${text.length}`)
+  assert.equal(reply.structuredContent.assets.length, 5, 'digest must not truncate structuredContent')
+  assert.equal(reply.structuredContent.contractVersion, 1)
+}, ['--import', pathToFileURL(guard).href, entry, '--text=digest'])
+
+// `--web-only` has no MCP caller to pass a session in the fragment, so it must bootstrap one,
+// otherwise the printed URL always fails with SESSION_REQUIRED on the first paint.
+{
+  const { spawn } = await import('node:child_process')
+  const child = spawn(process.execPath, [entry, '--web-only'], { cwd: scope, env: { ...process.env, MODCRAFTING_DATA: path.join(scope, 'web-only') }, stdio: ['ignore', 'ignore', 'pipe'] })
+  const url = await bounded(new Promise((resolve, reject) => {
+    let buffered = ''
+    child.stderr.on('data', (chunk) => { buffered += chunk; const match = /ModCrafting browser: (\S+)/.exec(buffered); if (match) resolve(match[1]) })
+    child.once('exit', (code) => reject(new Error(`--web-only exited early with ${code}`)))
+  }), 'web-only bootstrap url', 8000)
+  const fragment = new URLSearchParams(new URL(url).hash.slice(1))
+  assert.match(fragment.get('sessionId') || '', /^[0-9a-f-]{36}$/i, '--web-only URL must carry a starter session')
+  assert.match(fragment.get('backendId') || '', /^[0-9a-f-]{36}$/i, '--web-only URL must carry the backend id')
+  child.kill('SIGTERM')
+  await bounded(new Promise((resolve) => child.once('exit', resolve)), 'web-only shutdown', 5000)
+}
+
+// `--plan` is the automation entry point: one JSON line on stdout, a self-contained report, and a
+// zero exit code for any completed plan. A missing plan must fail loudly instead.
+{
+  const { execFile } = await import('node:child_process')
+  const planData = path.join(scope, 'plan-data')
+  const runPlanFile = (file) => new Promise((resolve) => execFile(process.execPath, [entry, `--plan=${file}`], { cwd: scope, timeout: 60000, env: { ...process.env, MODCRAFTING_DATA: planData } }, (error, stdout) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout })))
+  const planPath = path.join(scope, 'plan.json')
+  await writeFile(planPath, JSON.stringify({ version: 1, name: 'smoke-plan', projectPath: path.join(fixtures, 'valid'), stopOnFailure: true, steps: [{ op: 'inspect' }, { op: 'validate' }] }))
+  const run = await runPlanFile(planPath)
+  assert.equal(run.code, 0, 'a completed plan must exit 0 even when a step is not PASS')
+  const summary = JSON.parse(run.stdout)
+  assert.equal(summary.ok, true)
+  assert.equal(summary.verdict, 'PASS')
+  assert.equal(summary.steps.length, 2)
+  assert.equal(summary.archiveHint.tool, 'LibraryUpload')
+  const html = await readFile(summary.reportPath, 'utf8')
+  assert.ok(html.length < 200 * 1024, 'the report must stay small enough to archive')
+  assert.equal(/<script\b|<link\b|https?:\/\//.test(html), false, 'the report must be self-contained')
+  const broken = await runPlanFile(path.join(scope, 'missing-plan.json'))
+  assert.notEqual(broken.code, 0, 'an unreadable plan must not look like a completed run')
+}
+
+const summary = { ok: true, node: process.version, toolCount, protocol: ['initialize', 'notifications/initialized', 'tools/list', 'tools/call'], isolatedModules: true, missingJavaDiagnosed: true, toolAnnotations: toolCount, uiCards: 3, digest: true, webOnlyBootstrap: true, plan: 'PASS', realGame: 'not run', scope }
 await writeFile(path.join(scope, 'summary.json'), JSON.stringify(summary, null, 2))
 console.log(JSON.stringify(summary))

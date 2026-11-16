@@ -1,0 +1,22 @@
+{
+  "name": "ModCrafting",
+  "name_zh": "ModCrafting",
+  "name_en": "ModCrafting",
+  "description": "Build and deterministically validate Minecraft Fabric 1.21.4 mods on this machine.",
+  "description_zh": "在本机制作并确定性验证 Minecraft Fabric 1.21.4 模组。",
+  "description_en": "Build and deterministically validate Minecraft Fabric 1.21.4 mods on this machine.",
+  "source": "modcrafting",
+  "type": "mcp",
+  "version": "__VERSION__",
+  "examples_zh": [
+    "检查这个模组工程，告诉我下一步能做什么",
+    "帮我做一个能吃的蓝莓，包含贴图和配方",
+    "跑一次确定性玩法测试，并把结论和证据整理给我"
+  ],
+  "examples_en": [
+    "Inspect this Fabric project and tell me what I can build next",
+    "Add an edible blueberry with a texture and a recipe",
+    "Run a deterministic gameplay test and summarize the evidence"
+  ],
+  "minWorkbuddyVersion": "5.0.0"
+}

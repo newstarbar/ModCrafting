@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { hashTree } from '../bench/bench-support.ts'
+import { EXPECTED_TOOL_COUNT } from '../plugin/tool-count.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const { values } = parseArgs({ options: { 'product-dir': { type: 'string' }, 'assets-data': { type: 'string' }, 'run-root': { type: 'string' }, help: { type: 'boolean' } } })
@@ -43,7 +44,7 @@ let instance
 console.log(JSON.stringify({ step: 'cold-first-use-start', scope }))
 try {
   await client.connect(transport); summary.serverPid = transport.child.pid
-  assert.equal((await client.listTools()).tools.length, 28)
+  assert.equal((await client.listTools()).tools.length, EXPECTED_TOOL_COUNT)
   sessionId = (await call('modcrafting_session', { action: 'create', name: '空目录首次启动' })).session.sessionId
   const environment = await call('modcrafting_environment_status'); assert.equal(environment.java.ok, true)
   assert.equal(environment.observer.bundled, true); summary.observer = environment.observer; summary.version = environment.version

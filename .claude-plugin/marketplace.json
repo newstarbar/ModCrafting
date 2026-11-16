@@ -1,0 +1,28 @@
+{
+  "name": "modcrafting",
+  "owner": {
+    "name": "newstarbar",
+    "url": "https://github.com/newstarbar"
+  },
+  "plugins": [
+    {
+      "name": "modcrafting-fabric",
+      "source": "./plugins/modcrafting-claude",
+      "description": "Fabric 1.21.4 模组开发、构建、游戏准备与测试报告（MCP + Skills）。",
+      "version": "0.1.8",
+      "author": {
+        "name": "newstarbar",
+        "url": "https://github.com/newstarbar"
+      },
+      "homepage": "https://github.com/newstarbar/ModCrafting",
+      "keywords": [
+        "minecraft",
+        "fabric",
+        "modding",
+        "gradle",
+        "observer"
+      ],
+      "category": "developer-tools"
+    }
+  ]
+}

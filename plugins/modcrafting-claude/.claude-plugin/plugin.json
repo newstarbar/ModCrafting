@@ -1,0 +1,19 @@
+{
+  "name": "modcrafting-fabric",
+  "description": "Develop, build and deterministically validate Minecraft Fabric 1.21.4 mods from Claude Code.",
+  "version": "0.1.8",
+  "author": {
+    "name": "newstarbar",
+    "url": "https://github.com/newstarbar"
+  },
+  "homepage": "https://github.com/newstarbar/ModCrafting",
+  "repository": "https://github.com/newstarbar/ModCrafting",
+  "license": "GPL-3.0",
+  "keywords": [
+    "minecraft",
+    "fabric",
+    "modding",
+    "gradle",
+    "observer"
+  ]
+}

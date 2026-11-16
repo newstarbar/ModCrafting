@@ -45,8 +45,20 @@ jobs:
         run: pnpm run plugin:validate
       - name: Stage whitelist and reject private/development files
         run: pnpm run plugin:stage
+      - name: Build the verified runtime bundle
+        run: pnpm run bundle:stage
+      - name: Test the installer CLI in an isolated HOME
+        run: pnpm run cli:test
+      - name: Check npm tarball contents and size
+        run: pnpm run cli:pack:check
+      - name: Check the committed Claude Code plugin has no version drift
+        run: pnpm run claude:check
       - name: Verify isolated MCP protocol and tool calls
         run: pnpm run plugin:smoke
+      - name: Stage WorkBuddy plugin and expert package
+        run: pnpm run workbuddy:stage
+      - name: Verify WorkBuddy package, hooks and packaged config
+        run: pnpm run workbuddy:smoke
       - name: Check offline Fabric-Bench verdicts and error codes
         run: pnpm run bench:fabric
       - name: Build portable Bench commands without running Minecraft

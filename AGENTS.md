@@ -7,6 +7,7 @@
 - `packages/modcrafting-core/`：工程、session、配置、构建、Minecraft 运行时、测试与报告。
 - `plugins/modcrafting-fabric/`：MCP 服务、工具 Schema、浏览器服务和工作台入口。
 - `packages/modcrafting-view/`：React 浏览器工作台；不要引入另一套 UI 框架。
+- `packages/modcrafting-cli/`：多宿主安装器（`bin` + `lib` + `test`）。零运行时依赖、无构建产物；不要给它加 `prepare` 脚本或 `dist/` 目录，否则 `npx github:` 会失败或打包漏文件。
 - `bridge-mod/`：Minecraft 1.21.4 Observer V2。
 - `scripts/bench/`、`scripts/plugin/`：测试夹具、构建、候选包和宿主分发。
 - 详细接口见 [`docs/architecture.md`](docs/architecture.md) 与 [`docs/core-contracts.md`](docs/core-contracts.md)。
@@ -19,6 +20,8 @@ pnpm run build
 pnpm run typecheck
 pnpm test
 pnpm run plugin:smoke
+pnpm run cli:test
+pnpm run cli:pack:check
 pnpm run candidate:build
 pnpm run plugin:qoder -- --source ABSOLUTE_CANDIDATE_PLUGIN_DIR
 ```
@@ -40,6 +43,7 @@ pnpm run plugin:qoder -- --source ABSOLUTE_CANDIDATE_PLUGIN_DIR
 
 - 语义：`X.Y.Z` 中 Z（第三位）= 本地开发/测试验证更新，每轮本地验证递增；Y（第二位）= GitHub 发行版变更；X（第一位）= 大版本更新。
 - 升版本同步三处：根 `package.json`、`plugins/modcrafting-fabric/.codex-plugin/plugin.json`、`plugins/modcrafting-fabric/compatibility.json`，再重跑 `candidate:build` 与 `stage-qoder` 出新包。
+- 分发相关：改版本后按 `plugin:stage` → `bundle:stage` → `claude:stage` → `release:npm` → `release:package` 顺序重跑；`claude:check` 会拦住提交进 git 的插件清单漂移。CLI 与 npm 包没有独立版本文件，版本在打包时从根 `package.json` 注入。
 
 ## 分支与交付
 

@@ -55,6 +55,12 @@ const webAssets = {
   js: view.outputFiles[0].text,
   css: (await readFile(path.join(root, 'packages/modcrafting-view/src/view.css'), 'utf8')).replace(/\r\n/g, '\n')
 }
+// MCP Apps widgets: a tiny dependency-free bundle, kept separate from the React workbench because
+// the host inlines HTML up to 256KB and the workbench bundle is far larger than that.
+const widget = await build({ entryPoints: [path.join(plugin, 'src/mcp-app/widget-entry.ts')], absWorkingDir: root, bundle: true, platform: 'browser', format: 'iife', target: 'es2020', minify: true, legalComments: 'none', write: false, metafile: true })
+if (Object.values(widget.metafile.outputs).some((output) => output.imports.some((entry) => entry.external))) throw Error('Widget bundle has an external runtime dependency')
+const widgetJs = widget.outputFiles[0].text
+if (Buffer.byteLength(widgetJs) > 180 * 1024) throw Error('Widget bundle exceeds the 180KB budget')
 const bundled = await build({
   entryPoints: [path.join(plugin, 'src', 'mcp-server.ts')],
   absWorkingDir: root,
@@ -65,7 +71,7 @@ const bundled = await build({
   target: 'node22',
   sourcemap: false,
   legalComments: 'eof',
-  define: { __PLUGIN_VERSION__: JSON.stringify(manifest.version), __WEB_ASSETS__: JSON.stringify(webAssets), __PROJECT_WRAPPER__: JSON.stringify(wrapper), __OBSERVER__: JSON.stringify(observer), __BUILDER__: JSON.stringify(builder) },
+  define: { __PLUGIN_VERSION__: JSON.stringify(manifest.version), __WEB_ASSETS__: JSON.stringify(webAssets), __WIDGET_JS__: JSON.stringify(widgetJs), __PROJECT_WRAPPER__: JSON.stringify(wrapper), __OBSERVER__: JSON.stringify(observer), __BUILDER__: JSON.stringify(builder) },
   metafile: true,
   write: false
 })

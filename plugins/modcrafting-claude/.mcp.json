@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "modcrafting-fabric": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "modcrafting-mcp@0.1.8"
+      ]
+    }
+  }
+}

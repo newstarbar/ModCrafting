@@ -1,0 +1,18 @@
+# WorkBuddy hooks run through Git Bash on Windows; a stray CRLF makes the trailing
+# quote of a quoted path land on a nonexistent file, so force LF for text files.
+plugins/modcrafting-workbuddy/hooks/** text eol=lf
+plugins/modcrafting-workbuddy/commands/** text eol=lf
+plugins/modcrafting-workbuddy/agents/** text eol=lf
+plugins/modcrafting-workbuddy/skills/** text eol=lf
+plugins/modcrafting-workbuddy/*.json text eol=lf
+plugins/modcrafting-workbuddy/*.md text eol=lf
+
+# Binary assets must never be normalised, or the bytes are corrupted on commit.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.jar binary
+*.zip binary
+*.7z binary

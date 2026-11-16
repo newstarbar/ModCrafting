@@ -6,6 +6,7 @@ import sharp from 'sharp'
 import { captureWorkbench } from './capture-workbench.mjs'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
+import { EXPECTED_TOOL_COUNT } from './tool-count.mjs'
 
 const { values } = parseArgs({ options: { entry: { type: 'string' }, edge: { type: 'string' }, 'open-browser': { type: 'boolean' } } })
 const parent = path.resolve('temp/experience-smoke'); await mkdir(parent, { recursive: true })
@@ -21,7 +22,7 @@ const call = async (name, args = {}) => {
 try {
   await client.connect(transport)
   const tools = (await client.listTools()).tools
-  assert.equal(tools.length, 28)
+  assert.equal(tools.length, EXPECTED_TOOL_COUNT)
   const environment = await call('modcrafting_environment_status')
   assert.equal(environment.observer.bundled, true); assert.equal(environment.observer.protocol, 2)
   assert.equal(environment.version, client.getServerVersion().version)

@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { createHash } from 'node:crypto'
 import { writeHostConfig } from './host-config.mjs'
+import { EXPECTED_TOOL_COUNT } from './tool-count.mjs'
 
 const distribution = path.resolve(process.argv[2] || '')
 if (!process.argv[2]) throw Error('Usage: host:smoke PATH-TO-HOST-DISTRIBUTION. SDK/JSON/TOML config verification, not a native host acceptance test.')
@@ -38,7 +39,7 @@ for (const host of ['codex', 'claude', 'qoder']) {
   const row = { host, nativeHostTest: false }
   try {
     await client.connect(transport)
-    assert.equal((await client.listTools()).tools.length, 28); row.tools = 28
+    assert.equal((await client.listTools()).tools.length, EXPECTED_TOOL_COUNT); row.tools = EXPECTED_TOOL_COUNT
     const call = async (name, args = {}) => { const reply = await client.callTool({ name, arguments: args }); return reply.structuredContent || JSON.parse(reply.content.find((value) => value.type === 'text').text) }
     const environment = await call('modcrafting_environment_status')
     assert.equal(environment.paths.dataRoot, dataRoot); assert.ok(environment.browserUrl)

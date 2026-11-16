@@ -36,16 +36,19 @@ export type BrowserAction = z.input<typeof actionSchema>
 export type BrowserAssets = { html: string; js: string; css: string }
 
 /** Optional loopback view of an existing owner, never a second FabricRuntime. */
-export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAssets, port = 0) {
+export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAssets, port = 0, options: { embed?: boolean; bootstrapSession?: boolean } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw Error('INVALID_BROWSER_PORT')
   const token = randomBytes(32).toString('hex')
+  // Embedding only changes who may frame the page. Host/Origin/Fetch-Metadata checks and the
+  // 32-byte token still decide who may read data, so `--web-embed` cannot widen data access.
+  const frameAncestors = options.embed ? "frame-ancestors *" : "frame-ancestors 'none'"
   let origin = ''
   const server = createServer(async (request, response) => {
     const json = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value)) }
     response.setHeader('cache-control', 'no-store')
     response.setHeader('x-content-type-options', 'nosniff')
     response.setHeader('referrer-policy', 'no-referrer')
-    response.setHeader('content-security-policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+    response.setHeader('content-security-policy', `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; ${frameAncestors}; base-uri 'none'; form-action 'self'`)
     // Host blocks DNS rebinding; Origin and Fetch Metadata block cross-site actions.
     if (request.headers.host !== origin.slice('http://'.length) || request.headers.origin && request.headers.origin !== origin || request.headers['sec-fetch-site'] === 'cross-site') {
       json(403, { ok: false, code: 'ORIGIN_FORBIDDEN', error: 'Use the local browser URL' }); return
@@ -172,11 +175,22 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
   })
   server.requestTimeout = 30000
   server.headersTimeout = 10000
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve) })
+  const listen = (value: number) => new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(value, '127.0.0.1', resolve) })
+  try {
+    await listen(port)
+  } catch (cause) {
+    // A busy fixed port must not kill the MCP server: fall back to an ephemeral port and say so.
+    if (port === 0 || (cause as { code?: string })?.code !== 'EADDRINUSE') throw cause
+    server.removeAllListeners('error')
+    await listen(0)
+    process.stderr.write(`ModCrafting: port ${port} is busy, the workbench switched to an ephemeral port\n`)
+  }
   origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  // `--web-only` has no MCP caller to hand the fragment over, so bind a starter session directly.
+  const bootstrap = options.bootstrapSession ? `&sessionId=${runtime.createSession({ name: '本地工作台' }).sessionId}&backendId=${runtime.backendId}` : ''
   let closing: Promise<void> | undefined
   return {
-    url: `${origin}/#token=${token}`,
+    url: `${origin}/#token=${token}${bootstrap}`,
     close: () => closing ??= new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeIdleConnections() })
   }
 }

@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/hooks/session-start.mjs\" \"${CODEBUDDY_PLUGIN_DATA}\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__modcrafting-fabric__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/hooks/pre-tool-use.mjs\" \"${CODEBUDDY_PLUGIN_DATA}\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__modcrafting-fabric__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/hooks/post-tool-use.mjs\" \"${CODEBUDDY_PLUGIN_DATA}\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

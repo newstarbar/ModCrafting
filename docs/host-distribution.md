@@ -1,6 +1,35 @@
 # 宿主分发
 
-Core/MCP bundle 与 Skills 在各宿主之间复用；宿主清单和安装机制不同。所有 Stage 命令只生成本地文件，不改 Qoder/Codex/Claude 的真实账户设置。
+Core/MCP bundle 与 Skills 在各宿主之间复用；宿主清单和安装机制不同。分两条路径，职责不要混：
+
+| 路径 | 谁改宿主配置 | 覆盖宿主 |
+|---|---|---|
+| Stage 脚本（`plugin:stage` / `host:stage` / `workbuddy:stage` / `plugin:qoder`） | **不改**，只生成目录或 ZIP | Codex、Claude Code、Qoder、WorkBuddy |
+| 安装器（`modcrafting install`） | **默认直写**，写前 `.bak`、幂等、只动自己的键 | 15 个宿主，见 [安装指南](install.md) |
+
+## 宿主清单
+
+| 宿主 | 清单 | 额外能力 | 命令 |
+|---|---|---|---|
+| Codex | `.codex-plugin/plugin.json` + `.mcp.json` | Skills | `plugin:stage` |
+| Claude Code | `.claude-plugin/plugin.json` + `.mcp.json` + marketplace | Skills | `claude:stage`（薄插件，MCP 走 `npx modcrafting-mcp`） |
+| Qoder | `.qoder-plugin/plugin.json` + `.mcp.json` | Skills、commands、ZIP | `plugin:qoder` |
+| WorkBuddy | `.codebuddy-plugin/plugin.json` + `.mcp.json` | Skills、commands、agents、hooks、内联卡片、专家包 | `workbuddy:stage` |
+| Cursor / OpenCode / Pi / Trae / Copilot / Kimi / Devin CLI / Devin Desktop | 无仓库内插件清单 | Skills（Kimi 未验证） | `modcrafting install --host <id>` |
+| DeepSeek Harness | 无仓库内插件清单 | 官方插件机制 | `dsh plugin --profile web add github:newstarbar/ModCrafting` |
+
+## WorkBuddy 插件包 + 专家包
+
+```powershell
+pnpm run plugin:build
+pnpm run plugin:stage       # WorkBuddy 包复用这里产出的独立插件目录
+pnpm run workbuddy:stage      # temp/plugin-artifacts/modcrafting-workbuddy
+pnpm run workbuddy:validate   # 清单、钩子、技能、路径边界、头像
+pnpm run workbuddy:smoke      # 钩子真实执行 + 打包配置启动
+codebuddy --plugin-dir temp/plugin-artifacts/modcrafting-workbuddy
+```
+
+同一份目录既是插件（commands/agents/skills/hooks）也是专家包（`expertType: agent`）。钩子只在 WorkBuddy 生效；`.mcp.json` 的 `--web --workbench=builtin --text=digest` 也只出现在这个包里，三宿主行为不变。详见 [WorkBuddy 使用指南](workbuddy-integration.md) 与 [WorkBuddy 钩子契约](workbuddy-hooks.md)。
 
 ## Qoder 桌面 Plugin ZIP
 

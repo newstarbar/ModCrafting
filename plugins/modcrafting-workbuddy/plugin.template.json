@@ -1,0 +1,54 @@
+{
+  "name": "modcrafting-workbuddy",
+  "version": "__VERSION__",
+  "description": "Develop and deterministically validate Fabric 1.21.4 mods inside WorkBuddy.",
+  "author": {
+    "name": "newstarbar",
+    "url": "https://github.com/newstarbar"
+  },
+  "homepage": "https://github.com/newstarbar/ModCrafting",
+  "repository": "https://github.com/newstarbar/ModCrafting",
+  "license": "GPL-3.0",
+  "keywords": ["minecraft", "fabric", "modding", "gradle", "observer", "workbuddy"],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "agents": ["./agents/modcrafting.md"],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "defaultEnabled": true,
+  "dependencies": {
+    "mcpServers": "./.mcp.json",
+    "connectors": []
+  },
+  "expertType": "agent",
+  "agentName": "modcrafting",
+  "displayName": {
+    "en": "ModCrafting Fabric Studio",
+    "zh": "ModCrafting 模组工坊"
+  },
+  "profession": {
+    "en": "Minecraft Fabric Mod Engineer",
+    "zh": "Minecraft 模组工程师"
+  },
+  "displayDescription": {
+    "en": "Build Fabric 1.21.4 content, textures and recipes locally, then run deterministic in-game tests and report reproducible evidence inside WorkBuddy.",
+    "zh": "在本地制作 Fabric 1.21.4 模组的内容、贴图、配方与界面，构建后自动进入游戏跑确定性玩法测试，并输出可复查的验收报告。"
+  },
+  "avatar": "./avatars/expert.png",
+  "categoryId": "03-GameSpatial",
+  "defaultInitPrompt": {
+    "en": "Inspect this project, tell me whether it can build, and open the workbench.",
+    "zh": "检查当前工程能不能开始开发，并打开工作台。"
+  },
+  "tags": [
+    { "en": "Minecraft", "zh": "Minecraft" },
+    { "en": "Fabric Modding", "zh": "Fabric 模组开发" },
+    { "en": "Game Test Automation", "zh": "游戏自动化测试" }
+  ],
+  "quickPrompts": [
+    { "en": "Inspect this project, tell me whether it can build, and open the workbench.", "zh": "检查当前工程能不能开始开发，并打开工作台。" },
+    { "en": "Add an edible blueberry with a texture and a recipe.", "zh": "帮我做一个能吃的蓝莓，包含贴图和配方。" },
+    { "en": "Run a deterministic gameplay test and summarize the verdict and evidence.", "zh": "跑一次确定性玩法测试，并把结论和证据整理给我。" }
+  ],
+  "plugin": "modcrafting-workbuddy"
+}
