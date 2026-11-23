@@ -39,6 +39,8 @@ test('every content capability matches what the generator actually does, across 
 
 test('createProject capability matches materialize for all 30 cells', async () => {
   const mismatches: string[] = []
+  // A fresh checkout has no temp/ directory; mkdtemp does not create parents.
+  mkdirSync(path.resolve('temp'), { recursive: true })
   const root = path.join(mkdtempSync(path.resolve('temp/capabilities-unit-')), 'projects')
   for (const cell of registry.cells()) {
     const capabilities = capabilitiesFor(resolveTarget(cell.loader, cell.minecraft))

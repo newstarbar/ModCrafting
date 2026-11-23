@@ -86,7 +86,9 @@ export function readRepresentative(version: string, index: GoldenIndex): Capture
       const file = path.join(directory, entry.name)
       if (entry.isDirectory()) { walk(file); continue }
       const relative = path.relative(root, file).replaceAll('\\', '/')
-      text.push({ path: relative, content: readFileSync(file, 'utf8') })
+      // Generated resources are LF; git may still hand a CRLF checkout back on
+      // Windows. Normalise the fixture, not the generated tree.
+      text.push({ path: relative, content: readFileSync(file, 'utf8').replaceAll('\r\n', '\n') })
     }
   }
   walk(root)

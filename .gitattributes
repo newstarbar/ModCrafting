@@ -7,6 +7,10 @@ plugins/modcrafting-workbuddy/skills/** text eol=lf
 plugins/modcrafting-workbuddy/*.json text eol=lf
 plugins/modcrafting-workbuddy/*.md text eol=lf
 
+# Golden fixtures are compared byte-for-byte with generated LF output, so a
+# Windows checkout must not rewrite them to CRLF.
+scripts/test/golden/resources/** text eol=lf
+
 # Binary assets must never be normalised, or the bytes are corrupted on commit.
 *.png binary
 *.jpg binary
