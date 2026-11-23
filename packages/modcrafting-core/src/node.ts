@@ -7,6 +7,12 @@ import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { FABRIC_TARGET, GAME_TEST_WORLD, isAllowedBridgeApiPath, type GameTestVerdict } from './domain.ts'
 import { acceptanceVerdict } from './acceptance.ts'
+import { deriveResourceLayout, type ResourceLayout } from './version/resources-profile.ts'
+import { getRegistry } from './version/registry.ts'
+import { capabilitiesFor } from './version/capabilities.ts'
+import { neoForgeProjectFiles } from './loaders/neoforge.ts'
+import { forgeProjectFiles } from './loaders/forge.ts'
+import type { ResolvedTarget } from './version/targets.ts'
 import type { RuntimePaths, RuntimeEvents, EnvironmentStatus, FabricProject, JavaCandidate, JavaSource, JavaStatus } from './contracts.ts'
 export type { RuntimePaths, RuntimeEvents, EnvironmentStatus, FabricProject, JavaCandidate, JavaSource, JavaStatus } from './contracts.ts'
 
@@ -338,14 +344,35 @@ export function inspectFabricProject(projectPath: string): FabricProject {
   const errors: string[] = []
   if (!existsSync(root) || !statSync(root).isDirectory()) errors.push('project path does not exist')
   const modJson = path.join(root, 'src', 'main', 'resources', 'fabric.mod.json')
+  // Platform metadata decides which loader a project targets; everything downstream
+  // (layout, knowledge lookup, capabilities) reads the same value.
+  const modsToml = path.join(root, 'src', 'main', 'resources', 'META-INF', 'neoforge.mods.toml')
+  const forgeToml = path.join(root, 'src', 'main', 'resources', 'META-INF', 'mods.toml')
   const wrapper = path.join(root, 'gradlew.bat')
-  if (!existsSync(modJson)) errors.push('missing src/main/resources/fabric.mod.json')
+  let loader: FabricProject['loader'] | undefined
   let modId: string | undefined
-  try { const metadata = JSON.parse(readFileSync(modJson, 'utf8')); if (typeof metadata.id !== 'string' || !/^[a-z][a-z0-9_-]{1,63}$/.test(metadata.id)) errors.push('fabric.mod.json requires a valid mod id'); else modId = metadata.id } catch { if (existsSync(modJson)) errors.push('fabric.mod.json is invalid JSON') }
+  if (existsSync(modJson)) {
+    loader = 'fabric'
+    try { const metadata = JSON.parse(readFileSync(modJson, 'utf8')); if (typeof metadata.id !== 'string' || !/^[a-z][a-z0-9_-]{1,63}$/.test(metadata.id)) errors.push('fabric.mod.json requires a valid mod id'); else modId = metadata.id } catch { errors.push('fabric.mod.json is invalid JSON') }
+  } else if (existsSync(modsToml)) {
+    loader = 'neoforge'
+    try {
+      const metadata = readFileSync(modsToml, 'utf8')
+      modId = metadata.match(/^modId\s*=\s*"([a-z][a-z0-9_-]{1,63})"$/m)?.[1]
+      if (!modId) errors.push('neoforge.mods.toml requires a valid modId')
+    } catch { errors.push('neoforge.mods.toml is unreadable') }
+  } else if (existsSync(forgeToml)) {
+    loader = 'forge'
+    try {
+      const metadata = readFileSync(forgeToml, 'utf8')
+      modId = metadata.match(/^modId\s*=\s*"([a-z][a-z0-9_-]{1,63})"$/m)?.[1]
+      if (!modId) errors.push('mods.toml requires a valid modId')
+    } catch { errors.push('mods.toml is unreadable') }
+  } else errors.push('missing src/main/resources/fabric.mod.json')
   if (!existsSync(wrapper)) errors.push('missing gradlew.bat')
   let minecraftVersion: string | undefined
   try { const gradle = readFileSync(path.join(root, 'gradle.properties'), 'utf8'); minecraftVersion = gradle.match(/^minecraft_version=(.+)$/m)?.[1]?.trim() } catch { /* optional */ }
-  return { path: root, valid: errors.length === 0, modId, minecraftVersion, wrapperPath: existsSync(wrapper) ? wrapper : undefined, errors }
+  return { path: root, valid: errors.length === 0, loader, modId, minecraftVersion, wrapperPath: existsSync(wrapper) ? wrapper : undefined, errors }
 }
 
 export interface ProjectDiagnostic { level: 'error' | 'warning'; code: string; path: string; message: string }
@@ -380,7 +407,7 @@ function localReference(reference: string, modId: string): { namespace: string; 
   if (!resource || namespace !== modId) return undefined
   return { namespace, resource }
 }
-function validateResourceReferences(root: string, resources: string, modId: string, diagnostics: ProjectDiagnostic[]): void {
+function validateResourceReferences(root: string, resources: string, modId: string, diagnostics: ProjectDiagnostic[], layout: ResourceLayout): void {
   const assets = path.join(resources, 'assets', modId)
   const add = (level: 'error' | 'warning', code: string, file: string, message: string) => diagnostics.push({ level, code, path: relativeResourcePath(root, file), message })
   const modelsRoot = path.join(assets, 'models')
@@ -398,7 +425,7 @@ function validateResourceReferences(root: string, resources: string, modId: stri
     const parsed = parseJsonObject(file)
     if ('error' in parsed) { add('error', 'INVALID_JSON', file, `模型 JSON 无法解析：${parsed.error}`); continue }
     const parent = parsed.value.parent
-    if (typeof parent === 'string' && !parent.startsWith('builtin/') && !modelExists(parent)) add('error', 'MISSING_MODEL', file, `parent 引用的模型不存在（1.21.4 模型路径区分大小写）：${parent}`)
+    if (typeof parent === 'string' && !parent.startsWith('builtin/') && !modelExists(parent)) add('error', 'MISSING_MODEL', file, `parent 引用的模型不存在（模型路径区分大小写）：${parent}`)
     const textures = parsed.value.textures
     if (textures && typeof textures === 'object' && !Array.isArray(textures)) {
       for (const [key, value] of Object.entries(textures as Record<string, unknown>)) {
@@ -406,13 +433,13 @@ function validateResourceReferences(root: string, resources: string, modId: stri
       }
     }
     const relative = relativeResourcePath(modelsRoot, file)
-    if (relative.startsWith('item/')) {
+    if (layout.itemModelDefinition === 'assets-items' && relative.startsWith('item/')) {
       const itemPath = relative.slice('item/'.length).replace(/\.json$/, '')
       const definition = path.join(assets, 'items', ...itemPath.split('/')) + '.json'
-      if (!existsSync(definition)) add('error', 'MISSING_ITEM_MODEL_DEFINITION', file, `1.21.4 需要 assets/${modId}/items/${itemPath}.json 指向这个物品模型；只有 models/item 文件时物品会显示紫黑占位。`)
+      if (!existsSync(definition)) add('error', 'MISSING_ITEM_MODEL_DEFINITION', file, `该版本需要 assets/${modId}/items/${itemPath}.json 指向这个物品模型；只有 models/item 文件时物品会显示紫黑占位。`)
     }
   }
-  for (const file of jsonFilesUnder(path.join(assets, 'items'))) {
+  for (const file of layout.itemModelDefinition === 'assets-items' ? jsonFilesUnder(path.join(assets, 'items')) : []) {
     const parsed = parseJsonObject(file)
     if ('error' in parsed) { add('error', 'INVALID_JSON', file, `物品模型定义 JSON 无法解析：${parsed.error}`); continue }
     const references: string[] = []
@@ -432,14 +459,14 @@ function validateResourceReferences(root: string, resources: string, modId: stri
     const parsed = parseJsonObject(file)
     if ('error' in parsed) add('error', 'INVALID_JSON', file, `语言文件无法解析：${parsed.error}`)
   }
-  const recipes = path.join(resources, 'data', modId, 'recipe')
+  const recipes = path.join(resources, 'data', modId, layout.recipeDir)
   for (const file of jsonFilesUnder(recipes)) {
     const parsed = parseJsonObject(file)
     if ('error' in parsed) add('error', 'INVALID_JSON', file, `配方 JSON 无法解析：${parsed.error}`)
-    else if (typeof parsed.value.type !== 'string') add('error', 'INVALID_RECIPE', file, '配方缺少字符串 type；1.21.4 不会加载这个文件。')
+    else if (typeof parsed.value.type !== 'string') add('error', 'INVALID_RECIPE', file, '配方缺少字符串 type；游戏不会加载这个文件。')
   }
-  const legacyRecipes = path.join(resources, 'data', modId, 'recipes')
-  if (existsSync(legacyRecipes)) add('warning', 'LEGACY_RECIPE_DIRECTORY', legacyRecipes, '1.21.4 使用单数 recipe 目录；recipes 目录中的配方不会被加载。')
+  const wrongRecipeDir = path.join(resources, 'data', modId, layout.recipeDir === 'recipe' ? 'recipes' : 'recipe')
+  if (existsSync(wrongRecipeDir)) add('warning', 'LEGACY_RECIPE_DIRECTORY', wrongRecipeDir, `该版本使用 ${layout.recipeDir} 目录；${path.basename(wrongRecipeDir)} 目录中的配方不会被加载。`)
 }
 function validateMixinConfiguration(root: string, resources: string, metadata: Record<string, unknown>, diagnostics: ProjectDiagnostic[]): void {
   const declared = metadata.mixins
@@ -455,12 +482,33 @@ function validateMixinConfiguration(root: string, resources: string, metadata: R
   }
 }
 
+const VERSION_ID_RE = /^\d+\.\d+(?:\.\d+)?$/
+
+/**
+ * Validation follows the project's own version, so a 1.20.1 project is not
+ * judged by 1.21.4 resource rules (no assets/<ns>/items/, plural recipes/).
+ */
+function resolveValidationLayout(minecraftVersion?: string): { layout: ResourceLayout; inMatrix: boolean; error?: string } {
+  const registry = getRegistry()
+  const fallback = deriveResourceLayout(FABRIC_TARGET.minecraft, registry)
+  if (!minecraftVersion) return { layout: fallback, inMatrix: false }
+  if (!VERSION_ID_RE.test(minecraftVersion)) {
+    return { layout: fallback, inMatrix: false, error: `minecraft_version=${minecraftVersion} 不是有效的正式版号；写成 1.21.4 或 26.3 这样的格式。` }
+  }
+  if (!registry.has(minecraftVersion)) {
+    return { layout: fallback, inMatrix: false, error: `minecraft_version=${minecraftVersion} 不在已同步的正式版清单里；运行 pnpm run versions:sync 后重试，或改用矩阵内的版本。` }
+  }
+  return { layout: deriveResourceLayout(minecraftVersion, registry), inMatrix: registry.milestones().includes(minecraftVersion) }
+}
+
 export function validateFabricProject(projectPath: string): { ok: boolean; project: FabricProject; checks: Record<string, boolean>; diagnostics: ProjectDiagnostic[] } {
   const project = inspectFabricProject(projectPath)
   const diagnostics: ProjectDiagnostic[] = []
   const resources = path.join(project.path, 'src', 'main', 'resources')
-  if (!project.minecraftVersion) diagnostics.push({ level: 'error', code: 'MINECRAFT_VERSION_MISSING', path: 'gradle.properties', message: '缺少 minecraft_version；目标固定为 1.21.4。' })
-  else if (project.minecraftVersion !== FABRIC_TARGET.minecraft) diagnostics.push({ level: 'error', code: 'MINECRAFT_VERSION_MISMATCH', path: 'gradle.properties', message: `当前 minecraft_version=${project.minecraftVersion}，本插件只构建 1.21.4。` })
+  const resolution = resolveValidationLayout(project.minecraftVersion)
+  if (!project.minecraftVersion) diagnostics.push({ level: 'error', code: 'MINECRAFT_VERSION_MISSING', path: 'gradle.properties', message: '缺少 minecraft_version；请声明目标版本（例如 1.21.4 或 26.3）。' })
+  else if (resolution.error) diagnostics.push({ level: 'error', code: 'INVALID_MINECRAFT_VERSION', path: 'gradle.properties', message: resolution.error })
+  else if (!resolution.inMatrix) diagnostics.push({ level: 'warning', code: 'TARGET_NOT_IN_MATRIX', path: 'gradle.properties', message: `minecraft_version=${project.minecraftVersion} 可以校验，但不在发布矩阵内；需要参与多版本发布时把它加进 catalog 的 milestones。` })
   let metadata: Record<string, unknown> | undefined
   const metadataFile = path.join(resources, 'fabric.mod.json')
   if (existsSync(metadataFile)) {
@@ -476,19 +524,123 @@ export function validateFabricProject(projectPath: string): { ok: boolean; proje
       const minecraft = (depends as Record<string, unknown>).minecraft
       if (typeof minecraft === 'string' && !minecraft.includes(FABRIC_TARGET.minecraft)) diagnostics.push({ level: 'warning', code: 'MINECRAFT_DEPENDENCY_MISMATCH', path: 'src/main/resources/fabric.mod.json', message: `depends.minecraft=${minecraft} 与目标 ${FABRIC_TARGET.minecraft} 不一致。` })
     }
-    if (project.modId) validateResourceReferences(project.path, resources, project.modId, diagnostics)
+    if (project.modId) validateResourceReferences(project.path, resources, project.modId, diagnostics, resolution.layout)
     validateMixinConfiguration(project.path, resources, metadata, diagnostics)
   }
   const checks = {
     fabricModJson: Boolean(project.modId),
     wrapper: Boolean(project.wrapperPath),
-    minecraft1214: project.minecraftVersion === FABRIC_TARGET.minecraft,
+    targetResolved: Boolean(project.minecraftVersion) && !resolution.error,
     resourceReferences: !diagnostics.some((diagnostic) => diagnostic.level === 'error')
   }
   return { ok: project.valid && Object.values(checks).every(Boolean), project, checks, diagnostics }
 }
 
 export interface ProjectWrapper { batch: string; properties: string; jarBase64: string }
+export interface MaterializeVersions {
+  minecraft: string
+  loader: string
+  api: string
+  mappings: string
+  mappingKind: 'yarn' | 'mojmap'
+  loom: string
+  gradle: string
+  javaMajor: number
+}
+
+/**
+ * The version tuple a project is written with.
+ *
+ * The build toolchain (Gradle + Loom) is part of the *product*, not part of the
+ * target: one shipped toolchain must serve every Minecraft version, otherwise a
+ * target silently means "a different build system". Only Minecraft, loader, API
+ * and mappings vary per target.
+ *
+ * The pinned target additionally keeps the exact loader/API/mappings this repo
+ * has built, so the default project's bytes never drift.
+ *
+ * Probed 2026-11-16: maven's newest Loom (1.19.4) refuses to run on our Gradle
+ * 9.5.0 (`requires at least Gradle 9.8.0`), so following "latest plugin" per target
+ * would break the build for reasons unrelated to Minecraft.
+ */
+export function materializeVersions(target: ResolvedTarget): MaterializeVersions {
+  const pinned = target.loader === 'fabric' && target.minecraft === FABRIC_TARGET.minecraft
+  // Three toolchains, each forced by an upstream constraint rather than preference:
+  //  - shipped: Gradle 9.5.0 + Loom 1.17.12, targets up to 1.21.11;
+  //  - 26.x: Loom 1.19.4 needs Gradle >= 9.8 (probed 2026-11-16);
+  //  - forge: ForgeGradle 6 refuses Gradle >= 9.0 (probed 2026-11-19).
+  const secondToolchain = target.loader === 'fabric' && target.release.javaTarget > 21
+  const forgeToolchain = target.loader === 'forge'
+  return {
+    minecraft: target.minecraft,
+    loader: pinned ? FABRIC_TARGET.loader : target.release.loaderVersion,
+    api: pinned ? FABRIC_TARGET.fabricApi : target.release.apiVersion ?? '',
+    mappings: pinned ? FABRIC_TARGET.yarn : target.release.mappings.version,
+    mappingKind: pinned ? 'yarn' : target.release.mappings.kind === 'mojmap' ? 'mojmap' : 'yarn',
+    loom: secondToolchain ? target.release.build?.pluginVersion ?? '1.19.4' : FABRIC_TARGET.loom,
+    gradle: forgeToolchain ? '8.10.2' : secondToolchain ? '9.8.0' : FABRIC_TARGET.gradle,
+    javaMajor: target.release.javaTarget
+  }
+}
+
+/**
+ * Write a complete project for any resolved target.
+ *
+ * The scaffold owns the canonical file shapes; this rewrites only the four version
+ * values, so one template serves every target and the pinned scaffold never drifts.
+ * Non-Fabric loaders are rejected until the Java dialect layer (P4) exists: a
+ * NeoForge project with Yarn imports would not compile, and pretending otherwise
+ * is worse than refusing.
+ */
+export async function materializeProject(input: { projectPath: string; modId: string; modName: string; target: ResolvedTarget; wrapper?: ProjectWrapper }): Promise<FabricProject> {
+  // One source of truth: the capability table decides, not a local loader check.
+  const capability = capabilitiesFor(input.target).createProject
+  if (capability.state === 'blocked') throw new Error(`${capability.reason}；${capability.requirement ?? ''}`.trim())
+  const root = path.resolve(input.projectPath)
+  if (existsSync(root) && (await readdir(root)).length > 0) throw new Error('refusing to scaffold into a non-empty directory')
+  if (input.target.loader === 'neoforge' || input.target.loader === 'forge') {
+    const platform = input.target.loader === 'forge' ? forgeProjectFiles(input.target, input.modId, input.modName) : neoForgeProjectFiles(input.target, input.modId, input.modName)
+    for (const file of platform.files) {
+      const destination = path.join(root, ...file.path.split('/'))
+      await mkdir(path.dirname(destination), { recursive: true })
+      await writeFile(destination, file.content, 'utf8')
+    }
+    if (input.wrapper) {
+      await mkdir(path.join(root, 'gradle', 'wrapper'), { recursive: true })
+      await writeFile(path.join(root, 'gradlew.bat'), input.wrapper.batch, { flag: 'wx' })
+      await writeFile(path.join(root, 'gradle', 'wrapper', 'gradle-wrapper.properties'), input.wrapper.properties, { flag: 'wx' })
+      await writeFile(path.join(root, 'gradle', 'wrapper', 'gradle-wrapper.jar'), Buffer.from(input.wrapper.jarBase64, 'base64'), { flag: 'wx' })
+    }
+    return inspectFabricProject(root)
+  }
+  // The scaffold owns the canonical Fabric file shapes; only the four version values are rewritten.
+  const project = await scaffoldFabricProject(input.projectPath, input.modId, input.modName, input.wrapper)
+  const fabricRoot = project.path, versions = materializeVersions(input.target)
+  const properties = path.join(fabricRoot, 'gradle.properties')
+  writeFileSync(properties, readFileSync(properties, 'utf8')
+    .replace(/^minecraft_version=.*$/m, `minecraft_version=${versions.minecraft}`)
+    .replace(/^yarn_mappings=.*$/m, `yarn_mappings=${versions.mappings}`)
+    .replace(/^loader_version=.*$/m, `loader_version=${versions.loader}`)
+    .replace(/^fabric_version=.*$/m, `fabric_version=${versions.api}`), 'utf8')
+  const build = path.join(fabricRoot, 'build.gradle')
+  const buildRewrite = readFileSync(build, 'utf8')
+    .replace(/id 'fabric-loom' version '[^']+'/, `id 'fabric-loom' version '${versions.loom}'`)
+    .replace(/com\.mojang:minecraft:[^"]+/, `com.mojang:minecraft:${versions.minecraft}`)
+    .replace(/net\.fabricmc:fabric-loader:[^"]+/, `net.fabricmc:fabric-loader:${versions.loader}`)
+    .replace(/net\.fabricmc\.fabric-api:fabric-api:[^"]+/, `net.fabricmc.fabric-api:fabric-api:${versions.api}`)
+  // 26.x uses Mojang official mappings — yarn has no 26.x builds (maven-metadata,
+  // probed 2026-11-16), so loom's official mappings API replaces the yarn coordinate.
+  const buildFinal = versions.mappingKind === 'mojmap'
+    ? buildRewrite.replace(/mappings "net\.fabricmc:yarn:[^"]+"/, 'mappings loom.officialMojangMappings()')
+    : buildRewrite.replace(/net\.fabricmc:yarn:[^":]+:v2/, `net.fabricmc:yarn:${versions.mappings}:v2`)
+  writeFileSync(build, buildFinal, 'utf8')
+  const metadataFile = path.join(fabricRoot, 'src', 'main', 'resources', 'fabric.mod.json')
+  const metadata = JSON.parse(readFileSync(metadataFile, 'utf8')) as Record<string, any>
+  metadata.depends = { ...metadata.depends, fabricloader: `>=${versions.loader}`, minecraft: `~${versions.minecraft}`, java: `>=${versions.javaMajor}` }
+  writeFileSync(metadataFile, JSON.stringify(metadata, null, 2), 'utf8')
+  return inspectFabricProject(fabricRoot)
+}
+
 export async function scaffoldFabricProject(projectPath: string, modId: string, modName: string, wrapper?: ProjectWrapper): Promise<FabricProject> {
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(modId)) throw new Error('modId must be lower-case and use [a-z0-9_-]')
   const root = path.resolve(projectPath)
@@ -550,17 +702,39 @@ async function extractZip(archive: string, destination: string): Promise<void> {
 }
 async function githubRelease(repo: string, prefix?: string): Promise<Record<string, unknown>> { const response = await fetch(`https://api.github.com/repos/${repo}/releases`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'ModCrafting Fabric plugin' } }); if (!response.ok) throw new Error(`GitHub releases API: HTTP ${response.status}`); const releases = await response.json() as Record<string, unknown>[]; const release = releases.find((item) => !prefix || String(item.tag_name).startsWith(prefix)); if (!release) throw new Error(`no release matching ${prefix || 'latest'}`); return release }
 export type DownloadableAsset = 'minecraft-data' | 'mc-wiki-zh' | 'mc-wiki-zh-index' | 'agent-knowledge'
-export async function prepareAssets(paths: RuntimePaths, names?: DownloadableAsset[]): Promise<AssetResult[]> {
+/** Which Minecraft versions actually have published knowledge data. */
+async function knowledgeVersions(repo: string): Promise<string[]> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${repo}/releases`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'ModCrafting Fabric plugin' } })
+    if (!response.ok) return []
+    const releases = await response.json() as Record<string, unknown>[]
+    const versions = releases.map((item) => String(item.tag_name ?? '').match(/^knowledge-(\d+\.\d+(?:\.\d+)?)-/)?.[1]).filter((value): value is string => Boolean(value))
+    return [...new Set(versions)]
+  } catch { return [] }
+}
+export async function prepareAssets(paths: RuntimePaths, names?: DownloadableAsset[], options: { minecraft?: string } = {}): Promise<AssetResult[]> {
   // Only the directories this function writes; avoid scaffolding unrelated roots (e.g. logs/reports inside a project workspace).
   for (const directory of [paths.knowledgeRoot, paths.assetsRoot]) mkdirSync(directory, { recursive: true })
   const results: AssetResult[] = []
-  const plans = [{ repo: 'newstarbar/ModCrafting-knowledge-base', prefix: `knowledge-${FABRIC_TARGET.minecraft}-`, names: ['minecraft-data.zip', 'mc-wiki-zh.zip', 'mc-wiki-zh-index.zip'], kind: 'knowledge' }, { repo: 'newstarbar/ModCrafting', names: ['agent-knowledge.zip'], kind: 'assets' }]
+  const minecraft = options.minecraft?.trim() || FABRIC_TARGET.minecraft
+  const plans = [{ repo: 'newstarbar/ModCrafting-knowledge-base', prefix: `knowledge-${minecraft}-`, names: ['minecraft-data.zip', 'mc-wiki-zh.zip', 'mc-wiki-zh-index.zip'], kind: 'knowledge' }, { repo: 'newstarbar/ModCrafting', names: ['agent-knowledge.zip'], kind: 'assets' }]
   for (const plan of plans) {
     const selected = plan.names.filter(name => !names || names.includes(name.replace(/\.zip$/, '') as DownloadableAsset))
     if (!selected.length) continue
     let assets: Record<string, unknown>[]
     try { const release = await githubRelease(plan.repo, plan.prefix); assets = Array.isArray(release.assets) ? release.assets as Record<string, unknown>[] : [] }
-    catch (error) { for (const name of selected) results.push({ name, ok: false, error: String(error) }); continue }
+    catch (error) {
+      // Only spend an extra request when a specific version was asked for and the
+      // failure means "that release does not exist" — not on network errors.
+      const explicit = Boolean(options.minecraft?.trim())
+      const missingRelease = String(error).includes('no release matching')
+      const available = plan.kind === 'knowledge' && explicit && missingRelease ? await knowledgeVersions(plan.repo) : []
+      const message = available.length && !available.includes(minecraft)
+        ? `${minecraft} 的知识数据尚未发布（已有 ${available.join(' / ')}）；不会用其他版本的数据冒充`
+        : String(error)
+      for (const name of selected) results.push({ name, ok: false, error: message })
+      continue
+    }
     for (const name of selected) {
       try {
         const asset = assets.find(item => item.name === name)
@@ -578,12 +752,56 @@ export async function prepareAssets(paths: RuntimePaths, names?: DownloadableAss
   return results
 }
 
-export function lookupMinecraftData(paths: RuntimePaths, kind: 'block' | 'item' | 'entity' | 'enchantment' | 'recipe', query: string): Record<string, unknown> {
-  const file = path.join(paths.knowledgeRoot, 'minecraft-data', FABRIC_TARGET.minecraft, 'index.json')
-  if (!existsSync(file)) return { ok: false, code: 'ASSET_NOT_READY', assetReady: false, error: `minecraft-data unavailable under ${paths.knowledgeRoot}; run modcrafting_prepare_assets with names ["minecraft-data"]`, remediation: { tool: 'modcrafting_prepare_assets', arguments: { names: ['minecraft-data'] } } }
+export interface KnowledgeIndexResolution { file: string; minecraft: string; exact: boolean; available: string[] }
+
+/**
+ * Knowledge data is published per Minecraft version, so a project must not read
+ * another version's index without saying so. Resolution order:
+ * exact version -> nearest available release (by catalog order) -> undefined.
+ */
+export function resolveKnowledgeIndex(knowledgeRoot: string, minecraft?: string): KnowledgeIndexResolution | undefined {
+  const base = path.join(knowledgeRoot, 'minecraft-data')
+  if (!existsSync(base)) return undefined
+  const available = readdirSync(base, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(path.join(base, entry.name, 'index.json')))
+    .map((entry) => entry.name)
+  if (!available.length) return undefined
+  const requested = minecraft?.trim()
+  if (requested && available.includes(requested)) return { file: path.join(base, requested, 'index.json'), minecraft: requested, exact: true, available }
+  const registry = getRegistry()
+  const rank = new Map(registry.order.map((id, index) => [id, index]))
+  const target = requested ? rank.get(requested) : undefined
+  const chosen = target === undefined
+    ? [...available].sort((left, right) => registry.compare(right, left))[0]
+    : [...available].sort((left, right) => {
+      const leftRank = rank.get(left), rightRank = rank.get(right)
+      const distance = (value: number | undefined) => value === undefined ? Number.MAX_SAFE_INTEGER : Math.abs(value - target)
+      return distance(leftRank) - distance(rightRank) || (leftRank ?? 0) - (rightRank ?? 0)
+    })[0]
+  if (!chosen) return undefined
+  // Nothing was requested, so the newest available index satisfies the request.
+  return { file: path.join(base, chosen, 'index.json'), minecraft: chosen, exact: !requested, available }
+}
+
+export function lookupMinecraftData(
+  paths: RuntimePaths,
+  kind: 'block' | 'item' | 'entity' | 'enchantment' | 'recipe',
+  query: string,
+  options: { minecraft?: string; allowFallback?: boolean } = {}
+): Record<string, unknown> {
+  const resolution = resolveKnowledgeIndex(paths.knowledgeRoot, options.minecraft)
+  if (!resolution) return { ok: false, code: 'ASSET_NOT_READY', assetReady: false, error: `minecraft-data unavailable under ${paths.knowledgeRoot}; run modcrafting_prepare_assets with names ["minecraft-data"]`, remediation: { tool: 'modcrafting_prepare_assets', arguments: { names: ['minecraft-data'] } } }
+  if (!resolution.exact && options.allowFallback !== true) {
+    return {
+      ok: false, code: 'KNOWLEDGE_VERSION_UNAVAILABLE', assetReady: false,
+      requested: options.minecraft, availableVersions: resolution.available,
+      error: `${options.minecraft ?? '该版本'} 的知识数据尚未发布（本地已有 ${resolution.available.join(' / ')}）。不会用其他版本的数据冒充，以免给出该版本不存在的物品。`,
+      remediation: { tool: 'modcrafting_prepare_assets', arguments: { names: ['minecraft-data'], minecraft: options.minecraft } }
+    }
+  }
   let index: Record<string, Record<string, unknown>>
-  try { index = JSON.parse(readFileSync(file, 'utf8')) as Record<string, Record<string, unknown>> } catch { return { ok: false, code: 'ASSET_INVALID', assetReady: false, error: 'minecraft-data index is invalid; prepare the asset again', remediation: { tool: 'modcrafting_prepare_assets', arguments: { names: ['minecraft-data'] } } } }
-  const plural = kind === 'block' ? 'blocks' : kind === 'item' ? 'items' : kind === 'entity' ? 'entities' : kind === 'enchantment' ? 'enchantments' : 'recipes'; const byId = index[`${plural}ById`] || {}; const normalized = query.startsWith('minecraft:') ? query : `minecraft:${query}`; const direct = byId[normalized] || byId[query]; if (direct) return { ok: true, kind, result: direct }; const aliases = [index[`${plural}ByEnName`] || {}, index[`${plural}ByZhName`] || {}]; for (const map of aliases) { const hit = map[query.toLowerCase()] || map[query]; if (typeof hit === 'string' && byId[hit]) return { ok: true, kind, result: byId[hit] } }; return { ok: false, kind, query, error: `no ${kind} found for ${query}` }
+  try { index = JSON.parse(readFileSync(resolution.file, 'utf8')) as Record<string, Record<string, unknown>> } catch { return { ok: false, code: 'ASSET_INVALID', assetReady: false, error: 'minecraft-data index is invalid; prepare the asset again', remediation: { tool: 'modcrafting_prepare_assets', arguments: { names: ['minecraft-data'] } } } }
+  const plural = kind === 'block' ? 'blocks' : kind === 'item' ? 'items' : kind === 'entity' ? 'entities' : kind === 'enchantment' ? 'enchantments' : 'recipes'; const byId = index[`${plural}ById`] || {}; const normalized = query.startsWith('minecraft:') ? query : `minecraft:${query}`; const direct = byId[normalized] || byId[query]; if (direct) return { ok: true, kind, result: direct, dataVersion: resolution.minecraft, exact: resolution.exact }; const aliases = [index[`${plural}ByEnName`] || {}, index[`${plural}ByZhName`] || {}]; for (const map of aliases) { const hit = map[query.toLowerCase()] || map[query]; if (typeof hit === 'string' && byId[hit]) return { ok: true, kind, result: byId[hit], dataVersion: resolution.minecraft, exact: resolution.exact } }; return { ok: false, kind, query, dataVersion: resolution.minecraft, exact: resolution.exact, error: `no ${kind} found for ${query}` }
 }
 export function searchFabricDocs(paths: RuntimePaths, query: string, limit = 8): Record<string, unknown> {
   const legacy = path.join(paths.knowledgeRoot, 'agent-knowledge', 'fabric')

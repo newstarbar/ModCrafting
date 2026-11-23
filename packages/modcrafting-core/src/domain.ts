@@ -1,5 +1,13 @@
 /** Shared, host-neutral Fabric and Observer V2 contracts. */
 import { z } from 'zod'
+/**
+ * The version this plugin pins and ships by default. It is *not* the only
+ * supported version any more: `version/catalog.json` lists every target, and
+ * `version/targets.ts` resolves them. This snapshot stays hand-maintained
+ * because it is the combination this repository actually builds and bundles
+ * (Gradle wrapper, embedded Observer), so it must not drift with upstream
+ * "latest" tags.
+ */
 export const FABRIC_TARGET = {
   minecraft: '1.21.4',
   loader: '0.16.10',
@@ -8,6 +16,7 @@ export const FABRIC_TARGET = {
   loom: '1.17.12',
   gradle: '9.5.0'
 } as const
+export const DEFAULT_TARGET_ID = 'fabric@1.21.4'
 
 export const GAME_TEST_WORLD = 'ModCrafting Test World'
 export const GAME_TEST_REGION = { minX: -16, maxX: 16, minY: 96, maxY: 112, minZ: -16, maxZ: 16 } as const

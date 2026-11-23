@@ -1,7 +1,24 @@
 import type { GuiLayout } from './gui-model.ts'
+import { deriveJavaApiProfile } from './version/java-profile.ts'
+import { applyJavaDialect } from './version/java-dialect.ts'
+import { getRegistry } from './version/registry.ts'
+import { FABRIC_TARGET } from './domain.ts'
+import { CoreError } from './runtime.ts'
 
 /** Data-only layout resources plus a small native Fabric client, isolated from handwritten initializers. */
-export function generateGui(layout: GuiLayout, splitClient: boolean) {
+export function generateGui(layout: GuiLayout, splitClient: boolean, minecraft?: string, loader?: string) {
+  // The draw call differs per generation (probed via javap on 1.20.1: the same
+  // argument list works once the RenderLayer prefix is dropped), so the profile
+  // decides, and the Identifier dialect is applied on top.
+  const api = deriveJavaApiProfile(minecraft?.trim() || FABRIC_TARGET.minecraft, 'yarn', getRegistry())
+  if (loader && loader !== 'fabric') throw new CoreError('JAVA_DIALECT_UNSUPPORTED', `GUI 的客户端 Java 尚未适配 ${loader}；P4 内容层：Mojmap 注册与 DeferredRegister 对接`)
+  const renderLayer = api.render.guiTextureDraw === 'render-layer-fn'
+  const renderLayerImport = renderLayer ? 'import net.minecraft.client.render.RenderLayer;' : ''
+  const renderLayerArg = renderLayer ? 'RenderLayer::getGuiTextured,' : ''
+  // Probed via javap: Screen.renderBackground is (DrawContext) before 1.21.2 and
+  // (DrawContext, int, int, float) from 1.21.2.
+  const renderBackgroundArgs = renderLayer ? 'DrawContext ctx,int mouseX,int mouseY,float delta' : 'DrawContext ctx'
+  const renderBackgroundSuper = renderLayer ? 'super.renderBackground(ctx,mouseX,mouseY,delta)' : 'super.renderBackground(ctx)'
   const [modId, name] = layout.id.split(':'), pkg = `modcrafting.generated.${modId.replaceAll('-', '_')}.gui_${name}`
   const resource = `assets/${modId}/modcrafting/gui/${name}.json`, client = pkg + '.GuiClient'
   const configName = `${modId}-gui-${name}.json`, keyName = `key.${modId}.gui.${name}`
@@ -20,7 +37,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.render.RenderLayer;
+${renderLayerImport}
 import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.item.ItemStack;
@@ -78,7 +95,7 @@ public final class GuiClient implements ClientModInitializer {
         for (JsonElement element: elements()) {
             JsonObject e=element.getAsJsonObject(); int x=dx+num(e,"x"), y=dy+num(e,"y"), w=num(e,"width"), h=num(e,"height"); String type=str(e,"type");
             if(type.equals("panel")) ctx.fill(x,y,x+w,y+h,color(e));
-            if(type.equals("image")) { String ref=e.has("texture")?str(e,"texture"):"minecraft:item/iron_ingot"; int split=ref.indexOf(':'); Identifier texture=Identifier.of(ref.substring(0,split),"textures/"+ref.substring(split+1)+".png"); ctx.drawTexture(RenderLayer::getGuiTextured,texture,x,y,0f,0f,w,h,w,h); }
+            if(type.equals("image")) { String ref=e.has("texture")?str(e,"texture"):"minecraft:item/iron_ingot"; int split=ref.indexOf(':'); Identifier texture=Identifier.of(ref.substring(0,split),"textures/"+ref.substring(split+1)+".png"); ctx.drawTexture(${renderLayerArg}texture,x,y,0f,0f,w,h,w,h); }
             if(type.equals("label")) { ctx.enableScissor(x,y,x+w,y+h); ctx.drawText(c.textRenderer,text(e),x,y,color(e),e.get("shadow").getAsBoolean()); ctx.disableScissor(); }
             if(type.equals("slot")) {
                 ctx.fill(x,y,x+w,y+h,0xff454545);ctx.fill(x+1,y+1,x+w-1,y+h-1,0xff8b8b8b);
@@ -117,7 +134,7 @@ public final class GuiClient implements ClientModInitializer {
                 }).dimensions(x,y,num(e,"width"),num(e,"height")).build());
             }
         }
-        @Override public void renderBackground(DrawContext ctx,int mouseX,int mouseY,float delta) { super.renderBackground(ctx,mouseX,mouseY,delta);draw(ctx,width,height); }
+        @Override public void renderBackground(${renderBackgroundArgs}) { ${renderBackgroundSuper};draw(ctx,width,height); }
     }
     private static final class BoundSlider extends SliderWidget {
         private final JsonObject element;
@@ -128,7 +145,7 @@ public final class GuiClient implements ClientModInitializer {
 }
 `
   return { client, keyName, configName, files: [
-    { path: `${splitClient ? 'src/client/java' : 'src/main/java'}/${pkg.replaceAll('.', '/')}/GuiClient.java`, content: source },
+    { path: `${splitClient ? 'src/client/java' : 'src/main/java'}/${pkg.replaceAll('.', '/')}/GuiClient.java`, content: applyJavaDialect(source, api) },
     { path: 'src/main/resources/' + resource, content: JSON.stringify(layout, null, 2) + '\n' }
   ] }
 }

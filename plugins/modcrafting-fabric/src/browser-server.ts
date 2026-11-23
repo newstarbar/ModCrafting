@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, guiTextureWorkspace, guiTextureRequestSchema, isPng } from '../../../packages/modcrafting-core/src/index.ts'
+import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, guiTextureWorkspace, guiTextureRequestSchema, isPng, gateFabricProject, questWorkspace, questRequestSchema, readQuestBook } from '../../../packages/modcrafting-core/src/index.ts'
 import { guiWorkspace, guiRequestSchema } from '../../../packages/modcrafting-core/src/gui-workspace.ts'
 import { visualAssets } from '../../../packages/modcrafting-core/src/visual-assets.ts'
 import { gameTestTemplate, gameTestSpecSchema, testProfileSchema, type GameFeatureType } from '../../../packages/modcrafting-core/src/domain.ts'
@@ -30,7 +30,8 @@ const actionSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('snapshot'), instanceId: instanceId.optional() }).strict(),
   z.object({ operation: z.literal('screenshot'), instanceId: instanceId.optional() }).strict(),
   z.object({ operation: z.literal('test'), instanceId: instanceId.optional(), spec: gameTestSpecSchema }).strict(),
-  z.object({ operation: z.literal('gui-texture'), request: guiTextureRequestSchema }).strict()
+  z.object({ operation: z.literal('gui-texture'), request: guiTextureRequestSchema }).strict(),
+  z.object({ operation: z.literal('quest'), request: questRequestSchema }).strict()
 ])
 export type BrowserAction = z.input<typeof actionSchema>
 export type BrowserAssets = { html: string; js: string; css: string }
@@ -67,6 +68,17 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
       if (!/^[0-9a-f-]{36}$/i.test(sessionId)) throw new CoreError('SESSION_REQUIRED', '工作台没有选择任务会话，请从当前任务链接重新打开。')
       if (request.method === 'GET' && url.pathname === '/api/state') { json(200, runtime.state(sessionId)); return }
       if (request.method === 'GET' && url.pathname === '/api/sessions') { json(200, { sessions: runtime.state(sessionId).sessions || [] }); return }
+      if (request.method === 'GET' && url.pathname === '/api/quest-book') {
+        // The query may name a workspace, but only the one this session owns:
+        // a GET must not become a way to read an arbitrary directory.
+        const session = runtime.readSession(sessionId)
+        const requested = url.searchParams.get('workspace') || session.workspacePath || session.projectPath
+        if (!requested) throw new CoreError('WORKSPACE_REQUIRED', '工作台还没有绑定工作区；先在任务书面板顶部选择整合包目录。')
+        if (session.workspacePath && path.resolve(session.workspacePath).toLowerCase() !== path.resolve(requested).toLowerCase()) {
+          throw new CoreError('WORKSPACE_MISMATCH', '只能读取当前任务会话绑定的任务书；换一个整合包请新建任务会话。')
+        }
+        json(200, readQuestBook(requested, url.searchParams.get('member') || undefined, url.searchParams.get('locale') || undefined)); return
+      }
       if (request.method === 'GET' && url.pathname.startsWith('/api/report/')) {
         const job = runtime.jobStatus(decodeURIComponent(url.pathname.slice('/api/report/'.length)), sessionId)
         if (!('result' in job) || typeof job.result?.reportPath !== 'string') throw new CoreError('REPORT_UNAVAILABLE', 'This job has no report')
@@ -107,31 +119,36 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
       switch (action.operation) {
         case 'gui': {
           const project = inspectFabricProject(resolveProjectPath(action.request.projectPath))
-          if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
+          const targetGate = gateFabricProject(project)
+          if (!targetGate.ok) throw new CoreError('PROJECT_UNAVAILABLE', targetGate.message)
           runtime.updateSession(sessionId, { projectPath: project.path })
           value = guiWorkspace(runtime.paths, action.request); break
         }
         case 'visuals': {
           const project = inspectFabricProject(resolveProjectPath(action.projectPath))
-          if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
+          const targetGate = gateFabricProject(project)
+          if (!targetGate.ok) throw new CoreError('PROJECT_UNAVAILABLE', targetGate.message)
           runtime.updateSession(sessionId, { projectPath: project.path })
-          value = await visualAssets(runtime.paths, project.path, action.itemIds, action.textureIds); break
+          value = await visualAssets(runtime.paths, project.path, action.itemIds, action.textureIds, project.minecraftVersion); break
         }
         case 'content': {
           const project = inspectFabricProject(resolveProjectPath(action.request.projectPath))
-          if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
+          const targetGate = gateFabricProject(project)
+          if (!targetGate.ok) throw new CoreError('PROJECT_UNAVAILABLE', targetGate.message)
           runtime.updateSession(sessionId, { projectPath: project.path })
           value = contentWorkspace(runtime.paths, action.request); break
         }
         case 'texture': {
           const project = inspectFabricProject(resolveProjectPath(action.request.projectPath))
-          if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
+          const targetGate = gateFabricProject(project)
+          if (!targetGate.ok) throw new CoreError('PROJECT_UNAVAILABLE', targetGate.message)
           runtime.updateSession(sessionId, { projectPath: project.path })
           value = textureWorkspace(runtime.paths, action.request, { uploadRoot: path.join(runtime.paths.dataRoot, 'texture-uploads', sessionId) }); break
         }
         case 'recipe': {
           const project = inspectFabricProject(resolveProjectPath(action.request.projectPath))
-          if (!project.valid || project.minecraftVersion !== '1.21.4') throw new CoreError('PROJECT_UNAVAILABLE', '需要有效的 Fabric 1.21.4 工程')
+          const targetGate = gateFabricProject(project)
+          if (!targetGate.ok) throw new CoreError('PROJECT_UNAVAILABLE', targetGate.message)
           runtime.updateSession(sessionId, { projectPath: project.path })
           value = recipeWorkspace(runtime.paths, action.request); break
         }
@@ -156,6 +173,12 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
         case 'stop': value = runtime.stopJob(action.jobId, sessionId); break
         case 'runtime': value = await runtime.runtimeStatus(action.instanceId, sessionId); break
         case 'gui-texture': value = guiTextureWorkspace(action.request); break
+        case 'quest': {
+          // Opening the panel binds the session to the pack, so the read-only
+          // `/api/quest-book` route can verify ownership without a second lookup.
+          runtime.updateSession(sessionId, { workspacePath: action.request.workspacePath })
+          value = questWorkspace(action.request.workspacePath, action.request); break
+        }
         case 'snapshot': value = await runtime.snapshot(action.instanceId, undefined, sessionId); break
         case 'test': value = runtime.startTest(action.spec, action.instanceId, sessionId); break
         case 'screenshot': {

@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { guiLayoutSchema, newGuiLayout, newGuiElement, guiTypes, type GuiLayout, type GuiDocument, type GuiFile } from './gui-model.ts'
 import { generateGui } from './gui-codegen.ts'
 import { inspectFabricProject, lookupMinecraftData } from './node.ts'
+import { gateFabricProject } from './version/project-gate.ts'
 import type { RuntimePaths } from './contracts.ts'
 import { CoreError } from './runtime.ts'
 import { recipeWorkspace, type RecipeItem } from './recipe-workspace.ts'
@@ -59,7 +60,7 @@ function read(root: string, modId: string, id: string): GuiDocument {
     const stored = JSON.parse(raw.toString('utf8')); if (stored.version !== 1) throw Error('不支持的界面声明版本')
     const value = guiLayoutSchema.parse(stored.value); if (value.id !== id) throw Error('界面声明 ID 不一致')
     document.value = value
-    const generated = generateGui(value, split(root)), owned = generated.files.map(file => file.path)
+    const generated = generateGui(value, split(root), inspectFabricProject(root).minecraftVersion, inspectFabricProject(root).loader), owned = generated.files.map(file => file.path)
     document.files = owned
     const files = [file, ...owned, ...shared(modId)].sort()
     document.revision = hash(JSON.stringify(files.map(file => [file, bytes(root, file)?.toString('base64') ?? null])))
@@ -89,7 +90,7 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: GuiLay
     const [namespace, ...parts] = element.texture!.split(':'), relative = `src/main/resources/assets/${namespace}/textures/${parts.join(':')}.png`
     if (namespace !== modId || !bytes(root, relative)) fail('GUI_TEXTURE_MISSING', '界面图片纹理不存在：' + element.texture + '（请先在纹理工作区绘制并保存）')
   }
-  const generated = generateGui(value, split(root)), metadataFile = shared(modId)[0], metadata = object(root, metadataFile)
+  const generated = generateGui(value, split(root), inspectFabricProject(root).minecraftVersion, inspectFabricProject(root).loader), metadataFile = shared(modId)[0], metadata = object(root, metadataFile)
   if (!exists) for (const target of generated.files) if (bytes(root, target.path)) fail('GUI_READ_ONLY', '已有文件不受此编辑器管理，不能覆盖：' + target.path)
   const client = clients(metadata); metadata.entrypoints = { ...metadata.entrypoints, client: client.includes(generated.client) ? client : [...client, generated.client] }
   const targets = [...generated.files, { path: metadataFile, content: json(metadata) }]
@@ -107,7 +108,8 @@ export function guiWorkspace(paths: RuntimePaths, raw: GuiRequest): Record<strin
   const request = guiRequestSchema.parse(raw)
   if (!path.isAbsolute(request.projectPath)) fail('PROJECT_UNAVAILABLE', '需要工程绝对路径')
   const root = safe(path.resolve(request.projectPath)), project = inspectFabricProject(root)
-  if (!project.valid || !project.modId || project.minecraftVersion !== '1.21.4') fail('PROJECT_UNAVAILABLE', '仅支持有效 Fabric 1.21.4 工程')
+  const projectGate = gateFabricProject(project)
+  if (!projectGate.ok) fail('PROJECT_UNAVAILABLE', projectGate.message)
   const modId = project.modId!
   if (request.action === 'template') return { ok: true, value: newGuiLayout(modId, request.layoutType), components: guiTypes.filter(type => request.layoutType !== 'hud-overlay' || !['button', 'toggle', 'slider'].includes(type)).map(type => newGuiElement(type, type + '_1')) }
   if (request.action === 'list') return { ok: true, documents: list(root, modId) }

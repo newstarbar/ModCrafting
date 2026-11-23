@@ -1,4 +1,9 @@
 // Pure Fabric source generators shared with the visual creator workbench.
+import type { ResourceLayout } from './resources/layout.ts'
+import { blockLootTableFile, blockModelFile, blockstateFile, itemModelFile, langFile } from './resources/transform.ts'
+import { deriveJavaApiProfile } from './version/java-profile.ts'
+import { getRegistry } from './version/registry.ts'
+
 export interface ProjectCreateConfig { modId: string; groupId: string; javaPackage: string }
 const mainClassName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1)
 
@@ -6,7 +11,12 @@ export interface TemplateCodegenParams {
   config: ProjectCreateConfig
   name: string
   displayName?: string
-  mcVersion?: string
+  /**
+   * Required: resource paths and JSON shapes must come from the target, never
+   * from a built-in default. A default would silently emit 1.21.4 files into a
+   * 26.x project.
+   */
+  layout: ResourceLayout
   formFields?: Record<string, unknown>
 }
 
@@ -57,24 +67,6 @@ function simpleName(name: string): string {
 function classNameFrom(name: string): string {
   const s = simpleName(name)
   return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
-export function lootTableBlockPath(modId: string, blockName: string): string {
-  const id = simpleName(blockName)
-  return `src/main/resources/data/${modId}/loot_table/block/${id}.json`
-}
-
-export function mergeLangEntries(existingJson: string | null, entries: Record<string, string>): string {
-  let base: Record<string, string> = {}
-  if (existingJson?.trim()) {
-    try {
-      const parsed = JSON.parse(existingJson) as Record<string, string>
-      if (parsed && typeof parsed === 'object') base = { ...parsed }
-    } catch {
-      base = {}
-    }
-  }
-  return JSON.stringify({ ...base, ...entries }, null, 2) + '\n'
 }
 
 function blockSoundGroup(materialStyle: string): string {
@@ -427,26 +419,11 @@ public class ModBlocks {
     files: [
       { path: `${jp}/${cls}Block.java`, content: blockClass },
       { path: `${jp}/ModBlocks.java`, content: modBlocks },
-      {
-        path: `src/main/resources/assets/${modId}/blockstates/${id}.json`,
-        content: JSON.stringify({ variants: { '': { model: `${modId}:block/${id}` } } }, null, 2) + '\n'
-      },
-      {
-        path: `src/main/resources/assets/${modId}/models/block/${id}.json`,
-        content: JSON.stringify({ parent: 'block/cube_all', textures: { all: `${modId}:block/${id}` } }, null, 2) + '\n'
-      },
-      {
-        path: `src/main/resources/assets/${modId}/models/item/${id}.json`,
-        content: JSON.stringify({ parent: `${modId}:block/${id}` }, null, 2) + '\n'
-      },
-      {
-        path: lootTableBlockPath(modId, id),
-        content: JSON.stringify({
-          type: 'minecraft:block',
-          pools: [{ rolls: 1, entries: [{ type: 'minecraft:item', name: `${modId}:${id}` }] }]
-        }, null, 2) + '\n'
-      },
-      { path: `src/main/resources/assets/${modId}/lang/zh_cn.json`, content: mergeLangEntries(null, lang) }
+      blockstateFile(input.layout, { namespace: modId, name: id, model: `${modId}:block/${id}` }),
+      blockModelFile(input.layout, { namespace: modId, name: id, parent: 'block/cube_all', textures: { all: `${modId}:block/${id}` } }),
+      itemModelFile(input.layout, { namespace: modId, name: id, parent: `${modId}:block/${id}` }),
+      blockLootTableFile(input.layout, { namespace: modId, name: id, item: `${modId}:${id}` }),
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: lang })
     ],
     mainInitCalls: ['ModBlocks.registerModBlocks()'],
     appliedParams,
@@ -500,14 +477,8 @@ public class ModItems {
   return {
     files: [
       { path: `${jp}/ModItems.java`, content: modItems },
-      {
-        path: `src/main/resources/assets/${modId}/models/item/${id}.json`,
-        content: JSON.stringify({ parent: 'item/generated', textures: { layer0: `${modId}:item/${id}` } }, null, 2) + '\n'
-      },
-      {
-        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
-        content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
-      }
+      itemModelFile(input.layout, { namespace: modId, name: id, parent: 'item/generated', textures: { layer0: `${modId}:item/${id}` } }),
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: { [`item.${modId}.${id}`]: displayName || id } })
     ],
     mainInitCalls: ['ModItems.registerModItems()'],
     appliedParams,
@@ -534,18 +505,21 @@ export function generateCustomFoodBundle(input: TemplateCodegenParams): Template
   const unsupportedParams: string[] = []
   if (effect !== 'none' && !effectExpr) unsupportedParams.push(`效果=${effect}（自定义）`)
   const jp = javaPath(config)
+  const api = deriveJavaApiProfile(input.layout.minecraft, 'yarn', getRegistry())
+  const useConsumable = api.food === 'consumable-component' && Boolean(effectExpr)
+  if (effectExpr && !useConsumable) unsupportedParams.push(`效果=${effect}（${input.layout.minecraft} 的消耗组件 API 不同，暂不支持）`)
 
   const foodBuilder = effectExpr
     ? `new FoodComponent.Builder()
-            .nutrition(${nutrition})
+            .${api.foodNutrition}(${nutrition})
             .saturationModifier(${saturation}f)${isMeat ? '\n            .meat()' : ''}
             .build()`
     : `new FoodComponent.Builder()
-            .nutrition(${nutrition})
+            .${api.foodNutrition}(${nutrition})
             .saturationModifier(${saturation}f)${isMeat ? '\n            .meat()' : ''}
             .build()`
 
-  const consumableBlock = effectExpr
+  const consumableBlock = useConsumable
     ? `
         ConsumableComponent consumable = ConsumableComponent.builder()
             .consumeSeconds(1.6f)
@@ -558,13 +532,13 @@ export function generateCustomFoodBundle(input: TemplateCodegenParams): Template
         FoodComponent food = ${foodBuilder};
         settings.food(food);`
 
-  const imports = effectExpr
+  const imports = useConsumable
     ? `import net.minecraft.component.type.ConsumableComponent;
-import net.minecraft.component.type.FoodComponent;
+import ${api.packages.food};
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.consume.ApplyEffectsConsumeEffect;`
-    : `import net.minecraft.component.type.FoodComponent;`
+    : `import ${api.packages.food};`
 
   const modItems = `package ${groupId}.${javaPackage};
 
@@ -595,14 +569,8 @@ public class ModItems {
   return {
     files: [
       { path: `${jp}/ModItems.java`, content: modItems },
-      {
-        path: `src/main/resources/assets/${modId}/models/item/${id}.json`,
-        content: JSON.stringify({ parent: 'item/generated', textures: { layer0: `${modId}:item/${id}` } }, null, 2) + '\n'
-      },
-      {
-        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
-        content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
-      }
+      itemModelFile(input.layout, { namespace: modId, name: id, parent: 'item/generated', textures: { layer0: `${modId}:item/${id}` } }),
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: { [`item.${modId}.${id}`]: displayName || id } })
     ],
     mainInitCalls: ['ModItems.registerModItems()'],
     appliedParams,
@@ -654,14 +622,8 @@ public class ModItems {
   return {
     files: [
       { path: `${jp}/ModItems.java`, content: modItems },
-      {
-        path: `src/main/resources/assets/${modId}/models/item/${id}.json`,
-        content: JSON.stringify({ parent: 'item/handheld', textures: { layer0: `${modId}:item/${id}` } }, null, 2) + '\n'
-      },
-      {
-        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
-        content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
-      }
+      itemModelFile(input.layout, { namespace: modId, name: id, parent: 'item/handheld', textures: { layer0: `${modId}:item/${id}` } }),
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: { [`item.${modId}.${id}`]: displayName || id } })
     ],
     mainInitCalls: ['ModItems.registerModItems()'],
     appliedParams,
@@ -718,14 +680,8 @@ public class ModItems {
   return {
     files: [
       { path: `${jp}/ModItems.java`, content: modItems },
-      {
-        path: `src/main/resources/assets/${modId}/models/item/${id}.json`,
-        content: JSON.stringify({ parent: 'item/generated', textures: { layer0: `${modId}:item/${id}` } }, null, 2) + '\n'
-      },
-      {
-        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
-        content: mergeLangEntries(null, { [`item.${modId}.${id}`]: displayName || id })
-      }
+      itemModelFile(input.layout, { namespace: modId, name: id, parent: 'item/generated', textures: { layer0: `${modId}:item/${id}` } }),
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: { [`item.${modId}.${id}`]: displayName || id } })
     ],
     mainInitCalls: ['ModItems.registerModItems()'],
     appliedParams,
@@ -828,10 +784,7 @@ public class ${main}ClientEntityRenderers {
       { path: `${jp}/${cls}Entity.java`, content: entityJava },
       { path: `${jp}/ModEntities.java`, content: modEntities },
       { path: `${cjp}/${main}ClientEntityRenderers.java`, content: clientInit },
-      {
-        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
-        content: mergeLangEntries(null, { [`entity.${modId}.${id}`]: displayName || id })
-      }
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: { [`entity.${modId}.${id}`]: displayName || id } })
     ],
     mainInitCalls: ['ModEntities.registerModEntities()'],
     appliedParams,
@@ -956,10 +909,7 @@ public class ${cls}Screen extends Screen {
   return {
     files: [
       { path: `${cjp}/client/gui/${cls}Screen.java`, content: screenJava },
-      {
-        path: `src/main/resources/assets/${modId}/lang/zh_cn.json`,
-        content: mergeLangEntries(null, langEntries)
-      }
+      langFile(input.layout, { namespace: modId, locale: 'zh_cn', entries: langEntries })
     ],
     mainInitCalls: [],
     appliedParams,

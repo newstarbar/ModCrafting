@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:stonecutting",
+  "ingredient": {
+    "item": "golden_demo:ruby_block"
+  },
+  "result": "golden_demo:ruby",
+  "count": 4
+}

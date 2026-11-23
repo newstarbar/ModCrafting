@@ -3,11 +3,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { DEFAULT_TEST_PROFILE, FABRIC_TARGET, GAME_TEST_WORLD, testProfileSchema, validateGameTestSpec, type GameAction, type GameTestSpec, type TestProfile } from './domain.ts'
+import { matrix } from './version/targets.ts'
 import { executeGameTest, SUPPORTED_GAME_ASSERTIONS } from './game-test.ts'
-import { JobManager, SystemToolchainProvider, bridgeRequest, createRuntimePaths, discoveryPath, portIsListening, readBridgeDiscovery, prepareAssets, writeGameTestReport, type BridgeDiscovery, type DownloadableAsset } from './node.ts'
+import { JobManager, SystemToolchainProvider, bridgeRequest, createRuntimePaths, discoveryPath, inspectFabricProject, portIsListening, readBridgeDiscovery, prepareAssets, resolveKnowledgeIndex, writeGameTestReport, type BridgeDiscovery, type DownloadableAsset } from './node.ts'
 import { assertBuildId, prepareStudioInbox, readStudioDiscovery, readStudioOutbox, studioRequest, StudioError, type StudioDiscovery, type StudioOutbox, type StudioResult } from './building-studio.ts'
 import type { RuntimePaths, CoreEnvironmentStatus, CoreCapabilities, LocalAssetStatus, GameInstance, GameRuntimeStatus, JobSnapshot, CoreFailure, BridgeResult, CoreRuntimeState, JavaCandidate, JavaStatus } from './contracts.ts'
 import { SessionRegistry } from './sessions.ts'
+import { loadWorkspace } from './workspace.ts'
+import type { Workspace, WorkspaceKind } from './workspace-model.ts'
 
 export class CoreError extends Error {
   readonly code: string
@@ -138,10 +141,11 @@ function builderBytes(builder?: BundledBuilder): Buffer {
   if (builder.protocol !== 1 || createHash('sha256').update(bytes).digest('hex') !== builder.sha256) throw new CoreError('BUILDER_UPDATE_REQUIRED', '建筑工作室组件校验失败，请重新安装完整插件包。')
   return bytes
 }
-export function localAssetStatus(paths: RuntimePaths, observer?: BundledObserver): LocalAssetStatus[] {
+export function localAssetStatus(paths: RuntimePaths, observer?: BundledObserver, minecraft?: string): LocalAssetStatus[] {
+  const knowledge = resolveKnowledgeIndex(paths.knowledgeRoot, minecraft)
   const docs = path.join(paths.knowledgeRoot, 'agent-knowledge', 'fabric')
   const checks = [
-    { name: 'minecraft-data', path: path.join(paths.knowledgeRoot, 'minecraft-data', FABRIC_TARGET.minecraft, 'index.json'), kind: 'object' },
+    { name: 'minecraft-data', path: knowledge?.file ?? path.join(paths.knowledgeRoot, 'minecraft-data', minecraft ?? FABRIC_TARGET.minecraft, 'index.json'), kind: 'object' },
     { name: 'mc-wiki-zh', path: path.join(paths.knowledgeRoot, 'mc-wiki-zh'), kind: 'directory' },
     { name: 'mc-wiki-zh-index', path: path.join(paths.knowledgeRoot, 'mc-wiki-zh-index', 'chunks.json'), kind: 'array' },
     { name: 'fabric-docs', path: existsSync(docs) ? docs : path.join(paths.assetsRoot, 'agent-knowledge', 'fabric'), kind: 'markdown' },
@@ -213,8 +217,12 @@ export class FabricRuntime {
   studioInfo() {
     return this.builder ? { bundled: true, version: this.builder.version, protocol: this.builder.protocol } : { bundled: false }
   }
-  createSession(input: { name?: string; projectPath?: string } = {}) {
-    return this.sessions.create({ ...input, projectPath: input.projectPath ? resolveProjectPath(input.projectPath) : undefined })
+  createSession(input: { name?: string; projectPath?: string; workspacePath?: string; workspaceKind?: WorkspaceKind; activeMemberId?: string } = {}) {
+    return this.sessions.create({
+      ...input,
+      projectPath: input.projectPath ? resolveProjectPath(input.projectPath) : undefined,
+      workspacePath: input.workspacePath ? resolveProjectPath(input.workspacePath) : undefined
+    })
   }
   readSession(sessionId: string) { return this.sessions.read(sessionId) }
   resumeSession(sessionId: string) {
@@ -222,10 +230,36 @@ export class FabricRuntime {
     for (const instance of session.instances) this.instances.set(instance.instanceId, instance)
     return session
   }
-  updateSession(sessionId: string, changes: { name?: string; projectPath?: string; phase?: string; currentModule?: string; recommendedModules?: string[] }) {
-    const { projectPath, ...metadata } = changes
+  updateSession(sessionId: string, changes: { name?: string; projectPath?: string; workspacePath?: string; workspaceKind?: WorkspaceKind; activeMemberId?: string; phase?: string; currentModule?: string; recommendedModules?: string[] }) {
+    const { projectPath, workspacePath, workspaceKind, activeMemberId, ...metadata } = changes
     if (projectPath) this.sessions.bindProject(sessionId, resolveProjectPath(projectPath))
-    return this.sessions.update(sessionId, metadata)
+
+    // Resolve the member list from the real workspace so an unknown
+    // `activeMemberId` fails here with MEMBER_NOT_FOUND instead of being persisted
+    // and failing later in an authoring tool with a confusing message.
+    let memberIds: readonly string[] | undefined
+    const candidate = workspacePath ? resolveProjectPath(workspacePath) : this.sessions.assertOwned(sessionId).workspacePath
+    if (candidate) {
+      let loaded: Workspace | undefined
+      try { loaded = loadWorkspace(candidate) } catch { loaded = undefined }
+      if (loaded) {
+        memberIds = loaded.members.map((member) => member.memberId)
+        if (workspacePath) {
+          this.sessions.bindWorkspace(sessionId, {
+            workspacePath: candidate,
+            kind: workspaceKind ?? loaded.kind,
+            memberIds,
+            ...(projectPath ? { primaryPath: resolveProjectPath(projectPath) } : {})
+          })
+        }
+      }
+    }
+
+    return this.sessions.update(sessionId, {
+      ...metadata,
+      ...(activeMemberId ? { activeMemberId } : {}),
+      ...(workspaceKind ? { workspaceKind } : {})
+    }, { memberIds })
   }
   endSession(sessionId: string) {
     const session = this.sessions.assertOwned(sessionId)
@@ -264,12 +298,13 @@ export class FabricRuntime {
   async environmentStatus(projectPath?: string): Promise<CoreEnvironmentStatus> {
     const scoped = projectRuntimePaths(this.paths, projectPath)
     const status = await this.toolchainProvider.status(projectPath)
-    const assets = localAssetStatus(scoped, this.observer)
+    const assets = localAssetStatus(scoped, this.observer, projectPath ? inspectFabricProject(projectPath).minecraftVersion : undefined)
     const missingAssets = assets.filter((asset) => asset.status !== 'present' && asset.name !== 'base-mods')
     return {
       ...status,
       remediation: [...status.remediation, ...missingAssets.map((asset) => asset.remediation).filter((value): value is string => Boolean(value))],
       contractVersion: 1, paths: scoped, assets,
+      targets: matrix().map((entry) => ({ id: entry.id, loader: entry.loader, minecraft: entry.minecraft, status: entry.status, javaTarget: entry.javaTarget, runtimeObserver: entry.runtimeObserver, ...(entry.reason ? { reason: entry.reason } : {}) })),
       capabilities: { ...CORE_CAPABILITIES, toolchain: { ...CORE_CAPABILITIES.toolchain, scaffoldIncludesWrapper: this.scaffoldIncludesWrapper } }
     }
   }
@@ -295,22 +330,23 @@ export class FabricRuntime {
     const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
     return { ok: status.java.ok, action: 'read', config: provider.readJavaConfig?.(), java: status.java, candidates: status.java.candidates }
   }
-  async prepareAssets(names: DownloadableAsset[] = ['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'], projectPath?: string) {
+  async prepareAssets(names: DownloadableAsset[] = ['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'], projectPath?: string, minecraft?: string) {
     if (projectPath) resolveProjectPath(projectPath)
     const scoped = projectRuntimePaths(this.paths, projectPath)
+    const version = minecraft?.trim() || (projectPath ? inspectFabricProject(projectPath).minecraftVersion : undefined)
     // Serialize overlapping selections because extraction uses PID-based staging directories.
-    const key = `${scoped.dataRoot}|${[...new Set(names)].sort().join(',')}`
-    const present = localAssetStatus(scoped, this.observer)
+    const key = `${scoped.dataRoot}|${version ?? ''}|${[...new Set(names)].sort().join(',')}`
+    const present = localAssetStatus(scoped, this.observer, version)
     const needed = [...new Set(names)].filter(name => present.find(row => row.name === (name === 'agent-knowledge' ? 'fabric-docs' : name))?.status !== 'present')
     let work = this.preparations.get(key)
     if (!work) {
       const previous = Promise.allSettled([...this.preparations.values()])
-      work = previous.then(() => prepareAssets(scoped, needed))
+      work = previous.then(() => prepareAssets(scoped, needed, version ? { minecraft: version } : {}))
       this.preparations.set(key, work)
     }
     try {
       const assets = await work
-      const localAssets = localAssetStatus(scoped, this.observer)
+      const localAssets = localAssetStatus(scoped, this.observer, version)
       const ready = names.every(name => localAssets.find(row => row.name === (name === 'agent-knowledge' ? 'fabric-docs' : name))?.status === 'present')
       return { ok: ready && assets.every(asset => asset.ok), assets, dataRoot: scoped.dataRoot, localAssets }
     } finally { if (this.preparations.get(key) === work) this.preparations.delete(key) }

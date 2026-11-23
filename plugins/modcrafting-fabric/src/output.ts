@@ -28,6 +28,7 @@ const TOOLS: Record<string, Hint> = {
   fabric_gui_texture_workspace: ['GUI texture workspace', false, false, false, false],
   fabric_recipe_workspace: ['Recipe workspace', false, false, false, false],
   modcrafting_environment_status: ['Environment status', true, false, true, false],
+  modcrafting_targets: ['Target matrix', true, false, true, false],
   modcrafting_toolchain: ['JDK toolchain', false, false, false, false],
   modcrafting_prepare_assets: ['Prepare knowledge assets', false, false, false, true],
   minecraft_data_lookup: ['Vanilla data lookup', true, false, true, false],
@@ -52,7 +53,8 @@ const TOOLS: Record<string, Hint> = {
   minecraft_input: ['Controlled input', false, false, false, false],
   minecraft_test_start: ['Start game test', false, true, false, true],
   minecraft_test_status: ['Game test result', true, false, true, false],
-  minecraft_build_studio: ['Build studio', false, true, false, false]
+  minecraft_build_studio: ['Build studio', false, true, false, false],
+  modcrafting_quest_workspace: ['Quest book workspace', false, false, false, false]
 }
 
 export function metaFor(name: string): { title: string; annotations: ToolAnnotations; _meta?: Record<string, unknown> } {

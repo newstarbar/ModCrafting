@@ -157,14 +157,21 @@ test('resource validation reports missing 1.21.4 item definitions, model/texture
     const recipes = path.join(project.path, 'src/main/resources/data/validation_fixture/recipes')
     await fs.mkdir(recipes, { recursive: true })
     await fs.writeFile(path.join(recipes, 'legacy.json'), JSON.stringify({ type: 'minecraft:crafting_shaped' }))
-    await fs.writeFile(path.join(project.path, 'gradle.properties'), 'minecraft_version=1.21.3\n')
     const result = validateFabricProject(project.path)
     assert.equal(result.ok, false)
-    for (const code of ['MINECRAFT_VERSION_MISMATCH', 'MISSING_ITEM_MODEL_DEFINITION', 'MISSING_MODEL', 'MISSING_TEXTURE', 'LEGACY_RECIPE_DIRECTORY']) {
+    for (const code of ['MISSING_ITEM_MODEL_DEFINITION', 'MISSING_MODEL', 'MISSING_TEXTURE', 'LEGACY_RECIPE_DIRECTORY']) {
       assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === code), `missing diagnostic ${code}: ${JSON.stringify(result.diagnostics)}`)
     }
-    assert.equal(result.checks.minecraft1214, false)
+    assert.equal(result.checks.targetResolved, true)
     assert.equal(result.checks.resourceReferences, false)
+    // A real but unshipped version warns, and must not be judged by 1.21.4 rules.
+    await fs.writeFile(path.join(project.path, 'gradle.properties'), 'minecraft_version=1.21.3\n')
+    const older = validateFabricProject(project.path)
+    assert.ok(older.diagnostics.some((diagnostic) => diagnostic.code === 'TARGET_NOT_IN_MATRIX'), JSON.stringify(older.diagnostics))
+    assert.ok(!older.diagnostics.some((diagnostic) => diagnostic.code === 'MISSING_ITEM_MODEL_DEFINITION'), '1.21.3 does not use assets/<ns>/items definitions')
+    // A version no release ever had is a hard error.
+    await fs.writeFile(path.join(project.path, 'gradle.properties'), 'minecraft_version=not.a.version\n')
+    assert.ok(validateFabricProject(project.path).diagnostics.some((diagnostic) => diagnostic.code === 'INVALID_MINECRAFT_VERSION'))
   } finally {
     await fs.rm(root, { recursive: true, force: true })
   }

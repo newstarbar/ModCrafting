@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "A"
+  ],
+  "key": {
+    "A": {
+      "tag": "minecraft:planks"
+    }
+  },
+  "result": {
+    "item": "golden_demo:ruby",
+    "count": 2
+  }
+}

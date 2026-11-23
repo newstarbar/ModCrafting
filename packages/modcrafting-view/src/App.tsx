@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { CoreEnvironmentStatus, CoreRuntimeState, FabricProject, GameRuntimeStatus, JobSnapshot, BridgeResult, TaskSession } from '../../modcrafting-core/src/contracts.ts'
 import { DEFAULT_TEST_PROFILE, gameTestTemplate, type TestProfile } from '../../modcrafting-core/src/domain.ts'
+import { isPanelId, type PanelId } from '../../modcrafting-core/src/panels.ts'
 import { action, request, state, initialProject, initialView, currentSession, selectSession } from './client.ts'
 import { IconFolder, IconWrench, IconGamepad, IconPlay, IconSquare as IconStop } from './Icon.tsx'
 import { RecipeEditor } from './RecipeEditor.tsx'
@@ -9,23 +10,12 @@ import { GuiEditor } from './GuiEditor.tsx'
 import { TextureStudio } from './TextureStudio.tsx'
 import { TextureWorkspace } from './TextureWorkspace.tsx'
 import { ModelEditor } from './ModelEditor.tsx'
+import { PanelHost } from './shell/PanelHost.tsx'
+import { PANEL_META, PANEL_ORDER, panelLabel } from './shell/registry.ts'
+import { QuestPanel } from './panels/quest/QuestPanel.tsx'
 
-type Module = 'overview' | 'content' | 'textures' | 'paint' | 'recipe' | 'gui' | 'model' | 'build' | 'game' | 'tests' | 'reports'
-const modules: Array<{ id: Module; label: string; icon: string }> = [
-  { id: 'overview', label: '概览', icon: '⌂' }, { id: 'content', label: '内容', icon: '◇' }, { id: 'textures', label: '贴图', icon: '▩' }, { id: 'paint', label: '纹理画板', icon: '▧' }, { id: 'recipe', label: '配方', icon: '▦' },
-  { id: 'gui', label: '界面', icon: '▣' }, { id: 'model', label: '模型', icon: '⬡' }, { id: 'build', label: '构建', icon: '⚒' }, { id: 'game', label: '游戏', icon: '▶' },
-  { id: 'tests', label: '测试', icon: '✓' }, { id: 'reports', label: '报告', icon: '▤' }
-]
 const labels: Record<string, string> = { build: '构建', minecraft: 'Minecraft', minecraft_prepare: '准备测试世界', game_test: '游戏测试', running: '进行中', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '服务重启时中断', present: '已准备', missing: '尚未准备', invalid: '需要更新或修复', PASS: '通过', FAIL: '未通过', INCONCLUSIVE: '暂时无法验证' }
 const empty: CoreRuntimeState = { contractVersion: 1, jobs: [], instances: [] }
-class WorkspaceBoundary extends React.Component<React.PropsWithChildren, { error: Error | null }> {
-  state = { error: null as Error | null }
-  static getDerivedStateFromError(error: Error) { return { error } }
-  render() {
-    if (!this.state.error) return this.props.children
-    return <section className="panel" role="alert"><h2>这个工作区加载失败</h2><p>侧边栏仍然可用；可以切换到其他工作区，或清除本页草稿后重试。</p><pre>{this.state.error.message}</pre><button onClick={() => this.setState({ error: null })}>重试</button></section>
-  }
-}
 function Badge({ value }: { value: string }) { return <span title={value} className={`badge badge-${value}`}>{labels[value] || value}</span> }
 function download(value: unknown, name: string) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }))
@@ -62,7 +52,7 @@ export function App() {
   const [pending, setPending] = useState('')
   const [notice, setNotice] = useState('')
   const [followAgent, setFollowAgent] = useState(() => sessionStorage.getItem(`modcrafting-follow:${currentSession()}`) !== 'false')
-  const [activeModule, setActiveModule] = useState<Module>(() => (modules.some(value => value.id === initialView) ? initialView : 'overview') as Module)
+  const [activeModule, setActiveModule] = useState<PanelId>(() => (isPanelId(initialView) ? initialView : 'overview'))
 
   const currentTask = runtime.sessions?.find(value => value.sessionId === sessionId)
   const sessionJobs = runtime.jobs.filter(value => value.sessionId === sessionId || !value.sessionId)
@@ -74,11 +64,11 @@ export function App() {
     const value = await state(); setRuntime(value); setConnection('工作台已连接')
     setInstanceId(current => current && value.instances.some(row => row.instanceId === current) ? current : value.instances.at(-1)?.instanceId || '')
     const session = value.sessions?.find(row => row.sessionId === sessionId)
-    if (followAgent && session?.recommendedModules[0] && modules.some(row => row.id === session.recommendedModules[0])) setActiveModule(session.recommendedModules[0] as Module)
+    if (followAgent && session?.recommendedModules[0] && isPanelId(session.recommendedModules[0])) setActiveModule(session.recommendedModules[0])
   }
   useEffect(() => {
     let active = true, busy = false
-    const poll = async () => { if (busy) return; busy = true; try { const value = await state(); if (!active) return; setRuntime(value); setConnection('工作台已连接'); const session = value.sessions?.find(row => row.sessionId === sessionId); if (followAgent && session?.recommendedModules[0] && modules.some(row => row.id === session.recommendedModules[0])) setActiveModule(session.recommendedModules[0] as Module); setInstanceId(current => current && value.instances.some(row => row.instanceId === current) ? current : value.instances.at(-1)?.instanceId || '') } catch (cause) { if (active) setConnection(`连接中断：${String(cause)}`) } finally { busy = false } }
+    const poll = async () => { if (busy) return; busy = true; try { const value = await state(); if (!active) return; setRuntime(value); setConnection('工作台已连接'); const session = value.sessions?.find(row => row.sessionId === sessionId); if (followAgent && session?.recommendedModules[0] && isPanelId(session.recommendedModules[0])) setActiveModule(session.recommendedModules[0]); setInstanceId(current => current && value.instances.some(row => row.instanceId === current) ? current : value.instances.at(-1)?.instanceId || '') } catch (cause) { if (active) setConnection(`连接中断：${String(cause)}`) } finally { busy = false } }
     void poll(); const timer = setInterval(poll, 1800)
     return () => { active = false; clearInterval(timer) }
   }, [sessionId, followAgent])
@@ -87,7 +77,8 @@ export function App() {
     setProject(undefined); setEnvironment(undefined); setGame(undefined); setSnapshot(undefined); setImage(''); setReport(undefined); setInstanceId('')
     const session = runtime.sessions?.find(value => value.sessionId === sessionId)
     if (session?.projectPath) { setPath(session.projectPath); sessionStorage.setItem('modcrafting-view-project', session.projectPath) }
-    setActiveModule(session?.status === 'ended' ? 'reports' : (session?.recommendedModules[0] as Module) || 'overview')
+    const recommended = session?.recommendedModules[0]
+    setActiveModule(session?.status === 'ended' ? 'reports' : (recommended && isPanelId(recommended) ? recommended : 'overview'))
     setFollowAgent(sessionStorage.getItem(`modcrafting-follow:${sessionId}`) !== 'false')
     if (session?.projectPath && session.status !== 'ended') void loadProfile(session.projectPath)
   }, [sessionId])
@@ -130,8 +121,12 @@ export function App() {
     catch (cause) { setError(String(cause)) }
     finally { setPending('') }
   }
-  function navigate(module: Module) { setActiveModule(module); setFollowAgent(false); sessionStorage.setItem(`modcrafting-follow:${sessionId}`, 'false') }
-  function follow() { setFollowAgent(true); sessionStorage.setItem(`modcrafting-follow:${sessionId}`, 'true'); const recommendation = currentTask?.recommendedModules[0] as Module | undefined; setActiveModule(recommendation && modules.some(row => row.id === recommendation) ? recommendation : 'overview') }
+  function navigate(module: PanelId) { setActiveModule(module); setFollowAgent(false); sessionStorage.setItem(`modcrafting-follow:${sessionId}`, 'false') }
+  function follow() {
+    setFollowAgent(true); sessionStorage.setItem(`modcrafting-follow:${sessionId}`, 'true')
+    const recommendation = currentTask?.recommendedModules[0]
+    setActiveModule(recommendation && isPanelId(recommendation) ? recommendation : 'overview')
+  }
   const connected = connection === '工作台已连接', readOnly = currentTask?.status === 'ended', disabled = Boolean(pending) || !connected || readOnly
 
   function overview() { return <>
@@ -142,7 +137,7 @@ export function App() {
       <div className="row"><button disabled={disabled} onClick={() => void run('检查环境', async () => setEnvironment(await action({ operation: 'environment', projectPath: project?.path })))}>刷新环境</button><button disabled={disabled} onClick={() => void run('准备资料', async () => { const value = await action<{ ok: boolean }>({ operation: 'prepare', projectPath: project?.path }); setNotice(value.ok ? '离线知识资料已准备好。游戏测试组件随插件提供。' : '部分资料未准备好，请查看环境信息。'); setEnvironment(await action({ operation: 'environment', projectPath: project?.path })) })}>准备离线资料</button></div>
       {environment && <details className="environment-details"><summary>环境详情</summary><div className="checks"><div><span>系统 JDK 21</span><Badge value={environment.java.ok ? 'PASS' : 'FAIL'} /><small>{environment.java.version || environment.java.error}</small></div><div><span>工程 Wrapper</span><Badge value={environment.gradleWrapper ? 'PASS' : 'FAIL'} /></div><div><span>游戏测试桥</span><Badge value={game?.bridgeReady ? 'PASS' : 'INCONCLUSIVE'} /><small>{game?.bridgeReady ? '已连接；仍需等世界准备完成' : '等待 Minecraft 启动'}</small></div></div>{environment.remediation.map(value => <p className="error" key={value}>{value}</p>)}<details><summary>资源目录</summary><code>{environment.paths.dataRoot}</code>{environment.assets.map(value => <div className="row asset" key={value.name}><strong>{value.name}</strong><Badge value={value.status} /><code>{value.path}</code></div>)}</details></details>}
     </section>
-    <section className="panel"><h2>当前任务</h2><p>{currentTask?.phase || '等待 Agent 更新任务状态'}</p><p className="muted">推荐工作区：{currentTask?.recommendedModules.map(id => modules.find(row => row.id === id)?.label || id).join('、') || '概览'}</p><div className="row"><button onClick={() => navigate('content')}>编辑内容</button><button onClick={() => navigate('game')}>准备游戏</button><button onClick={() => navigate('reports')}>查看本会话报告</button></div></section>
+    <section className="panel"><h2>当前任务</h2><p>{currentTask?.phase || '等待 Agent 更新任务状态'}</p><p className="muted">推荐工作区：{currentTask?.recommendedModules.map(id => panelLabel(id)).join('、') || '概览'}</p><div className="row"><button onClick={() => navigate('content')}>编辑内容</button><button onClick={() => navigate('game')}>准备游戏</button><button onClick={() => navigate('reports')}>查看本会话报告</button></div></section>
   </> }
 
   function buildView() { return <>
@@ -187,13 +182,20 @@ export function App() {
 
   function jobsView() { return <section className="panel"><h2>本会话构建</h2>{sessionJobs.filter(job => job.kind === 'build').toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => {}} />)}</section> }
   const moduleContent = (() => {
+    const meta = PANEL_META[activeModule]
+    // One guard for every project-scoped panel, so the branches below can assume a
+    // valid project instead of each repeating its own empty state.
+    if (meta.requiresProject && !project?.valid) {
+      return <section className="panel"><h2>{meta.label}</h2><p className="muted">{meta.hint ?? '请先关联一个有效工程。'}</p></section>
+    }
     if (activeModule === 'overview') return overview()
-    if (activeModule === 'content') return project?.valid ? <ContentEditor key={`${sessionId}:content:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>内容工作区</h2><p>请先关联一个有效工程。</p></section>
-    if (activeModule === 'textures') return project?.valid ? <TextureStudio key={`${sessionId}:textures:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>贴图工作区</h2><p>请先关联一个有效工程。</p></section>
-    if (activeModule === 'paint') return project?.valid ? <TextureWorkspace key={`${sessionId}:paint:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>纹理画板</h2><p>请先关联一个有效工程。</p></section>
-    if (activeModule === 'recipe') return project?.valid ? <RecipeEditor key={`${sessionId}:recipe:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>配方工作区</h2><p>请先关联一个有效工程。</p></section>
-    if (activeModule === 'gui') return project?.valid ? <GuiEditor key={`${sessionId}:gui:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>界面工作区</h2><p>请先关联一个有效工程。</p></section>
-    if (activeModule === 'model') return project?.valid ? <ModelEditor key={`${sessionId}:model:${project.path}`} projectPath={project.path} modId={project.modId!} /> : <section className="panel"><h2>模型工作区</h2><p>请先关联一个有效工程。</p></section>
+    if (activeModule === 'content') return <ContentEditor key={`${sessionId}:content:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
+    if (activeModule === 'textures') return <TextureStudio key={`${sessionId}:textures:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
+    if (activeModule === 'paint') return <TextureWorkspace key={`${sessionId}:paint:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
+    if (activeModule === 'recipe') return <RecipeEditor key={`${sessionId}:recipe:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
+    if (activeModule === 'gui') return <GuiEditor key={`${sessionId}:gui:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
+    if (activeModule === 'model') return <ModelEditor key={`${sessionId}:model:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
+    if (activeModule === 'quest') return <QuestPanel workspacePath={currentTask?.workspacePath || path} memberId={currentTask?.activeMemberId} readOnly={readOnly} />
     if (activeModule === 'build') return buildView()
     if (activeModule === 'game') return gameView()
     if (activeModule === 'tests') return testsView()
@@ -207,13 +209,13 @@ export function App() {
     </header>
     {error && <div role="alert" className="message error top-message">{error}<button onClick={() => setError('')}>收起</button></div>}
     {(pending || notice) && <div role="status" className="message top-message">{pending ? `${pending}…` : notice}</div>}
-    <div className="workbench-shell"><aside className="workbench-sidebar" aria-label="工作区导航"><p className="eyebrow">工作区</p>{modules.map(row => <button key={row.id} aria-current={activeModule === row.id ? 'page' : undefined} onClick={() => navigate(row.id)}><span aria-hidden>{row.icon}</span>{row.label}{currentTask?.recommendedModules.includes(row.id) && <i title="Agent 当前推荐" />}</button>)}<details><summary>更多工具</summary><p className="muted">知识库和 Fabric 工具由聊天 Agent 按任务调用。日志收在页面底部的诊断区。</p></details></aside>
-      <main className="workbench-main"><div className="module-heading"><div><p className="eyebrow">{project?.minecraftVersion ? `FABRIC ${project.minecraftVersion}` : 'MODCRAFTING FABRIC'}</p><h1>{modules.find(row => row.id === activeModule)?.label}</h1></div><div><strong>{currentTask?.phase || '等待任务阶段'}</strong><small>Agent 推荐：{currentTask?.recommendedModules.map(id => modules.find(row => row.id === id)?.label || id).join('、') || '概览'}</small></div></div>
-        <WorkspaceBoundary key={`${sessionId}:${activeModule}`}>{moduleContent}</WorkspaceBoundary>
+    <div className="workbench-shell"><aside className="workbench-sidebar" aria-label="工作区导航"><p className="eyebrow">工作区</p>{PANEL_ORDER.map(id => { const meta = PANEL_META[id]; return <button key={id} aria-current={activeModule === id ? 'page' : undefined} onClick={() => navigate(id)}><span aria-hidden>{meta.icon}</span>{meta.label}{currentTask?.recommendedModules.includes(id) && <i title="Agent 当前推荐" />}</button> })}<details><summary>更多工具</summary><p className="muted">知识库和 Fabric 工具由聊天 Agent 按任务调用。日志收在页面底部的诊断区。</p></details></aside>
+      <main className="workbench-main"><div className="module-heading"><div><p className="eyebrow">{project?.minecraftVersion ? `FABRIC ${project.minecraftVersion}` : 'MODCRAFTING FABRIC'}</p><h1>{PANEL_META[activeModule].label}</h1></div><div><strong>{currentTask?.phase || '等待任务阶段'}</strong><small>Agent 推荐：{currentTask?.recommendedModules.map(id => panelLabel(id)).join('、') || '概览'}</small></div></div>
+        <PanelHost panelKey={`${sessionId}:${activeModule}`} title={PANEL_META[activeModule].label}>{moduleContent}</PanelHost>
         <details className="panel diagnostics"><summary>诊断与日志 · {sessionJobs.length} 个会话任务</summary>{sessionJobs.toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => void run('读取报告', async () => setReport(await request(`/api/report/${encodeURIComponent(job.id)}`))) } />)}</details>
       </main>
     </div>
-    <nav className="mobile-nav" aria-label="工作区导航"><label>当前模块<select value={activeModule} onChange={event => navigate(event.target.value as Module)}>{modules.map(value => <option key={value.id} value={value.id}>{value.label}</option>)}</select></label></nav>
+    <nav className="mobile-nav" aria-label="工作区导航"><label>当前模块<select value={activeModule} onChange={event => { const next = event.target.value; if (isPanelId(next)) navigate(next) }}>{PANEL_ORDER.map(id => <option key={id} value={id}>{PANEL_META[id].label}</option>)}</select></label></nav>
     <footer>ModCrafting Core · 关闭页面不会停止本会话作业 · 报告按会话隔离</footer>
   </>
 }

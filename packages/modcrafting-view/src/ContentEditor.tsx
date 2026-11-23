@@ -61,7 +61,7 @@ export function ContentEditor({ projectPath, modId }: { projectPath: string; mod
   const showImage = image && !imageFailed
   const items = documents.filter(doc => `${doc.id} ${doc.value?.displayName || ''}`.toLowerCase().includes(query.toLowerCase()))
   return <section className="panel content-workspace" aria-label="内容参数工作区">
-    <div className="row"><div className="grow"><p className="eyebrow">CONTENT / FABRIC 1.21.4</p><h2>内容创作</h2><p className="muted">调整实际属性，确认代码和资源变更，再应用到工程。</p></div><span className={`badge badge-${dirty ? 'INCONCLUSIVE' : 'PASS'}`}>{dirty ? '未应用草稿' : document ? '已读回工程' : '新对象'}</span></div>
+    <div className="row"><div className="grow"><p className="eyebrow">CONTENT / FABRIC</p><h2>内容创作</h2><p className="muted">调整实际属性，确认代码和资源变更，再应用到工程。</p></div><span className={`badge badge-${dirty ? 'INCONCLUSIVE' : 'PASS'}`}>{dirty ? '未应用草稿' : document ? '已读回工程' : '新对象'}</span></div>
     <div className="content-layout">
       <aside className="content-list"><div className="row"><strong>工程内容 · {documents.length}</strong><button disabled={busy} onClick={() => void run(refresh)}>刷新目录</button></div><input aria-label="搜索工程内容" placeholder="名称或 ID" value={query} onChange={event => setQuery(event.target.value)} />
         {items.map(doc => <button key={doc.id} data-content-id={doc.id} className={document?.id === doc.id ? 'selected' : ''} disabled={busy} onClick={() => void run(() => load(doc))}><strong>{doc.value?.displayName || doc.id}</strong><small>{doc.id}</small><small>{doc.kind ? contentForms[doc.kind].title : '已有内容'} · {doc.editable ? '参数可编辑' : '交给 Agent 检查'}</small></button>)}

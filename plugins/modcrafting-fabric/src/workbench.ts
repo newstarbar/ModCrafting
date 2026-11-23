@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { inspectFabricProject } from '../../../packages/modcrafting-core/src/node.ts'
+import { gateFabricProject } from '../../../packages/modcrafting-core/src/version/project-gate.ts'
 
 /**
  * How the workbench URL reaches the user.
@@ -32,7 +33,8 @@ export async function openWorkbench(
   if (options.projectPath) {
     if (!path.isAbsolute(options.projectPath)) throw Error('工程路径需要使用绝对路径。')
     const project = inspectFabricProject(options.projectPath)
-    if (!project.valid || project.minecraftVersion !== '1.21.4') return { ok: false, code: 'PROJECT_UNAVAILABLE', message: '当前文件夹还不是可编辑的 Fabric 1.21.4 工程，请先创建或选择工程。', errors: project.errors }
+    const gate = gateFabricProject(project)
+    if (!gate.ok) return { ok: false, code: 'PROJECT_UNAVAILABLE', message: `${gate.message}；请先创建或选择工程。`, errors: project.errors }
     fragment.set('project', project.path)
   }
   if (!options.sessionId) throw Error('打开工作台需要任务 sessionId。')

@@ -175,7 +175,7 @@ export function ModelEditor({ projectPath, modId }: { projectPath: string; modId
   const swatch = (symbol: string) => { const raw = voxel?.palette[symbol]; return typeof raw === 'string' ? raw : raw?.color ?? '#888' }
 
   return <section className="panel model-workspace" aria-label="3D 体素模型工作区">
-    <div className="row"><div className="grow"><p className="eyebrow">MODEL / VOXEL · FABRIC 1.21.4</p><h2>3D 模型工坊</h2><p className="muted">Agent 用体素 DSL 生成模型，你在这里旋转、增删体素、调色并保存；保存走统一 revision 冲突检查。</p></div><span className={`badge badge-${dirty ? 'INCONCLUSIVE' : 'PASS'}`}>{dirty ? '未应用草稿' : document ? '已读回工程' : '新模型'}</span></div>
+    <div className="row"><div className="grow"><p className="eyebrow">MODEL / VOXEL · FABRIC</p><h2>3D 模型工坊</h2><p className="muted">Agent 用体素 DSL 生成模型，你在这里旋转、增删体素、调色并保存；保存走统一 revision 冲突检查。</p></div><span className={`badge badge-${dirty ? 'INCONCLUSIVE' : 'PASS'}`}>{dirty ? '未应用草稿' : document ? '已读回工程' : '新模型'}</span></div>
     <div className="model-layout">
       <aside className="model-list">
         <div className="row"><strong>模型 · {documents.length}</strong><button disabled={busy} onClick={() => void run(refresh)}>刷新</button></div>

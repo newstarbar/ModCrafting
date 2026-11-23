@@ -1,3 +1,7 @@
+import { FABRIC_TARGET } from './domain.ts'
+import { deriveResourceLayout } from './resources/layout.ts'
+import { getRegistry } from './version/registry.ts'
+
 export interface RecipeIngredient {
   item: string
   count?: number
@@ -42,7 +46,21 @@ export interface RecipeValidationResult {
 }
 
 const RESOURCE_ID_RE = /^[a-z0-9_.-]+:[a-z0-9/._-]+$/
-const RECIPE_PATH_RE = /(?:^|\/)src\/main\/resources\/data\/([a-z0-9_.-]+)\/recipe\/([a-z0-9/._-]+)\.json$/
+const RECIPE_PATH_RE = /(?:^|\/)src\/main\/resources\/data\/([a-z0-9_.-]+)\/(recipe|recipes)\/([a-z0-9/._-]+)\.json$/
+
+/** Everything the validator needs to know about one target's recipe dialect. */
+interface RecipeFormat { mc: string; folder: 'recipe' | 'recipes'; stringIngredients: boolean; resultId: boolean }
+
+function recipeFormat(mcVersion?: string): RecipeFormat {
+  const mc = mcVersion?.trim() || FABRIC_TARGET.minecraft
+  const layout = deriveResourceLayout(mc, getRegistry())
+  return {
+    mc,
+    folder: layout.recipeDir,
+    stringIngredients: layout.recipeIngredient === 'string',
+    resultId: layout.recipeResult === 'id-object'
+  }
+}
 
 function isResourceId(value: unknown, allowTag = false): value is string {
   if (typeof value !== 'string') return false
@@ -50,32 +68,44 @@ function isResourceId(value: unknown, allowTag = false): value is string {
   return RESOURCE_ID_RE.test(normalized) && (!value.startsWith('#') || allowTag)
 }
 
-function validateIngredient(value: unknown, label: string, errors: string[]): void {
-  if (!isResourceId(value, true)) {
-    errors.push(`${label} 必须是 1.21.4 字符串物品 ID 或 #标签，不能使用旧版 {item/tag} 对象`)
+function validateIngredient(value: unknown, label: string, errors: string[], format: RecipeFormat): void {
+  if (isResourceId(value, true)) return
+  if (!format.stringIngredients && value && typeof value === 'object' && !Array.isArray(value)) {
+    const entry = value as Record<string, unknown>
+    const keys = Object.keys(entry)
+    const key = keys[0]
+    if (keys.length === 1 && (key === 'item' || key === 'tag') && isResourceId(entry[key], key === 'tag')) return
+    errors.push(`${label} 必须是 {"item": ...} 或 {"tag": ...}（MC ${format.mc}）`)
+    return
   }
+  errors.push(format.stringIngredients
+    ? `${label} 必须是 ${format.mc} 字符串物品 ID 或 #标签，不能使用旧版 {item/tag} 对象`
+    : `${label} 必须是 {"item": ...} 或 {"tag": ...}（MC ${format.mc}）`)
 }
 
-function validateResultObject(value: unknown, errors: string[], knownVanillaIds?: ReadonlySet<string>): void {
+function validateResultObject(value: unknown, errors: string[], knownVanillaIds: ReadonlySet<string> | undefined, format: RecipeFormat): void {
+  const field = format.resultId ? 'id' : 'item'
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push('result 必须是包含 id 的对象')
+    errors.push(`result 必须是包含 ${field} 的对象`)
     return
   }
   const result = value as Record<string, unknown>
-  if ('item' in result) errors.push('MC 1.21.4 使用 result.id，禁止旧版 result.item')
-  if (!isResourceId(result.id)) errors.push('result.id 不是合法资源 ID')
+  if ((format.resultId ? 'item' : 'id') in result) errors.push(`MC ${format.mc} 使用 result.${field}，禁止${format.resultId ? '旧版' : ''} result.${format.resultId ? 'item' : 'id'}`)
+  if (!isResourceId(result[field])) errors.push(`result.${field} 不是合法资源 ID`)
   if (result.count !== undefined && (!Number.isInteger(result.count) || Number(result.count) < 1)) {
     errors.push('result.count 必须是正整数')
   }
-  if (typeof result.id === 'string' && result.id.startsWith('minecraft:') && knownVanillaIds && !knownVanillaIds.has(result.id)) {
-    errors.push(`未知的 1.21.4 原版物品 ID: ${result.id}`)
+  const id = result[field]
+  if (typeof id === 'string' && id.startsWith('minecraft:') && knownVanillaIds && !knownVanillaIds.has(id)) {
+    errors.push(`未知的 ${format.mc} 原版物品 ID: ${id}`)
   }
 }
 
 export function validateRecipeContent(
   content: string,
-  options: { path?: string; modId?: string; knownVanillaIds?: ReadonlySet<string> } = {}
+  options: { path?: string; modId?: string; knownVanillaIds?: ReadonlySet<string>; mcVersion?: string } = {}
 ): RecipeValidationResult {
+  const format = recipeFormat(options.mcVersion)
   const errors: string[] = []
   const warnings: string[] = []
   let parsed: Record<string, unknown>
@@ -91,8 +121,8 @@ export function validateRecipeContent(
   if (options.path) {
     const normalizedPath = options.path.replace(/\\/g, '/').replace(/^\/+/, '')
     const match = normalizedPath.match(RECIPE_PATH_RE)
-    if (!match) {
-      errors.push('MC 1.21.4 配方路径必须是 src/main/resources/data/<namespace>/recipe/<name>.json')
+    if (!match || match[2] !== format.folder) {
+      errors.push(`MC ${format.mc} 配方路径必须是 src/main/resources/data/<namespace>/${format.folder}/<name>.json`)
     } else {
       namespace = match[1]
       if (options.modId && namespace !== options.modId) {
@@ -110,7 +140,7 @@ export function validateRecipeContent(
   }
   const type = typeof parsed.type === 'string' ? typeMap[parsed.type] : undefined
   if (!type) {
-    errors.push('仅支持 shaped、shapeless、smelting、blasting、stonecutting 五种 1.21.4 原版配方')
+    errors.push(`仅支持 shaped、shapeless、smelting、blasting、stonecutting 五种 ${format.mc} 原版配方`)
     return { valid: false, errors, warnings, namespace }
   }
 
@@ -119,9 +149,9 @@ export function validateRecipeContent(
     if (!Array.isArray(ingredients) || ingredients.length < 1 || ingredients.length > 9) {
       errors.push('shapeless ingredients 数量必须为 1–9')
     } else {
-      ingredients.forEach((ingredient, index) => validateIngredient(ingredient, `ingredients[${index}]`, errors))
+      ingredients.forEach((ingredient, index) => validateIngredient(ingredient, `ingredients[${index}]`, errors, format))
     }
-    validateResultObject(parsed.result, errors, options.knownVanillaIds)
+    validateResultObject(parsed.result, errors, options.knownVanillaIds, format)
   } else if (type === 'shaped') {
     const pattern = parsed.pattern
     const key = parsed.key
@@ -141,7 +171,7 @@ export function validateRecipeContent(
         const entries = Object.entries(key as Record<string, unknown>)
         for (const [symbol, ingredient] of entries) {
           if (symbol.length !== 1 || symbol === ' ') errors.push(`key "${symbol}" 必须是单个非空格字符`)
-          validateIngredient(ingredient, `key.${symbol}`, errors)
+          validateIngredient(ingredient, `key.${symbol}`, errors, format)
           if (!used.has(symbol)) errors.push(`key "${symbol}" 未在 pattern 中使用`)
         }
         for (const symbol of used) {
@@ -149,15 +179,15 @@ export function validateRecipeContent(
         }
       }
     }
-    validateResultObject(parsed.result, errors, options.knownVanillaIds)
+    validateResultObject(parsed.result, errors, options.knownVanillaIds, format)
   } else if (type === 'stonecutting') {
-    validateIngredient(parsed.ingredient, 'ingredient', errors)
-    validateResultObject(parsed.result, errors, options.knownVanillaIds)
+    validateIngredient(parsed.ingredient, 'ingredient', errors, format)
+    validateResultObject(parsed.result, errors, options.knownVanillaIds, format)
   } else {
-    validateIngredient(parsed.ingredient, 'ingredient', errors)
+    validateIngredient(parsed.ingredient, 'ingredient', errors, format)
     if (!isResourceId(parsed.result)) errors.push(`${type} result 必须是字符串物品 ID`)
     if (typeof parsed.result === 'string' && parsed.result.startsWith('minecraft:') && options.knownVanillaIds && !options.knownVanillaIds.has(parsed.result)) {
-      errors.push(`未知的 1.21.4 原版物品 ID: ${parsed.result}`)
+      errors.push(`未知的 ${format.mc} 原版物品 ID: ${parsed.result}`)
     }
     if (typeof parsed.experience !== 'number' || !Number.isFinite(parsed.experience) || parsed.experience < 0) {
       errors.push('experience 必须是非负数')
@@ -191,46 +221,25 @@ function normalizeResourcePart(value: string, fallback: string): string {
   return normalized || fallback
 }
 
-function parseMcVersion(mcVersion?: string): { major: number; minor: number; patch: number } {
-  if (!mcVersion) return { major: 1, minor: 21, patch: 4 }
-  const parts = mcVersion.trim().split('.').map((p) => Number.parseInt(p, 10))
-  return {
-    major: Number.isFinite(parts[0]) ? parts[0] : 1,
-    minor: Number.isFinite(parts[1]) ? parts[1] : 21,
-    patch: Number.isFinite(parts[2]) ? parts[2] : 0
-  }
-}
-
-/** MC 1.21+ uses singular data/<ns>/recipe/ folder. */
-export function usesModernRecipeFolder(mcVersion?: string): boolean {
-  const { major, minor } = parseMcVersion(mcVersion)
-  return major > 1 || (major === 1 && minor >= 21)
-}
+/**
+ * Version predicates now come from the catalog release sequence instead of
+ * parsing `1.x.y`, because Minecraft also ships year-based ids (26.1, 26.3).
+ * `26.1 > 1.21.11` holds through the release order, never through parseFloat.
+ */
+export function usesModernRecipeFolder(mcVersion?: string): boolean { return recipeFormat(mcVersion).folder === 'recipe' }
 
 /** MC 1.21.2+ uses plain string ingredients and keys. */
-export function usesStringRecipeIngredients(mcVersion?: string): boolean {
-  const { major, minor, patch } = parseMcVersion(mcVersion)
-  if (major > 1) return true
-  if (major === 1 && minor > 21) return true
-  if (major === 1 && minor === 21 && patch >= 2) return true
-  return false
-}
+export function usesStringRecipeIngredients(mcVersion?: string): boolean { return recipeFormat(mcVersion).stringIngredients }
 
 /** MC 1.20.5+ uses result.id instead of result.item. */
-export function usesResultIdField(mcVersion?: string): boolean {
-  const { major, minor, patch } = parseMcVersion(mcVersion)
-  if (major > 1) return true
-  if (major === 1 && minor > 20) return true
-  if (major === 1 && minor === 20 && patch >= 5) return true
-  return false
-}
+export function usesResultIdField(mcVersion?: string): boolean { return recipeFormat(mcVersion).resultId }
 
 export function usesModernRecipeFormat(mcVersion?: string): boolean {
   return usesModernRecipeFolder(mcVersion)
 }
 
 export function recipeFolder(mcVersion?: string): string {
-  return usesModernRecipeFolder(mcVersion) ? 'recipe' : 'recipes'
+  return recipeFormat(mcVersion).folder
 }
 
 export function recipePath(namespace: string, name: string, mcVersion?: string): string {

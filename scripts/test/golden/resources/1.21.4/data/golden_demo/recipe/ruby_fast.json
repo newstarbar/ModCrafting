@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:blasting",
+  "category": "misc",
+  "ingredient": "minecraft:iron_ore",
+  "result": "golden_demo:ruby",
+  "experience": 1.2,
+  "cookingtime": 100
+}

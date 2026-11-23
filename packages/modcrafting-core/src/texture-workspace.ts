@@ -10,6 +10,7 @@ import { decodePng, decodeRgbaBase64, encodePng, encodeRgbaBase64, isPng, MAX_TE
 import { contentWorkspace, contentRequestSchema } from './content-workspace.ts'
 import type { ContentObject } from './content-model.ts'
 import { inspectFabricProject } from './node.ts'
+import { gateFabricProject } from './version/project-gate.ts'
 import { CoreError } from './runtime.ts'
 import type { RuntimePaths } from './contracts.ts'
 
@@ -72,7 +73,8 @@ function limit(relative: string, maximum: number, label: string): Buffer | null 
 function projectOf(raw: string): { root: string; modId: string } {
   if (!path.isAbsolute(raw)) fail('PROJECT_UNAVAILABLE', '需要 Fabric 工程绝对路径')
   const root = safe(path.resolve(raw)), inspected = inspectFabricProject(root)
-  if (!inspected.valid || !inspected.modId || inspected.minecraftVersion !== '1.21.4') fail('PROJECT_UNAVAILABLE', '仅支持有效的 Fabric 1.21.4 工程：' + inspected.errors.join('; '))
+  const projectGate = gateFabricProject(inspected)
+  if (!projectGate.ok) fail('PROJECT_UNAVAILABLE', projectGate.message)
   return { root, modId: inspected.modId! }
 }
 

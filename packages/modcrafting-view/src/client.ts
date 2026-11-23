@@ -1,5 +1,7 @@
 import type { BrowserAction } from '../../../plugins/modcrafting-fabric/src/browser-server.ts'
 import type { CoreRuntimeState } from '../../modcrafting-core/src/contracts.ts'
+import type { QuestRequest } from '../../modcrafting-core/src/quest-workspace.ts'
+import type { QuestBookResponse } from './panels/quest/types.ts'
 
 const parameters = new URLSearchParams(location.hash.slice(1))
 export const initialProject = parameters.get('project') || ''
@@ -34,6 +36,22 @@ export async function uploadTextureSource(file: File): Promise<{ sourceToken: st
   return value
 }
 export const state = () => request<CoreRuntimeState>('/api/state')
+
+/**
+ * The whole quest book in one GET.
+ *
+ * POST would hit the 256 KB body cap on a large pack, and the read is idempotent,
+ * so it belongs on the read-only route where the server can verify ownership.
+ */
+export function questBook(workspace: string, member?: string, locale?: string): Promise<QuestBookResponse> {
+  const query = new URLSearchParams({ workspace })
+  if (member) query.set('member', member)
+  if (locale) query.set('locale', locale)
+  return request<QuestBookResponse>(`/api/quest-book?${query.toString()}`)
+}
+
+/** The quest operation body is the same schema the MCP tool accepts. */
+export const questAction = <T,>(body: QuestRequest) => action<T>({ operation: 'quest', request: body } as BrowserAction)
 export async function selectSession(sessionId: string): Promise<boolean> {
   const selected = await action<{ readOnly: boolean }>({ operation: 'select_session', sessionId })
   generation++

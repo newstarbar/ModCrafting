@@ -5,6 +5,9 @@ import { meshVoxel, rectToCuboid, type VoxelRect } from './voxel-mesh.ts'
 import { buildAtlas, renderTile, resolvePalette, tileFor, tileRectUvMc, type AtlasResult, type ResolvedPalette } from './voxel-atlas.ts'
 import { encodePng } from './voxel-png.ts'
 import type { ContentObject } from './content-model.ts'
+import { FABRIC_TARGET } from './domain.ts'
+import { deriveResourceLayout, type ResourceLayout } from './resources/layout.ts'
+import { getRegistry } from './version/registry.ts'
 
 export interface VoxelStats {
   voxels: number
@@ -175,7 +178,7 @@ const itemDisplay = {
 }
 const variantOf = (face: string) => face === 'up' ? 'top' as const : face === 'down' ? 'bottom' as const : 'side' as const
 
-export function compileVoxel(value: ContentObject): { models: GeneratedFile[]; assets: GeneratedAsset[]; previewPng: Buffer; stats: VoxelStats; warnings: string[] } {
+export function compileVoxel(value: ContentObject, layout: ResourceLayout = deriveResourceLayout(FABRIC_TARGET.minecraft, getRegistry())): { models: GeneratedFile[]; assets: GeneratedAsset[]; previewPng: Buffer; stats: VoxelStats; warnings: string[] } {
   if (!value.voxel) fail('VOXEL_DSL_MISSING', '内容对象没有体素模型')
   const check = validateVoxel(value.voxel)
   if (!check.ok) fail('VOXEL_DSL_INVALID', '体素 DSL 校验失败：' + formatVoxelIssues(check.errors))
@@ -198,10 +201,10 @@ export function compileVoxel(value: ContentObject): { models: GeneratedFile[]; a
   const model = isBlock
     ? { parent: 'block/block', textures: { '0': atlasId, particle: `${modId}:block/${name}_particle` }, elements }
     : { textures: { '0': atlasId }, display: itemDisplay, elements }
-  const modelPath = `src/main/resources/assets/${modId}/models/${kindDir}/${name}.json`
+  const modelPath = isBlock ? layout.blockModelPath(modId, name) : layout.itemModelPath(modId, name)
   const modelContent = JSON.stringify(model, null, 2) + '\n'
   const atlasPng = encodePng(analysis.atlas.width, analysis.atlas.height, analysis.atlas.pixels)
-  const assets: GeneratedAsset[] = [{ path: `src/main/resources/assets/${modId}/textures/${kindDir}/${name}_atlas.png`, content: atlasPng }]
+  const assets: GeneratedAsset[] = [{ path: layout.texturePath(modId, `${kindDir}/${name}_atlas`), content: atlasPng }]
   if (isBlock) {
     const usage = usageOf(analysis.grid)
     let dominant = 1
@@ -211,7 +214,7 @@ export function compileVoxel(value: ContentObject): { models: GeneratedFile[]; a
     const dominantEntry = analysis.entries[dominant - 1]
     if (dominantEntry) {
       const particleTile = renderTile(dominantEntry, 'side', voxelLimits.resolution)
-      assets.push({ path: `src/main/resources/assets/${modId}/textures/block/${name}_particle.png`, content: encodePng(voxelLimits.resolution, voxelLimits.resolution, particleTile) })
+      assets.push({ path: layout.texturePath(modId, `block/${name}_particle`), content: encodePng(voxelLimits.resolution, voxelLimits.resolution, particleTile) })
     }
   }
   const stats: VoxelStats = { ...analysis.stats, modelBytes: Buffer.byteLength(modelContent) }

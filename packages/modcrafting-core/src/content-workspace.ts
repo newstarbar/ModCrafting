@@ -4,8 +4,15 @@ import path from 'node:path'
 import { z } from 'zod'
 import { contentObjectSchema, contentKinds, contentForms, newContentObject, type ContentObject, type ContentDocument, type ContentFile } from './content-model.ts'
 import { generateContent } from './content-codegen.ts'
+import { neoForgeContentIndex, registrationFor } from './loaders/neoforge-content.ts'
+import { forgeRegistrationFor } from './loaders/forge-content.ts'
 import { baseTextureSize, validateEntityTexture, validatePixelTexture } from './entity-appearance.ts'
 import { inspectFabricProject, lookupMinecraftData } from './node.ts'
+import { gateFabricProject, projectLayout } from './version/project-gate.ts'
+import { dialectSignature, deriveResourceLayout } from './resources/layout.ts'
+import { FABRIC_TARGET } from './domain.ts'
+import { getRegistry } from './version/registry.ts'
+import { resolveVisualVersion } from './visual-assets.ts'
 import { CoreError, projectRuntimePaths } from './runtime.ts'
 import type { RuntimePaths } from './contracts.ts'
 
@@ -17,7 +24,10 @@ export const contentRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list'), projectPath: fields.projectPath }).strict(),
   z.object({ action: z.literal('read'), projectPath: fields.projectPath, id: z.string().min(1) }).strict(),
   z.object({ action: z.literal('preview'), ...fields, texturePng }).strict(),
-  z.object({ action: z.literal('save'), ...fields, previewRevision: revisionSchema, texturePng }).strict()
+  z.object({ action: z.literal('save'), ...fields, previewRevision: revisionSchema, texturePng }).strict(),
+  // Rewrites an object's resources for a new target. Explicit and revision-checked on purpose:
+  // a target change must never silently rewrite or delete files.
+  z.object({ action: z.literal('migrate'), projectPath: fields.projectPath, id: z.string().min(1), expectedRevision: revisionSchema, confirm: z.literal(true) }).strict()
 ])
 export type ContentRequest = z.input<typeof contentRequestSchema>
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -55,6 +65,23 @@ function idName(id: string, modId: string): string {
   return id.split(':')[1]
 }
 const manifestPath = (name: string) => `.modcrafting/content/${name}.json`
+const contentIndexPath = (modId: string) => `src/main/java/modcrafting/generated/${modId.replaceAll('-', '_')}/ContentIndex.java`
+/** Every manifest in the workspace, mapped back to its registration class. */
+function contentRegistrations(root: string, modId: string, loader: string): Array<{ packageName: string; className: string }> {
+  const directory = path.join(root, '.modcrafting', 'content')
+  if (!existsSync(directory)) return []
+  const registrations: Array<{ packageName: string; className: string }> = []
+  for (const name of readdirSync(directory).filter((file) => file.endsWith('.json'))) {
+    try {
+      const stored = JSON.parse(readFileSync(path.join(directory, name), 'utf8'))
+      const value = stored?.value as ContentObject | undefined
+      if (!value?.id) continue
+      const registration = loader === 'forge' ? forgeRegistrationFor(modId, value) : registrationFor(modId, value)
+      if (registration) registrations.push(registration)
+    } catch { /* a broken manifest is reported elsewhere; skip it here */ }
+  }
+  return registrations
+}
 const sharedFiles = (modId: string) => ['src/main/resources/fabric.mod.json', `src/main/resources/assets/${modId}/lang/zh_cn.json`, `src/main/resources/assets/${modId}/lang/en_us.json`, 'build.gradle', 'build.gradle.kts']
 function objectJson(root: string, file: string): Record<string, any> {
   const content = bytes(root, file)
@@ -62,6 +89,7 @@ function objectJson(root: string, file: string): Record<string, any> {
   try { const value = JSON.parse(content.toString('utf8')); if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(); return value }
   catch { return fail('CONTENT_READ_ONLY', '无法安全合并 JSON，原文件保持不变：' + file) }
 }
+const layoutFor = (root: string) => projectLayout(inspectFabricProject(root)).layout
 function splitClient(root: string) { return ['build.gradle', 'build.gradle.kts'].some(file => bytes(root, file)?.toString('utf8').includes('splitEnvironmentSourceSets')) }
 function entrypoints(metadata: Record<string, any>, type: string): unknown[] {
   const entries = metadata.entrypoints?.[type] ?? []
@@ -75,8 +103,10 @@ function textureFile(value: ContentObject) {
 function previewImage(paths: RuntimePaths | undefined, root: string, value: ContentObject, png?: Buffer): string | undefined {
   if (png) return 'data:image/png;base64,' + png.toString('base64')
   const file = textureFile(value)
-  const image = value.texture.startsWith('minecraft:')
-    ? paths && bytes(paths.assetsRoot, `minecraft-textures/1.21.4/${file.slice('src/main/resources/'.length)}`)
+  // Cache root is per Minecraft version; a 1.20.x project must not silently render 1.21.4 art.
+  const assetsVersion = paths ? resolveVisualVersion(paths, inspectFabricProject(root).minecraftVersion).version : undefined
+  const image = value.texture.startsWith('minecraft:') && assetsVersion
+    ? bytes(paths!.assetsRoot, `minecraft-textures/${assetsVersion}/${file.slice('src/main/resources/'.length)}`)
     : bytes(root, file)
   return image && image.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'data:image/png;base64,' + image.toString('base64') : undefined
 }
@@ -126,17 +156,17 @@ function validateResources(paths: RuntimePaths, root: string, value: ContentObje
       const kind = value.texture.startsWith('minecraft:block/') ? 'block' : 'item'
       if (!value.texture.startsWith(`minecraft:${kind}/`)) fail('CONTENT_RESOURCE_MISSING', '使用原版 item/ 或 block/ 纹理引用')
       const query = 'minecraft:' + value.texture.split('/').slice(1).join('/')
-      if (!lookupMinecraftData(knowledge, kind, query).ok) fail('CONTENT_RESOURCE_MISSING', '知识库无法确认原版纹理关联：' + query)
+      if (!lookupMinecraftData(knowledge, kind, query, { minecraft: inspectFabricProject(root).minecraftVersion, allowFallback: true }).ok) fail('CONTENT_RESOURCE_MISSING', '知识库无法确认原版纹理关联：' + query)
     }
   }
   // Knowledge checks precede registration generation; missing data never becomes a guessed baseline.
   const baseline = value.kind === 'block' ? ['block', 'minecraft:stone'] : value.kind === 'entity' ? ['entity', `minecraft:${value.parameters.baseEntity}`] : ['item', value.kind === 'food' ? 'minecraft:apple' : 'minecraft:iron_ingot']
-  if (!lookupMinecraftData(knowledge, baseline[0] as 'block' | 'entity' | 'item', baseline[1]).ok) fail('ASSET_UNAVAILABLE', '原版基准知识不可用，请先准备知识数据')
+  if (!lookupMinecraftData(knowledge, baseline[0] as 'block' | 'entity' | 'item', baseline[1], { minecraft: inspectFabricProject(root).minecraftVersion, allowFallback: true }).ok) fail('ASSET_UNAVAILABLE', '原版基准知识不可用，请先准备知识数据')
   if (value.kind === 'tool' || value.kind === 'armor') {
     const material = String(value.parameters.material)
     const prefix = material === 'wood' ? 'wooden' : material === 'gold' ? 'golden' : material
     const item = `minecraft:${prefix}_${value.kind === 'tool' ? value.parameters.toolType : value.parameters.armorType}`
-    if (!lookupMinecraftData(knowledge, 'item', item).ok) fail('ASSET_UNAVAILABLE', '知识库无法确认所选材质/部位基准：' + item)
+    if (!lookupMinecraftData(knowledge, 'item', item, { minecraft: inspectFabricProject(root).minecraftVersion, allowFallback: true }).ok) fail('ASSET_UNAVAILABLE', '知识库无法确认所选材质/部位基准：' + item)
   }
 }
 function readManaged(root: string, modId: string, id: string, image = false, paths?: RuntimePaths): ContentDocument {
@@ -145,11 +175,17 @@ function readManaged(root: string, modId: string, id: string, image = false, pat
   const document: ContentDocument = { id, editable: false, revision: hash(raw), files: [file] }
   try {
     const stored = JSON.parse(raw.toString('utf8'))
-    if (stored.version !== 1) throw Error('不支持的声明版本')
+    if (stored.version !== 1 && stored.version !== 2) throw Error('不支持的声明版本')
     const value = contentObjectSchema.parse(stored.value)
     if (value.id !== id) throw Error('内容 ID 与声明文件名不一致')
     document.value = value; document.kind = value.kind
-    const generated = generateContent(value, splitClient(root))
+    // Compare against the tree this object was *written* with, never against the
+    // current project target: otherwise changing gradle.properties turns every
+    // saved object into a false "externally modified" read-only document.
+    const storedMinecraft = stored.version === 2 && typeof stored.target?.minecraft === 'string' ? stored.target.minecraft : FABRIC_TARGET.minecraft
+    const storedLayout = deriveResourceLayout(storedMinecraft, getRegistry())
+    document.target = { loader: 'fabric', minecraft: storedMinecraft }
+    const generated = generateContent(value, { splitClient: splitClient(root), layout: storedLayout, loader: (stored.target?.loader as string) ?? 'fabric' })
     const generatedAll: Array<{ path: string; content: string | Buffer }> = [...generated.files, ...generated.assets]
     const owned = generatedAll.map(target => target.path)
     const tracked = [...new Set([file, ...owned, ...sharedFiles(modId), ...(value.texture.startsWith('minecraft:') || value.voxel ? [] : [textureFile(value)])])].sort()
@@ -164,9 +200,25 @@ function readManaged(root: string, modId: string, id: string, image = false, pat
       // Saved hashes detect external edits; generator evolution is applied only through preview/save.
       if (!current || hash(current) !== stored.files[target.path]) throw Error('生成文件已被外部修改，保留源码并交由 Agent 合并：' + target.path)
     }
-    const metadata = objectJson(root, sharedFiles(modId)[0])
-    if (!entrypoints(metadata, 'main').includes(generated.main) || generated.client && !entrypoints(metadata, 'client').includes(generated.client)) throw Error('生成的 Fabric 入口已被外部修改')
+    const storedLoader = (stored.target?.loader as string) ?? 'fabric'
+    if (storedLoader === 'fabric') {
+      const metadata = objectJson(root, sharedFiles(modId)[0])
+      if (!entrypoints(metadata, 'main').includes(generated.main) || generated.client && !entrypoints(metadata, 'client').includes(generated.client)) throw Error('生成的 Fabric 入口已被外部修改')
+    } else {
+      // NeoForge registers through ContentIndex; a missing call means someone edited it.
+      const index = bytes(root, contentIndexPath(modId))?.toString('utf8') ?? ''
+      const registration = generateContent(value, { splitClient: splitClient(root), layout: storedLayout, loader: storedLoader }).registration
+      if (registration && !index.includes(`${registration.packageName}.${registration.className}.register(modEventBus);`)) throw Error('生成的 ContentIndex 注册已被外部修改')
+    }
     for (const file of sharedFiles(modId).slice(1, 3)) if (objectJson(root, file)[generated.langKey] !== value.displayName) throw Error('对象名称已被外部修改：' + file)
+    const currentLayout = layoutFor(root)
+    const storedDialect = typeof stored.dialect === 'string' ? stored.dialect : dialectSignature(storedLayout)
+    if (dialectSignature(currentLayout) !== storedDialect) {
+      document.editable = false
+      document.requiresMigration = true
+      document.reason = `对象按 ${storedMinecraft} 生成，当前工程目标是 ${currentLayout.minecraft}；运行 migrate 重写资源后再编辑`
+      return document
+    }
     document.editable = true
     if (image) document.image = previewImage(paths, root, value, generated.previewPng)
   } catch (cause) { document.editable = false; document.reason = String(cause) }
@@ -185,7 +237,7 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: Conten
   const contentTexture = value.voxel ? undefined : validateContentTexture(root, value, textureBytes)
   const texturePath = contentTexture ? textureFile(value) : undefined
   const textureSha256 = contentTexture ? hash(contentTexture) : undefined
-  const generated = generateContent(value, splitClient(root))
+  const generated = generateContent(value, { splitClient: splitClient(root), layout: layoutFor(root), loader: inspectFabricProject(root).loader })
   const generatedAll: Array<{ path: string; content: string | Buffer }> = [...generated.files, ...generated.assets]
   if (existing) {
     for (const target of generatedAll) {
@@ -194,24 +246,40 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: Conten
   }
   if (!exists) {
     const resourcePrefix = `src/main/resources/assets/${modId}`
-    for (const target of [`${resourcePrefix}/items/${name}.json`, `${resourcePrefix}/models/item/${name}.json`, `${resourcePrefix}/models/block/${name}.json`]) if (bytes(root, target)) fail('CONTENT_READ_ONLY', '已有资源未受此编辑器管理，不能覆盖：' + target)
+    const existingResources = [`${resourcePrefix}/models/item/${name}.json`, `${resourcePrefix}/models/block/${name}.json`]
+    if (layoutFor(root).itemModelDefinition === 'assets-items') existingResources.unshift(`${resourcePrefix}/items/${name}.json`)
+    for (const target of existingResources) if (bytes(root, target)) fail('CONTENT_READ_ONLY', '已有资源未受此编辑器管理，不能覆盖：' + target)
     for (const file of walk(root, 'src/main/java').filter(file => file.endsWith('.java'))) {
       if (bytes(root, file)?.toString('utf8').includes(JSON.stringify(name))) fail('CONTENT_READ_ONLY', '源码已有同名 ID 引用，请交由 Agent 核对：' + file)
     }
     for (const target of generatedAll) if (bytes(root, target.path)) fail('CONTENT_READ_ONLY', '目标文件已存在，不能覆盖：' + target.path)
   }
-  const metadataFile = sharedFiles(modId)[0], metadata = objectJson(root, metadataFile)
-  metadata.entrypoints = { ...metadata.entrypoints }
-  for (const [type, entry] of [['main', generated.main], ['client', generated.client]]) if (entry) {
-    const entries = entrypoints(metadata, type); metadata.entrypoints[type] = entries.includes(entry) ? entries : [...entries, entry]
+  const projectLoader = inspectFabricProject(root).loader ?? 'fabric'
+  const targets: Array<{ path: string; content: string | Buffer }> = [...generatedAll]
+  if (projectLoader === 'fabric') {
+    const metadataFile = sharedFiles(modId)[0], metadata = objectJson(root, metadataFile)
+    metadata.entrypoints = { ...metadata.entrypoints }
+    for (const [type, entry] of [['main', generated.main], ['client', generated.client]]) if (entry) {
+      const entries = entrypoints(metadata, type); metadata.entrypoints[type] = entries.includes(entry) ? entries : [...entries, entry]
+    }
+    targets.push({ path: metadataFile, content: json(metadata) })
+  } else {
+    // NeoForge has no entrypoint list: registration is aggregated in ContentIndex,
+    // regenerated from every content manifest so adding or removing content is a
+    // pure function of what the workspace holds.
+    const registrations = contentRegistrations(root, modId, projectLoader)
+    if (generated.registration) registrations.push(generated.registration)
+    const unique = [...new Map(registrations.map((entry) => [`${entry.packageName}.${entry.className}`, entry])).values()]
+    const busImport = projectLoader === 'forge' ? 'net.minecraftforge.eventbus.api.IEventBus' : 'net.neoforged.bus.api.IEventBus'
+    targets.push({ path: contentIndexPath(modId), content: neoForgeContentIndex(modId, unique, busImport) })
   }
-  const targets = [...generatedAll, { path: metadataFile, content: json(metadata) }]
   for (const file of sharedFiles(modId).slice(1, 3)) {
     const lang = objectJson(root, file)
     if (!exists && Object.hasOwn(lang, generated.langKey)) fail('CONTENT_READ_ONLY', '同名语言键已存在，请先由 Agent 核对')
     targets.push({ path: file, content: json({ ...lang, [generated.langKey]: value.displayName }) })
   }
-  targets.push({ path: file, content: json({ version: 1, value, files: Object.fromEntries(generatedAll.map(target => [target.path, hash(target.content)])), ...(texturePath && textureSha256 ? { texture: { path: texturePath, sha256: textureSha256 } } : {}) }) })
+  const previewLayout = layoutFor(root)
+  targets.push({ path: file, content: json({ version: 2, target: { loader: projectLoader, minecraft: previewLayout.minecraft }, dialect: dialectSignature(previewLayout), value, files: Object.fromEntries(generatedAll.map(target => [target.path, hash(target.content)])), ...(texturePath && textureSha256 ? { texture: { path: texturePath, sha256: textureSha256 } } : {}) }) })
   const changes: ContentFile[] = targets.map(target => {
     const binary = Buffer.isBuffer(target.content)
     const before = bytes(root, target.path)
@@ -227,11 +295,70 @@ function preview(paths: RuntimePaths, root: string, modId: string, value: Conten
   return { ok: true, value, files: changes, image: previewImage(paths, root, value, generated.previewPng ?? contentTexture), texture: texturePath ? { path: texturePath, base64: contentTexture!.toString('base64'), sha256: textureSha256, beforeSha256: previousTexture ? hash(previousTexture) : null, width: contentTexture!.readUInt32BE(16), height: contentTexture!.readUInt32BE(20) } : undefined, previewRevision: hash(JSON.stringify({ changes, context })) }
 }
 
+/**
+ * Rewrite one object's resources for the project's current target.
+ *
+ * Deliberately explicit: the manifest is versioned, every tracked file must still
+ * match the manifest, and deletions are backed up so a failure restores the tree.
+ */
+function migrate(paths: RuntimePaths, root: string, modId: string, id: string, expectedRevision: string): Record<string, unknown> {
+  const name = idName(id, modId), file = manifestPath(name), raw = bytes(root, file)
+  if (!raw) fail('CONTENT_NOT_FOUND', '没有可迁移的对象；手写/第三方内容保持只读')
+  const stored = JSON.parse(raw.toString('utf8')) as Record<string, any>
+  const value = contentObjectSchema.parse(stored.value)
+  const fromMinecraft = stored.version === 2 && typeof stored.target?.minecraft === 'string' ? stored.target.minecraft : FABRIC_TARGET.minecraft
+  const fromLayout = deriveResourceLayout(fromMinecraft, getRegistry()), toLayout = layoutFor(root)
+  const fromGenerated = generateContent(value, { splitClient: splitClient(root), layout: fromLayout, loader: (stored.target?.loader as string) ?? 'fabric' })
+  const toGenerated = generateContent(value, { splitClient: splitClient(root), layout: toLayout, loader: inspectFabricProject(root).loader })
+  const fromAll = [...fromGenerated.files, ...fromGenerated.assets], toAll = [...toGenerated.files, ...toGenerated.assets]
+  const storedFiles = stored.files && typeof stored.files === 'object' ? stored.files as Record<string, string> : {}
+  // Integrity first: an externally edited file must produce MIGRATION_BLOCKED, not a generic conflict.
+  const blocked = fromAll.filter(target => { const existing = bytes(root, target.path); return !existing || hash(existing) !== storedFiles[target.path] })
+  if (blocked.length) fail('MIGRATION_BLOCKED', '以下文件与清单不一致，拒绝迁移（请先核对是否被外部修改）：' + blocked.map(target => target.path).join('; '))
+  const current = readManaged(root, modId, id)
+  if (current.revision !== expectedRevision) fail('CONTENT_CONFLICT', '对象已改变，请重新读取后再迁移')
+  const targetPaths = new Set(toAll.map(target => target.path))
+  const deletes = fromAll.filter(target => !targetPaths.has(target.path)).map(target => target.path)
+  const writes = toAll.filter(target => { const existing = bytes(root, target.path); const next = Buffer.isBuffer(target.content) ? target.content : Buffer.from(target.content); return !existing || !existing.equals(next) })
+  const manifest = json({ version: 2, target: { loader: 'fabric', minecraft: toLayout.minecraft }, dialect: dialectSignature(toLayout), value, files: Object.fromEntries(toAll.map(target => [target.path, hash(target.content)])), ...(stored.texture ? { texture: stored.texture } : {}) })
+  const backup = safe(path.join(paths.dataRoot, 'content-backups', hash(root), randomUUID() + '.json'))
+  mkdirSync(path.dirname(backup), { recursive: true })
+  writeFileSync(backup, json({
+    kind: 'migration', objectId: id, from: fromMinecraft, to: toLayout.minecraft,
+    writes: writes.map(target => ({ path: target.path, binary: Buffer.isBuffer(target.content), before: bytes(root, target.path)?.toString('base64') ?? null })),
+    deletes: deletes.map(target => ({ path: target, base64: bytes(root, target)?.toString('base64') ?? '' }))
+  }), { flag: 'wx' })
+  const written: string[] = [], removed: Array<{ path: string; bytes: Buffer }> = []
+  try {
+    for (const target of writes) {
+      const destination = safe(path.join(root, target.path)), next = Buffer.isBuffer(target.content) ? target.content : Buffer.from(target.content)
+      mkdirSync(path.dirname(destination), { recursive: true })
+      const temporary = destination + '.modcrafting-' + randomUUID() + '.tmp'
+      try { writeFileSync(temporary, next, { flag: 'wx' }); renameSync(temporary, destination) } finally { if (existsSync(temporary)) unlinkSync(temporary) }
+      written.push(target.path)
+    }
+    for (const target of deletes) {
+      const destination = safe(path.join(root, target))
+      if (!existsSync(destination)) continue
+      removed.push({ path: target, bytes: readFileSync(destination) })
+      unlinkSync(destination)
+    }
+    writeFileSync(safe(path.join(root, file)), manifest, { flag: 'w' })
+  } catch (cause) {
+    for (const target of written.reverse()) { try { unlinkSync(safe(path.join(root, target))) } catch { /* best effort */ } }
+    for (const entry of removed.reverse()) { try { const destination = safe(path.join(root, entry.path)); mkdirSync(path.dirname(destination), { recursive: true }); writeFileSync(destination, entry.bytes, { flag: 'w' }) } catch { /* best effort */ } }
+    throw cause
+  }
+  if (!written.length && !removed.length) return { ok: true, noop: true, from: fromMinecraft, to: toLayout.minecraft, document: readManaged(root, modId, id, true, paths) }
+  return { ok: true, migrated: true, from: fromMinecraft, to: toLayout.minecraft, wrote: written, deleted: removed.map(entry => entry.path), backup, document: readManaged(root, modId, id, true, paths) }
+}
+
 export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Record<string, unknown> {
   const request = contentRequestSchema.parse(raw)
   if (!path.isAbsolute(request.projectPath)) fail('PROJECT_UNAVAILABLE', '需要 Fabric 工程绝对路径')
   const root = safe(path.resolve(request.projectPath)), project = inspectFabricProject(root)
-  if (!project.valid || !project.modId || project.minecraftVersion !== '1.21.4') fail('PROJECT_UNAVAILABLE', '仅支持有效 Fabric 1.21.4 工程：' + project.errors.join('; '))
+  const projectGate = gateFabricProject(project)
+  if (!projectGate.ok) fail('PROJECT_UNAVAILABLE', projectGate.message)
   const modId = project.modId!
   if (request.action === 'template') return { ok: true, value: newContentObject(request.kind, modId), fields: contentForms[request.kind].fields, hint: contentForms[request.kind].hint }
   if (request.action === 'read') return { ok: true, document: readManaged(root, modId, request.id, true, paths) }
@@ -239,13 +366,15 @@ export function contentWorkspace(paths: RuntimePaths, raw: ContentRequest): Reco
     const documents = walk(root, '.modcrafting/content').filter(file => /^\.modcrafting\/content\/[a-z][a-z0-9_]{0,47}\.json$/.test(file)).map(file => readManaged(root, modId, `${modId}:${path.basename(file, '.json')}`))
     const unmanaged = new Map<string, string[]>()
     const prefix = `src/main/resources/assets/${modId}`
-    for (const file of walk(root, prefix).filter(file => /\/(items|models\/item)\/[^/]+\.json$/.test(file))) {
+    const managedPattern = layoutFor(root).itemModelDefinition === 'assets-items' ? /\/(items|models\/item)\/[^/]+\.json$/ : /\/models\/item\/[^/]+\.json$/
+    for (const file of walk(root, prefix).filter(file => managedPattern.test(file))) {
       const id = `${modId}:${path.basename(file, '.json')}`
       if (!documents.some(doc => doc.id === id)) unmanaged.set(id, [...(unmanaged.get(id) || []), file])
     }
     for (const [id, files] of unmanaged) documents.push({ id, editable: false, reason: '已有手写/第三方内容；参数无法可靠反向解析，交由 Agent 修改', revision: hash(JSON.stringify(files.map(file => bytes(root, file)?.toString('base64')))), files })
     return { ok: true, documents }
   }
+  if (request.action === 'migrate') return migrate(paths, root, modId, request.id, request.expectedRevision)
   if (request.action === 'preview') return preview(paths, root, modId, request.value, request.expectedRevision, request.texturePng)
   const lock = safe(path.join(root, '.modcrafting/content.lock'))
   mkdirSync(path.dirname(lock), { recursive: true })

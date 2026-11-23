@@ -1,0 +1,10 @@
+{
+  "type": "minecraft:stonecutting",
+  "ingredient": {
+    "item": "golden_demo:ruby_block"
+  },
+  "result": {
+    "id": "golden_demo:ruby",
+    "count": 4
+  }
+}

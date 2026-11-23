@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { contentObjectSchema, newContentObject, type ContentDocument, type ContentObject } from './content-model.ts'
 import { contentWorkspace, type ContentRequest } from './content-workspace.ts'
 import { inspectFabricProject } from './node.ts'
+import { gateFabricProject } from './version/project-gate.ts'
 import { CoreError, resolveProjectPath } from './runtime.ts'
 import type { RuntimePaths } from './contracts.ts'
 import { voxelAsciiViews, voxelDslSchema, voxelLimits, validateVoxel, type VoxelDsl } from './voxel-dsl.ts'
@@ -40,7 +41,8 @@ const exampleVoxel = (): VoxelDsl => ({
 const requireProject = (projectPath: string) => {
   if (!path.isAbsolute(projectPath)) fail('PROJECT_UNAVAILABLE', '需要 Fabric 工程绝对路径')
   const project = inspectFabricProject(resolveProjectPath(projectPath))
-  if (!project.valid || !project.modId || project.minecraftVersion !== '1.21.4') fail('PROJECT_UNAVAILABLE', '仅支持有效 Fabric 1.21.4 工程：' + project.errors.join('; '))
+  const projectGate = gateFabricProject(project)
+  if (!projectGate.ok) fail('PROJECT_UNAVAILABLE', projectGate.message)
   return project
 }
 

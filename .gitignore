@@ -42,3 +42,19 @@ scripts/**/__pycache__/
 .superpowers/
 Thumbs.db
 .DS_Store
+
+# Local toolchain downloads, extracted runtimes, and probe/test sandboxes
+# (resources/agent-knowledge stays tracked; everything else is provisioned locally)
+resources/*
+!resources/agent-knowledge/
+
+# Legacy Desktop artefacts, removed from the release branch
+/packaging/
+/src/renderer/
+
+# Local agent workspace and scratch test output
+.workbuddy/
+Python/
+failures.txt
+failures_*.txt
+test_output*.txt

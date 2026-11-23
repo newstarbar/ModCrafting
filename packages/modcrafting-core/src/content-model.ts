@@ -53,4 +53,4 @@ export function newContentObject(kind: ContentKind, modId: string): ContentObjec
   return value
 }
 export type ContentFile = { path: string; before: string | null; after: string; binary?: boolean; size?: number }
-export type ContentDocument = { id: string; kind?: ContentKind; value?: ContentObject; editable: boolean; reason?: string; revision: string; files: string[]; image?: string }
+export type ContentDocument = { id: string; kind?: ContentKind; value?: ContentObject; editable: boolean; reason?: string; revision: string; files: string[]; image?: string; requiresMigration?: boolean; target?: { loader: string; minecraft: string } }

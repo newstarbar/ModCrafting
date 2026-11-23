@@ -45,7 +45,7 @@ export function RecipeEditor({ projectPath, modId }: { projectPath: string; modI
     setDocument(value); setRecipeId(id); setDraft(value.editable ? recipeDraftFromContent(value.content) : newRecipeDraft()); setDirty(false); setPreview(false); setMessage('已从工程读取最新版本')
   }
   let content = '', issue = ''
-  try { content = recipeContentFromDraft(draft, document?.content); const validation = validateRecipeContent(content); if (!validation.valid) issue = validation.errors.join('；') } catch (cause) { issue = String(cause).replace(/^Error: /, '') }
+  try { content = recipeContentFromDraft(draft, document?.content, document?.minecraft); const validation = validateRecipeContent(content, { mcVersion: document?.minecraft }); if (!validation.valid) issue = validation.errors.join('；') } catch (cause) { issue = String(cause).replace(/^Error: /, '') }
   const readonly = document && !document.editable
   const oneIngredient = !['shaped', 'shapeless'].includes(draft.type)
   const names = new Map(items.map(item => [item.id, item.zhName || item.name]))
@@ -78,7 +78,7 @@ export function RecipeEditor({ projectPath, modId }: { projectPath: string; modI
     }}>{value.itemId ? <><ItemVisual image={visuals.items?.[value.itemId]} label={label(value.itemId)} /><small>{label(value.itemId)}</small>{ref.kind === 'output' && draft.outputCount > 1 && <b>{draft.outputCount}</b>}</> : <span className="recipe-slot-empty">＋</span>}</button>
   }
   return <section className="panel recipe-workspace" aria-label="配方创作工作区">
-    <div className="row"><div className="grow"><p className="eyebrow">CRAFT / FABRIC 1.21.4</p><h2>配方工坊</h2><p className="muted">拖放材料，调整产物。确认后的配方可由 Agent 直接读回。</p></div><span className={`badge ${dirty ? 'badge-INCONCLUSIVE' : 'badge-PASS'}`}>{dirty ? '未保存草稿' : document ? '已读回工程' : '新配方'}</span></div>
+    <div className="row"><div className="grow"><p className="eyebrow">CRAFT / FABRIC</p><h2>配方工坊</h2><p className="muted">拖放材料，调整产物。确认后的配方可由 Agent 直接读回。</p></div><span className={`badge ${dirty ? 'badge-INCONCLUSIVE' : 'badge-PASS'}`}>{dirty ? '未保存草稿' : document ? '已读回工程' : '新配方'}</span></div>
     <div className="recipe-layout">
       <aside className="recipe-list"><div className="row"><strong>工程配方 · {recipes.length}</strong><button disabled={busy} onClick={() => { if (dirty && !window.confirm('放弃当前未保存草稿？')) return; setDocument(undefined); setDraft(newRecipeDraft()); setRecipeId(modId + ':new_recipe'); setDirty(false); setPreview(false); setError(''); setMessage('') }}>新建配方</button></div>
         {!recipes.length && <p className="muted">还没有配方，从右侧材料开始创建。</p>}
@@ -101,7 +101,7 @@ export function RecipeEditor({ projectPath, modId }: { projectPath: string; modI
           const saved = (await request({ action: 'save', recipeId, expectedRevision: document?.revision ?? null, content } as Request)).document!
           setDocument(saved); setDraft(recipeDraftFromContent(saved.content)); setRecipes((await request({ action: 'list' })).recipes || []); setDirty(false); setPreview(false); setMessage('已保存并读回工程。Agent 可通过 fabric_recipe_workspace 读取同一配方；构建或重新启动游戏后生效。')
         })}>{busy ? '处理中…' : '确认保存配方'}</button>{document && <button disabled={busy} onClick={() => void run(() => load(document.recipeId))}>重新加载工程版本</button>}{issue && <span className="muted">{issue}</span>}</div>}
-        {(preview || readonly) && <div className="recipe-diff"><h3>{readonly ? '原始配方（只读）' : '确认写入 · ' + (document?.file || `data/${recipeId.replace(':', '/recipe/')}.json`)}</h3><div className="columns"><div><h4>工程中的原版本</h4><pre>{document?.content || '新建文件，不覆盖已有配方'}</pre></div>{!readonly && <div><h4>待写入版本</h4><pre data-testid="recipe-preview">{content}</pre></div>}</div></div>}
+        {(preview || readonly) && <div className="recipe-diff"><h3>{readonly ? '原始配方（只读）' : '确认写入 · ' + (document?.file || '保存后按工程目标版本确定路径')}</h3><div className="columns"><div><h4>工程中的原版本</h4><pre>{document?.content || '新建文件，不覆盖已有配方'}</pre></div>{!readonly && <div><h4>待写入版本</h4><pre data-testid="recipe-preview">{content}</pre></div>}</div></div>}
       </div>
     </div>
   </section>

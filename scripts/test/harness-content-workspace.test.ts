@@ -216,7 +216,8 @@ test('Generator upgrades retain manifest, owned path, texture, entrypoint and na
     { name: 'extra manifest file entry', change: f => { f.stored.files['src/main/java/Unowned.java'] = sha256('unowned') }, reason: /生成文件清单不匹配/ },
     { name: 'relocated manifest file entry', change: f => { f.stored.files['../outside.java'] = f.stored.files[f.model.path]; delete f.stored.files[f.model.path] }, reason: /生成文件清单不匹配/ },
     { name: 'source set path change', change: f => { writeFileSync(path.join(f.project, 'build.gradle'), 'loom { splitEnvironmentSourceSets() }\n') }, reason: /生成文件清单不匹配/ },
-    { name: 'unsupported manifest version', change: f => { f.stored.version = 2 }, reason: /不支持的声明版本/ },
+    // v2 is supported now, so an unknown future version must keep being rejected.
+    { name: 'unsupported manifest version', change: f => { f.stored.version = 99 }, reason: /不支持的声明版本/ },
     { name: 'manifest ID mismatch', change: f => { f.stored.value.id = 'content_test:other_creature' }, reason: /内容 ID 与声明文件名不一致/ },
     { name: 'external texture edit', change: f => { writeFileSync(f.textureFile, Buffer.concat([f.png, Buffer.from([0])])) }, reason: /绘制纹理已被外部修改/ },
     { name: 'missing texture', change: f => { unlinkSync(f.textureFile) }, reason: /绘制纹理已被外部修改/ },

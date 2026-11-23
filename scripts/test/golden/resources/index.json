@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 2,
+  "representatives": {
+    "1.20.1": {
+      "pathsetHash": "403a1c098b8e681300262741af9716116479f27c5f7a4ace56d490f0dc21ad46",
+      "contentHash": "8e00755b0d1a54629d9268965c02bcaad63059ede945f69a05f641e5ac87e71f",
+      "text": 18,
+      "binary": 3,
+      "binaryEntries": [
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        },
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_particle.png",
+          "sha256": "2d157f3ad52e264dab06bafa2b98fbb8c90d203f26a252e70477aa827c082095",
+          "size": 82
+        },
+        {
+          "path": "assets/golden_demo/textures/item/ruby_shard_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        }
+      ]
+    },
+    "1.20.6": {
+      "pathsetHash": "403a1c098b8e681300262741af9716116479f27c5f7a4ace56d490f0dc21ad46",
+      "contentHash": "24f479602936b713b4626a224eed22d28ef1b88b2cfec2c4b0712b6fdb361bbb",
+      "text": 18,
+      "binary": 3,
+      "binaryEntries": [
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        },
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_particle.png",
+          "sha256": "2d157f3ad52e264dab06bafa2b98fbb8c90d203f26a252e70477aa827c082095",
+          "size": 82
+        },
+        {
+          "path": "assets/golden_demo/textures/item/ruby_shard_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        }
+      ]
+    },
+    "1.21.1": {
+      "pathsetHash": "96e30780c63bd129758d925354967d5ad173c834a24a31d0b9f71fa018201901",
+      "contentHash": "47d97d15519022d90dc63b6d7f0cc2f300529af012d98ec447eb261c8a85652b",
+      "text": 18,
+      "binary": 3,
+      "binaryEntries": [
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        },
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_particle.png",
+          "sha256": "2d157f3ad52e264dab06bafa2b98fbb8c90d203f26a252e70477aa827c082095",
+          "size": 82
+        },
+        {
+          "path": "assets/golden_demo/textures/item/ruby_shard_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        }
+      ]
+    },
+    "1.21.4": {
+      "pathsetHash": "296914878426ccf6d3256f8113f4db3ca65cea0fc06917643549f56692aab839",
+      "contentHash": "cd8e20742662a7b06127fb06a4c0e02eb481e5098a0fced4f42bc1f0b6432028",
+      "text": 28,
+      "binary": 3,
+      "binaryEntries": [
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        },
+        {
+          "path": "assets/golden_demo/textures/block/ruby_lantern_particle.png",
+          "sha256": "2d157f3ad52e264dab06bafa2b98fbb8c90d203f26a252e70477aa827c082095",
+          "size": 82
+        },
+        {
+          "path": "assets/golden_demo/textures/item/ruby_shard_atlas.png",
+          "sha256": "2f82a7bb4e34533f785d1afa26217d3647cc058f4394fd5e7518086ba8cb17cf",
+          "size": 173
+        }
+      ]
+    }
+  },
+  "cells": {
+    "fabric@1.20.1": "1.20.1",
+    "fabric@1.20.4": "1.20.1",
+    "fabric@1.20.6": "1.20.6",
+    "fabric@1.21.1": "1.21.1",
+    "fabric@1.21.4": "1.21.4",
+    "fabric@1.21.5": "1.21.4",
+    "fabric@1.21.8": "1.21.4",
+    "fabric@1.21.11": "1.21.4"
+  },
+  "partial": {
+    "fabric@26.1": {
+      "representative": "1.21.4",
+      "reason": "Mojmap 内容发射器尚未实现（26.1 使用官方映射，yarn 未发布 26.x）"
+    },
+    "fabric@26.3": {
+      "representative": "1.21.4",
+      "reason": "Mojmap 内容发射器尚未实现（26.3 使用官方映射，yarn 未发布 26.x）"
+    },
+    "neoforge@1.20.1": {
+      "representative": "1.20.1",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.20.4": {
+      "representative": "1.20.1",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.20.6": {
+      "representative": "1.20.6",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.21.1": {
+      "representative": "1.21.1",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.21.4": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.21.5": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.21.8": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@1.21.11": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@26.1": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "neoforge@26.3": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 neoforge 的 Java"
+    },
+    "forge@1.20.1": {
+      "representative": "1.20.1",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.20.4": {
+      "representative": "1.20.1",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.20.6": {
+      "representative": "1.20.6",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.21.1": {
+      "representative": "1.21.1",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.21.4": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.21.5": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.21.8": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@1.21.11": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@26.1": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 forge 的 Java"
+    },
+    "forge@26.3": {
+      "representative": "1.21.4",
+      "reason": "生成器尚未产出 forge 的 Java"
+    }
+  }
+}

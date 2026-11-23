@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:smelting",
+  "category": "misc",
+  "ingredient": "minecraft:iron_ore",
+  "result": "golden_demo:ruby",
+  "experience": 0.7,
+  "cookingtime": 200
+}

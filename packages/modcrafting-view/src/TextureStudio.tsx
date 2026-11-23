@@ -296,7 +296,7 @@ export function TextureStudio({ projectPath, modId }: { projectPath: string; mod
   }
 
   return <section className="panel texture-workspace" aria-label="物品贴图工作区">
-    <div className="row"><div className="grow"><p className="eyebrow">TEXTURE / FABRIC 1.21.4</p><h2>AI 物品贴图</h2><p className="muted">常规流程在聊天里由 Agent 自动完成生成、导入、保存与绑定；本页用于逐像素手工润色和参数化二次优化。</p></div><span className={`badge badge-${dirty ? 'INCONCLUSIVE' : 'PASS'}`}>{dirty ? '未保存草稿' : '已同步工程'}</span></div>
+    <div className="row"><div className="grow"><p className="eyebrow">TEXTURE / FABRIC</p><h2>AI 物品贴图</h2><p className="muted">常规流程在聊天里由 Agent 自动完成生成、导入、保存与绑定；本页用于逐像素手工润色和参数化二次优化。</p></div><span className={`badge badge-${dirty ? 'INCONCLUSIVE' : 'PASS'}`}>{dirty ? '未保存草稿' : '已同步工程'}</span></div>
     <div className="texture-layout">
       <aside className="texture-list">
         <div className="row"><strong>工程贴图 · {textures.length}</strong><button disabled={busy} onClick={() => void run(() => refreshList(selected || undefined))}>刷新</button></div>

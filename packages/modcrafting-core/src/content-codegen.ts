@@ -2,16 +2,53 @@ import { generateCustomBlockBundle, generateCustomFoodBundle, generateCustomItem
 import { compileVoxel } from './voxel-codegen.ts'
 import type { ContentObject } from './content-model.ts'
 import { entityBoxMotion, layoutEntityBoxes, orderedEntityBoxes } from './entity-appearance.ts'
+import { FABRIC_TARGET } from './domain.ts'
+import { deriveResourceLayout, type ResourceLayout } from './resources/layout.ts'
+import { blockModelFile, itemModelDefinitionFiles, itemModelFile } from './resources/transform.ts'
+import { getRegistry } from './version/registry.ts'
+import { deriveJavaApiProfile } from './version/java-profile.ts'
+import { capabilitiesFor } from './version/capabilities.ts'
+import { neoForgeBlockBundle, neoForgeFoodBundle, neoForgeItemBundle } from './loaders/neoforge-content.ts'
+import { forgeBlockBundle, forgeFoodBundle, forgeItemBundle } from './loaders/forge-content.ts'
+import { applyJavaDialect } from './version/java-dialect.ts'
+import { CoreError } from './runtime.ts'
 
 const javaFloat = (value: number) => Number.isInteger(value) ? `${value}.0f` : `${value}f`
 const javaRadians = (degrees: number) => `(float) Math.toRadians(${Number.isInteger(degrees) ? `${degrees}.0` : degrees})`
 
-/** Isolate each supported object; never patch a handwritten initializer or aggregate ModItems class. */
-export function generateContent(value: ContentObject, splitClient = false): { files: GeneratedFile[]; assets: GeneratedAsset[]; main: string; client?: string; langKey: string; previewPng?: Buffer } {
+/**
+ * Isolate each supported object; never patch a handwritten initializer or aggregate ModItems class.
+ *
+ * `options.layout` defaults to the pinned target so existing callers that pass a
+ * boolean keep working, but every production caller should pass the project's
+ * own layout — a default in a 26.x project would emit 1.21.4 resources.
+ */
+export function generateContent(value: ContentObject, options: boolean | { splitClient?: boolean; layout?: ResourceLayout; loader?: string } = false): { files: GeneratedFile[]; assets: GeneratedAsset[]; main: string; client?: string; langKey: string; previewPng?: Buffer; registration?: { packageName: string; className: string } } {
+  const normalized = typeof options === 'boolean' ? { splitClient: options } : options
+  const splitClient = normalized.splitClient ?? false
+  const loader = normalized.loader ?? 'fabric'
+  const layout = normalized.layout ?? deriveResourceLayout(FABRIC_TARGET.minecraft, getRegistry())
+  // The mapping kind decides both the dialect and the capability answer: 26.x uses
+  // Mojang official mappings, so the Yarn-structural emitter must refuse there.
+  const mappingKind = (getRegistry().cell('fabric' as 'fabric', layout.minecraft)?.release.mappings.kind ?? 'yarn') as 'yarn' | 'mojmap'
+  const api = deriveJavaApiProfile(layout.minecraft, mappingKind, getRegistry())
   const [modId, name] = value.id.split(':'), p = value.parameters
   const groupId = `modcrafting.generated.${modId.replaceAll('-', '_')}.o_${name}`, pkg = groupId + '.content', folder = pkg.replaceAll('.', '/')
+  // The refusal comes from the capability table with the project's real loader, so an
+  // Agent sees the same answer whether it checks capabilities first or hits the generator.
+  const capability = capabilitiesFor({ loader: loader as 'fabric', minecraft: layout.minecraft }, api).content[value.kind]
+  if (capability.state === 'blocked') throw new CoreError('JAVA_DIALECT_UNSUPPORTED', `${capability.reason}；${capability.requirement ?? ''}`.trim())
+  // Forge and NeoForge share the mapping but not the registry API, so each owns an emitter.
+  if (loader === 'forge') {
+    const bundle = value.kind === 'block' ? forgeBlockBundle(value, layout) : value.kind === 'food' ? forgeFoodBundle(value, layout) : forgeItemBundle(value, layout)
+    return { files: bundle.files, assets: [], main: '', registration: bundle.entry, langKey: bundle.langKey }
+  }
+  if (loader === 'neoforge') {
+    const bundle = value.kind === 'block' ? neoForgeBlockBundle(value, layout) : value.kind === 'food' ? neoForgeFoodBundle(value, layout) : neoForgeItemBundle(value, layout)
+    return { files: bundle.files, assets: [], main: '', registration: bundle.entry, langKey: bundle.langKey }
+  }
   const config = { modId, groupId, javaPackage: 'content' }
-  const input = { config, name, displayName: value.displayName, mcVersion: '1.21.4', formFields: { ...p, specialFeatures: 'none', customRender: 'no', hasDurability: Number(p.durability) > 0 ? 'yes' : 'no', isMeat: 'no' } }
+  const input = { config, name, displayName: value.displayName, layout, formFields: { ...p, specialFeatures: 'none', customRender: 'no', hasDurability: Number(p.durability) > 0 ? 'yes' : 'no', isMeat: 'no' } }
   const main = pkg + '.Content', java = `src/main/java/${folder}`, files: GeneratedFile[] = []
   const assets: GeneratedAsset[] = []
   let previewPng: Buffer | undefined
@@ -20,16 +57,17 @@ export function generateContent(value: ContentObject, splitClient = false): { fi
   if (base) {
     files.push(...base.files.filter(file => !file.path.includes('/lang/')))
     init = base.mainInitCalls.map(call => call + ';').join('\n        ')
-    for (const file of files) {
-      if (file.path.includes('/loot_table/block/')) file.path = file.path.replace('/loot_table/block/', '/loot_table/blocks/')
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index]
       if (file.path.endsWith('ModBlocks.java')) file.content = file.content.replace('Block.Settings.create()', `Block.Settings.create().registryKey(RegistryKey.of(RegistryKeys.BLOCK, Identifier.of(Content.MOD_ID, "${name}"))).luminance(state -> ${p.luminance})`)
-      if (file.path.includes('/models/block/')) file.content = JSON.stringify({ parent: 'minecraft:block/cube_all', textures: { all: value.texture } }, null, 2) + '\n'
-      if (file.path.includes('/models/item/') && value.kind !== 'block') file.content = JSON.stringify({ parent: value.kind === 'tool' ? 'minecraft:item/handheld' : 'minecraft:item/generated', textures: { layer0: value.texture } }, null, 2) + '\n'
+      // Replacing the whole entry keeps path and content from the same layout.
+      if (file.path.includes('/models/block/')) files[index] = blockModelFile(layout, { namespace: modId, name, parent: 'minecraft:block/cube_all', textures: { all: value.texture } })
+      if (file.path.includes('/models/item/') && value.kind !== 'block') files[index] = itemModelFile(layout, { namespace: modId, name, parent: value.kind === 'tool' ? 'minecraft:item/handheld' : 'minecraft:item/generated', textures: { layer0: value.texture } })
       if (file.path.endsWith('ModItems.java') && value.kind === 'item' && Number(p.durability) > 0) file.content = file.content.replace(`.maxCount(${p.maxStackSize})`, `.maxCount(1).maxDamage(${p.durability})`)
       if (file.path.endsWith('ModItems.java') && value.kind === 'food') file.content = file.content.replace('new FoodComponent.Builder()', `new FoodComponent.Builder()${p.alwaysEdible ? '.alwaysEdible()' : ''}`).replace('new Item.Settings().registryKey(itemKey);', `new Item.Settings().registryKey(itemKey).maxCount(${p.maxStackSize});`)
     }
   }
-  const voxel = value.voxel && (value.kind === 'block' || value.kind === 'item') ? compileVoxel(value) : null
+  const voxel = value.voxel && (value.kind === 'block' || value.kind === 'item') ? compileVoxel(value, layout) : null
   if (voxel) {
     for (const model of voxel.models) {
       const target = files.find(file => file.path === model.path)
@@ -183,7 +221,7 @@ public class ContentClient implements ClientModInitializer {
 ` })
     }
     init = 'ModEntities.registerModEntities();'; client = pkg + '.ContentClient'
-  } else files.push({ path: `src/main/resources/assets/${modId}/items/${name}.json`, content: JSON.stringify({ model: { type: 'minecraft:model', model: `${modId}:item/${name}` } }, null, 2) + '\n' })
+  } else files.push(...itemModelDefinitionFiles(layout, { namespace: modId, name }))
   files.push({ path: `${java}/Content.java`, content: `package ${pkg};
 import net.fabricmc.api.ModInitializer;
 import org.slf4j.Logger;
@@ -194,5 +232,5 @@ public class Content implements ModInitializer {
     public void onInitialize() { ${init} }
 }
 ` })
-  return { files, assets, main, client, langKey: `${value.kind === 'entity' ? 'entity' : value.kind === 'block' ? 'block' : 'item'}.${modId}.${name}`, ...(previewPng ? { previewPng } : {}) }
+  return { files: files.map(file => file.path.endsWith('.java') ? { ...file, content: applyJavaDialect(file.content, api) } : file), assets, main, client, langKey: `${value.kind === 'entity' ? 'entity' : value.kind === 'block' ? 'block' : 'item'}.${modId}.${name}`, ...(previewPng ? { previewPng } : {}) }
 }

@@ -2,9 +2,15 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { GameInstance, JobSnapshot, TaskSession } from './contracts.ts'
+import { PRIMARY_MEMBER_ID, type WorkspaceKind } from './workspace-model.ts'
 
 type SessionRecord = TaskSession & { schemaVersion: 1; backendOwner?: string; ownerPid?: number }
-type SessionChanges = Partial<Pick<TaskSession, 'name' | 'projectPath' | 'phase' | 'currentModule' | 'recommendedModules' | 'profile'>>
+type SessionChanges = Partial<Pick<TaskSession, 'name' | 'projectPath' | 'workspacePath' | 'workspaceKind' | 'activeMemberId' | 'phase' | 'currentModule' | 'recommendedModules' | 'profile'>>
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string) => path.resolve(value).replaceAll('\\', '/').toLowerCase()
+  return normalize(left) === normalize(right)
+}
 
 function alive(pid?: number): boolean {
   if (!Number.isInteger(pid) || !pid) return false
@@ -32,10 +38,16 @@ export class SessionRegistry {
     }
   }
 
-  create(input: { name?: string; projectPath?: string } = {}): TaskSession {
+  create(input: { name?: string; projectPath?: string; workspacePath?: string; workspaceKind?: WorkspaceKind; activeMemberId?: string } = {}): TaskSession {
     const now = new Date().toISOString()
+    const projectPath = input.projectPath ? path.resolve(input.projectPath) : undefined
+    // A project path alone still describes a complete workspace: the project root
+    // is the workspace and its only member is `main`. Writing all three keeps
+    // later workspace calls from having to re-derive it.
+    const workspacePath = input.workspacePath ? path.resolve(input.workspacePath) : projectPath
     const record: SessionRecord = {
-      schemaVersion: 1, sessionId: randomUUID(), name: input.name?.trim() || '新任务', projectPath: input.projectPath ? path.resolve(input.projectPath) : undefined,
+      schemaVersion: 1, sessionId: randomUUID(), name: input.name?.trim() || '新任务', projectPath,
+      ...(workspacePath ? { workspacePath, workspaceKind: input.workspaceKind ?? 'mod' as WorkspaceKind, activeMemberId: input.activeMemberId ?? PRIMARY_MEMBER_ID } : {}),
       status: 'active', createdAt: now, updatedAt: now, phase: '准备开始', currentModule: 'overview', recommendedModules: [], jobs: [], instances: [],
       backendOwner: this.backendId, ownerPid: process.pid
     }
@@ -60,25 +72,77 @@ export class SessionRegistry {
     return this.publicRecord(record)
   }
 
-  update(sessionId: string, changes: SessionChanges): TaskSession {
+  update(sessionId: string, changes: SessionChanges, options: { memberIds?: readonly string[] } = {}): TaskSession {
     const record = this.mustOwn(sessionId)
-    if (changes.projectPath && record.projectPath && path.resolve(changes.projectPath).toLowerCase() !== path.resolve(record.projectPath).toLowerCase()) {
-      throw Object.assign(new Error('一个任务会话只能绑定一个工程。请为另一个工程创建新会话。'), { code: 'SESSION_PROJECT_MISMATCH' })
+    if (changes.projectPath && record.projectPath && !samePath(changes.projectPath, record.projectPath)) {
+      this.conflict('project', '一个任务会话只能绑定一个工程。请为另一个工程创建新会话。')
+    }
+    if (changes.workspacePath && record.workspacePath && !samePath(changes.workspacePath, record.workspacePath)) {
+      this.conflict('workspace', '一个任务会话只能绑定一个工作区。请为另一个工作区创建新会话。')
+    }
+    if (changes.activeMemberId && options.memberIds && !options.memberIds.includes(changes.activeMemberId)) {
+      throw Object.assign(
+        new Error(`工作区里没有成员「${changes.activeMemberId}」；现有成员：${options.memberIds.join(', ') || '（空）'}`),
+        { code: 'MEMBER_NOT_FOUND' }
+      )
     }
     Object.assign(record, changes)
     if (changes.projectPath) record.projectPath = path.resolve(changes.projectPath)
+    if (changes.workspacePath) record.workspacePath = path.resolve(changes.workspacePath)
     record.updatedAt = new Date().toISOString(); this.write(record)
     return this.publicRecord(record)
   }
 
+  /**
+   * Bind the session to a workspace.
+   *
+   * `primaryPath` is the compatibility projection into `projectPath`: for a mod
+   * workspace it is the project root, for a pack it is whichever member the legacy
+   * tools should keep reading. Omitting it leaves `projectPath` untouched, which
+   * is what a pure metadata update wants.
+   */
+  bindWorkspace(sessionId: string, input: { workspacePath: string; kind: WorkspaceKind; primaryPath?: string; memberIds?: readonly string[] }): TaskSession {
+    const root = path.resolve(input.workspacePath)
+    const current = this.mustOwn(sessionId)
+    if (current.workspacePath && !samePath(current.workspacePath, root)) {
+      this.conflict('workspace', '当前会话已关联其他工作区；请创建新会话，避免游戏和任务混到一起。')
+    }
+    // Sessions created before workspaces existed only carry `projectPath`. Keep
+    // rejecting a genuinely different project rather than silently rebinding.
+    if (!current.workspacePath && current.projectPath && !samePath(current.projectPath, input.primaryPath ?? root)) {
+      this.conflict('project', '当前会话已关联其他工程；请创建新会话，避免游戏和任务混到一起。')
+    }
+    let changed = false
+    if (!current.workspacePath) { current.workspacePath = root; changed = true }
+    if (current.workspaceKind !== input.kind) { current.workspaceKind = input.kind; changed = true }
+    const memberId = this.pickMember(current.activeMemberId, input.memberIds)
+    if (memberId && memberId !== current.activeMemberId) { current.activeMemberId = memberId; changed = true }
+    if (input.primaryPath) {
+      const primary = path.resolve(input.primaryPath)
+      if (!current.projectPath || !samePath(current.projectPath, primary)) { current.projectPath = primary; changed = true }
+    }
+    if (changed) { current.updatedAt = new Date().toISOString(); this.write(current) }
+    return this.publicRecord(current)
+  }
+
+  /** Compatibility adapter: a single-mod project is a workspace with one `main` member. */
   bindProject(sessionId: string, projectPath: string): TaskSession {
     const root = path.resolve(projectPath)
-    const current = this.mustOwn(sessionId)
-    if (current.projectPath && path.resolve(current.projectPath).toLowerCase() !== root.toLowerCase()) {
-      throw Object.assign(new Error('当前会话已关联其他工程；请创建新会话，避免游戏和任务混到一起。'), { code: 'SESSION_PROJECT_MISMATCH' })
-    }
-    if (!current.projectPath) { current.projectPath = root; current.updatedAt = new Date().toISOString(); this.write(current) }
-    return this.publicRecord(current)
+    return this.bindWorkspace(sessionId, { workspacePath: root, kind: 'mod', primaryPath: root, memberIds: [PRIMARY_MEMBER_ID] })
+  }
+
+  /**
+   * Keep the current member when it still exists, otherwise prefer `main`.
+   * Returns undefined when no member list is supplied (metadata-only update).
+   */
+  private pickMember(current: string | undefined, memberIds?: readonly string[]): string | undefined {
+    if (!memberIds || memberIds.length === 0) return current
+    if (current && memberIds.includes(current)) return current
+    return memberIds.includes(PRIMARY_MEMBER_ID) ? PRIMARY_MEMBER_ID : memberIds[0]
+  }
+
+  private conflict(scope: 'workspace' | 'project', message: string): never {
+    throw Object.assign(new Error(message), { code: 'SESSION_PROJECT_MISMATCH', scope })
   }
 
   sync(sessionId: string, jobs: JobSnapshot[], instances: GameInstance[]): void {

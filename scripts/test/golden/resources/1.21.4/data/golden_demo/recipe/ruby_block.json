@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "AA",
+    "AA"
+  ],
+  "key": {
+    "A": "minecraft:iron_ingot"
+  },
+  "result": {
+    "id": "golden_demo:ruby",
+    "count": 1
+  }
+}

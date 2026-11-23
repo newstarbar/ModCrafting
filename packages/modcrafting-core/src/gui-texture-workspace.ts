@@ -4,6 +4,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { validatePixelTexture } from './entity-appearance.ts'
 import { inspectFabricProject } from './node.ts'
+import { gateFabricProject } from './version/project-gate.ts'
 import { CoreError } from './runtime.ts'
 
 const revision = z.string().regex(/^[a-f0-9]{64}$/), projectPath = z.string().min(1)
@@ -62,7 +63,8 @@ export function guiTextureWorkspace(raw: GuiTextureRequest): Record<string, unkn
   const request = guiTextureRequestSchema.parse(raw)
   if (!path.isAbsolute(request.projectPath)) fail('PROJECT_UNAVAILABLE', '需要工程绝对路径')
   const root = safe(path.resolve(request.projectPath)), project = inspectFabricProject(root)
-  if (!project.valid || !project.modId || project.minecraftVersion !== '1.21.4') fail('PROJECT_UNAVAILABLE', '仅支持有效 Fabric 1.21.4 工程')
+  const projectGate = gateFabricProject(project)
+  if (!projectGate.ok) fail('PROJECT_UNAVAILABLE', projectGate.message)
   const modId = project.modId!
   if (request.action === 'list') return { ok: true, textures: list(root, modId) }
   if (request.action === 'read') return { ok: true, document: read(root, modId, request.id) }
