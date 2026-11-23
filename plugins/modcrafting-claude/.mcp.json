@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "modcrafting-mcp@0.2.0"
+        "modcrafting-mcp@0.2.1"
       ]
     }
   }

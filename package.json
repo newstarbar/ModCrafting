@@ -1,7 +1,7 @@
 {
   "name": "modcrafting",
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ModCrafting Fabric Core, MCP tools, and visual workbench",
   "author": "newstarbar",
   "license": "GPL-3.0",
