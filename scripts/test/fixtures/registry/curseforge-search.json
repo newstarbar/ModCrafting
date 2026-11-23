@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "id": 238222,
+      "gameId": 432,
+      "name": "Just Enough Items",
+      "slug": "jei",
+      "links": { "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/jei" },
+      "summary": "View items and recipes in a searchable overlay.",
+      "status": 4,
+      "downloadCount": 4567890,
+      "latestFilesIndexes": [
+        { "gameVersion": "1.21.4", "fileId": 7001, "filename": "jei-1.21.4.jar", "releaseType": 1, "modLoader": 4 }
+      ],
+      "dateModified": "2026-02-01T00:00:00Z",
+      "categories": [{ "id": 1, "name": "Utility" }, { "id": 2, "name": "Storage" }],
+      "classId": 6,
+      "allowModDistribution": true
+    },
+    {
+      "id": 999001,
+      "gameId": 432,
+      "name": "Closed Pack Helper",
+      "slug": "closed-pack-helper",
+      "links": { "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/closed-pack-helper" },
+      "summary": "A mod whose author disabled third-party distribution.",
+      "status": 4,
+      "downloadCount": 10,
+      "latestFilesIndexes": [
+        { "gameVersion": "1.21.4", "fileId": 8001, "filename": "closed.jar", "releaseType": 1, "modLoader": 6 }
+      ],
+      "dateModified": "2025-01-01T00:00:00Z",
+      "categories": [{ "id": 3, "name": "Adventure" }],
+      "classId": 6,
+      "allowModDistribution": false
+    }
+  ],
+  "pagination": { "index": 0, "pageSize": 10, "resultCount": 2, "totalCount": 2 }
+}

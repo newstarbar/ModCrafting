@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
@@ -27,9 +28,11 @@ import {
 
 test('release branch excludes the retired Desktop application and dependency chain', async () => {
   const packageJson = JSON.parse(await fs.readFile('package.json', 'utf8'))
-  assert.equal(existsSync('src'), false)
-  assert.equal(existsSync('electron.vite.config.ts'), false)
-  assert.equal(existsSync('scripts/plugin/migrate-desktop.ts'), false)
+  // Assert on tracked content, not the local checkout: an old untracked
+  // Desktop `src/` left on someone's disk does not make the release branch
+  // ship Desktop, and deleting local leftovers is not this test's job.
+  const tracked = execFileSync('git', ['ls-files', '--', 'src', 'electron.vite.config.ts', 'scripts/plugin/migrate-desktop.ts'], { encoding: 'utf8' }).trim()
+  assert.equal(tracked, '', 'the release branch must not track retired Desktop sources')
   assert.equal(packageJson.dependencies?.electron, undefined)
   assert.equal(packageJson.devDependencies?.electron, undefined)
   assert.equal(packageJson.scripts['build:win'], undefined)

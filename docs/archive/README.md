@@ -1,5 +1,7 @@
 # 归档索引
 
+- [2026-11-23] [整合包创作、分级改造与三栏工作台](./2026-11-23-modpack-authoring-and-tiered-transform.md) — 双源发现/底座/求解/锁/`.mrpack`+Prism 导出、桥接工程、L1–L4 许可证门与审计、三栏 shell 与实例 scope；366/366 回归、43 工具冒烟通过，真实网络/编译/实机未验收。触发：大功能自动归档。
+
 - [2026-11-16] [多渠道安装与分发](./2026-11-16-installer-distribution.md) — 零依赖 CLI（15 宿主适配）、`bundle.json` 单一运行时契约、npm 三包、MCP/Skills/Offline 三类新 Release 资产、GitHub 与 QQ 群一句话安装；57 项 CLI 测试与分发相关回归通过，真实 `npx github:` 待干净 runner 冒烟。触发：大功能自动归档。
 
 - [2026-11-08] [WorkBuddy 生态适配](./2026-11-08-workbuddy-adapter.md) — 插件包 + 专家包双形态、Hooks 三件套（会话预热/会话守卫/输出瘦身）、`ui://` 内联卡片、工作台走宿主内置浏览器、`--plan` 无头回归；三宿主 36 工具零回归，内联卡片与专家市场待真实宿主验收。触发：新增宿主与主流程调整自动归档。

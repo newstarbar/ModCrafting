@@ -153,9 +153,12 @@ test('Project-scoped preparation stores knowledge under the workspace and leaves
   const source = path.join(f.root, 'zip-source', 'minecraft-data'), member = `minecraft-data/${FABRIC_TARGET.minecraft}/index.json`
   await mkdir(path.dirname(path.join(source, member)), { recursive: true })
   await writeFile(path.join(source, member), JSON.stringify({ itemsById: { 'minecraft:stone': { id: 'minecraft:stone' } } }))
-  const archive = path.join(f.root, 'minecraft-data.zip')
-  assert.equal(spawnSync('tar', ['-a', '-cf', archive, '-C', source, 'minecraft-data'], { encoding: 'utf8', windowsHide: true, timeout: 5000 }).status, 0)
-  const body = new Uint8Array(await readFile(archive))
+  // Use a relative output name: GNU tar interprets an absolute `C:\...` in -f
+  // as a remote host on Windows, which made this fixture fail with status 128.
+  const archive = 'minecraft-data.zip'
+  const tar = spawnSync('tar', ['-a', '-cf', archive, '-C', source, 'minecraft-data'], { cwd: f.root, encoding: 'utf8', windowsHide: true, timeout: 5000 })
+  assert.equal(tar.status, 0, tar.stderr)
+  const body = new Uint8Array(await readFile(path.join(f.root, archive)))
   globalThis.fetch = async (input) => {
     const url = String(input)
     if (url.startsWith('https://api.github.com/')) return new Response(JSON.stringify([{ tag_name: `knowledge-${FABRIC_TARGET.minecraft}-fixture`, assets: [{ name: 'minecraft-data.zip', browser_download_url: 'https://github.com/fixture/minecraft-data.zip' }] }]))

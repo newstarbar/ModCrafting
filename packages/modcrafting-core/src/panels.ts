@@ -27,7 +27,17 @@ export const PANEL_IDS = [
   'tests',
   'reports',
   /** FTB Quests book: chapter tree + dependency graph + per-quest inspector. */
-  'quest'
+  'quest',
+  /** Pack manifest, lockfile, solver findings and export. */
+  'pack',
+  /** Community search: intent -> candidates -> coverage and gaps. */
+  'discover',
+  /** Shared quality-of-life base: group selection, availability, assembly. */
+  'baseline',
+  /** Generated Fabric bridge project between two mods. */
+  'bridge',
+  /** Licence-gated L1–L4 transform: overlay, companion, plan, analysis, audit. */
+  'transform'
 ] as const
 
 export type PanelId = (typeof PANEL_IDS)[number]

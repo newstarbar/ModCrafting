@@ -1,0 +1,43 @@
+{
+  "data": [
+    {
+      "id": 7001,
+      "modId": 238222,
+      "displayName": "JEI 1.21.4",
+      "fileName": "jei-1.21.4.jar",
+      "releaseType": 1,
+      "fileStatus": 4,
+      "hashes": [{ "value": "cccccccccccccccccccccccccccccccccccccccc", "algo": 1 }],
+      "fileDate": "2026-02-01T00:00:00Z",
+      "fileLength": 2048,
+      "downloadCount": 100,
+      "downloadUrl": "https://edge.forgecdn.net/files/7001/jei-1.21.4.jar",
+      "gameVersions": ["1.21.4", "Fabric"],
+      "dependencies": [
+        { "modId": 123456, "relationType": 3 },
+        { "modId": 654321, "relationType": 2 },
+        { "modId": 777777, "relationType": 4 }
+      ],
+      "isServerPack": false,
+      "fileFingerprint": 1
+    },
+    {
+      "id": 8001,
+      "modId": 999001,
+      "displayName": "Closed Pack Helper 1.0",
+      "fileName": "closed.jar",
+      "releaseType": 1,
+      "fileStatus": 4,
+      "hashes": [{ "value": "dddddddddddddddddddddddddddddddddddddddd", "algo": 1 }],
+      "fileDate": "2025-01-01T00:00:00Z",
+      "fileLength": 4096,
+      "downloadCount": 1,
+      "downloadUrl": null,
+      "gameVersions": ["1.21.4", "NeoForge"],
+      "dependencies": [],
+      "isServerPack": false,
+      "fileFingerprint": 2
+    }
+  ],
+  "pagination": { "index": 0, "pageSize": 10, "resultCount": 2, "totalCount": 2 }
+}

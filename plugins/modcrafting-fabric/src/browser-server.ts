@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, guiTextureWorkspace, guiTextureRequestSchema, isPng, gateFabricProject, questWorkspace, questRequestSchema, readQuestBook } from '../../../packages/modcrafting-core/src/index.ts'
+import { FabricRuntime, CoreError, inspectFabricProject, resolveProjectPath, recipeWorkspace, recipeRequestSchema, contentWorkspace, contentRequestSchema, textureWorkspace, textureRequestSchema, guiTextureWorkspace, guiTextureRequestSchema, isPng, gateFabricProject, questWorkspace, questRequestSchema, readQuestBook, discoverPack, packDiscoverRequestSchema, packBaseline, packBaselineRequestSchema, createRegistryClient, packWorkspaceAction, packActionRequestSchema, bridgeScaffold, bridgeScaffoldRequestSchema, transformAction, transformActionRequestSchema, type RegistryReader } from '../../../packages/modcrafting-core/src/index.ts'
 import { guiWorkspace, guiRequestSchema } from '../../../packages/modcrafting-core/src/gui-workspace.ts'
 import { visualAssets } from '../../../packages/modcrafting-core/src/visual-assets.ts'
 import { gameTestTemplate, gameTestSpecSchema, testProfileSchema, type GameFeatureType } from '../../../packages/modcrafting-core/src/domain.ts'
@@ -31,7 +31,12 @@ const actionSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('screenshot'), instanceId: instanceId.optional() }).strict(),
   z.object({ operation: z.literal('test'), instanceId: instanceId.optional(), spec: gameTestSpecSchema }).strict(),
   z.object({ operation: z.literal('gui-texture'), request: guiTextureRequestSchema }).strict(),
-  z.object({ operation: z.literal('quest'), request: questRequestSchema }).strict()
+  z.object({ operation: z.literal('quest'), request: questRequestSchema }).strict(),
+  z.object({ operation: z.literal('pack_discover'), request: packDiscoverRequestSchema }).strict(),
+  z.object({ operation: z.literal('pack_baseline'), request: packBaselineRequestSchema }).strict(),
+  z.object({ operation: z.literal('pack_workspace'), request: packActionRequestSchema }).strict(),
+  z.object({ operation: z.literal('bridge_scaffold'), request: bridgeScaffoldRequestSchema }).strict(),
+  z.object({ operation: z.literal('transform'), request: transformActionRequestSchema }).strict()
 ])
 export type BrowserAction = z.input<typeof actionSchema>
 export type BrowserAssets = { html: string; js: string; css: string }
@@ -44,6 +49,13 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
   // 32-byte token still decide who may read data, so `--web-embed` cannot widen data access.
   const frameAncestors = options.embed ? "frame-ancestors *" : "frame-ancestors 'none'"
   let origin = ''
+  // One cache/client per workbench instance. The browser never calls a registry
+  // directly (connect-src is 'self'), so the key stays in the Node process.
+  let discoveryReader: RegistryReader | undefined
+  const discovery = () => discoveryReader ??= createRegistryClient({
+    cacheRoot: path.join(runtime.paths.dataRoot, 'registry-cache'),
+    curseforgeApiKey: process.env.MODCRAFTING_CURSEFORGE_API_KEY || process.env.CURSEFORGE_API_KEY
+  })
   const server = createServer(async (request, response) => {
     const json = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value)) }
     response.setHeader('cache-control', 'no-store')
@@ -179,6 +191,11 @@ export async function startBrowserView(runtime: FabricRuntime, assets: BrowserAs
           runtime.updateSession(sessionId, { workspacePath: action.request.workspacePath })
           value = questWorkspace(action.request.workspacePath, action.request); break
         }
+        case 'pack_discover': value = await discoverPack(discovery(), action.request); break
+        case 'pack_baseline': value = await packBaseline(discovery(), action.request); break
+        case 'pack_workspace': value = await packWorkspaceAction(discovery(), action.request); break
+        case 'bridge_scaffold': value = await bridgeScaffold(action.request); break
+        case 'transform': value = await transformAction(action.request); break
         case 'snapshot': value = await runtime.snapshot(action.instanceId, undefined, sessionId); break
         case 'test': value = runtime.startTest(action.spec, action.instanceId, sessionId); break
         case 'screenshot': {

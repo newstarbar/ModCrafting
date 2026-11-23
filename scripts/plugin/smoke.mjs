@@ -111,8 +111,8 @@ await session({ MODCRAFTING_DATA: data, PATH: fixtures, JAVA_HOME: path.join(sco
     assert.ok(tool.annotations, `Missing annotations: ${tool.name}`)
     for (const hint of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']) assert.equal(typeof tool.annotations[hint], 'boolean', `annotations.${hint} must be boolean: ${tool.name}`)
   }
-  assert.equal(tools.filter((tool) => tool.annotations.readOnlyHint).length, 17, 'read-only tool count changed; update src/output.ts deliberately')
-  assert.deepEqual(tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name).sort(), ['fabric_job_stop', 'minecraft_build_studio', 'minecraft_command', 'minecraft_stop_client', 'minecraft_test_start'])
+  assert.equal(tools.filter((tool) => tool.annotations.readOnlyHint).length, 18, 'read-only tool count changed; update src/output.ts deliberately')
+  assert.deepEqual(tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name).sort(), ['fabric_job_stop', 'minecraft_build_studio', 'minecraft_command', 'minecraft_stop_client', 'minecraft_test_start', 'modcrafting_transform'])
   // Inline cards: exactly the tools that render well as a read-only card declare a ui:// resource.
   assert.deepEqual(tools.filter((tool) => tool._meta?.ui?.resourceUri).map((tool) => tool.name).sort(), [
     'fabric_gui_texture_workspace', 'fabric_job_status', 'fabric_project_inspect', 'fabric_texture_workspace',

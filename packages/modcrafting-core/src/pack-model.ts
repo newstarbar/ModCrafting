@@ -18,7 +18,7 @@
 
 import { z } from 'zod'
 import { loaderIds } from './version/schema.ts'
-import { licenseSchema, packEntrySchema, targetIdSchema, type PackEntry } from './workspace-model.ts'
+import { licenseSchema, packEntrySchema, registryIds, targetIdSchema, type PackEntry } from './workspace-model.ts'
 
 export const PACK_MANIFEST_FILE = 'pack.json'
 export const PACK_LOCK_FILE = 'pack.lock.json'
@@ -97,6 +97,10 @@ export type LockedDependency = z.infer<typeof lockedDependencySchema>
 export const lockedEntrySchema = z.object({
   entryId: z.string().min(1),
   fileName: z.string().min(1),
+  /** Optional so older locks stay readable; new locks always write them. */
+  registry: z.enum(registryIds).optional(),
+  projectId: z.string().min(1).max(128).optional(),
+  versionId: z.string().min(1).max(128).optional(),
   /** Where the bytes come from. `null` means "present locally only", which cannot be reproduced. */
   downloadUrl: z.string().url().nullable(),
   hashes: z.object({
@@ -171,6 +175,7 @@ export const scoreEvidenceSchema = z.object({
 export type ScoreEvidence = z.infer<typeof scoreEvidenceSchema>
 
 export const candidateSchema = z.object({
+  registry: z.enum(registryIds),
   projectId: z.string().min(1),
   slug: z.string().min(1),
   title: z.string().min(1),
@@ -199,6 +204,7 @@ export const gapReportSchema = z.object({
    * "closest existing mod is X, it lacks Y" is a concrete work item.
    */
   nearMiss: z.array(z.object({
+    registry: z.enum(registryIds),
     projectId: z.string().min(1),
     slug: z.string().min(1),
     title: z.string().min(1),

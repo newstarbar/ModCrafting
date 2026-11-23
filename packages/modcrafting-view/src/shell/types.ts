@@ -10,7 +10,7 @@
 
 import type { PanelId } from '../../../modcrafting-core/src/panels.ts'
 
-export type PanelScope = 'global' | 'mod' | 'modpack'
+export type PanelScope = 'global' | 'mod' | 'modpack' | 'instance'
 
 export interface PanelMeta {
   readonly label: string

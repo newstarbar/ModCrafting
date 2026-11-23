@@ -2,4 +2,4 @@
 // `plugin:smoke` cross-checks this against the registerTool calls in
 // plugins/modcrafting-fabric/src/mcp-server.ts, so adding or removing a tool
 // fails loudly here instead of silently breaking host smoke assertions.
-export const EXPECTED_TOOL_COUNT = 38
+export const EXPECTED_TOOL_COUNT = 43

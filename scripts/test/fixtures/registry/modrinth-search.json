@@ -1,0 +1,49 @@
+{
+  "hits": [
+    {
+      "project_id": "AANobbMI",
+      "project_type": "mod",
+      "slug": "sodium",
+      "author": "jellysquid3",
+      "title": "Sodium",
+      "description": "Modern rendering engine and client-side optimization mod for Minecraft.",
+      "categories": ["optimization", "fabric"],
+      "display_categories": ["optimization"],
+      "versions": ["1.21.4"],
+      "downloads": 12345678,
+      "follows": 1000,
+      "icon_url": null,
+      "date_created": "2020-01-01T00:00:00Z",
+      "date_modified": "2026-01-01T00:00:00Z",
+      "latest_version": "0.6.0",
+      "license": "LGPL-3.0-only",
+      "client_side": "required",
+      "server_side": "unsupported",
+      "gallery": []
+    },
+    {
+      "project_id": "ftbq0001",
+      "project_type": "mod",
+      "slug": "ftb-quests",
+      "author": "FTB",
+      "title": "FTB Quests",
+      "description": "A team-based questing mod with chapters, rewards and a visual quest book.",
+      "categories": ["adventure", "utility", "fabric"],
+      "display_categories": ["adventure", "utility"],
+      "versions": ["1.21.4"],
+      "downloads": 987654,
+      "follows": 500,
+      "icon_url": null,
+      "date_created": "2021-01-01T00:00:00Z",
+      "date_modified": "2025-12-01T00:00:00Z",
+      "latest_version": "2101.1.0",
+      "license": "All-Rights-Reserved",
+      "client_side": "required",
+      "server_side": "required",
+      "gallery": []
+    }
+  ],
+  "offset": 0,
+  "limit": 10,
+  "total_hits": 2
+}

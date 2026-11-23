@@ -12,7 +12,10 @@ import {
   textureWorkspace, textureRequestSchema, guiTextureWorkspace, guiTextureRequestSchema,
   testProfileSchema, type GameFeatureType, type ProjectWrapper, voxelWorkspace, voxelRequestSchema,
   resolveTarget, targetSummary, matrix, getRegistry, summarize, capabilitiesFor,
-  panelIdSchema, workspaceKinds, questWorkspace, questRequestSchema
+  panelIdSchema, workspaceKinds, questWorkspace, questRequestSchema,
+  discoverPack, packDiscoverRequestSchema, packBaseline, packBaselineRequestSchema, createRegistryClient,
+  packWorkspaceAction, packActionRequestSchema, bridgeScaffold, bridgeScaffoldRequestSchema,
+  transformAction, transformActionRequestSchema
 } from '../../../packages/modcrafting-core/src/index.ts'
 import { startBrowserView, type BrowserAssets } from './browser-server.ts'
 import { openWorkbench, type WorkbenchMode } from './workbench.ts'
@@ -117,6 +120,39 @@ function buildServer(): McpServer {
   server.registerTool('fabric_recipe_workspace', { ...metaFor('fabric_recipe_workspace'), description: 'List/read project recipes, search the vanilla/project item catalog, or save a validated recipe using expectedRevision from the last read (null only for new files). The recipe directory and field dialect follow the project\'s Minecraft version, and a file left in the other directory is reported instead of hidden. Shared with the visual recipe editor; refuses external-edit conflicts and unsupported formats. action=migrate rewrites one recipe for the current target and needs confirm=true.', inputSchema: recipeRequestSchema }, async (request) => { try { return result(recipeWorkspace(paths, request)) } catch (cause) { return failure(cause) } })
   server.registerTool('modcrafting_quest_workspace', { ...metaFor('modcrafting_quest_workspace'), description: 'Read and edit an FTB Quests book under config/ftbquests/quests. Workflow: list to see chapters plus the current revision, read to get the graph the workbench renders, then preview with operations and save using the returned previewRevision together with the expectedRevision. Text lives in lang/<locale>.snbt while positions and dependencies live in chapters/*.snbt, so one edit can span two files; save commits all touched files or none. Fields this tool does not model are preserved verbatim. If the pack has no book yet, install FTB Quests and open it once in game, then retry.', inputSchema: questRequestSchema }, async (request) => {
     try { return result(questWorkspace(request.workspacePath, request)) } catch (cause) { return failure(cause) }
+  })
+  server.registerTool('modcrafting_pack_discover', { ...metaFor('modcrafting_pack_discover'), description: 'Search Modrinth and CurseForge for mods that match a pack idea. Pass a structured intent (goal, features, mustHave, niceToHave, keywords) and a targetId such as fabric@1.21.4. Returns ranked candidates with evidence, coverage and a gap report; nearMiss entries are the concrete inputs for bridge or transform work. CurseForge needs MODCRAFTING_CURSEFORGE_API_KEY; without it the call still returns Modrinth results plus a warning. Results are cached, and offline mode replays the cache instead of failing.', inputSchema: packDiscoverRequestSchema }, async (request) => {
+    try {
+      const reader = createRegistryClient({
+        cacheRoot: path.join(paths.dataRoot, 'registry-cache'),
+        curseforgeApiKey: process.env.MODCRAFTING_CURSEFORGE_API_KEY || process.env.CURSEFORGE_API_KEY
+      })
+      return result({ ...await discoverPack(reader, request) })
+    } catch (cause) { return failure(cause) }
+  })
+  server.registerTool('modcrafting_pack_baseline', { ...metaFor('modcrafting_pack_baseline'), description: 'Read, replace or resolve the shared quality-of-life baseline for a modpack. read returns the workspace override or the shipped groups; write validates and replaces .modcrafting/baseline.json; resolve checks every selected entry against the target loader and Minecraft version, applies mutex/requires rules, substitutes a loader-specific alternative when one exists, and returns picks, required gaps, warnings and ready pack entries. resolve performs registry reads and is cached.', inputSchema: packBaselineRequestSchema }, async (request) => {
+    try {
+      const reader = createRegistryClient({
+        cacheRoot: path.join(paths.dataRoot, 'registry-cache'),
+        curseforgeApiKey: process.env.MODCRAFTING_CURSEFORGE_API_KEY || process.env.CURSEFORGE_API_KEY
+      })
+      return result({ ...await packBaseline(reader, request) })
+    } catch (cause) { return failure(cause) }
+  })
+  server.registerTool('modcrafting_pack_workspace', { ...metaFor('modcrafting_pack_workspace'), description: 'Create, read, edit, solve and export a modpack. Workflow: create writes pack.json once (load on an existing pack); add_entries or add_candidate adds resolved entries; solve closes required dependencies against Modrinth/CurseForge and writes pack.lock.json when the result is satisfied or has only a gap; export writes a .mrpack or a Prism/MultiMC instance under the pack directory. Every edit requires expectedRevision from the last read; a stale revision is refused instead of overwriting external edits. Export refuses a missing or stale lock, and never copies bytes whose license forbids redistribution. add_candidate and solve perform registry reads and are cached.', inputSchema: packActionRequestSchema }, async (request) => {
+    try {
+      const reader = createRegistryClient({
+        cacheRoot: path.join(paths.dataRoot, 'registry-cache'),
+        curseforgeApiKey: process.env.MODCRAFTING_CURSEFORGE_API_KEY || process.env.CURSEFORGE_API_KEY
+      })
+      return result({ ...await packWorkspaceAction(reader, request) })
+    } catch (cause) { return failure(cause) }
+  })
+  server.registerTool('modcrafting_bridge_scaffold', { ...metaFor('modcrafting_bridge_scaffold'), description: 'Generate a compilable Fabric bridge project between two mods that do not know about each other. The project contains an entrypoint, a BridgeAdapter seam with registry (onRegister) and event (onServerStarting) hooks, a mixin config and class, Gradle build files, and a /<modId>-status command. It starts even when one peer is missing and only activates when both are loaded. The target is read from the pack manifest, so the project must be a Fabric pack. Output must be a new or empty directory; the tool refuses mods/ and existing code, and never reads or rewrites the peers\' jars. Next step is filling the adapter TODOs, then building it like any other project.', inputSchema: bridgeScaffoldRequestSchema }, async (request) => {
+    try { return result({ ...await bridgeScaffold(request) }) } catch (cause) { return failure(cause) }
+  })
+  server.registerTool('modcrafting_transform', { ...metaFor('modcrafting_transform'), description: 'Apply, roll back or audit a licence-gated transform for one pack entry. L1 builds a separate resource/data overlay zip; L2 scaffolds a Fabric companion mixin project that targets the source class by string and never puts its jar on the compile classpath. L3 writes a bytecode patch plan and L4 writes a class/resource inventory: this release ships no bytecode engine and no decompiler, so neither modifies the source jar, and both report that plainly. L3/L4 require a modification-permitting licence plus consent=true for this call. A non-redistributable source still transforms locally, but the artifact is marked exportable=false and must not be shipped. The source jar is verified against the manifest hashes and never rewritten; outputs live under transforms/<transformId>/, every apply/refusal/rollback is appended to .modcrafting/transform-audit.jsonl, and rollback removes only artifacts this tool created (a companion project only with deleteProject=true).', inputSchema: transformActionRequestSchema }, async (request) => {
+    try { return result({ ...await transformAction(request) }) } catch (cause) { return failure(cause) }
   })
   server.registerTool('modcrafting_environment_status', { ...metaFor('modcrafting_environment_status'), description: 'Check project, Java, cache paths and resource compatibility without downloads. Reports the selected JDK source and candidates; a stale JAVA_HOME is not fatal when a JDK 21 can be discovered. Use modcrafting_toolchain to switch Java without restarting Qoder. An empty folder is a new-project state, not a broken installation. Explain results in plain language; use modcrafting_open_workbench for browser opening.', inputSchema: z.object({ projectPath: z.string().optional() }) }, async ({ projectPath: value }) => { try { return result({ ...await runtime.environmentStatus(value), version: __PLUGIN_VERSION__, projectState: value ? inspectFabricProject(value).valid ? 'existing_project' : 'needs_project' : 'no_project_selected', observer: { bundled: Boolean(__OBSERVER__), version: __OBSERVER__?.version, protocol: __OBSERVER__?.protocol }, builder: runtime.studioInfo(), ...(browser ? { browserUrl: browser.url, browser: { available: true, opened: false } } : {}) }) } catch (cause) { return failure(cause) } })
   server.registerTool('modcrafting_targets', { ...metaFor('modcrafting_targets'), description: 'List which Minecraft versions and mod loaders this build can target, and how far each one has actually been verified. Check this before promising multi-version support: "declared" means the version exists upstream but the build toolchain is unproven, "build-only" means it compiles but has no game-test runtime yet, "supported" means both work. action=target resolves one loader+version pair into the exact mappings, Java level and resource folders that will be generated, which is what you need before writing version-specific code. Never guess a supported version list from memory.', inputSchema: z.object({ action: z.enum(['matrix', 'target']).default('matrix'), loader: z.enum(['fabric', 'neoforge', 'forge']).optional(), minecraft: z.string().min(1).optional() }).strict() }, async ({ action, loader, minecraft }) => {

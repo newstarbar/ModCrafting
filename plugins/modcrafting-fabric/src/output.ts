@@ -54,7 +54,12 @@ const TOOLS: Record<string, Hint> = {
   minecraft_test_start: ['Start game test', false, true, false, true],
   minecraft_test_status: ['Game test result', true, false, true, false],
   minecraft_build_studio: ['Build studio', false, true, false, false],
-  modcrafting_quest_workspace: ['Quest book workspace', false, false, false, false]
+  modcrafting_quest_workspace: ['Quest book workspace', false, false, false, false],
+  modcrafting_pack_discover: ['Modpack discovery', true, false, true, true],
+  modcrafting_pack_baseline: ['Modpack baseline', false, false, false, true],
+  modcrafting_pack_workspace: ['Modpack workspace', false, false, false, true],
+  modcrafting_bridge_scaffold: ['Bridge scaffold', false, false, false, false],
+  modcrafting_transform: ['Pack transform', false, true, false, false]
 }
 
 export function metaFor(name: string): { title: string; annotations: ToolAnnotations; _meta?: Record<string, unknown> } {

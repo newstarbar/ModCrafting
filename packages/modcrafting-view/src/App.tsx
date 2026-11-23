@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { CoreEnvironmentStatus, CoreRuntimeState, FabricProject, GameRuntimeStatus, JobSnapshot, BridgeResult, TaskSession } from '../../modcrafting-core/src/contracts.ts'
 import { DEFAULT_TEST_PROFILE, gameTestTemplate, type TestProfile } from '../../modcrafting-core/src/domain.ts'
 import { isPanelId, type PanelId } from '../../modcrafting-core/src/panels.ts'
@@ -11,8 +11,15 @@ import { TextureStudio } from './TextureStudio.tsx'
 import { TextureWorkspace } from './TextureWorkspace.tsx'
 import { ModelEditor } from './ModelEditor.tsx'
 import { PanelHost } from './shell/PanelHost.tsx'
-import { PANEL_META, PANEL_ORDER, panelLabel } from './shell/registry.ts'
+import { PANEL_META, panelGroups, panelLabel } from './shell/registry.ts'
+import { PanelEmptyState } from './shell/PanelState.tsx'
+import { WorkbenchShell } from './shell/WorkbenchShell.tsx'
 import { QuestPanel } from './panels/quest/QuestPanel.tsx'
+import { DiscoverPanel } from './panels/discover/DiscoverPanel.tsx'
+import { BaselinePanel } from './panels/baseline/BaselinePanel.tsx'
+import { PackPanel } from './panels/pack/PackPanel.tsx'
+import { BridgePanel } from './panels/bridge/BridgePanel.tsx'
+import { TransformPanel } from './panels/transform/TransformPanel.tsx'
 
 const labels: Record<string, string> = { build: '构建', minecraft: 'Minecraft', minecraft_prepare: '准备测试世界', game_test: '游戏测试', running: '进行中', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '服务重启时中断', present: '已准备', missing: '尚未准备', invalid: '需要更新或修复', PASS: '通过', FAIL: '未通过', INCONCLUSIVE: '暂时无法验证' }
 const empty: CoreRuntimeState = { contractVersion: 1, jobs: [], instances: [] }
@@ -128,6 +135,16 @@ export function App() {
     setActiveModule(recommendation && isPanelId(recommendation) ? recommendation : 'overview')
   }
   const connected = connection === '工作台已连接', readOnly = currentTask?.status === 'ended', disabled = Boolean(pending) || !connected || readOnly
+  const workspaceKind = currentTask?.workspaceKind ?? 'mod'
+  const targetId = project?.loader && project.minecraftVersion ? `${project.loader}@${project.minecraftVersion}` : 'fabric@1.21.4'
+  const runningJobs = sessionJobs.filter((job) => job.status === 'running').length
+  const failedJobs = sessionJobs.filter((job) => job.status === 'failed').length
+
+  // A panel that is not part of this workspace kind must never stay selected:
+  // switching from a pack to a single mod would otherwise leave a blank page.
+  useEffect(() => {
+    if (!panelGroups(workspaceKind).some((group) => group.entries.some((entry) => entry.id === activeModule))) setActiveModule('overview')
+  }, [workspaceKind, activeModule])
 
   function overview() { return <>
     {!project && <section className="panel"><h2>先选择工程</h2><p className="muted">描述任务后，Agent 可以为当前会话创建或关联工程；已有工程可从下面打开。</p></section>}
@@ -181,41 +198,66 @@ export function App() {
   function reportsView() { return <section className="panel"><h2>当前会话报告</h2><p className="muted">只显示这个任务会话的测试结果与诊断记录。</p>{sessionJobs.filter(job => job.kind === 'game_test').toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => void run('读取报告', async () => setReport(await request(`/api/report/${encodeURIComponent(job.id)}`))) } />)}{!sessionJobs.some(job => job.kind === 'game_test') && <p className="muted">这个会话还没有测试报告。</p>}{report !== undefined && <div className="report"><div className="row"><h3>测试报告</h3><button onClick={() => download(report, 'modcrafting-game-test.json')}>下载 JSON</button><button onClick={() => setReport(undefined)}>收起</button></div><pre>{JSON.stringify(report, null, 2)}</pre></div>}</section> }
 
   function jobsView() { return <section className="panel"><h2>本会话构建</h2>{sessionJobs.filter(job => job.kind === 'build').toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => {}} />)}</section> }
+  // Adding a panel is a registry entry plus one renderer here; the Record makes a
+  // missing renderer a compile error instead of a blank tab at runtime.
+  const renderers: Record<PanelId, () => ReactNode> = {
+    overview,
+    content: () => <ContentEditor key={`${sessionId}:content:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />,
+    textures: () => <TextureStudio key={`${sessionId}:textures:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />,
+    paint: () => <TextureWorkspace key={`${sessionId}:paint:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />,
+    recipe: () => <RecipeEditor key={`${sessionId}:recipe:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />,
+    gui: () => <GuiEditor key={`${sessionId}:gui:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />,
+    model: () => <ModelEditor key={`${sessionId}:model:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />,
+    quest: () => <QuestPanel workspacePath={currentTask?.workspacePath || path} memberId={currentTask?.activeMemberId} readOnly={readOnly} />,
+    pack: () => <PackPanel key={`${sessionId}:pack:${currentTask?.workspacePath || path}`} workspacePath={currentTask?.workspacePath || path} initialTargetId={targetId} readOnly={readOnly} />,
+    discover: () => <DiscoverPanel key={`${sessionId}:discover:${targetId}`} workspacePath={currentTask?.workspacePath || path} initialTargetId={targetId} readOnly={readOnly} />,
+    baseline: () => <BaselinePanel key={`${sessionId}:baseline:${targetId}`} workspacePath={currentTask?.workspacePath || path} initialTargetId={targetId} readOnly={readOnly} />,
+    bridge: () => <BridgePanel key={`${sessionId}:bridge:${currentTask?.workspacePath || path}`} workspacePath={currentTask?.workspacePath || path} readOnly={readOnly} />,
+    transform: () => <TransformPanel key={`${sessionId}:transform:${currentTask?.workspacePath || path}`} workspacePath={currentTask?.workspacePath || path} readOnly={readOnly} />,
+    build: buildView,
+    game: gameView,
+    tests: testsView,
+    reports: reportsView
+  }
   const moduleContent = (() => {
     const meta = PANEL_META[activeModule]
-    // One guard for every project-scoped panel, so the branches below can assume a
+    // One guard for every project-scoped panel, so the renderers can assume a
     // valid project instead of each repeating its own empty state.
     if (meta.requiresProject && !project?.valid) {
-      return <section className="panel"><h2>{meta.label}</h2><p className="muted">{meta.hint ?? '请先关联一个有效工程。'}</p></section>
+      return <PanelEmptyState title={meta.label} description={meta.hint ?? '请先关联一个有效工程。'} hint="工程路径可以在“概览”里打开；当前会话也可以由 Agent 创建工程后再回到这里。" />
     }
-    if (activeModule === 'overview') return overview()
-    if (activeModule === 'content') return <ContentEditor key={`${sessionId}:content:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
-    if (activeModule === 'textures') return <TextureStudio key={`${sessionId}:textures:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
-    if (activeModule === 'paint') return <TextureWorkspace key={`${sessionId}:paint:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
-    if (activeModule === 'recipe') return <RecipeEditor key={`${sessionId}:recipe:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
-    if (activeModule === 'gui') return <GuiEditor key={`${sessionId}:gui:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
-    if (activeModule === 'model') return <ModelEditor key={`${sessionId}:model:${project!.path}`} projectPath={project!.path} modId={project!.modId!} />
-    if (activeModule === 'quest') return <QuestPanel workspacePath={currentTask?.workspacePath || path} memberId={currentTask?.activeMemberId} readOnly={readOnly} />
-    if (activeModule === 'build') return buildView()
-    if (activeModule === 'game') return gameView()
-    if (activeModule === 'tests') return testsView()
-    return reportsView()
+    return renderers[activeModule]()
   })()
 
-  return <>
-    <header className="workbench-header"><div className="brand"><span className="brand-mark">M</span><div><strong>ModCrafting</strong><span>Fabric 工作台</span></div></div>
-      <div className="task-bar"><label>任务会话<select aria-label="任务会话" value={sessionId} onChange={event => void switchSession(event.target.value)}>{(runtime.sessions || []).map((value: TaskSession) => <option key={value.sessionId} value={value.sessionId}>{value.name}{value.status === 'ended' ? ' · 已结束' : ''} · {value.phase}</option>)}</select></label><div><strong>{currentTask?.name || '当前任务'}</strong><small>{project?.modId || currentTask?.projectPath || '未关联工程'} · {sessionId.slice(0, 8)}</small></div></div>
-      <div className="header-state"><span className={connected ? 'connected' : 'error'} role="status">● {readOnly ? '已结束 · 只读' : connection}</span><button disabled={readOnly} aria-pressed={followAgent} onClick={followAgent ? () => { setFollowAgent(false); sessionStorage.setItem(`modcrafting-follow:${sessionId}`, 'false') } : follow}>{followAgent ? '跟随 Agent：开' : '跟随 Agent：关'}</button></div>
-    </header>
+  const header = <header className="workbench-header"><div className="brand"><span className="brand-mark">M</span><div><strong>ModCrafting</strong><span>Fabric 工作台</span></div></div>
+    <div className="task-bar"><label>任务会话<select aria-label="任务会话" value={sessionId} onChange={event => void switchSession(event.target.value)}>{(runtime.sessions || []).map((value: TaskSession) => <option key={value.sessionId} value={value.sessionId}>{value.name}{value.status === 'ended' ? ' · 已结束' : ''} · {value.phase}</option>)}</select></label><div><strong>{currentTask?.name || '当前任务'}</strong><small>{project?.modId || currentTask?.projectPath || '未关联工程'} · {sessionId.slice(0, 8)}</small></div></div>
+    <div className="header-state"><span className={connected ? 'connected' : 'error'} role="status">● {readOnly ? '已结束 · 只读' : connection}</span><button disabled={readOnly} aria-pressed={followAgent} onClick={followAgent ? () => { setFollowAgent(false); sessionStorage.setItem(`modcrafting-follow:${sessionId}`, 'false') } : follow}>{followAgent ? '跟随 Agent：开' : '跟随 Agent：关'}</button></div>
+  </header>
+
+  const banners = <>
     {error && <div role="alert" className="message error top-message">{error}<button onClick={() => setError('')}>收起</button></div>}
     {(pending || notice) && <div role="status" className="message top-message">{pending ? `${pending}…` : notice}</div>}
-    <div className="workbench-shell"><aside className="workbench-sidebar" aria-label="工作区导航"><p className="eyebrow">工作区</p>{PANEL_ORDER.map(id => { const meta = PANEL_META[id]; return <button key={id} aria-current={activeModule === id ? 'page' : undefined} onClick={() => navigate(id)}><span aria-hidden>{meta.icon}</span>{meta.label}{currentTask?.recommendedModules.includes(id) && <i title="Agent 当前推荐" />}</button> })}<details><summary>更多工具</summary><p className="muted">知识库和 Fabric 工具由聊天 Agent 按任务调用。日志收在页面底部的诊断区。</p></details></aside>
-      <main className="workbench-main"><div className="module-heading"><div><p className="eyebrow">{project?.minecraftVersion ? `FABRIC ${project.minecraftVersion}` : 'MODCRAFTING FABRIC'}</p><h1>{PANEL_META[activeModule].label}</h1></div><div><strong>{currentTask?.phase || '等待任务阶段'}</strong><small>Agent 推荐：{currentTask?.recommendedModules.map(id => panelLabel(id)).join('、') || '概览'}</small></div></div>
-        <PanelHost panelKey={`${sessionId}:${activeModule}`} title={PANEL_META[activeModule].label}>{moduleContent}</PanelHost>
-        <details className="panel diagnostics"><summary>诊断与日志 · {sessionJobs.length} 个会话任务</summary>{sessionJobs.toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => void run('读取报告', async () => setReport(await request(`/api/report/${encodeURIComponent(job.id)}`))) } />)}</details>
-      </main>
-    </div>
-    <nav className="mobile-nav" aria-label="工作区导航"><label>当前模块<select value={activeModule} onChange={event => { const next = event.target.value; if (isPanelId(next)) navigate(next) }}>{PANEL_ORDER.map(id => <option key={id} value={id}>{PANEL_META[id].label}</option>)}</select></label></nav>
-    <footer>ModCrafting Core · 关闭页面不会停止本会话作业 · 报告按会话隔离</footer>
   </>
+
+  return <WorkbenchShell
+    active={activeModule}
+    context={{
+      kind: workspaceKind,
+      targetId,
+      workspacePath: currentTask?.workspacePath || path,
+      phase: currentTask?.phase || '',
+      jobCount: sessionJobs.length,
+      runningJobs,
+      failedJobs,
+      readOnly,
+      recommended: currentTask?.recommendedModules ?? []
+    }}
+    header={header}
+    banners={banners}
+    onNavigate={navigate}
+  >
+    <div className="module-heading"><div><p className="eyebrow">{project?.minecraftVersion ? `FABRIC ${project.minecraftVersion}` : 'MODCRAFTING FABRIC'}</p><h1>{PANEL_META[activeModule].label}</h1></div><div><strong>{currentTask?.phase || '等待任务阶段'}</strong><small>Agent 推荐：{currentTask?.recommendedModules.map(id => panelLabel(id)).join('、') || '概览'}</small></div></div>
+    <PanelHost panelKey={`${sessionId}:${activeModule}`} title={PANEL_META[activeModule].label}>{moduleContent}</PanelHost>
+    <details className="panel diagnostics"><summary>诊断与日志 · {sessionJobs.length} 个会话任务</summary>{sessionJobs.toReversed().map(job => <Job key={job.id} job={job} onStop={() => void run('停止任务', async () => { await action({ operation: 'stop', jobId: job.id }) })} onReport={() => void run('读取报告', async () => setReport(await request(`/api/report/${encodeURIComponent(job.id)}`))) } />)}</details>
+  </WorkbenchShell>
 }

@@ -34,6 +34,10 @@ export type MemberRole = (typeof memberRoles)[number]
 export const packEntrySources = ['modrinth', 'curseforge', 'local', 'baseline', 'transform'] as const
 export type PackEntrySource = (typeof packEntrySources)[number]
 
+/** External catalogues a pack entry may come from. `local` is not a registry. */
+export const registryIds = ['modrinth', 'curseforge'] as const
+export type RegistryId = (typeof registryIds)[number]
+
 export const ENTRY_SIDES = ['client', 'server', 'both'] as const
 export type EntrySide = (typeof ENTRY_SIDES)[number]
 
