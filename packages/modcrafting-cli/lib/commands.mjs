@@ -38,12 +38,22 @@ function delegateCommand(host, ctx, options) {
   return { executable, args }
 }
 
+/**
+ * Host CLIs on Windows are usually `.cmd` shims, which need cmd.exe rather than
+ * `shell: true`. Passing an args array together with `shell` also triggers
+ * Node's DEP0190 warning on stderr, which corrupts the `--json` error output.
+ */
+function spawnHost(executable, args) {
+  if (process.platform !== 'win32') return spawnSync(executable, args, { encoding: 'utf8', windowsHide: true })
+  return spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', executable, ...args], { encoding: 'utf8', windowsHide: true })
+}
+
 function tryDelegate(host, ctx, options) {
   const command = delegateCommand(host, ctx, options)
   if (!command) return undefined
-  const probe = spawnSync(command.executable, ['--version'], { encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true })
+  const probe = spawnHost(command.executable, ['--version'])
   if (probe.error || probe.status !== 0) return undefined
-  const result = spawnSync(command.executable, command.args, { encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true })
+  const result = spawnHost(command.executable, command.args)
   return {
     delegated: true,
     command: [command.executable, ...command.args].join(' '),
