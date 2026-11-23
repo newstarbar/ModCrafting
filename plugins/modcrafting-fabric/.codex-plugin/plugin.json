@@ -1,7 +1,7 @@
 {
   "name": "modcrafting-fabric",
-  "version": "0.1.8",
-  "description": "Develop and deterministically validate Fabric 1.21.4 mods from Codex.",
+  "version": "0.2.0",
+  "description": "Develop Fabric 1.21.4 mods and author modpacks from Codex.",
   "author": {
     "name": "newstarbar",
     "url": "https://github.com/newstarbar"
@@ -13,6 +13,7 @@
     "minecraft",
     "fabric",
     "modding",
+    "modpack",
     "gradle",
     "observer"
   ],
@@ -20,7 +21,7 @@
   "interface": {
     "displayName": "ModCrafting Fabric",
     "shortDescription": "Build and validate Fabric 1.21.4 mods.",
-    "longDescription": "Local Fabric development, Minecraft knowledge lookup, Gradle builds, Observer V2 control, and deterministic game validation for Codex.",
+    "longDescription": "Local Fabric development, modpack discovery and export, Minecraft knowledge lookup, Gradle builds, Observer V2 control, and deterministic game validation for Codex.",
     "developerName": "newstarbar",
     "category": "Developer Tools",
     "capabilities": [

@@ -25,7 +25,7 @@ async function render() {
   const version = manifest.version
   const pluginManifest = {
     name: 'modcrafting-fabric',
-    description: 'Develop, build and deterministically validate Minecraft Fabric 1.21.4 mods from Claude Code.',
+    description: 'Develop Minecraft Fabric 1.21.4 mods and author modpacks from Claude Code.',
     version,
     author: manifest.author,
     homepage: manifest.homepage,
@@ -47,7 +47,7 @@ async function render() {
     plugins: [{
       name: 'modcrafting-fabric',
       source: './plugins/modcrafting-claude',
-      description: 'Fabric 1.21.4 模组开发、构建、游戏准备与测试报告（MCP + Skills）。',
+      description: 'Fabric 1.21.4 模组开发与整合包创作、构建、游戏准备与测试报告（MCP + Skills）。',
       version,
       author: manifest.author,
       homepage: manifest.homepage,

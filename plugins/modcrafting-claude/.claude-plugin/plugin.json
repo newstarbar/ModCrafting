@@ -1,7 +1,7 @@
 {
   "name": "modcrafting-fabric",
-  "description": "Develop, build and deterministically validate Minecraft Fabric 1.21.4 mods from Claude Code.",
-  "version": "0.1.8",
+  "description": "Develop Minecraft Fabric 1.21.4 mods and author modpacks from Claude Code.",
+  "version": "0.2.0",
   "author": {
     "name": "newstarbar",
     "url": "https://github.com/newstarbar"
@@ -13,6 +13,7 @@
     "minecraft",
     "fabric",
     "modding",
+    "modpack",
     "gradle",
     "observer"
   ]

@@ -15,14 +15,14 @@
 固定版本更稳（推荐写进脚本）：
 
 ```
-npx -y github:newstarbar/ModCrafting#v0.1.8 install --auto --json
+npx -y github:newstarbar/ModCrafting#v0.2.0 install --auto --json
 ```
 
 ## 国内网络 / 代理环境
 
 Node 的 `fetch` 不读取 `HTTPS_PROXY`，公司代理下联网安装会失败。改用离线包：
 
-> 我下载了 `ModCrafting-Offline-v0.1.8.zip`，请解压到任意目录，然后运行
+> 我下载了 `ModCrafting-Offline-v0.2.0.zip`，请解压到任意目录，然后运行
 > `node <解压目录>/cli/bin/modcrafting.mjs install --bundle-dir <解压目录>/bundle --auto --json`，
 > 最后按提示重启宿主。
 

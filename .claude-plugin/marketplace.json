@@ -8,8 +8,8 @@
     {
       "name": "modcrafting-fabric",
       "source": "./plugins/modcrafting-claude",
-      "description": "Fabric 1.21.4 模组开发、构建、游戏准备与测试报告（MCP + Skills）。",
-      "version": "0.1.8",
+      "description": "Fabric 1.21.4 模组开发与整合包创作、构建、游戏准备与测试报告（MCP + Skills）。",
+      "version": "0.2.0",
       "author": {
         "name": "newstarbar",
         "url": "https://github.com/newstarbar"
@@ -19,6 +19,7 @@
         "minecraft",
         "fabric",
         "modding",
+        "modpack",
         "gradle",
         "observer"
       ],

@@ -120,10 +120,14 @@ await writeFile(checksums, sums, { flag: 'wx' })
 
 const prerelease = tag.includes('-')
 const notesFile = path.join(outputDirectory, 'release-notes.md')
+// A hand-written note for this tag wins over the generic template, so a
+// release page can describe the actual changes without changing the packager.
+const customNotesFile = path.join(root, 'docs/releases', `${tag}.md`)
+const customNotes = existsSync(customNotesFile) ? await readFile(customNotesFile, 'utf8') : undefined
 const verificationSummary = githubActionsRun
   ? 'GitHub Actions 已通过静态检查、插件回归、MCP 协议 Smoke、离线 Fabric-Bench 和 Windows 候选包构建。'
   : '此文件由本地打包器生成，尚未代表 GitHub Actions 检查通过。'
-const notes = `# ModCrafting Fabric ${tag}\n\n` +
+const notes = customNotes ?? (`# ModCrafting Fabric ${tag}\n\n` +
   '此版本属于 `release` 发布主线，面向 Fabric 1.21.4，提供 Qoder 桌面 Plugin 和跨宿主插件包。\n\n' +
   '## 下载与安装\n\n' +
   `- **Qoder 桌面版**：下载 \`${path.basename(qoderZip)}\`，在 Qoder Plugin 管理界面导入。\n` +
@@ -133,7 +137,7 @@ const notes = `# ModCrafting Fabric ${tag}\n\n` +
   `- **离线安装（QQ 群）**：\`${offline.filename}\`，解压后双击 install.cmd 或把包内 PROMPT.md 发给 Agent。\n` +
   `- **校验**：\`${path.basename(checksums)}\` 包含全部资产与构建信息的 SHA-256。\n\n` +
   '## 验收范围\n\n' +
-  `${verificationSummary} 该工作流不登录 Qoder、不启动交互式 Minecraft；真实宿主聊天与实机玩法结果需按仓库的候选验收记录单独确认。\n`
+  `${verificationSummary} 该工作流不登录 Qoder、不启动交互式 Minecraft；真实宿主聊天与实机玩法结果需按仓库的候选验收记录单独确认。\n`)
 await writeFile(notesFile, notes, { flag: 'wx' })
 
 const result = { ok: true, tag, version: packageJson.version, prerelease, directory: outputDirectory, qoderZip, hostsZip, mcpZip, skillsZip, offlineZip: path.join(outputDirectory, offline.filename), infoFile, checksums, notesFile }
