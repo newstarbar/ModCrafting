@@ -66,6 +66,8 @@ Cursor、Trae、Devin Desktop、WorkBuddy、CodeBuddy、Qoder、Pi 由图形界�
 
 每个宿主使用独立的 `MODCRAFTING_DATA`：`~/.modcrafting/data/<host-id>`。这样同一个工作台不会串 session、日志或游戏实例。需要自定义时加 `--data-root <绝对路径>`。
 
+构建缓存不必跟数据目录放在一起：Windows 下默认会避开系统盘（数据目录在非系统盘时用 `<数据目录>/cache`；工程在非系统盘时用 `<工程盘>:\ModCrafting\cache`；系统盘紧张时选剩余空间最大的固定盘）。需要固定位置时设置 `MODCRAFTING_CACHE=<绝对路径>`；已显式设置的 `GRADLE_USER_HOME` 优先。已有缓存不会被自动迁移或删除，可通过 `modcrafting_toolchain` 的 `storage` / `migrate` / `clean` 动作显式处理。
+
 ## 原生插件（可选）
 
 除了 MCP + 技能，部分宿主支持把 ModCrafting 作为原生插件安装，能额外获得命令、钩子与专家卡：

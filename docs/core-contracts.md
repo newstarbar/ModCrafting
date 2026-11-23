@@ -12,8 +12,8 @@
 
 | 业务 | Core 入口 | 主要结果 |
 |---|---|---|
-| 环境、资源与能力 | runtime.environmentStatus(projectPath?) | CoreEnvironmentStatus；contractVersion、paths、assets、capabilities；JavaStatus 含来源、候选和 configPath |
-| 工具链选择 | runtime.toolchain({action, javaHome?, projectPath?}) | read/scan/write/clear；写入经探针验证的 JDK 21 并持久化 toolchain.json |
+| 环境、资源与能力 | runtime.environmentStatus(projectPath?) | CoreEnvironmentStatus；contractVersion、paths、assets、capabilities；JavaStatus 含来源、候选和 configPath；storage 含 cacheRoot、source、gradleUserHome、temporaryDirectory、managed、drives、warning |
+| 工具链选择 | runtime.toolchain({action, javaHome?, cacheRoot?, confirm?, projectPath?}) | read/scan/write/clear；写入经探针验证的 JDK 21 并持久化 toolchain.json。storage 报告缓存路径、体积与旧缓存；storage-write 保存绝对 cacheRoot；migrate/clean 需 confirm=true，复制后保留旧缓存、只清理插件标记的未活动缓存 |
 | 资源准备 | runtime.prepareAssets() | ok、assets[].ok/error/path、dataRoot、localAssets |
 | 项目检查/创建/校验 | inspectFabricProject、scaffoldFabricProject、validateFabricProject；检查已有路径用 resolveProjectPath | FabricProject、checks、文件级 ProjectDiagnostic；脚手架不自动生成 Wrapper |
 | 标准数据与知识 | lookupMinecraftData、searchFabricDocs、searchWiki | 结构化查询；缺失时返回 ASSET_NOT_READY 与可执行的 prepare_assets 提示；Wiki 当前为关键词索引查询 |

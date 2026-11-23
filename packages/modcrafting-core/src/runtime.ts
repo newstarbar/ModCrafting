@@ -115,6 +115,10 @@ export type ToolchainProvider = Pick<SystemToolchainProvider, 'status' | 'startG
   configureJava?: (javaHome: string) => Promise<{ configPath: string; javaHome: string; version?: string }>
   clearJava?: () => { configPath?: string; removed: boolean }
   readJavaConfig?: () => { path?: string; javaHome?: string; error?: string }
+  storageReport?: (projectPath?: string) => ReturnType<SystemToolchainProvider['storageReport']>
+  storageWrite?: (cacheRoot: string, projectPath?: string) => ReturnType<SystemToolchainProvider['storageWrite']>
+  storageMigrate?: (targetRoot: string, projectPath?: string) => ReturnType<SystemToolchainProvider['storageMigrate']>
+  storageClean?: (targetRoot?: string, projectPath?: string) => ReturnType<SystemToolchainProvider['storageClean']>
 }
 /** Companion artifact receipt produced by product:stage, also used by the standalone Bench. */
 export function loadBundledObserver(directory: string): BundledObserver {
@@ -308,8 +312,29 @@ export class FabricRuntime {
       capabilities: { ...CORE_CAPABILITIES, toolchain: { ...CORE_CAPABILITIES.toolchain, scaffoldIncludesWrapper: this.scaffoldIncludesWrapper } }
     }
   }
-  async toolchain(request: { action: 'read' | 'scan' | 'write' | 'clear'; javaHome?: string; projectPath?: string }) {
+  async toolchain(request: { action: 'read' | 'scan' | 'write' | 'clear' | 'storage' | 'storage-write' | 'migrate' | 'clean'; javaHome?: string; cacheRoot?: string; confirm?: boolean; projectPath?: string }) {
     const provider = this.toolchainProvider
+    const projectPath = request.projectPath ? resolveProjectPath(request.projectPath) : undefined
+    if (request.action === 'storage') {
+      if (!provider.storageReport) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持缓存报告。')
+      return { ok: true, action: 'storage', ...await provider.storageReport(projectPath) }
+    }
+    if (request.action === 'storage-write') {
+      if (!request.cacheRoot) throw new CoreError('INVALID_ARGUMENT', '写入缓存配置时需要 cacheRoot 绝对路径。')
+      if (!provider.storageWrite) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持缓存配置。')
+      return { ok: true, action: 'storage-write', ...await provider.storageWrite(request.cacheRoot, projectPath) }
+    }
+    if (request.action === 'migrate') {
+      if (request.confirm !== true) throw new CoreError('CONFIRM_REQUIRED', '迁移缓存前需要 confirm=true；旧缓存会保留，确认新缓存可用后再清理。')
+      if (!request.cacheRoot) throw new CoreError('INVALID_ARGUMENT', '迁移缓存时需要 cacheRoot 目标绝对路径。')
+      if (!provider.storageMigrate) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持缓存迁移。')
+      return { ok: true, action: 'migrate', ...await provider.storageMigrate(request.cacheRoot, projectPath) }
+    }
+    if (request.action === 'clean') {
+      if (request.confirm !== true) throw new CoreError('CONFIRM_REQUIRED', '清理缓存前需要 confirm=true，并确认迁移后的构建已经成功。')
+      if (!provider.storageClean) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持缓存清理。')
+      return { ok: true, action: 'clean', ...await provider.storageClean(request.cacheRoot, projectPath) }
+    }
     if (request.action === 'scan') {
       if (!provider.scanJavas) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持 JDK 扫描。')
       return { ok: true, action: 'scan', config: provider.readJavaConfig?.(), candidates: await provider.scanJavas() }
@@ -318,17 +343,17 @@ export class FabricRuntime {
       if (!request.javaHome) throw new CoreError('INVALID_ARGUMENT', '写入工具链配置时需要 javaHome 绝对路径。')
       if (!provider.configureJava) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持工具链配置。')
       const configured = await provider.configureJava(request.javaHome)
-      const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
+      const status = await provider.status(projectPath)
       return { ok: status.java.ok, action: 'write', ...configured, java: status.java }
     }
     if (request.action === 'clear') {
       if (!provider.clearJava) throw new CoreError('ENVIRONMENT_UNAVAILABLE', '当前测试后端不支持工具链配置。')
       const cleared = provider.clearJava()
-      const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
+      const status = await provider.status(projectPath)
       return { ok: status.java.ok, action: 'clear', ...cleared, java: status.java }
     }
-    const status = await provider.status(request.projectPath ? resolveProjectPath(request.projectPath) : undefined)
-    return { ok: status.java.ok, action: 'read', config: provider.readJavaConfig?.(), java: status.java, candidates: status.java.candidates }
+    const status = await provider.status(projectPath)
+    return { ok: status.java.ok, action: 'read', config: provider.readJavaConfig?.(), java: status.java, candidates: status.java.candidates, storage: status.storage }
   }
   async prepareAssets(names: DownloadableAsset[] = ['minecraft-data', 'mc-wiki-zh', 'mc-wiki-zh-index', 'agent-knowledge'], projectPath?: string, minecraft?: string) {
     if (projectPath) resolveProjectPath(projectPath)

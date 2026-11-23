@@ -12,6 +12,7 @@ import { getRegistry } from './version/registry.ts'
 import { capabilitiesFor } from './version/capabilities.ts'
 import { neoForgeProjectFiles } from './loaders/neoforge.ts'
 import { forgeProjectFiles } from './loaders/forge.ts'
+import { configureStorage, ensureStorageDirs, migrateStorage, cleanStorage, resolveStorage, storageSourceLabel, storageUsage, withEnvPrecedenceWarning, type StorageOptions, type StorageStatus, type StorageUsage } from './storage.ts'
 import type { ResolvedTarget } from './version/targets.ts'
 import type { RuntimePaths, RuntimeEvents, EnvironmentStatus, FabricProject, JavaCandidate, JavaSource, JavaStatus } from './contracts.ts'
 export type { RuntimePaths, RuntimeEvents, EnvironmentStatus, FabricProject, JavaCandidate, JavaSource, JavaStatus } from './contracts.ts'
@@ -154,8 +155,9 @@ function failedJava(candidates: JavaCandidate[], config: JavaConfig, reason?: st
 
 export class SystemToolchainProvider {
   private readonly dataRoot?: string
+  private readonly storageSettings: Omit<StorageOptions, 'dataRoot' | 'projectPath'>
   private cachedJava?: { key: string; value: JavaStatus; at: number }
-  constructor(dataRoot?: string) { this.dataRoot = dataRoot }
+  constructor(dataRoot?: string, storageSettings: Omit<StorageOptions, 'dataRoot' | 'projectPath'> = {}) { this.dataRoot = dataRoot; this.storageSettings = storageSettings }
 
   javaConfigPath(): string | undefined { return this.dataRoot ? path.join(this.dataRoot, 'toolchain.json') : undefined }
   readJavaConfig(): JavaConfig {
@@ -311,6 +313,7 @@ export class SystemToolchainProvider {
     const java = await this.resolveJava()
     const project = projectPath ? inspectFabricProject(projectPath) : undefined
     const wrapper = Boolean(project?.wrapperPath)
+    const storage = this.dataRoot ? await this.storageStatus(projectPath) : undefined
     const remediation: string[] = []
     if (!java.ok) {
       remediation.push('安装或选择 JDK 21（必须包含 javac）。')
@@ -318,11 +321,40 @@ export class SystemToolchainProvider {
       remediation.push('也可以设置 MODCRAFTING_JAVA_HOME；修改系统 JAVA_HOME 后必须完全退出并重启 Qoder，仅重新连接 MCP 不会刷新宿主环境变量。')
     }
     if (projectPath && !wrapper) remediation.push('当前文件夹还不是完整模组工程；新建工程或选择已有工程。')
+    if (storage?.warning) remediation.push(storage.warning)
     return {
       ok: java.ok && (!projectPath || wrapper), platform: process.platform, node: process.version, java,
       gradleWrapper: wrapper, target: FABRIC_TARGET, remediation,
-      storage: { gradleUserHome: process.env.GRADLE_USER_HOME || (this.dataRoot ? path.join(this.dataRoot, 'cache', 'gradle') : undefined), temporaryDirectory: this.dataRoot ? path.join(this.dataRoot, 'cache', 'tmp') : undefined }
+      ...(storage ? { storage } : {})
     }
+  }
+  private async storageStatus(projectPath?: string): Promise<StorageStatus> {
+    if (!this.dataRoot) throw Object.assign(new Error('当前后端没有可写的数据目录，无法解析构建缓存。'), { code: 'DATA_DIRECTORY_UNAVAILABLE' })
+    return resolveStorage({ dataRoot: this.dataRoot, ...(projectPath ? { projectPath } : {}), ...this.storageSettings })
+  }
+  async storageReport(projectPath?: string): Promise<{ storage: StorageStatus; usage: StorageUsage; legacy?: { path: string; usage: StorageUsage } }> {
+    const storage = await this.storageStatus(projectPath)
+    const usage = await storageUsage(storage.gradleUserHome)
+    const legacyRoot = path.join(this.dataRoot!, 'cache')
+    const legacy = path.resolve(legacyRoot) !== path.resolve(storage.cacheRoot) && existsSync(legacyRoot)
+      ? { path: legacyRoot, usage: await storageUsage(legacyRoot) }
+      : undefined
+    return { storage, usage, ...(legacy ? { legacy } : {}) }
+  }
+  async storageWrite(cacheRoot: string, projectPath?: string): Promise<{ storage: StorageStatus }> {
+    if (!this.dataRoot) throw Object.assign(new Error('当前后端没有可写的数据目录，无法保存缓存配置。'), { code: 'DATA_DIRECTORY_UNAVAILABLE' })
+    const storage = await configureStorage({ dataRoot: this.dataRoot, ...(projectPath ? { projectPath } : {}), ...this.storageSettings, cacheRoot })
+    return { storage }
+  }
+  async storageMigrate(targetRoot: string, projectPath?: string): Promise<{ from: string; to: string; bytes: number; files: number; storage: StorageStatus }> {
+    if (!this.dataRoot) throw Object.assign(new Error('当前后端没有可写的数据目录，无法迁移构建缓存。'), { code: 'DATA_DIRECTORY_UNAVAILABLE' })
+    const result = await migrateStorage({ dataRoot: this.dataRoot, ...(projectPath ? { projectPath } : {}), ...this.storageSettings, targetRoot })
+    return { ...result, storage: withEnvPrecedenceWarning(await this.storageStatus(projectPath)) }
+  }
+  async storageClean(targetRoot?: string, projectPath?: string): Promise<{ removed: string[]; freedBytes: number; storage: StorageStatus }> {
+    if (!this.dataRoot) throw Object.assign(new Error('当前后端没有可写的数据目录，无法清理构建缓存。'), { code: 'DATA_DIRECTORY_UNAVAILABLE' })
+    const result = await cleanStorage({ dataRoot: this.dataRoot, ...(projectPath ? { projectPath } : {}), ...this.storageSettings, ...(targetRoot ? { targetRoot } : {}) })
+    return { ...result, storage: await this.storageStatus(projectPath) }
   }
   async startGradle(projectPath: string, task: string, events?: RuntimeEvents, extraArgs: string[] = []): Promise<ChildProcess> {
     const project = inspectFabricProject(projectPath)
@@ -331,8 +363,9 @@ export class SystemToolchainProvider {
     if (!status.java.ok) throw Object.assign(new Error(status.java.error), { code: 'ENVIRONMENT_UNAVAILABLE' })
     if (!/^[A-Za-z][A-Za-z0-9:.-]*$/.test(task) || extraArgs.some((value) => /[%!&|<>^\r\n]/.test(value))) throw Object.assign(new Error('Unsafe Gradle task arguments'), { code: 'INVALID_ARGUMENT' })
     const storage = status.storage
-    for (const directory of [storage?.gradleUserHome, storage?.temporaryDirectory]) if (directory) mkdirSync(directory, { recursive: true })
-    const child = spawn(process.platform === 'win32' ? 'cmd.exe' : project.wrapperPath, process.platform === 'win32' ? ['/d', '/v:off', '/s', '/c', '.\\gradlew.bat', task, '--no-daemon', ...extraArgs] : [task, '--no-daemon', ...extraArgs], { cwd: project.path, windowsHide: true, shell: false, env: { ...process.env, JAVA_HOME: status.java.path, JAVA_TOOL_OPTIONS: process.env.JAVA_TOOL_OPTIONS || '', ...(storage?.gradleUserHome ? { GRADLE_USER_HOME: storage.gradleUserHome } : {}), ...(storage?.temporaryDirectory ? { TEMP: storage.temporaryDirectory, TMP: storage.temporaryDirectory } : {}) } })
+    if (storage) ensureStorageDirs(storage)
+    if (storage) events?.onLog?.('gradle', `[modcrafting] Gradle 缓存：${storage.gradleUserHome}（${storageSourceLabel(storage.source)}）；临时目录：${storage.temporaryDirectory}${storage.warning ? `。${storage.warning}` : ''}\n`)
+    const child = spawn(process.platform === 'win32' ? 'cmd.exe' : project.wrapperPath, process.platform === 'win32' ? ['/d', '/v:off', '/s', '/c', '.\\gradlew.bat', task, '--no-daemon', ...extraArgs] : [task, '--no-daemon', ...extraArgs], { cwd: project.path, windowsHide: true, shell: false, env: { ...process.env, JAVA_HOME: status.java.path, JAVA_TOOL_OPTIONS: process.env.JAVA_TOOL_OPTIONS || '', ...(storage ? { GRADLE_USER_HOME: storage.gradleUserHome, TEMP: storage.temporaryDirectory, TMP: storage.temporaryDirectory } : {}) } })
     child.stdout.on('data', (value) => events?.onLog?.('gradle', String(value)))
     child.stderr.on('data', (value) => events?.onLog?.('gradle', String(value)))
     return child

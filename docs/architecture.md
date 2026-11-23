@@ -33,6 +33,12 @@ Core 和工作台共享工程源码，但 session 的页面状态、游戏实例
 
 游戏启动准备有独立阶段：准备文件、启动客户端、等待桥接、处理首次向导、准备世界、进入世界、可测试。`bridgeReady` 仅代表 Observer 可通信；测试只有在 `canRunTests=true` 后才可执行。
 
+## 构建缓存与存储
+
+构建缓存与插件数据根分离：`dataRoot` 保存 session、日志、报告和备份，`cacheRoot` 保存 Gradle 用户目录（发行包、依赖、Loom/Minecraft、自动 JDK）与 Gradle 临时文件。解析顺序为 `MODCRAFTING_CACHE` → `GRADLE_USER_HOME` → 已保存的 `storage.json` → 已有 `data/cache` → Windows 自动选盘。自动选盘优先复用已标记的缓存盘，其次使用非系统盘上的数据目录或工程目录，系统盘低于 20 GB 时选择剩余空间最大的固定盘；选择会持久化，其他宿主通过 `.modcrafting-cache.json` 标记复用。检查状态只读，只有真实构建才创建目录。
+
+旧缓存的迁移和清理是显式工具动作：`modcrafting_toolchain` 的 `storage` / `storage-write` / `migrate` / `clean`；`migrate` 与 `clean` 需要 `confirm=true`，清理拒绝当前活动缓存和任何未标记目录。插件不会自动搬移或删除用户缓存。
+
 ## AI 物品贴图
 
 宿主 Agent 在同一轮对话内自动完成全流程：调用 `fabric_texture_workspace` 的 `prompt` 获取提示词包，用宿主自己的图像模型生成 PNG，再依次 `import`、`save`，工程已有对应内容对象时 `bind`；用户不需要手动执行每一步。Core 的纯 TS 管线完成背景去除、轮廓扩张、对比度感知降采样、调色板/抖动、二进制 Alpha、描边、材质换色与质量检查；浏览器“贴图”模块只作为可选的逐像素润色和二次优化入口。插件不调用任何图像模型，也不把生成图当作测试通过证据。

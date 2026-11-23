@@ -46,12 +46,16 @@ test('PATH-only JDK becomes the same JAVA_HOME for a Windows build; cache stays 
     const status = await provider.status(root)
     assert.equal(status.java.ok, true); assert.ok(status.java.path)
     assert.equal(status.storage?.gradleUserHome, path.join(root, 'data/cache/gradle'))
+    assert.equal(status.storage?.cacheRoot, path.join(root, 'data/cache'))
+    assert.ok(status.storage?.source && ['default', 'auto', 'existing'].includes(status.storage.source))
     assert.equal(existsSync(status.storage!.gradleUserHome!), false, 'inspection must not create cache directories')
     let output = ''
     const child = await provider.startGradle(root, 'build', { onLog: (_, line) => { output += line } })
     const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve) })
     assert.equal(code, 0); assert.ok(output.includes(`JAVA=${status.java.path}`))
     assert.ok(output.includes(`CACHE=${status.storage!.gradleUserHome}`)); assert.ok(output.includes(`TEMPORARY=${status.storage!.temporaryDirectory}`))
+    assert.ok(output.includes('Gradle 缓存'), 'build output must name the selected cache path')
+    assert.ok(existsSync(path.join(root, 'data/cache/.modcrafting-cache.json')), 'a build records the cache for other hosts')
     process.env.JAVA_HOME = path.join(root, 'missing-jdk')
     assert.equal((await provider.status(root)).java.ok, false, 'an explicit broken JAVA_HOME must not silently pass via PATH')
   } finally { for (const [name, value] of Object.entries(original)) { if (value === undefined) delete process.env[name]; else process.env[name] = value } }

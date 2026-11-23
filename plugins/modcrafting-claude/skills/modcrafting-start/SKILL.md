@@ -17,8 +17,8 @@ description: Help a beginner use the ModCrafting plugin. Use for how to use this
 按需准备：
 - 安装包包含配套游戏测试组件，不下载旧 base-mods，不让用户手工找 JAR。
 - 编写注册代码前必须 minecraft_data_lookup。缺少原版数据时，使用 modcrafting_prepare_assets(names=["minecraft-data"], projectPath=当前工程路径)；知识资料默认随工程存放在工程的 .modcrafting/knowledge。需要 Fabric API 文档才选 agent-knowledge，需要百科才选 mc-wiki-zh-index。后续 minecraft_data_lookup、mc_wiki_search、fabric_docs_search 都要传同一个 projectPath，读取同一份资料。不要为了首次介绍下载全部资源。
-- 首次下载/构建前简短说明会联网下载、实际缓存目录；遵循当前宿主的下载确认策略及用户已授权范围。不要搬迁或删除用户旧缓存。
-- JAVA_HOME/PATH 选择和缓存路径由环境工具报告；不要靠改工程脚本、建立 junction 或全局设置掩盖插件问题。用户要求文件放在非 C 盘时检查返回路径，必要时说明需配置数据根/GRADLE_USER_HOME 并重新连接，不承诺更改宿主自身缓存。
+- 首次下载/构建前简短说明会联网下载、实际缓存目录；遵循当前宿主的下载确认策略及用户已授权范围。不要绕过插件自行搬迁或删除用户旧缓存。
+- JAVA_HOME/PATH 和构建缓存路径由环境工具报告。缓存默认会智能选择非系统固定盘；用户要求放到指定盘时，先调用 `modcrafting_toolchain` 的 `storage` 查看当前路径和用量，再用 `storage-write` 指定 `cacheRoot`，或 `migrate`（需 `confirm=true`）复制并切换。确认新缓存构建成功后才用 `clean` 清理旧缓存；不要靠改工程脚本、建立 junction 或全局设置掩盖插件问题，也不承诺更改宿主自身缓存。
 - minecraft_run_client 返回的是“客户端作业 + 测试准备作业”；必须等 minecraft_runtime_status 的 canRunTests=true 才能运行测试。默认简体中文并自动处理首次引导和专用世界，不要求用户预先写 options.txt 或手动复制地图。
 
 沟通与故障规则：

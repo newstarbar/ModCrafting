@@ -1,5 +1,6 @@
 /** Public data contracts. No Electron, MCP SDK or Node runtime imports. */
 import type { FABRIC_TARGET } from './domain.ts'
+import type { StorageStatus } from './storage.ts'
 import type { WorkspaceKind } from './workspace-model.ts'
 
 export type RuntimePaths = { dataRoot: string; knowledgeRoot: string; assetsRoot: string; reportsRoot: string; logsRoot: string }
@@ -8,7 +9,7 @@ export type JavaSource = 'configured' | 'modcrafting-env' | 'java-home' | 'path'
 export type JavaCandidate = { path: string; source: JavaSource; version?: string; javac: boolean; ok: boolean; error?: string }
 export type JavaStatus = { ok: boolean; version?: string; path?: string; source?: JavaSource; error?: string; javac?: boolean; candidates?: JavaCandidate[]; configPath?: string; configError?: string }
 export type EnvironmentTarget = { id: string; loader: string; minecraft: string; status: string; javaTarget: number; runtimeObserver: boolean; reason?: string }
-export type EnvironmentStatus = { ok: boolean; platform: string; node: string; java: JavaStatus; gradleWrapper: boolean; target: typeof FABRIC_TARGET; targets?: EnvironmentTarget[]; remediation: string[]; storage?: { gradleUserHome?: string; temporaryDirectory?: string } }
+export type EnvironmentStatus = { ok: boolean; platform: string; node: string; java: JavaStatus; gradleWrapper: boolean; target: typeof FABRIC_TARGET; targets?: EnvironmentTarget[]; remediation: string[]; storage?: StorageStatus }
 export type FabricProject = { path: string; valid: boolean; loader?: 'fabric' | 'neoforge' | 'forge'; modId?: string; minecraftVersion?: string; wrapperPath?: string; errors: string[] }
 export type JobStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'interrupted'
 export type JobSnapshot = { id: string; kind: string; sessionId?: string; status: JobStatus; startedAt: string; finishedAt?: string; output: string[]; pid?: number; result?: Record<string, unknown>; error?: string; code?: string }

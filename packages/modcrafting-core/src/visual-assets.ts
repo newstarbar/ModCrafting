@@ -5,6 +5,7 @@ import os from 'node:os'
 import { FABRIC_TARGET } from './domain.ts'
 import type { RuntimePaths } from './contracts.ts'
 import { deriveResourceLayout } from './resources/layout.ts'
+import { visualGradleHomes } from './storage.ts'
 import { getRegistry } from './version/registry.ts'
 
 const resource = /^[a-z0-9_.-]+:[a-z0-9_/-]+$/
@@ -123,8 +124,10 @@ export function prepareVisualAssets(paths: RuntimePaths, version: string = FABRI
   if (markerOf(root)?.version === version) return Promise.resolve({ ready: true })
   const existing = preparations.get(root); if (existing) return existing
   const work = (async () => {
-    const gradle = process.env.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle')
-    const candidates = [path.join(gradle, 'caches/fabric-loom', version, 'minecraft-client.jar'), path.join(process.env.APPDATA || os.homedir(), '.minecraft/versions', version, version + '.jar')]
+    const candidates = [
+      ...visualGradleHomes(paths.dataRoot).map(home => path.join(home, 'caches/fabric-loom', version, 'minecraft-client.jar')),
+      path.join(process.env.APPDATA || os.homedir(), '.minecraft/versions', version, version + '.jar')
+    ]
     const archive = candidates.find(file => { try { return existsSync(safe(file)) && lstatSync(file).isFile() } catch { return false } })
     if (!archive || process.platform !== 'win32') return { ready: false, message: `未找到 ${version} 客户端素材。请使用该版本的工程构建缓存（GRADLE_USER_HOME），或安装 ${version} 原版客户端后重试。不会自动下载。` }
     mkdirSync(root, { recursive: true })

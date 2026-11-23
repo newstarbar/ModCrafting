@@ -7,7 +7,7 @@
 /plugin install modcrafting-fabric@modcrafting
 ```
 
-首次启动时 Claude Code 通过 `npx -y modcrafting-mcp@0.2.1` 拉起 MCP，技能随插件加载。
+首次启动时 Claude Code 通过 `npx -y modcrafting-mcp@0.2.2` 拉起 MCP，技能随插件加载。
 需要绝对 node 路径、离线安装或多宿主管理时改用安装器：
 
 ```
